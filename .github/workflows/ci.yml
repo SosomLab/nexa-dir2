@@ -39,7 +39,6 @@ jobs:
         shell: pwsh
         run: |
           # 1차: 목록 가시화(게이트 자동화는 M0-8에서 화이트리스트로 강화)
-          & "$env:VCToolsInstallDir..\..\..\..\VC\Auxiliary\Build\vcvars64.bat" 2>$null
           $dumpbin = Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($dumpbin) { & $dumpbin.FullName /imports target/release/nexa-app.exe | Select-String "\.dll" }
           else { Write-Output "dumpbin 미발견 — 로컬 실측으로 대체(docs/18 §5)" }
