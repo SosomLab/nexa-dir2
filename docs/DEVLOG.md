@@ -8,6 +8,8 @@
 
 ## 2026-07-12
 
+- **M1-3 가상화 파일 리스트 초안(`feat/m1-virtual-list`)**: **실제 파일시스템 첫 표시** — nexa-tree 가시 노드 평면 스트림을 `TreeSource`로 `RowSource`에 배선(들여쓰기·▸/▾ 마커·클릭=펼침/접힘, `InputEvent::MouseDown` 신설). ADR-0002 §5 이행: GDI 경로·F2 삭제(DW 단일), 텍스트 키 레이아웃 캐시 도입 — 실 트리 벤치 **1,673µs/프레임**(스파이크 대비 −62%)·유휴 RSS 18.2MB·exe 0.27MB(전 게이트 내). 테스트 48 green. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
+- **CI B3 red 복구(main)**: ADR-0002로 늘어난 `dwrite.dll`·`combase.dll`(OS 인박스)이 화이트리스트에 없어 windows job fail → 목록 갱신(`5a613b3`)·green 복구. 규약 추가: 인박스 DLL 변경 시 ci.yml·docs/18 동시 갱신. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
 - **M1-2 ADR-0002 렌더링 확정(`feat/m1-adr0002-render`)**: DirectWrite GDI interop 백엔드(`dw.rs` — `IDWriteBitmapRenderTarget`+`IDWriteTextLayout`+커스텀 `IDWriteTextRenderer`) 구현, F2 전환·F3 200프레임 벤치 하네스로 **같은 창 실측 비교**. 결과: DW가 GDI 대비 **−28%**(4,373µs vs 6,072µs, 캐시 미적용 상한치)·RSS +4.1MB(17.4MB)·exe 0.23MB — 전 게이트 내. **DW interop 채택**([07 ADR-0002](07-adr-0002-rendering.md) Accepted), 기본 백엔드 전환. `DrawCtx` 어휘는 무변경(추상 검증). GDI 경로·비교 하네스는 M1-3에서 제거 예정. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
 
 ## 2026-07-11
