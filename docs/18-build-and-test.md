@@ -36,7 +36,7 @@ cargo build --release -p nexa-app
 
 `.github/workflows/ci.yml` — push/PR마다:
 - **core**(ubuntu·macos): `cargo test`
-- **windows**(windows-latest): `cargo test` + `cargo build --release` + 예산 검사(§5 스크립트화 예정)
+- **windows**(windows-latest): `cargo test` + `cargo build --release` + **예산 게이트** — B2(exe >10MB fail) · B3(dumpbin 임포트가 화이트리스트[kernel32·user32·gdi32·ntdll·oleaut32·`api-ms-win-*`] 외면 fail)
 
 ## 5. 예산 측정 (DR-2 게이트)
 

@@ -15,7 +15,7 @@
 | M0-5 | `nexa-app` Win32 창 스켈레톤(클래스·메시지 루프·WM_PAINT·DPI) + 맥 스텁 | P0 | 중 | M0-1 | ✅ (07-11 `34b5649` — windows 타깃 check green) |
 | M0-6 | CI — core(ubuntu/mac test)·windows(build/test·예산 B2 게이트) | P0 | 소 | M0-5 | ✅ (07-11 `3b2ddf8` — 러너 검증은 push 후) |
 | M0-7 | GDI 렌더 스파이크(가시 N행 텍스트·더블 버퍼) | P1 | 중 | M0-5 | ✅ (07-11 `90a9243` — 100k 행·휠/키 스크롤·DPI, windows check/clippy green) |
-| M0-8 | **게이트 실측**: 빈 창 RSS·exe 크기·임포트 테이블(Windows) → journal 기록·`0.1.0` 태그 | P0 | 소 | M0-7 | ☐ Windows 실기 필요 |
+| M0-8 | **게이트 실측**: 빈 창 RSS·exe 크기·임포트 테이블(Windows) → journal 기록·`0.1.0` 태그 | P0 | 소 | M0-7 | ✅ (07-11 — B1 13.22MB·B2 0.20MB·B3 인박스만, CI B3 게이트화) |
 
 ## §2. M1 — 뷰어 코어 (★)
 

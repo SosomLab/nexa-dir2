@@ -8,6 +8,7 @@
 
 ## 2026-07-11
 
+- **M0-8 게이트 실측 · M0 완료(`0.1.0`)**: Windows 실기(Win11 26200)에서 DR-2 예산 전 항목 통과 — **B1 유휴 RSS 13.22MB**(100k 행 창·3회 중앙값·Private 1.70MB) · **B2 exe 0.20MB**(214KB, 정적 CRT+lto+strip) · **B3 임포트 6종 전부 OS 인박스**(user32·kernel32·gdi32·ntdll·oleaut32·api-ms-win-core-synch). 실기 테스트 26 green. CI B3를 목록 가시화→**화이트리스트 fail 게이트**로 강화. 원본 대비: 유휴 RSS 60MB+ → 13MB(1/4 이하)·배포 64MB → 0.2MB. 다음 M1-1(`nexa-gui`)·M1-2(ADR-0002). 상세 [journal/2026-07-11.md](journal/2026-07-11.md).
 - **M0-7 GDI 렌더 스파이크(`feat/m0-render-spike`)**: WM_PAINT **더블 버퍼**(메모리 DC 캐시·ERASEBKGND 생략) + 합성 **100k 행 중 가시 행만** ExtTextOutW(ETO_OPAQUE, 교대 음영) — 프레임 비용이 창 높이에만 비례함을 코드로 실증(M1 가상 리스트 전제). 휠(분수 노치 누적)·키보드(↑↓/PgUp/PgDn/Home/End) 스크롤·WM_DPICHANGED 대응. 맥에서 windows 타깃 check·clippy green. 잔여 M0-8(실기 게이트 실측→`0.1.0`). 상세 [journal/2026-07-11.md](journal/2026-07-11.md).
 - **M0 스캐폴딩·코어 이식·Win32 스켈레톤(`feat/m0-scaffold`)**: 워크스페이스(정적 CRT·lto fat·panic abort) → **nexa-core/vfs/tree 원본 이식**(rlib 직접 링크, 테스트 21+5 green — 인터롭/ABI 계층 소멸) → **Win32 창 스켈레톤**(windows-rs 0.62: 클래스·메시지 루프·WM_PAINT·PerMonitorV2, 비-Windows 스텁) — **맥에서 windows 타깃 cargo check green**(WinUI 시절 불가능하던 UI 코드 사전 검증) → CI(core ubuntu/mac + windows·예산 B2 10MB 게이트·아티팩트). 잔여 M0-7(렌더 스파이크)·M0-8(실기 게이트 실측→`0.1.0`). 상세 [journal/2026-07-11.md](journal/2026-07-11.md).
 - **권한 파일 사고 2건·복구**: IDE "Allow always"가 세션 스냅샷으로 `.claude/settings.json`을 덮어씀(2회) → git 커밋본에서 병합 복원, rust/python 전 명령 자동 허용 추가. 규율 확정: **이 파일은 병합만, 덮어쓰기 금지**. 상세 [journal/2026-07-11.md](journal/2026-07-11.md).

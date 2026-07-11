@@ -35,13 +35,18 @@ jobs:
           $mb = [math]::Round((Get-Item $exe).Length / 1MB, 2)
           Write-Output "nexa-app.exe = $mb MB"
           if ((Get-Item $exe).Length -gt 10MB) { throw "예산 B2 초과: $mb MB > 10 MB" }
-      - name: 예산 B3 — 임포트 DLL(OS 인박스만) 목록 출력
+      - name: 예산 B3 — 임포트 DLL 화이트리스트 게이트 (docs/18 §5)
         shell: pwsh
         run: |
-          # 1차: 목록 가시화(게이트 자동화는 M0-8에서 화이트리스트로 강화)
-          $dumpbin = Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($dumpbin) { & $dumpbin.FullName /imports target/release/nexa-app.exe | Select-String "\.dll" }
-          else { Write-Output "dumpbin 미발견 — 로컬 실측으로 대체(docs/18 §5)" }
+          # OS 인박스 DLL 화이트리스트(M0-8 실측 기준) — 외 DLL 발견 시 fail
+          $whitelist = @("kernel32.dll", "user32.dll", "gdi32.dll", "ntdll.dll", "oleaut32.dll")
+          $dumpbin = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin 미발견 — B3 게이트 실행 불가" }
+          $imports = & $dumpbin.FullName /imports target/release/nexa-app.exe |
+            Select-String '^\s+(\S+\.dll)\s*$' | ForEach-Object { $_.Matches[0].Groups[1].Value.ToLower() } | Sort-Object -Unique
+          Write-Output "임포트: $($imports -join ', ')"
+          $violations = $imports | Where-Object { $_ -notin $whitelist -and $_ -notlike "api-ms-win-*" }
+          if ($violations) { throw "예산 B3 위반(OS 인박스 외): $($violations -join ', ')" }
       - uses: actions/upload-artifact@v4
         with:
           name: nexa-app-win-x64
