@@ -16,4 +16,10 @@ pub trait DrawCtx {
 
     /// 텍스트의 렌더 폭(px) — 우측 정렬(크기 컬럼 등)에 사용.
     fn text_width(&mut self, text: &str) -> i32;
+
+    /// 아이콘 그리기 — `key`는 백엔드가 해석하는 불투명 식별자, `hint`는 로드 힌트(경로 등).
+    /// 미로드 시 아무것도 그리지 않아도 된다(백엔드가 큐잉 후 재그리기). 기본 = no-op.
+    fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) {
+        let _ = (x, y, size, key, hint);
+    }
 }
