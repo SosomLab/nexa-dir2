@@ -47,6 +47,17 @@ pub struct RowItem {
     pub marker: Marker,
 }
 
+/// 클릭 선택 방식(원본 docs/07 §1-2 — 교차폴더 다중 선택).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SelectOp {
+    /// 단일 선택(기존 해제) + anchor 갱신.
+    Single,
+    /// Ctrl — 비연속 토글.
+    Toggle,
+    /// Shift — anchor~행 가시 범위.
+    RangeTo,
+}
+
 /// 행 데이터 공급자. 위젯은 가시 행에 대해서만 호출한다.
 pub trait RowSource {
     fn len(&self) -> usize;
@@ -57,7 +68,7 @@ pub trait RowSource {
         let _ = (index, key);
         String::new()
     }
-    /// 행 활성화(클릭) — 목록 구조가 바뀌었으면 `true`(위젯이 전체 무효화).
+    /// 행 활성화(펼침 마커 클릭) — 목록 구조가 바뀌었으면 `true`(위젯이 전체 무효화).
     fn toggle(&mut self, index: usize) -> bool {
         let _ = index;
         false
@@ -65,6 +76,27 @@ pub trait RowSource {
     /// 정렬 적용(우선순위 순 `(key, desc)`, 빈 목록 = 열거 순서). 반영했으면 `true`.
     fn set_sort(&mut self, keys: &[(u32, bool)]) -> bool {
         let _ = keys;
+        false
+    }
+    // ── 선택(기본 = 선택 없음 소스) ──
+    fn is_selected(&self, index: usize) -> bool {
+        let _ = index;
+        false
+    }
+    fn select(&mut self, index: usize, op: SelectOp) -> bool {
+        let _ = (index, op);
+        false
+    }
+    /// 가시 범위 `lo..=hi`로 선택을 대체(러버밴드).
+    fn select_span(&mut self, lo: usize, hi: usize) -> bool {
+        let _ = (lo, hi);
+        false
+    }
+    fn select_all(&mut self) -> bool {
+        false
+    }
+    /// 선택 전체 해제(빈 영역 클릭). 해제했으면 `true`.
+    fn clear_selection(&mut self) -> bool {
         false
     }
     fn is_empty(&self) -> bool {
@@ -78,6 +110,23 @@ struct ResizeDrag {
     col: usize,
     start_x: i32,
     start_w: i32,
+}
+
+/// 러버밴드 드래그 상태(본문 빈 영역에서 시작).
+#[derive(Clone, Copy, Debug)]
+struct BandDrag {
+    ox: i32,
+    oy: i32,
+    cx: i32,
+    cy: i32,
+}
+
+impl BandDrag {
+    fn rect(&self) -> Rect {
+        let x = self.ox.min(self.cx);
+        let y = self.oy.min(self.cy);
+        Rect::new(x, y, (self.ox - self.cx).abs(), (self.oy - self.cy).abs())
+    }
 }
 
 /// 세로 가상화 행 리스트 + 컬럼 헤더 — 프레임 비용은 bounds 높이에만 비례(docs/01 §3).
@@ -97,6 +146,9 @@ pub struct VirtualRows<S> {
     /// 정렬 상태(우선순위 순). 빈 목록 = 소스 기본 정렬.
     sort: Vec<(u32, bool)>,
     resize: Option<ResizeDrag>,
+    band: Option<BandDrag>,
+    /// 캐럿(마지막 상호작용 행) — 키보드 펼침/접힘 기준. 전체 키보드 네비는 M1-6.
+    caret: Option<usize>,
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -114,7 +166,13 @@ impl<S: RowSource> VirtualRows<S> {
             columns: Vec::new(),
             sort: Vec::new(),
             resize: None,
+            band: None,
+            caret: None,
         }
+    }
+
+    pub fn caret(&self) -> Option<usize> {
+        self.caret
     }
 
     pub fn scroll_row(&self) -> usize {
@@ -228,6 +286,24 @@ impl<S: RowSource> VirtualRows<S> {
         }
         let row = self.scroll_row + ((y - self.body_top()) / self.row_h) as usize;
         (row < self.src.len()).then_some(row)
+    }
+
+    /// 클릭 x가 해당 행의 펼침 마커 영역인가(트리 컬럼 안 들여쓰기 자리·마커 있는 행만).
+    fn in_marker_zone(&self, row: usize, x: i32) -> bool {
+        let (tc_x, tc_w) = if self.columns.is_empty() {
+            (self.bounds.x, self.bounds.w)
+        } else {
+            match self.columns.iter().position(|c| c.key == 0) {
+                Some(i) => (self.col_x(i), self.columns[i].width),
+                None => return false,
+            }
+        };
+        let item = self.src.row(row);
+        if item.marker == Marker::None {
+            return false;
+        }
+        let indent = tc_x + self.pad_x + item.depth as i32 * self.indent_w;
+        x >= indent && x < (indent + self.indent_w).min(tc_x + tc_w)
     }
 
     /// 헤더 명중 판정: `Some((컬럼 인덱스, 리사이즈 핸들 여부))`.
@@ -366,8 +442,27 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 Key::PageDown => self.scroll_to(cur + page, inv),
                 Key::Home => self.scroll_to(0, inv),
                 Key::End => self.scroll_to(isize::MAX / 2, inv),
+                // →/← = 캐럿 행 인라인 펼침/접힘(docs/07 §8 — 부모 이동은 M1-6)
+                Key::Right | Key::Left => {
+                    if let Some(c) = self.caret.filter(|&c| c < self.src.len()) {
+                        let want = if k == Key::Right {
+                            Marker::Collapsed
+                        } else {
+                            Marker::Expanded
+                        };
+                        if self.src.row(c).marker == want && self.src.toggle(c) {
+                            self.clamp_scroll();
+                            inv.push(self.bounds);
+                        }
+                    }
+                }
             },
-            InputEvent::MouseDown { x, y, shift } => {
+            InputEvent::SelectAll => {
+                if self.src.select_all() {
+                    inv.push(self.bounds);
+                }
+            }
+            InputEvent::MouseDown { x, y, shift, ctrl } => {
                 if let Some((i, handle)) = self.header_hit(x, y) {
                     if handle {
                         self.resize = Some(ResizeDrag {
@@ -380,14 +475,37 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         self.apply_sort(key, shift, inv);
                     }
                 } else if let Some(row) = self.row_at(x, y) {
-                    if self.src.toggle(row) {
-                        // 목록 구조 변경(펼침/접힘) — 행 수가 줄었을 수 있으니 재클램프
-                        self.clamp_scroll();
-                        inv.push(self.bounds);
+                    if self.in_marker_zone(row, x) {
+                        // 삼각형 = 인라인 펼침/접힘(docs/07 §1-1) — 선택과 분리
+                        if self.src.toggle(row) {
+                            self.clamp_scroll();
+                            inv.push(self.bounds);
+                        }
+                    } else {
+                        let op = if shift {
+                            SelectOp::RangeTo
+                        } else if ctrl {
+                            SelectOp::Toggle
+                        } else {
+                            SelectOp::Single
+                        };
+                        self.src.select(row, op);
+                        self.caret = Some(row);
+                        inv.push(self.bounds); // 하이라이트·캐럿 갱신
                     }
+                } else if y >= self.body_top() && self.bounds.contains(Point { x, y }) {
+                    // 빈 본문 영역 — 러버밴드 시작(기존 선택 해제)
+                    self.band = Some(BandDrag {
+                        ox: x,
+                        oy: y,
+                        cx: x,
+                        cy: y,
+                    });
+                    self.src.clear_selection();
+                    inv.push(self.bounds);
                 }
             }
-            InputEvent::MouseMove { x, y: _ } => {
+            InputEvent::MouseMove { x, y } => {
                 if let Some(drag) = self.resize {
                     let w =
                         (drag.start_w + (x - drag.start_x)).max(self.columns[drag.col].min_width);
@@ -396,10 +514,35 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         self.clamp_scroll_x();
                         inv.push(self.bounds);
                     }
+                } else if let Some(mut band) = self.band {
+                    band.cx = x;
+                    band.cy = y;
+                    self.band = Some(band);
+                    // 밴드 세로 범위와 교차하는 가시 행 범위로 선택 대체
+                    let r = band.rect();
+                    let top = r.y.max(self.body_top());
+                    let bot = r.bottom().min(self.bounds.bottom());
+                    if bot > top && !self.src.is_empty() {
+                        let lo = self.scroll_row + ((top - self.body_top()) / self.row_h) as usize;
+                        let hi = (self.scroll_row
+                            + ((bot - 1 - self.body_top()) / self.row_h) as usize)
+                            .min(self.src.len() - 1);
+                        if lo <= hi && lo < self.src.len() {
+                            self.src.select_span(lo, hi);
+                        } else {
+                            self.src.clear_selection();
+                        }
+                    } else {
+                        self.src.clear_selection();
+                    }
+                    inv.push(self.bounds);
                 }
             }
             InputEvent::MouseUp { .. } => {
                 self.resize = None;
+                if self.band.take().is_some() {
+                    inv.push(self.bounds); // 밴드 사각형 지우기
+                }
             }
         }
     }
@@ -416,7 +559,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
         for i in 0..count {
             let row = first + i;
             let y = body_top + i as i32 * self.row_h;
-            let bg = if row.is_multiple_of(2) {
+            // 선택 하이라이트 > 교대 음영(docs/07 §7 다중·비연속·교차폴더 하이라이트)
+            let bg = if self.src.is_selected(row) {
+                theme.sel_bg
+            } else if row.is_multiple_of(2) {
                 theme.panel_bg
             } else {
                 theme.panel_bg_alt
@@ -429,38 +575,45 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 let item = self.src.row(row);
                 let rc = Rect::new(b.x, y, b.w, self.row_h);
                 self.paint_tree_cell(ctx, theme, &item, rc, ty, bg);
-                continue;
+            } else {
+                for (ci, col) in self.columns.iter().enumerate() {
+                    let cx = self.col_x(ci);
+                    if cx >= b.right() || cx + col.width <= b.x {
+                        continue; // 가로 스크롤로 화면 밖
+                    }
+                    let cell = Rect::new(cx, y, col.width, self.row_h);
+                    if col.key == 0 {
+                        let item = self.src.row(row);
+                        self.paint_tree_cell(ctx, theme, &item, cell, ty, bg);
+                    } else {
+                        let text = self.src.cell(row, col.key);
+                        let tx = match col.align {
+                            Align::Left => cell.x + self.pad_x,
+                            Align::Right => {
+                                let w = ctx.text_width(&text);
+                                (cell.right() - self.pad_x - w).max(cell.x + self.pad_x)
+                            }
+                        };
+                        ctx.text_opaque(tx, ty, cell, &text, theme.text, bg);
+                    }
+                }
+                // 마지막 컬럼 오른쪽 잔여
+                let cols_right =
+                    self.col_x(self.columns.len() - 1) + self.columns.last().map_or(0, |c| c.width);
+                if cols_right < b.right() {
+                    ctx.fill_rect(
+                        Rect::new(cols_right, y, b.right() - cols_right, self.row_h),
+                        bg,
+                    );
+                }
             }
 
-            for (ci, col) in self.columns.iter().enumerate() {
-                let cx = self.col_x(ci);
-                if cx >= b.right() || cx + col.width <= b.x {
-                    continue; // 가로 스크롤로 화면 밖
-                }
-                let cell = Rect::new(cx, y, col.width, self.row_h);
-                if col.key == 0 {
-                    let item = self.src.row(row);
-                    self.paint_tree_cell(ctx, theme, &item, cell, ty, bg);
-                } else {
-                    let text = self.src.cell(row, col.key);
-                    let tx = match col.align {
-                        Align::Left => cell.x + self.pad_x,
-                        Align::Right => {
-                            let w = ctx.text_width(&text);
-                            (cell.right() - self.pad_x - w).max(cell.x + self.pad_x)
-                        }
-                    };
-                    ctx.text_opaque(tx, ty, cell, &text, theme.text, bg);
-                }
-            }
-            // 마지막 컬럼 오른쪽 잔여
-            let cols_right =
-                self.col_x(self.columns.len() - 1) + self.columns.last().map_or(0, |c| c.width);
-            if cols_right < b.right() {
-                ctx.fill_rect(
-                    Rect::new(cols_right, y, b.right() - cols_right, self.row_h),
-                    bg,
-                );
+            // 캐럿 행 테두리(1px accent) — 선택과 독립(키보드 기준점 표시)
+            if self.caret == Some(row) {
+                ctx.fill_rect(Rect::new(b.x, y, b.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(b.x, y + self.row_h - 1, b.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(b.x, y, 1, self.row_h), theme.accent);
+                ctx.fill_rect(Rect::new(b.right() - 1, y, 1, self.row_h), theme.accent);
             }
         }
 
@@ -509,6 +662,17 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     Rect::new(cols_right, hy, b.right() - cols_right, self.row_h),
                     theme.header_bg,
                 );
+            }
+        }
+
+        // ── 러버밴드 외곽선(드래그 중) ──
+        if let Some(band) = self.band {
+            let r = band.rect();
+            if r.w > 0 && r.h > 0 {
+                ctx.fill_rect(Rect::new(r.x, r.y, r.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(r.x, r.y, 1, r.h), theme.accent);
+                ctx.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), theme.accent);
             }
         }
     }
@@ -614,7 +778,15 @@ mod tests {
     }
 
     fn down(v: &mut VirtualRows<Rows>, inv: &mut Invalidations, x: i32, y: i32, shift: bool) {
-        v.on_event(&InputEvent::MouseDown { x, y, shift }, inv);
+        v.on_event(
+            &InputEvent::MouseDown {
+                x,
+                y,
+                shift,
+                ctrl: false,
+            },
+            inv,
+        );
     }
 
     // ── M1-3 계승(컬럼 없음 = 헤더 없음) ──
@@ -629,20 +801,34 @@ mod tests {
     }
 
     #[test]
-    fn click_toggles_row_without_columns() {
+    fn marker_click_toggles_row_without_columns() {
         let mut inv = Invalidations::default();
         let mut v = VirtualRows::new(Expandable { expanded: false }, 20, 12, 16);
         v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
         inv.drain().for_each(drop);
+        // 헤더 없음 → y=5는 0행. 마커 존 = [12, 28)
         v.on_event(
             &InputEvent::MouseDown {
-                x: 10,
+                x: 15,
                 y: 5,
                 shift: false,
+                ctrl: false,
             },
             &mut inv,
-        ); // 헤더 없음 → y=5는 0행
+        );
         assert_eq!(v.source().len(), 6);
+        // 마커 존 밖 클릭은 펼침이 아니라 선택(캐럿만 이동)
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: 100,
+                y: 5,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.source().len(), 6, "본문 클릭은 토글 아님");
+        assert_eq!(v.caret(), Some(0));
     }
 
     // ── 헤더·본문 오프셋 ──
@@ -726,6 +912,171 @@ mod tests {
         v.on_event(&InputEvent::MouseUp { x: -500, y: 5 }, &mut inv);
         v.on_event(&InputEvent::MouseMove { x: 300, y: 5 }, &mut inv);
         assert_eq!(v.columns()[0].width, 40, "업 이후엔 리사이즈 없음");
+    }
+
+    // ── 선택(원본 docs/07 §1-2·§8): 단일·Ctrl 토글·Shift 범위·Ctrl+A·러버밴드 ──
+
+    struct SelRows {
+        n: usize,
+        sel: std::collections::HashSet<usize>,
+        anchor: usize,
+    }
+    impl SelRows {
+        fn new(n: usize) -> SelRows {
+            SelRows {
+                n,
+                sel: Default::default(),
+                anchor: 0,
+            }
+        }
+    }
+    impl RowSource for SelRows {
+        fn len(&self) -> usize {
+            self.n
+        }
+        fn row(&self, index: usize) -> RowItem {
+            RowItem {
+                text: format!("row-{index}"),
+                depth: 0,
+                marker: Marker::None,
+            }
+        }
+        fn is_selected(&self, index: usize) -> bool {
+            self.sel.contains(&index)
+        }
+        fn select(&mut self, index: usize, op: SelectOp) -> bool {
+            match op {
+                SelectOp::Single => {
+                    self.sel.clear();
+                    self.sel.insert(index);
+                    self.anchor = index;
+                }
+                SelectOp::Toggle => {
+                    if !self.sel.remove(&index) {
+                        self.sel.insert(index);
+                    }
+                    self.anchor = index;
+                }
+                SelectOp::RangeTo => {
+                    let (lo, hi) = if self.anchor <= index {
+                        (self.anchor, index)
+                    } else {
+                        (index, self.anchor)
+                    };
+                    self.sel = (lo..=hi).collect();
+                }
+            }
+            true
+        }
+        fn select_span(&mut self, lo: usize, hi: usize) -> bool {
+            self.sel = (lo..=hi).collect();
+            true
+        }
+        fn select_all(&mut self) -> bool {
+            self.sel = (0..self.n).collect();
+            true
+        }
+        fn clear_selection(&mut self) -> bool {
+            let had = !self.sel.is_empty();
+            self.sel.clear();
+            had
+        }
+    }
+
+    fn sel_list(n: usize, h: i32) -> (VirtualRows<SelRows>, Invalidations) {
+        let mut inv = Invalidations::default();
+        let mut v = VirtualRows::new(SelRows::new(n), 20, 12, 16);
+        v.set_bounds(Rect::new(0, 0, 400, h), &mut inv);
+        inv.drain().for_each(drop);
+        (v, inv)
+    }
+
+    fn sdown(
+        v: &mut VirtualRows<SelRows>,
+        inv: &mut Invalidations,
+        y: i32,
+        shift: bool,
+        ctrl: bool,
+    ) {
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: 100,
+                y,
+                shift,
+                ctrl,
+            },
+            inv,
+        );
+    }
+
+    #[test]
+    fn click_selects_single_ctrl_toggles_shift_ranges() {
+        let (mut v, mut inv) = sel_list(10, 200); // 헤더 없음 — 행 y = i*20
+        sdown(&mut v, &mut inv, 5, false, false); // 0행 단일
+        assert!(v.source().is_selected(0) && v.source().sel.len() == 1);
+        assert_eq!(v.caret(), Some(0));
+        sdown(&mut v, &mut inv, 45, false, true); // Ctrl+2행 토글 → {0,2} (비연속)
+        assert_eq!(v.source().sel.len(), 2);
+        assert!(v.source().is_selected(2));
+        sdown(&mut v, &mut inv, 85, true, false); // Shift+4행 → anchor(2)~4 범위
+        assert_eq!(
+            v.source().sel,
+            [2usize, 3, 4].into_iter().collect(),
+            "가시 순서 범위 선택"
+        );
+        assert_eq!(v.caret(), Some(4));
+        sdown(&mut v, &mut inv, 45, false, true); // Ctrl 토글 해제
+        assert!(!v.source().is_selected(2));
+    }
+
+    #[test]
+    fn ctrl_a_selects_all_visible() {
+        let (mut v, mut inv) = sel_list(7, 200);
+        v.on_event(&InputEvent::SelectAll, &mut inv);
+        assert_eq!(v.source().sel.len(), 7);
+        assert!(!inv.is_empty());
+    }
+
+    #[test]
+    fn rubber_band_selects_intersecting_rows_and_ends_on_up() {
+        let (mut v, mut inv) = sel_list(3, 200); // 행 3개(0..60), 아래 빈 영역
+        sdown(&mut v, &mut inv, 5, false, false); // 미리 선택해 둔 0행이
+        sdown(&mut v, &mut inv, 100, false, false); // 빈 영역 클릭 → 밴드 시작 + 해제
+        assert!(v.source().sel.is_empty());
+        v.on_event(&InputEvent::MouseMove { x: 50, y: 30 }, &mut inv); // 위로 드래그: 30..100
+        assert_eq!(
+            v.source().sel,
+            [1usize, 2].into_iter().collect(),
+            "밴드 세로 범위와 교차하는 행"
+        );
+        v.on_event(&InputEvent::MouseUp { x: 50, y: 30 }, &mut inv);
+        assert_eq!(v.source().sel.len(), 2, "업 후 선택 유지");
+        // 업 이후 이동은 밴드 아님
+        v.on_event(&InputEvent::MouseMove { x: 50, y: 5 }, &mut inv);
+        assert_eq!(v.source().sel.len(), 2);
+    }
+
+    #[test]
+    fn right_left_keys_toggle_expansion_at_caret() {
+        let mut inv = Invalidations::default();
+        let mut v = VirtualRows::new(Expandable { expanded: false }, 20, 12, 16);
+        v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: 100,
+                y: 5,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        ); // 본문 클릭 → 캐럿 0
+        assert_eq!(v.caret(), Some(0));
+        v.on_event(&InputEvent::Key(Key::Right), &mut inv);
+        assert_eq!(v.source().len(), 6, "→ = 인라인 펼침");
+        v.on_event(&InputEvent::Key(Key::Right), &mut inv);
+        assert_eq!(v.source().len(), 6, "이미 펼침이면 무시");
+        v.on_event(&InputEvent::Key(Key::Left), &mut inv);
+        assert_eq!(v.source().len(), 1, "← = 접힘");
     }
 
     // ── 가로 스크롤 ──

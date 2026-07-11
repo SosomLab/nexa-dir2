@@ -2,4 +2,4 @@
 
 pub mod rows;
 
-pub use rows::{Marker, RowItem, RowSource, VirtualRows};
+pub use rows::{Marker, RowItem, RowSource, SelectOp, VirtualRows};

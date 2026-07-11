@@ -49,6 +49,8 @@ pub struct Theme {
     pub text: Color,
     /// 보조 텍스트 (신설)
     pub text_dim: Color,
+    /// 선택 행 배경 (신설 — 원본은 알파 브러시, 커스텀 드로잉은 사전 블렌드 값)
+    pub sel_bg: Color,
 }
 
 impl Theme {
@@ -68,6 +70,7 @@ impl Theme {
             accent: Color::from_hex(0x3D8BFF),
             text: Color::from_hex(0xD6DAE0),
             text_dim: Color::from_hex(0x8A919C),
+            sel_bg: Color::from_hex(0x24405F), // accent 30% over panel_bg
         }
     }
 
@@ -87,6 +90,7 @@ impl Theme {
             accent: Color::from_hex(0x3D8BFF),
             text: Color::from_hex(0x1B1F26),
             text_dim: Color::from_hex(0x6B7280),
+            sel_bg: Color::from_hex(0xD8E8FF), // accent 20% over panel_bg
         }
     }
 }

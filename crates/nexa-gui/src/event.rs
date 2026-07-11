@@ -12,6 +12,10 @@ pub enum Key {
     PageDown,
     Home,
     End,
+    /// 캐럿 행 인라인 펼침(원본 docs/07 §8).
+    Right,
+    /// 캐럿 행 접힘.
+    Left,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -25,12 +29,15 @@ pub enum InputEvent {
         delta: i32,
     },
     Key(Key),
-    /// 마우스 좌클릭(클라이언트 좌표). 행 활성화(펼침 토글)·헤더 정렬/리사이즈 시작.
-    /// `shift` = 다중 컬럼 정렬 트리거(원본 docs/23 COL-3).
+    /// 현재 가시 노드 전체 선택(Ctrl+A — 원본 docs/07 §8).
+    SelectAll,
+    /// 마우스 좌클릭(클라이언트 좌표). 헤더 = 정렬/리사이즈, 본문 = 선택/펼침/러버밴드.
+    /// `shift` = 범위 선택·다중 정렬(docs/23 COL-3), `ctrl` = 비연속 토글(docs/07 §1-2).
     MouseDown {
         x: i32,
         y: i32,
         shift: bool,
+        ctrl: bool,
     },
     /// 마우스 이동(버튼 상태 무관 — 위젯이 드래그 상태를 보유).
     MouseMove {
