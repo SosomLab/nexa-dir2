@@ -5,8 +5,9 @@
 
 #[cfg(windows)]
 mod dw;
-#[cfg(windows)]
-mod gdi;
+// 비-Windows에선 창이 없어 미사용이지만 순수 어댑터라 테스트는 전 플랫폼 실행
+#[cfg_attr(not(windows), allow(dead_code))]
+mod source;
 #[cfg(windows)]
 mod win;
 
