@@ -21,7 +21,7 @@
 
 - ✅ 설계 문서 세트(00·01·02·05·06·10·11·12·15·18 + 운영 문서) — `docs/foundation` 병합(`d2727b5`).
 - ✅ 워크스페이스 스캐폴딩(정적 CRT·릴리스 프로파일) · ✅ **nexa-core/vfs/tree 이식**(rlib 직접 링크, 테스트 21+5 green — FFI/ABI 폐지 실현) · ✅ Win32 창 스켈레톤(windows-rs, 맥 check 검증) · ✅ CI(core 2종+windows·예산 B2 게이트) — `feat/m0-scaffold`.
-- ☐ 렌더 스파이크 확장(M0-7) · ☐ **게이트 실측**(M0-8, Windows 실기: 빈 창 RSS·exe 크기·임포트) → `0.1.0` 태그.
+- ✅ 렌더 스파이크(M0-7 — 더블 버퍼·가시 100k행·휠/키 스크롤·DPI, `feat/m0-render-spike`) · ☐ **게이트 실측**(M0-8, Windows 실기: 빈 창 RSS·exe 크기·임포트) → `0.1.0` 태그.
 
 ## M1+ (요약)
 
