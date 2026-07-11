@@ -30,7 +30,8 @@
 - ✅ M1-3 가상화 파일 리스트 초안(`feat/m1-virtual-list`) — **실제 파일시스템 첫 표시**: nexa-tree 평면 스트림 → `RowItem`(들여쓰기·▸/▾ 마커) 투영, 클릭=펼침/접힘. ADR-0002 §5 이행(GDI 삭제·레이아웃 캐시 — 벤치 1,673µs/프레임, RSS 18.2MB·exe 0.27MB).
 - ✅ M1-4 컬럼 시스템(`feat/m1-columns`) — 원본 docs/23 이식: 5컬럼·헤더 정렬 **3상태 순환+Shift 다중열**(화살표 앞·순번 뒤 규약)·드래그 리사이즈·가로 스크롤·말줄임 트리밍·TZ 반영 날짜(civil_from_days 순수 구현, crate 0 유지). 벤치 1,813µs·RSS 18.1MB·exe 0.31MB.
 - ✅ M1-5 ★ **플래그십**(`feat/m1-select`) — 원본 docs/07: 삼각형=펼침 vs 본문=선택 분리·**교차폴더 다중 선택**(Ctrl 토글·Shift 범위·Ctrl+A, 코어 OrderedSet·anchor 배선, AC2 테스트)·**러버밴드**(빈 영역 드래그)·캐럿·선택 하이라이트(sel_bg 토큰)·→/← 인라인 펼침. 벤치 1,540µs·RSS 18.2MB.
-- ☐ M1-6 키보드 네비+타입어헤드(원본 docs/32) · ☐ M1-7~9.
+- ✅ M1-6 키보드 네비+타입어헤드(`feat/m1-keyboard`) — 원본 docs/32 확정 규약: 캐럿 이동+단일 선택+스크롤 추적·Shift 범위·Ctrl 캐럿만·Space/Ctrl+Space 토글·→자식/←부모·타입어헤드(가시 스트림 C·1s·반복 cycle·Backspace·HUD 배지). Shift+End 실기 "선택 61". Alt+화살표는 M1-8.
+- ☐ M1-7 셸 아이콘 · ☐ M1-8 네비게이션 · ☐ M1-9 게이트.
 
 ## M1+ (요약)
 
