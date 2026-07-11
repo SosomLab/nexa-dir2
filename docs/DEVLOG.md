@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-12
+
+- **M1-2 ADR-0002 렌더링 확정(`feat/m1-adr0002-render`)**: DirectWrite GDI interop 백엔드(`dw.rs` — `IDWriteBitmapRenderTarget`+`IDWriteTextLayout`+커스텀 `IDWriteTextRenderer`) 구현, F2 전환·F3 200프레임 벤치 하네스로 **같은 창 실측 비교**. 결과: DW가 GDI 대비 **−28%**(4,373µs vs 6,072µs, 캐시 미적용 상한치)·RSS +4.1MB(17.4MB)·exe 0.23MB — 전 게이트 내. **DW interop 채택**([07 ADR-0002](07-adr-0002-rendering.md) Accepted), 기본 백엔드 전환. `DrawCtx` 어휘는 무변경(추상 검증). GDI 경로·비교 하네스는 M1-3에서 제거 예정. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
+
 ## 2026-07-11
 
 - **M1-1 nexa-gui 크레이트 분리(`feat/m1-gui`)**: **플랫폼 중립(의존 0)** GUI 기반 — 위젯 trait+무효화 수집(교차 rect 병합)·입력 이벤트(분수 노치 휠 누적기)·시맨틱 테마 토큰(**원본 docs/39 §4 차용**, 다크 기본)·`VirtualRows` 가상화 리스트(M0-7 스크롤 로직 이식, `RowSource` 추상 — M1-3에서 nexa-tree 배선). nexa-app은 WM_* 번역·더블 버퍼·GDI `DrawCtx` 백엔드(`gdi.rs`, ADR-0002 확정까지)로 축소. 테스트 43 green(신규 17)·clippy 0·실기 기동 확인(exe 0.21MB·RSS 12.4MB). 상세 [journal/2026-07-11.md](journal/2026-07-11.md).

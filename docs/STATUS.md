@@ -1,9 +1,9 @@
 # STATUS — Nexa Dir 2 진행 현황
 
-> **갱신: 2026-07-11 (KST)** — **M0 완료(`0.1.0`: B1 13.22MB·B2 0.20MB·B3 인박스만) → M1 착수.**
-> `feat/m1-gui`: **M1-1 `nexa-gui` 분리 완료** — 플랫폼 중립 위젯 trait·무효화(rect 병합)·입력 이벤트·
-> 테마 토큰(원본 docs/39 차용, 다크 기본)·`VirtualRows`(스파이크 로직 이식). 테스트 43 green·실기 확인.
-> 다음: **M1-2 ADR-0002** — GDI vs DirectWrite GDI interop 스파이크 비교(품질·RSS·속도) 확정.
+> **갱신: 2026-07-12 (KST)** — M0 완료(`0.1.0`) · M1-1 `nexa-gui` 분리 · **M1-2 ADR-0002 Accepted**:
+> 텍스트 렌더링 = **DirectWrite GDI interop** — 실측(100k 행 스크롤 벤치) GDI 대비 **−28%**(4.37ms/프레임),
+> RSS +4.1MB(17.4MB)·exe 0.23MB로 전 게이트 내. 기본 백엔드 전환, GDI 경로는 M1-3에서 제거.
+> 다음: **M1-3 가상화 파일 리스트** — nexa-tree 평면 스트림 배선 + 레이아웃 캐시.
 
 ## 1. 확정된 결정 ([10](10-decision-record.md))
 
@@ -29,7 +29,7 @@
 ## 3. 마일스톤 (상세 [MILESTONES](MILESTONES.md))
 
 - **M0** 기반·게이트 ✅ (`0.1.0`) — 설계 문서·스캐폴딩·코어 3크레이트 이식·Win32 창·렌더 스파이크·CI·게이트 실측.
-- **M1** 뷰어(★플래그십) 🚧 — M1-1 `nexa-gui` 분리 ✅ · M1-2 ADR-0002 ☐ 다음.
+- **M1** 뷰어(★플래그십) 🚧 — M1-1 `nexa-gui` 분리 ✅ · M1-2 ADR-0002(DW interop) ✅ · M1-3 가상 리스트 ☐ 다음.
 - M2 셸 골격 · M3 조작 · M4 패널 · M5 마감 — ☐.
 
 ## 4. 개발 모델 ([11](11-dev-environment.md))
@@ -38,6 +38,6 @@
 
 ## 5. 다음 단계
 
-1. ~~M0~~ ✅ (07-11) — 게이트 실측 통과 → `0.1.0`. ~~M1-1~~ ✅ (07-11, `feat/m1-gui`) — `nexa-gui` 분리.
-2. **M1-2**: ADR-0002 렌더링 확정 — GDI vs DirectWrite GDI interop 스파이크 비교(품질·RSS·속도).
-3. M1-3: 가상화 파일 리스트 초안(nexa-tree 배선·`RowSource` 자리). → [02](02-roadmap.md)
+1. ~~M0~~ ✅ → `0.1.0` · ~~M1-1~~ ✅ `nexa-gui` 분리 · ~~M1-2~~ ✅ (07-12) ADR-0002 DirectWrite interop 확정.
+2. **M1-3**: 가상화 파일 리스트 초안 — nexa-tree 평면 스트림을 `RowSource` 자리에 배선 + GDI 경로 제거·레이아웃 캐시.
+3. M1-4: 컬럼 시스템(원본 docs/23). → [02](02-roadmap.md)

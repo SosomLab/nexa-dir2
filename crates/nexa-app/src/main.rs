@@ -4,6 +4,8 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod dw;
+#[cfg(windows)]
 mod gdi;
 #[cfg(windows)]
 mod win;

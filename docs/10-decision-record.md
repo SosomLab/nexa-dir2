@@ -21,13 +21,14 @@
 | ADR | 결정 | 상태 | 문서 |
 | --- | --- | --- | --- |
 | **ADR-0001** | 스택 — 올 러스트 + Win32 + 커스텀 드로잉 | **Accepted** | [06](06-adr-0001-stack.md) |
-| ADR-0002 | 텍스트 렌더링 — GDI vs DirectWrite GDI interop (M0 스파이크 실측 후) | 예정(M1 초) | [07](07-adr-0002-rendering.md) 예약 |
+| **ADR-0002** | 텍스트 렌더링 — **DirectWrite GDI interop 채택**(실측: 벤치 −28%·RSS +4.1MB 예산 내·TextLayout 확장성) | **Accepted** | [07](07-adr-0002-rendering.md) |
 
 ### 1-2. 승인된 외부 crate (DR-8 원장, append)
 
 | crate | 용도 | 라이선스 | 예산 영향 | 승인일 |
 | --- | --- | --- | --- | --- |
 | `windows` | Win32/COM 바인딩 | MIT/Apache-2.0 | exe +수백 KB(사용 API만 링크) | 2026-07-11 |
+| `windows-core` | `#[implement]` COM 콜백(IDWriteTextRenderer) — `windows` 매크로 전개가 요구하는 직접 의존 | MIT/Apache-2.0 | 0(이미 `windows`의 전이 의존) | 2026-07-12 |
 
 ## 2. 원본과의 관계 (SSOT 분담)
 
