@@ -163,6 +163,13 @@ impl RowSource for TreeSource {
             .find_prefix(caret, prefix, FindScope::VisibleStream)
     }
 
+    fn icon(&self, index: usize) -> Option<(String, String)> {
+        let id = self.tree.visible_id(index)?;
+        let path = self.tree.node_path(id)?.to_string_lossy().into_owned();
+        let is_dir = self.tree.row(index)?.kind == FileKind::Dir;
+        Some((crate::icons::icon_key(is_dir, &path), path))
+    }
+
     fn set_sort(&mut self, keys: &[(u32, bool)]) -> bool {
         let mapped: Vec<(SortKey, bool)> = keys
             .iter()

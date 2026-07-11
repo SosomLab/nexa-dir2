@@ -15,4 +15,4 @@ nexa-tree = { workspace = true }
 
 [target."cfg(windows)".dependencies]
 windows-core = "0.62.2" # #[implement] 매크로 전개가 ::windows_core 경로를 참조
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_DirectWrite", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_System_Time"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_DirectWrite", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Time"] }
