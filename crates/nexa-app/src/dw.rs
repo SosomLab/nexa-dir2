@@ -16,8 +16,8 @@ use windows::Win32::Graphics::DirectWrite::{
     IDWriteInlineObject, IDWritePixelSnapping_Impl, IDWriteRenderingParams, IDWriteTextFormat,
     IDWriteTextLayout, IDWriteTextRenderer, IDWriteTextRenderer_Impl, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_MATRIX, DWRITE_MEASURING_MODE,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_STRIKETHROUGH, DWRITE_UNDERLINE,
-    DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_STRIKETHROUGH, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_UNDERLINE, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Gdi::{ExtTextOutW, SetBkColor, ETO_OPAQUE, HDC};
 
@@ -28,6 +28,8 @@ pub fn colorref(c: Color) -> COLORREF {
 
 /// 레이아웃 캐시 상한 — 초과 시 전체 비움(가시 행 수백 개 대비 충분한 여유).
 const LAYOUT_CACHE_CAP: usize = 4096;
+/// 측정 전용 레이아웃의 가상 최대 폭(px) — 트리밍이 걸리지 않는 충분히 큰 값.
+const MEASURE_W: i32 = 1 << 20;
 
 /// 텍스트 레이아웃의 글리프 런을 비트맵 렌더 타깃에 그리는 콜백.
 /// 색은 [`DwBackend`]와 공유하는 `Cell`로 전달(그리기 직전에 설정).
@@ -123,8 +125,10 @@ pub struct DwBackend {
     format: IDWriteTextFormat,
     renderer: IDWriteTextRenderer,
     color: Rc<Cell<COLORREF>>,
-    /// 텍스트 → 레이아웃 캐시(NO_WRAP·좌정렬이라 폭 무관). DPI 변경 시 비움.
-    layouts: RefCell<HashMap<String, IDWriteTextLayout>>,
+    /// 컬럼 트리밍(말줄임표) 기호 — 레이아웃마다 SetTrimming으로 부착.
+    ellipsis: IDWriteInlineObject,
+    /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
+    layouts: RefCell<HashMap<(String, i32), IDWriteTextLayout>>,
     w: i32,
     h: i32,
 }
@@ -158,6 +162,7 @@ impl DwBackend {
             color: color.clone(),
         }
         .into();
+        let ellipsis = factory.CreateEllipsisTrimmingSign(&format)?;
 
         Ok(DwBackend {
             factory,
@@ -165,29 +170,40 @@ impl DwBackend {
             format,
             renderer,
             color,
+            ellipsis,
             layouts: RefCell::new(HashMap::new()),
             w,
             h,
         })
     }
 
-    /// `text`의 레이아웃(캐시 히트 시 재사용). `max_h_dip` = 행 높이(세로 중앙 정렬 기준).
-    fn layout_for(&self, text: &str, max_h_dip: f32) -> Option<IDWriteTextLayout> {
-        if let Some(l) = self.layouts.borrow().get(text) {
+    /// `(text, max_w_px)`의 레이아웃(캐시 히트 시 재사용) — 폭 초과분은 말줄임표 트리밍.
+    /// `max_h_dip` = 행 높이(세로 중앙 정렬 기준).
+    fn layout_for(&self, text: &str, max_w_px: i32, max_h_dip: f32) -> Option<IDWriteTextLayout> {
+        let key = (text.to_owned(), max_w_px);
+        if let Some(l) = self.layouts.borrow().get(&key) {
             return Some(l.clone());
         }
+        let ppd = self.pixels_per_dip();
         let wtext: Vec<u16> = text.encode_utf16().collect();
-        // NO_WRAP + 좌정렬이라 max width는 글리프 배치에 영향 없음 — 충분히 큰 값
         let layout = unsafe {
-            self.factory
-                .CreateTextLayout(&wtext, &self.format, 65536.0, max_h_dip)
-                .ok()?
+            let layout = self
+                .factory
+                .CreateTextLayout(&wtext, &self.format, max_w_px as f32 / ppd, max_h_dip)
+                .ok()?;
+            let trim = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                delimiter: 0,
+                delimiterCount: 0,
+            };
+            let _ = layout.SetTrimming(&trim, &self.ellipsis);
+            layout
         };
         let mut cache = self.layouts.borrow_mut();
         if cache.len() >= LAYOUT_CACHE_CAP {
             cache.clear();
         }
-        cache.insert(text.to_owned(), layout.clone());
+        cache.insert(key, layout.clone());
         Some(layout)
     }
 
@@ -241,12 +257,13 @@ impl DrawCtx for DwCtx<'_> {
     fn text_opaque(&mut self, x: i32, _y: i32, clip: Rect, text: &str, fg: Color, bg: Color) {
         // 배경은 GDI로 불투명 채우기, 글리프는 DirectWrite로 — 행 = fill + Draw 1회
         self.fill_rect(clip, bg);
-        if text.is_empty() {
+        if text.is_empty() || x >= clip.right() {
             return;
         }
         unsafe {
             let ppd = self.back.pixels_per_dip();
-            let Some(layout) = self.back.layout_for(text, clip.h as f32 / ppd) else {
+            let max_w = clip.right() - x;
+            let Some(layout) = self.back.layout_for(text, max_w, clip.h as f32 / ppd) else {
                 return;
             };
             self.back.color.set(colorref(fg));
@@ -256,6 +273,23 @@ impl DrawCtx for DwCtx<'_> {
                 x as f32 / ppd,
                 clip.y as f32 / ppd,
             );
+        }
+    }
+
+    fn text_width(&mut self, text: &str) -> i32 {
+        if text.is_empty() {
+            return 0;
+        }
+        unsafe {
+            let ppd = self.back.pixels_per_dip();
+            let Some(layout) = self.back.layout_for(text, MEASURE_W, 1000.0) else {
+                return 0;
+            };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() {
+                return 0;
+            }
+            (m.widthIncludingTrailingWhitespace * ppd).ceil() as i32
         }
     }
 }
