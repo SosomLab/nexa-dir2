@@ -1,0 +1,49 @@
+# CI — docs/18 §4. 신뢰 원천: windows job(실행 타깃), core job(크로스 플랫폼 순수부).
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    name: core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show # rust-toolchain.toml 적용
+      - run: cargo test --workspace
+
+  windows:
+    name: windows (build·test·예산)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo test --workspace
+      - run: cargo build --release -p nexa-app
+      - name: 예산 B2 — 단일 exe ≤ 10MB (docs/18 §5)
+        shell: pwsh
+        run: |
+          $exe = "target/release/nexa-app.exe"
+          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 2)
+          Write-Output "nexa-app.exe = $mb MB"
+          if ((Get-Item $exe).Length -gt 10MB) { throw "예산 B2 초과: $mb MB > 10 MB" }
+      - name: 예산 B3 — 임포트 DLL(OS 인박스만) 목록 출력
+        shell: pwsh
+        run: |
+          # 1차: 목록 가시화(게이트 자동화는 M0-8에서 화이트리스트로 강화)
+          & "$env:VCToolsInstallDir..\..\..\..\VC\Auxiliary\Build\vcvars64.bat" 2>$null
+          $dumpbin = Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dumpbin) { & $dumpbin.FullName /imports target/release/nexa-app.exe | Select-String "\.dll" }
+          else { Write-Output "dumpbin 미발견 — 로컬 실측으로 대체(docs/18 §5)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexa-app-win-x64
+          path: target/release/nexa-app.exe
