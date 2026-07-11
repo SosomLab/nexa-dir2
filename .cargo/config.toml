@@ -1,0 +1,6 @@
+# CRT 정적 링크 — 재배포 런타임 0 (예산 B3, docs/18 §3)
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
