@@ -1,0 +1,11 @@
+[package]
+name = "nexa-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Nexa Dir 코어 공용 타입/유틸"
+
+[dependencies]
