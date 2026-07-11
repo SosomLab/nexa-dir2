@@ -9,3 +9,6 @@ homepage.workspace = true
 description = "Nexa Dir 2 앱 (Win32 창·메시지 루프·조립)"
 
 [dependencies]
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_LibraryLoader"] }
