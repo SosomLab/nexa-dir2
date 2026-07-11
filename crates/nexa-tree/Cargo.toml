@@ -1,0 +1,13 @@
+[package]
+name = "nexa-tree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Nexa Dir 인라인 트리/교차 선택 모델 (가시 노드 평면 스트림, C1)"
+
+[dependencies]
+nexa-core = { workspace = true }
+nexa-vfs = { workspace = true }
