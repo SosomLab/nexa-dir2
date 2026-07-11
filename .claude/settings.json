@@ -74,6 +74,7 @@
       "Bash(rustup show *)",
       "Bash(rustup target *)",
       "Bash(gh:*)",
+      "Bash(gh *)",
       "Bash(python:*)",
       "Bash(python3:*)",
       "Bash(pip:*)",
@@ -86,6 +87,7 @@
       "PowerShell(Write-Output:*)",
       "PowerShell(git:*)",
       "PowerShell(gh:*)",
+      "PowerShell(gh *)",
       "PowerShell(cargo:*)",
       "PowerShell(rustup:*)"
     ],
