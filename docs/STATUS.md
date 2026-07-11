@@ -1,9 +1,9 @@
 # STATUS — Nexa Dir 2 진행 현황
 
-> **갱신: 2026-07-11 (KST)** — 프로젝트 발족 + **M0 후반**. 설계 문서 세트(`docs/foundation`) 병합.
-> `feat/m0-scaffold`: 워크스페이스·**코어 3크레이트 이식 완료**(rlib 직접 링크 — FFI/ABI 폐지 실현, 테스트 21+5 green)·
-> **Win32 창 스켈레톤**(windows-rs 0.62, 맥에서 `cargo check --target x86_64-pc-windows-msvc` green)·CI(예산 B2 게이트).
-> 잔여: M0-7 렌더 스파이크 확장 · **M0-8 게이트 실측(Windows 실기)** → `0.1.0`.
+> **갱신: 2026-07-11 (KST)** — **M0 마지막 항목(M0-8)만 잔여**. 설계 문서 세트·`feat/m0-scaffold`(M0-1~6) 병합.
+> `feat/m0-render-spike`: **M0-7 GDI 렌더 스파이크 완료** — 더블 버퍼(메모리 DC)·합성 100k 행 중 **가시 행만** 그리기·
+> 휠/키보드 스크롤·DPI 대응 (맥에서 windows 타깃 check·clippy green, 테스트 26 green).
+> 잔여: **M0-8 게이트 실측(Windows 실기)** — 빈 창 RSS·exe 크기·임포트 → `0.1.0`.
 
 ## 1. 확정된 결정 ([10](10-decision-record.md))
 
@@ -38,6 +38,6 @@
 ## 5. 다음 단계
 
 1. ~~M0-1~6~~ ✅ (07-11, `feat/m0-scaffold`) — 스캐폴딩·코어 이식·Win32 스켈레톤·CI.
-2. **M0-7**: GDI 렌더 스파이크 확장(더블 버퍼·가시 N행) — 맥에서 작성, check 검증.
+2. ~~M0-7~~ ✅ (07-11, `feat/m0-render-spike`) — GDI 렌더 스파이크(더블 버퍼·가시 100k행·스크롤·DPI).
 3. **M0-8**: Windows 실기/CI에서 게이트 실측(빈 창 RSS·exe 크기·임포트) → journal 기록 → `0.1.0` 태그.
 4. M1 착수: `nexa-gui` 분리 + ADR-0002(렌더링) 스파이크 비교.

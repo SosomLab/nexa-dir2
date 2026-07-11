@@ -27,6 +27,7 @@
       "Bash(git init:*)",
       "Bash(git config:*)",
       "Bash(git -C:*)",
+      "Bash(git -C *)",
       "Bash(git -C /Users/kiros33/Projects/kiros33/nexa-dir2 log --oneline -5)",
       "Bash(git -C /Users/kiros33/Projects/kiros33/nexa-dir2 status --short --branch)",
       "Bash(echo:*)",
