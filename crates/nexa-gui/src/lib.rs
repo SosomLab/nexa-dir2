@@ -4,6 +4,7 @@
 //! 구체 렌더 백엔드(GDI ↔ DirectWrite interop)는 [`draw::DrawCtx`] 구현체로 nexa-app이 제공하며,
 //! ADR-0002(M1-2) 확정 후 이 크레이트로의 이동 여부를 재결정한다.
 
+pub mod columns;
 pub mod draw;
 pub mod event;
 pub mod geom;
@@ -11,6 +12,7 @@ pub mod theme;
 pub mod widget;
 pub mod widgets;
 
+pub use columns::{Align, Column};
 pub use draw::DrawCtx;
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
