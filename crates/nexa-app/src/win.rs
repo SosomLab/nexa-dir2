@@ -34,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use crate::dw::{DwBackend, DwCtx};
+use crate::icons::shell::ShellIcons;
 use crate::source::{TreeSource, COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
 
 /// wParam 마우스 수식키 비트(winuser.h MK_SHIFT/MK_CONTROL).
@@ -45,6 +46,8 @@ const BENCH_FRAMES: usize = 200;
 /// 타입어헤드 타임아웃 점검 타이머 id·주기(ms).
 const TIMER_TYPEAHEAD: usize = 1;
 const TIMER_TICK_MS: u32 = 250;
+/// 셸 아이콘 로딩 큐 타이머 id(주기 = icons::shell::TICK_MS — 원본 A-4 속도 제한).
+const TIMER_ICONS: usize = 2;
 
 /// 단조 시각(ms) — 타입어헤드 버퍼 타임아웃 판정용(프로세스 기동 기준).
 fn now_ms() -> u64 {
@@ -83,6 +86,7 @@ struct State {
     theme: Theme,
     dpi: u32,
     dw: Option<DwBackend>,
+    icons: std::cell::RefCell<ShellIcons>,
     stats: PaintStats,
 }
 
@@ -141,6 +145,7 @@ pub fn run() -> Result<()> {
         theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2 테마 시스템
         dpi: 96,
         dw: None,
+        icons: std::cell::RefCell::new(ShellIcons::new()),
         stats: PaintStats::default(),
     });
 
@@ -259,13 +264,21 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
 
     ensure_dw(st, hdc, rc.w, rc.h);
     if let Some(back) = &st.dw {
-        let mut ctx = DwCtx { back };
+        let mut ctx = DwCtx {
+            back,
+            icons: &st.icons,
+        };
         st.rows.paint(&mut ctx, &st.theme);
         let _ = BitBlt(hdc, 0, 0, rc.w, rc.h, Some(back.memory_dc()), 0, 0, SRCCOPY);
     }
 
     st.stats.add(t0.elapsed().as_micros() as u64);
     let _ = EndPaint(hwnd, &ps);
+
+    // 미로드 아이콘이 큐에 쌓였으면 속도 제한 로딩 시작(원본 A-4)
+    if st.icons.borrow().has_pending() {
+        SetTimer(Some(hwnd), TIMER_ICONS, crate::icons::shell::TICK_MS, None);
+    }
 
     // 첫 프레임(WM_NCCREATE의 SetWindowText는 창 생성 타이틀로 덮임) + 20프레임마다 갱신
     if st.stats.frames == 1 || st.stats.frames.is_multiple_of(20) {
@@ -444,6 +457,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     flush_invalidations(hwnd, &mut inv);
                     if st.rows.typeahead_text().is_empty() {
                         let _ = KillTimer(Some(hwnd), TIMER_TYPEAHEAD);
+                    }
+                }
+            } else if wparam.0 == TIMER_ICONS {
+                if let Some(st) = state_of(hwnd) {
+                    // 틱당 BATCH개만 로드(속도 제한) — 로드분이 있으면 가시 영역 다시 그리기
+                    if st.icons.borrow_mut().tick() {
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                    if !st.icons.borrow().has_pending() {
+                        let _ = KillTimer(Some(hwnd), TIMER_ICONS);
                     }
                 }
             }

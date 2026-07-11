@@ -235,8 +235,10 @@ impl DwBackend {
 }
 
 /// 프레임 단위 드로잉 컨텍스트 — DrawCtx의 DirectWrite interop 구현.
+/// 아이콘은 [`crate::icons::shell::ShellIcons`] 캐시(미로드 시 큐잉 — win.rs 타이머가 로드).
 pub struct DwCtx<'a> {
     pub back: &'a DwBackend,
+    pub icons: &'a std::cell::RefCell<crate::icons::shell::ShellIcons>,
 }
 
 impl DrawCtx for DwCtx<'_> {
@@ -291,5 +293,24 @@ impl DrawCtx for DwCtx<'_> {
             }
             (m.widthIncludingTrailingWhitespace * ppd).ceil() as i32
         }
+    }
+
+    fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) {
+        if let Some(icon) = self.icons.borrow_mut().get_or_request(key, hint) {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
+                    self.back.memory_dc(),
+                    x,
+                    y,
+                    icon,
+                    size,
+                    size,
+                    0,
+                    None,
+                    windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
+                );
+            }
+        }
+        // 미로드 시 공백 유지 — 큐잉됐으므로 win.rs 아이콘 타이머가 로드 후 다시 그린다
     }
 }

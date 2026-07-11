@@ -8,7 +8,8 @@ $ErrorActionPreference = "Stop"
 $whitelist = @(
   "kernel32.dll", "user32.dll", "gdi32.dll", "ntdll.dll", "oleaut32.dll",
   "dwrite.dll", "combase.dll",     # ADR-0002 DirectWrite interop
-  "bcryptprimitives.dll"           # rust std HashMap RandomState(BCryptGenRandom)
+  "bcryptprimitives.dll",          # rust std HashMap RandomState(BCryptGenRandom)
+  "shell32.dll"                    # M1-7 셸 아이콘(SHGetFileInfoW)
 )
 
 if (-not (Test-Path $Exe)) { throw "exe 없음: $Exe — cargo build --release 먼저" }

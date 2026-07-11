@@ -106,6 +106,11 @@ pub trait RowSource {
         let _ = (caret, prefix);
         None
     }
+    /// 행 아이콘 `(키, 로드 힌트)` — DrawCtx가 해석(M1-7 셸 아이콘). 기본 = 아이콘 없음.
+    fn icon(&self, index: usize) -> Option<(String, String)> {
+        let _ = index;
+        None
+    }
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -433,19 +438,28 @@ impl<S: RowSource> VirtualRows<S> {
 
     // ── 페인트 보조 ──────────────────────────────────────────────
 
-    /// 트리 컬럼(마커+들여쓰기+이름)을 `cell` 안에 그린다.
+    /// 트리 컬럼(마커+들여쓰기+아이콘+이름)을 `cell` 안에 그린다.
     fn paint_tree_cell(
         &self,
         ctx: &mut dyn DrawCtx,
         theme: &Theme,
         item: &RowItem,
+        icon: Option<&(String, String)>,
         cell: Rect,
-        ty: i32,
         bg: crate::theme::Color,
     ) {
+        // 텍스트 세로 위치: 행 높이의 4/5를 글자 높이로 보고 중앙 정렬(M0-7 계승)
+        let ty = cell.y + (cell.h - (cell.h * 4) / 5) / 2;
         let indent = cell.x + self.pad_x + item.depth as i32 * self.indent_w;
         ctx.text_opaque(indent, ty, cell, item.marker.glyph(), theme.text_dim, bg);
-        let name_x = indent + self.indent_w;
+        let mut name_x = indent + self.indent_w;
+        if let Some((key, hint)) = icon {
+            // 아이콘 크기 = 들여쓰기 폭(16px@96dpi) — 셸 스몰 아이콘 규격
+            let isz = self.indent_w;
+            let iy = cell.y + (cell.h - isz) / 2;
+            ctx.draw_icon(name_x, iy, isz, key, hint);
+            name_x += isz + self.pad_x / 2;
+        }
         if name_x < cell.right() {
             let name_rc = Rect::new(name_x, cell.y, cell.right() - name_x, cell.h);
             ctx.text_opaque(name_x, ty, name_rc, &item.text, theme.text, bg);
@@ -692,8 +706,9 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             if self.columns.is_empty() {
                 // M1-3 호환: 단일 트리 컬럼이 전체 폭
                 let item = self.src.row(row);
+                let icon = self.src.icon(row);
                 let rc = Rect::new(b.x, y, b.w, self.row_h);
-                self.paint_tree_cell(ctx, theme, &item, rc, ty, bg);
+                self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), rc, bg);
             } else {
                 for (ci, col) in self.columns.iter().enumerate() {
                     let cx = self.col_x(ci);
@@ -703,7 +718,8 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     let cell = Rect::new(cx, y, col.width, self.row_h);
                     if col.key == 0 {
                         let item = self.src.row(row);
-                        self.paint_tree_cell(ctx, theme, &item, cell, ty, bg);
+                        let icon = self.src.icon(row);
+                        self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), cell, bg);
                     } else {
                         let text = self.src.cell(row, col.key);
                         let tx = match col.align {
