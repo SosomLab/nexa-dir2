@@ -48,6 +48,7 @@
 | Double Commander | Free Pascal/LCL(Win32) | <20MB | 포터블 zip | UI 노후 — 우리는 원본의 모던 UX 계승 |
 | Total Commander | Delphi(Win32/GDI) | ~15MB | 설치/포터블 | 유료·구식 — 동일 체급 성능 + 차세대 UX |
 | Everything (voidtools) | C++/Win32 커스텀 드로잉 | <20MB | 단일 exe 有 | 검색 전용 — 우리는 탐색기 전체 |
+| One Commander | C#/.NET(WPF) | 100MB+ | 포터블 zip(런타임 동반) | 모던 듀얼 패널 UX지만 관리 런타임 체급(원본과 같은 한계) — 동급 UX를 네이티브 예산으로 |
 | 원본 Nexa Dir | Rust+WinUI 3 | 60MB+ | setup.exe ≈64MB | 기능 원천 — 우리는 예산·포터블 달성판 |
 
 **차별화 포인트**: *원본의 플래그십 UX(인라인 트리+교차선택)* × *Win32 커스텀 드로잉 체급의 예산* × *단일 exe*.
