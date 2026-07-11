@@ -1,0 +1,12 @@
+[package]
+name = "nexa-vfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Nexa Dir 가상 파일시스템 추상화 (로컬/원격/클라우드)"
+
+[dependencies]
+nexa-core = { workspace = true }

@@ -9,3 +9,10 @@ version = "0.1.0"
 [[package]]
 name = "nexa-core"
 version = "0.1.0"
+
+[[package]]
+name = "nexa-vfs"
+version = "0.1.0"
+dependencies = [
+ "nexa-core",
+]

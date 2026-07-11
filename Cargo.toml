@@ -4,6 +4,7 @@
 resolver = "2"
 members = [
   "crates/nexa-core",
+  "crates/nexa-vfs",
   "crates/nexa-app",
 ]
 
