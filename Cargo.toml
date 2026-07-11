@@ -3,6 +3,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/nexa-core",
   "crates/nexa-app",
 ]
 
