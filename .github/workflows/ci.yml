@@ -38,8 +38,8 @@ jobs:
       - name: 예산 B3 — 임포트 DLL 화이트리스트 게이트 (docs/18 §5)
         shell: pwsh
         run: |
-          # OS 인박스 DLL 화이트리스트(M0-8 실측 기준) — 외 DLL 발견 시 fail
-          $whitelist = @("kernel32.dll", "user32.dll", "gdi32.dll", "ntdll.dll", "oleaut32.dll")
+          # OS 인박스 DLL 화이트리스트(M0-8 실측 + ADR-0002 DirectWrite) — 외 DLL 발견 시 fail
+          $whitelist = @("kernel32.dll", "user32.dll", "gdi32.dll", "ntdll.dll", "oleaut32.dll", "dwrite.dll", "combase.dll")
           $dumpbin = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $dumpbin) { throw "dumpbin 미발견 — B3 게이트 실행 불가" }
           $imports = & $dumpbin.FullName /imports target/release/nexa-app.exe |
