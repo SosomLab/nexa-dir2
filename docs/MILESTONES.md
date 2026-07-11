@@ -26,7 +26,8 @@
 ## M1 — 뷰어 코어 🚧 착수
 
 - ✅ M1-1 `nexa-gui` 크레이트 분리(`feat/m1-gui`) — 플랫폼 중립 위젯 trait·무효화(rect 병합)·입력 이벤트·테마 토큰(원본 docs/39 차용, 다크 기본 DR-5)·`VirtualRows`(스파이크 로직 이식·`RowSource` 추상). GDI 백엔드는 nexa-app `gdi.rs`(ADR-0002 확정까지).
-- ☐ M1-2 ADR-0002 렌더링 확정 · ☐ M1-3 가상 리스트(nexa-tree 배선) · ☐ M1-4~9.
+- ✅ M1-2 [ADR-0002](07-adr-0002-rendering.md) **Accepted**(`feat/m1-adr0002-render`) — 텍스트 렌더링 = **DirectWrite GDI interop**. 실측: 스크롤 벤치 GDI 대비 −28%·RSS +4.1MB(17.4MB)·exe 0.23MB 전 게이트 내. 기본 백엔드 전환.
+- ☐ M1-3 가상 리스트(nexa-tree 배선·GDI 경로 제거·레이아웃 캐시) · ☐ M1-4~9.
 
 ## M1+ (요약)
 
