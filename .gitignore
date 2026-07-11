@@ -1,0 +1,24 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# 로컬 산출물
+/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 에디터
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+# Claude Code 로컬 설정(개인) — 공용 설정은 .claude/settings.json(커밋)
+.claude/settings.local.json
+
+# 비밀(공개 대비 커밋 금지 규율)
+*.pfx
+*.snk
+secrets/
