@@ -16,6 +16,7 @@
       "Bash(git commit:*)",
       "Bash(git merge:*)",
       "Bash(git mv:*)",
+      "Bash(git push:*)",
       "Bash(git pull:*)",
       "Bash(git fetch:*)",
       "Bash(git switch:*)",
