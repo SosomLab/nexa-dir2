@@ -7,6 +7,7 @@ use crate::draw::DrawCtx;
 use crate::event::{InputEvent, Key, WheelAccum};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
+use crate::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 use crate::widget::{Invalidations, Widget};
 
 /// 휠 1노치당 스크롤 행 수(M0-7 계승).
@@ -99,6 +100,12 @@ pub trait RowSource {
     fn clear_selection(&mut self) -> bool {
         false
     }
+    /// 타입어헤드 매칭(원본 docs/32 §6 — 가시 스트림 위치상대 starts-with + wrap).
+    /// `caret` 다음부터 검색(코어 `find_prefix` 규약). 기본 = 매치 없음.
+    fn find_prefix(&self, caret: Option<usize>, prefix: &str) -> Option<usize> {
+        let _ = (caret, prefix);
+        None
+    }
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -147,8 +154,9 @@ pub struct VirtualRows<S> {
     sort: Vec<(u32, bool)>,
     resize: Option<ResizeDrag>,
     band: Option<BandDrag>,
-    /// 캐럿(마지막 상호작용 행) — 키보드 펼침/접힘 기준. 전체 키보드 네비는 M1-6.
+    /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
+    typeahead: TypeAhead,
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -168,6 +176,19 @@ impl<S: RowSource> VirtualRows<S> {
             resize: None,
             band: None,
             caret: None,
+            typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
+        }
+    }
+
+    /// 타입어헤드 버퍼(HUD·타이머 판단용). 빈 값 = 비활성.
+    pub fn typeahead_text(&self) -> &str {
+        self.typeahead.text()
+    }
+
+    /// 주기 점검(WM_TIMER) — 타입어헤드 타임아웃 소거.
+    pub fn tick(&mut self, now_ms: u64, inv: &mut Invalidations) {
+        if self.typeahead.tick(now_ms) {
+            inv.push(self.bounds);
         }
     }
 
@@ -277,6 +298,54 @@ impl<S: RowSource> VirtualRows<S> {
             self.scroll_row = clamped;
             inv.push(self.bounds); // 전 행 이동 — 위젯 영역 전체 무효화
         }
+    }
+
+    /// 행이 보이도록 세로 스크롤 조정(원본 ScrollIndexIntoView 대응).
+    fn scroll_into_view(&mut self, row: usize) {
+        let full = ((self.body_h() / self.row_h).max(1)) as usize;
+        if row < self.scroll_row {
+            self.scroll_row = row;
+        } else if row >= self.scroll_row + full {
+            self.scroll_row = row + 1 - full;
+        }
+        self.scroll_row = self.scroll_row.min(self.max_scroll());
+    }
+
+    /// 캐럿 이동 + 선택 규약(탐색기): 평이동=단일 선택, Shift=범위, Ctrl=캐럿만.
+    fn move_caret(&mut self, target: usize, shift: bool, ctrl: bool, inv: &mut Invalidations) {
+        self.caret = Some(target);
+        if shift {
+            self.src.select(target, SelectOp::RangeTo);
+        } else if !ctrl {
+            self.src.select(target, SelectOp::Single);
+        }
+        self.scroll_into_view(target);
+        inv.push(self.bounds);
+    }
+
+    /// 가시 목록에서 `row`의 부모 행(더 얕은 깊이의 직전 행). 최상위면 `None`.
+    fn parent_row(&self, row: usize) -> Option<usize> {
+        let depth = self.src.row(row).depth;
+        if depth == 0 {
+            return None;
+        }
+        (0..row).rev().find(|&i| self.src.row(i).depth < depth)
+    }
+
+    /// 타입어헤드 검색 실행 — 매치 시 단일 선택+캐럿+스크롤(원본 docs/32 §6).
+    fn typeahead_find(&mut self, prefix: &str, include_caret: bool, inv: &mut Invalidations) {
+        // find_prefix는 caret "다음"부터 — 현재 행 포함 재평가는 caret-1 기준
+        let base = if include_caret {
+            self.caret.and_then(|c| c.checked_sub(1))
+        } else {
+            self.caret
+        };
+        if let Some(idx) = self.src.find_prefix(base, prefix) {
+            self.caret = Some(idx);
+            self.src.select(idx, SelectOp::Single);
+            self.scroll_into_view(idx);
+        }
+        inv.push(self.bounds); // 매치 없어도 HUD(버퍼) 갱신
     }
 
     /// 클라이언트 좌표 → 본문 행 인덱스(범위 밖이면 `None`).
@@ -435,28 +504,78 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     }
                 }
             }
-            InputEvent::Key(k) => match k {
-                Key::Up => self.scroll_to(cur - 1, inv),
-                Key::Down => self.scroll_to(cur + 1, inv),
-                Key::PageUp => self.scroll_to(cur - page, inv),
-                Key::PageDown => self.scroll_to(cur + page, inv),
-                Key::Home => self.scroll_to(0, inv),
-                Key::End => self.scroll_to(isize::MAX / 2, inv),
-                // →/← = 캐럿 행 인라인 펼침/접힘(docs/07 §8 — 부모 이동은 M1-6)
-                Key::Right | Key::Left => {
-                    if let Some(c) = self.caret.filter(|&c| c < self.src.len()) {
-                        let want = if k == Key::Right {
-                            Marker::Collapsed
-                        } else {
-                            Marker::Expanded
-                        };
-                        if self.src.row(c).marker == want && self.src.toggle(c) {
-                            self.clamp_scroll();
-                            inv.push(self.bounds);
+            InputEvent::Key { key, shift, ctrl } => {
+                let len = self.src.len();
+                if len == 0 {
+                    return;
+                }
+                let caret = self.caret.unwrap_or(self.scroll_row).min(len - 1);
+                match key {
+                    // 캐럿 이동(탐색기 규약: 평이동=단일 선택·Shift=범위·Ctrl=캐럿만)
+                    Key::Up | Key::Down | Key::PageUp | Key::PageDown | Key::Home | Key::End => {
+                        let cur = caret as isize;
+                        let target = match key {
+                            Key::Up => cur - 1,
+                            Key::Down => cur + 1,
+                            Key::PageUp => cur - page,
+                            Key::PageDown => cur + page,
+                            Key::Home => 0,
+                            _ => len as isize - 1, // End
+                        }
+                        .clamp(0, len as isize - 1) as usize;
+                        self.move_caret(target, shift, ctrl, inv);
+                    }
+                    // → = 펼침, 이미 펼침이면 첫 자식으로(docs/07 §8)
+                    Key::Right => {
+                        let item = self.src.row(caret);
+                        match item.marker {
+                            Marker::Collapsed => {
+                                if self.src.toggle(caret) {
+                                    self.caret = Some(caret);
+                                    self.clamp_scroll();
+                                    inv.push(self.bounds);
+                                }
+                            }
+                            Marker::Expanded => {
+                                if caret + 1 < len && self.src.row(caret + 1).depth > item.depth {
+                                    self.move_caret(caret + 1, shift, ctrl, inv);
+                                }
+                            }
+                            Marker::None => {}
                         }
                     }
+                    // ← = 접힘, 접힘/파일이면 부모로(docs/07 §8)
+                    Key::Left => {
+                        if self.src.row(caret).marker == Marker::Expanded {
+                            if self.src.toggle(caret) {
+                                self.caret = Some(caret);
+                                self.clamp_scroll();
+                                inv.push(self.bounds);
+                            }
+                        } else if let Some(parent) = self.parent_row(caret) {
+                            self.move_caret(parent, shift, ctrl, inv);
+                        }
+                    }
+                    // Space/Ctrl+Space = 캐럿 행 선택 토글(docs/32 §7 결정 1)
+                    Key::Space => {
+                        self.caret = Some(caret);
+                        self.src.select(caret, SelectOp::Toggle);
+                        inv.push(self.bounds);
+                    }
                 }
-            },
+            }
+            InputEvent::Char { c, now_ms } => {
+                if c == '\u{8}' {
+                    // Backspace — 접두사 축소, 비면 HUD 소거
+                    match self.typeahead.backspace(now_ms) {
+                        Some(q) => self.typeahead_find(&q.prefix, q.include_caret, inv),
+                        None => inv.push(self.bounds),
+                    }
+                } else if !c.is_control() && c != ' ' {
+                    let q = self.typeahead.push(c, now_ms);
+                    self.typeahead_find(&q.prefix, q.include_caret, inv);
+                }
+            }
             InputEvent::SelectAll => {
                 if self.src.select_all() {
                     inv.push(self.bounds);
@@ -675,6 +794,31 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 ctx.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), theme.accent);
             }
         }
+
+        // ── 타입어헤드 HUD(본문 좌하단 플로팅 배지 — 원본 docs/32 §7-A) ──
+        if !self.typeahead.text().is_empty() {
+            let label = format!("찾기: {}", self.typeahead.text());
+            let tw = ctx.text_width(&label);
+            let hud = Rect::new(
+                b.x + self.pad_x,
+                b.bottom() - self.row_h - self.pad_x,
+                tw + self.pad_x * 2,
+                self.row_h,
+            );
+            let hty = hud.y + (self.row_h - (self.row_h * 4) / 5) / 2;
+            ctx.text_opaque(
+                hud.x + self.pad_x,
+                hty,
+                hud,
+                &label,
+                theme.text,
+                theme.header_bg,
+            );
+            ctx.fill_rect(Rect::new(hud.x, hud.y, hud.w, 1), theme.accent);
+            ctx.fill_rect(Rect::new(hud.x, hud.bottom() - 1, hud.w, 1), theme.accent);
+            ctx.fill_rect(Rect::new(hud.x, hud.y, 1, hud.h), theme.accent);
+            ctx.fill_rect(Rect::new(hud.right() - 1, hud.y, 1, hud.h), theme.accent);
+        }
     }
 }
 
@@ -789,15 +933,25 @@ mod tests {
         );
     }
 
+    fn key(k: Key) -> InputEvent {
+        InputEvent::Key {
+            key: k,
+            shift: false,
+            ctrl: false,
+        }
+    }
+
     // ── M1-3 계승(컬럼 없음 = 헤더 없음) ──
 
     #[test]
     fn scroll_clamps_to_total_minus_full_rows() {
         let (mut v, mut inv) = list(100, 200); // 완전 가시 10행
-        v.on_event(&InputEvent::Key(Key::End), &mut inv);
-        assert_eq!(v.scroll_row(), 90);
-        v.on_event(&InputEvent::Key(Key::Home), &mut inv);
+        v.on_event(&key(Key::End), &mut inv);
+        assert_eq!(v.scroll_row(), 90); // 캐럿 99가 보이도록 스크롤 추적
+        assert_eq!(v.caret(), Some(99));
+        v.on_event(&key(Key::Home), &mut inv);
         assert_eq!(v.scroll_row(), 0);
+        assert_eq!(v.caret(), Some(0));
     }
 
     #[test]
@@ -840,7 +994,7 @@ mod tests {
         // y=5 → 헤더(정렬 클릭), y=25 → 0행
         assert_eq!(v.row_at(10, 5), None);
         assert_eq!(v.row_at(10, 25), Some(0));
-        v.on_event(&InputEvent::Key(Key::End), &mut inv);
+        v.on_event(&key(Key::End), &mut inv);
         assert_eq!(v.scroll_row(), 90);
     }
 
@@ -920,6 +1074,7 @@ mod tests {
         n: usize,
         sel: std::collections::HashSet<usize>,
         anchor: usize,
+        names: Vec<String>,
     }
     impl SelRows {
         fn new(n: usize) -> SelRows {
@@ -927,7 +1082,21 @@ mod tests {
                 n,
                 sel: Default::default(),
                 anchor: 0,
+                names: Vec::new(),
             }
+        }
+    }
+    impl SelRows {
+        fn named(names: &[&str]) -> SelRows {
+            let mut s = SelRows::new(names.len());
+            s.names = names.iter().map(|n| n.to_string()).collect();
+            s
+        }
+        fn name(&self, i: usize) -> String {
+            self.names
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("row-{i}"))
         }
     }
     impl RowSource for SelRows {
@@ -936,10 +1105,21 @@ mod tests {
         }
         fn row(&self, index: usize) -> RowItem {
             RowItem {
-                text: format!("row-{index}"),
+                text: self.name(index),
                 depth: 0,
                 marker: Marker::None,
             }
+        }
+        fn find_prefix(&self, caret: Option<usize>, prefix: &str) -> Option<usize> {
+            // 코어 find_prefix(VisibleStream) 축약 모사: caret+1부터 + wrap, 대소문자 무시
+            if prefix.is_empty() || self.n == 0 {
+                return None;
+            }
+            let lower = prefix.to_lowercase();
+            let start = caret.filter(|&c| c < self.n).map_or(0, |c| c + 1);
+            (start..self.n)
+                .chain(0..start)
+                .find(|&i| self.name(i).to_lowercase().starts_with(&lower))
         }
         fn is_selected(&self, index: usize) -> bool {
             self.sel.contains(&index)
@@ -1071,12 +1251,149 @@ mod tests {
             &mut inv,
         ); // 본문 클릭 → 캐럿 0
         assert_eq!(v.caret(), Some(0));
-        v.on_event(&InputEvent::Key(Key::Right), &mut inv);
+        v.on_event(&key(Key::Right), &mut inv);
         assert_eq!(v.source().len(), 6, "→ = 인라인 펼침");
-        v.on_event(&InputEvent::Key(Key::Right), &mut inv);
-        assert_eq!(v.source().len(), 6, "이미 펼침이면 무시");
-        v.on_event(&InputEvent::Key(Key::Left), &mut inv);
-        assert_eq!(v.source().len(), 1, "← = 접힘");
+        v.on_event(&key(Key::Right), &mut inv);
+        assert_eq!(v.caret(), Some(1), "펼침 상태에서 → = 첫 자식으로");
+        v.on_event(&key(Key::Left), &mut inv);
+        assert_eq!(v.caret(), Some(0), "자식(파일)에서 ← = 부모로");
+        v.on_event(&key(Key::Left), &mut inv);
+        assert_eq!(v.source().len(), 1, "펼친 부모에서 ← = 접힘");
+    }
+
+    // ── 캐럿 키보드 네비(M1-6, 탐색기 규약) ──
+
+    #[test]
+    fn caret_moves_select_and_scroll_follows() {
+        let (mut v, mut inv) = sel_list(100, 200); // 완전 가시 10행
+        v.on_event(&key(Key::Down), &mut inv); // 캐럿 없음 → scroll_row(0) 기준 +1
+        assert_eq!(v.caret(), Some(1));
+        assert!(v.source().is_selected(1) && v.source().sel.len() == 1);
+        v.on_event(&key(Key::PageDown), &mut inv);
+        assert_eq!(v.caret(), Some(11));
+        assert_eq!(v.scroll_row(), 2, "캐럿이 보이도록 스크롤 추적");
+        v.on_event(&key(Key::Home), &mut inv);
+        assert_eq!((v.caret(), v.scroll_row()), (Some(0), 0));
+    }
+
+    #[test]
+    fn shift_moves_range_and_ctrl_moves_caret_only() {
+        let (mut v, mut inv) = sel_list(20, 200);
+        sdown(&mut v, &mut inv, 25, false, false); // 1행 클릭(anchor)
+        v.on_event(
+            &InputEvent::Key {
+                key: Key::Down,
+                shift: true,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        v.on_event(
+            &InputEvent::Key {
+                key: Key::Down,
+                shift: true,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.source().sel, [1usize, 2, 3].into_iter().collect());
+        v.on_event(
+            &InputEvent::Key {
+                key: Key::Down,
+                shift: false,
+                ctrl: true,
+            },
+            &mut inv,
+        ); // Ctrl+↓ = 캐럿만
+        assert_eq!(v.caret(), Some(4));
+        assert_eq!(v.source().sel.len(), 3, "Ctrl 이동은 선택 불변");
+        v.on_event(
+            &InputEvent::Key {
+                key: Key::Space,
+                shift: false,
+                ctrl: true,
+            },
+            &mut inv,
+        ); // Ctrl+Space = 토글
+        assert_eq!(v.source().sel.len(), 4);
+        assert!(v.source().is_selected(4));
+    }
+
+    // ── 타입어헤드(M1-6, 원본 docs/32 §6) ──
+
+    #[test]
+    fn typeahead_jumps_cycles_and_accumulates() {
+        let mut inv = Invalidations::default();
+        let mut v = VirtualRows::new(
+            SelRows::named(&["apple", "apricot", "banana", "aardvark"]),
+            20,
+            12,
+            16,
+        );
+        v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        v.on_event(&InputEvent::Char { c: 'a', now_ms: 0 }, &mut inv);
+        assert_eq!(v.caret(), Some(0), "첫 'a' = apple");
+        assert!(v.source().is_selected(0));
+        v.on_event(
+            &InputEvent::Char {
+                c: 'a',
+                now_ms: 300,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.caret(), Some(1), "반복 'a' = 다음 매치 cycle(apricot)");
+        v.on_event(
+            &InputEvent::Char {
+                c: 'a',
+                now_ms: 600,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.caret(), Some(3), "banana 건너뛰고 aardvark");
+        v.on_event(
+            &InputEvent::Char {
+                c: 'p',
+                now_ms: 900,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.typeahead_text(), "ap");
+        assert_eq!(v.caret(), Some(0), "누적 'ap' = wrap 후 apple");
+        // Backspace → "a", 현재 행 포함 재평가 → apple 유지
+        v.on_event(
+            &InputEvent::Char {
+                c: '\u{8}',
+                now_ms: 1100,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.typeahead_text(), "a");
+        assert_eq!(v.caret(), Some(0));
+    }
+
+    #[test]
+    fn typeahead_times_out_via_tick_and_space_is_excluded() {
+        let mut inv = Invalidations::default();
+        let mut v = VirtualRows::new(SelRows::named(&["alpha", "beta"]), 20, 12, 16);
+        v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        v.on_event(&InputEvent::Char { c: 'b', now_ms: 0 }, &mut inv);
+        assert_eq!(v.typeahead_text(), "b");
+        v.tick(500, &mut inv);
+        assert_eq!(v.typeahead_text(), "b", "타임아웃 전 유지");
+        v.tick(1200, &mut inv);
+        assert_eq!(v.typeahead_text(), "", "1000ms 경과 → 버퍼 소거");
+        v.on_event(
+            &InputEvent::Char {
+                c: ' ',
+                now_ms: 1300,
+            },
+            &mut inv,
+        );
+        assert_eq!(
+            v.typeahead_text(),
+            "",
+            "Space는 타입어헤드 제외(docs/32 §7)"
+        );
     }
 
     // ── 가로 스크롤 ──

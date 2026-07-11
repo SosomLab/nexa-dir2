@@ -9,6 +9,7 @@ pub mod draw;
 pub mod event;
 pub mod geom;
 pub mod theme;
+pub mod typeahead;
 pub mod widget;
 pub mod widgets;
 
