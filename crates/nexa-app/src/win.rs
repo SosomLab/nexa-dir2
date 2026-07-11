@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use nexa_gui::widgets::VirtualRows;
-use nexa_gui::{InputEvent, Invalidations, Key, Rect as GRect, Theme, Widget};
+use nexa_gui::{Column, InputEvent, Invalidations, Key, Rect as GRect, Theme, Widget};
 use nexa_tree::Tree;
 use windows::core::{w, Result, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -14,23 +14,27 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, EndPaint, InvalidateRect, UpdateWindow, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
 use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_DOWN, VK_END, VK_F3, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
+    ReleaseCapture, SetCapture, VK_DOWN, VK_END, VK_F3, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
     GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
     SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA,
     IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE,
-    WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 use crate::dw::{DwBackend, DwCtx};
-use crate::source::TreeSource;
+use crate::source::{TreeSource, COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
+
+/// wParam 마우스 수식키 비트(winuser.h MK_SHIFT).
+const MK_SHIFT: usize = 0x0004;
 
 /// F3 스크롤 벤치 프레임 수(M1-9 게이트 관측).
 const BENCH_FRAMES: usize = 200;
@@ -74,6 +78,32 @@ fn metrics(dpi: u32) -> (i32, i32, i32) {
     (s(20).max(14), s(6), s(16))
 }
 
+/// 기본 5컬럼(원본 docs/23 §2-1 기본 정의열 중 M1-4 범위). 폭은 dpi 스케일.
+fn columns(dpi: u32) -> Vec<Column> {
+    let s = |v: i32| (v * dpi as i32) / 96;
+    vec![
+        Column::new(COL_NAME, "이름", s(340)),
+        Column::new(COL_EXT, "확장자", s(64)),
+        Column::new(COL_SIZE, "크기", s(96)).right_aligned(),
+        Column::new(COL_MODIFIED, "수정한 날짜", s(140)),
+        Column::new(COL_KIND, "종류", s(110)),
+    ]
+}
+
+/// 로컬 타임존 오프셋(분, UTC 동쪽 양수) — 수정한 날짜 표시용(원본은 셸 표시 규약).
+unsafe fn tz_offset_min() -> i32 {
+    let mut tzi = TIME_ZONE_INFORMATION::default();
+    let code = GetTimeZoneInformation(&mut tzi);
+    // Bias는 UTC = local + bias(분, 서쪽 양수) → 표시 오프셋은 부호 반전. DST 활성 시 보정.
+    let bias = tzi.Bias
+        + match code {
+            1 => tzi.StandardBias,
+            2 => tzi.DaylightBias,
+            _ => 0,
+        };
+    -bias
+}
+
 /// 표시할 루트 경로: argv[1] → %USERPROFILE% → C:\.
 fn root_path() -> std::path::PathBuf {
     std::env::args_os()
@@ -91,8 +121,9 @@ pub fn run() -> Result<()> {
         Tree::open("C:\\").expect("C:\\ 열기 실패")
     });
     let (row_h, pad_x, indent_w) = metrics(96); // 실제 DPI는 WM_NCCREATE에서 반영
+    let tz = unsafe { tz_offset_min() };
     let state = Box::new(State {
-        rows: VirtualRows::new(TreeSource::new(tree), row_h, pad_x, indent_w),
+        rows: VirtualRows::new(TreeSource::new(tree, tz), row_h, pad_x, indent_w),
         theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2 테마 시스템
         dpi: 96,
         dw: None,
@@ -262,6 +293,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let (row_h, pad_x, indent_w) = metrics(st.dpi);
                 let mut inv = Invalidations::default();
                 st.rows.set_metrics(row_h, pad_x, indent_w, &mut inv);
+                st.rows.set_columns(columns(st.dpi), &mut inv);
                 update_title(hwnd, st, "");
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -285,7 +317,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEWHEEL => {
             if let Some(st) = state_of(hwnd) {
                 let delta = (wparam.0 >> 16) as i16 as i32; // WHEEL_DELTA 단위(트랙패드는 분수 노치)
-                route_event(hwnd, st, InputEvent::Wheel { delta });
+                if wparam.0 & MK_SHIFT != 0 {
+                    // Shift+휠 = 가로(휠 아래 = 오른쪽 — 관례상 부호 반전)
+                    route_event(hwnd, st, InputEvent::HWheel { delta: -delta });
+                } else {
+                    route_event(hwnd, st, InputEvent::Wheel { delta });
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEHWHEEL => {
+            if let Some(st) = state_of(hwnd) {
+                let delta = (wparam.0 >> 16) as i16 as i32; // 양수 = 오른쪽
+                route_event(hwnd, st, InputEvent::HWheel { delta });
             }
             LRESULT(0)
         }
@@ -293,9 +337,29 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                route_event(hwnd, st, InputEvent::MouseDown { x, y });
-                update_title(hwnd, st, ""); // 펼침/접힘으로 행 수 변동 반영
+                // 리사이즈 드래그가 창 밖으로 나가도 추적되도록 캡처(MouseUp에서 해제)
+                SetCapture(hwnd);
+                let shift = wparam.0 & MK_SHIFT != 0;
+                route_event(hwnd, st, InputEvent::MouseDown { x, y, shift });
+                update_title(hwnd, st, ""); // 펼침/접힘·정렬로 행 수/헤더 변동 반영
             }
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            if let Some(st) = state_of(hwnd) {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                route_event(hwnd, st, InputEvent::MouseMove { x, y });
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if let Some(st) = state_of(hwnd) {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                route_event(hwnd, st, InputEvent::MouseUp { x, y });
+            }
+            let _ = ReleaseCapture();
             LRESULT(0)
         }
         WM_KEYDOWN => {

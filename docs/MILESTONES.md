@@ -28,7 +28,8 @@
 - ✅ M1-1 `nexa-gui` 크레이트 분리(`feat/m1-gui`) — 플랫폼 중립 위젯 trait·무효화(rect 병합)·입력 이벤트·테마 토큰(원본 docs/39 차용, 다크 기본 DR-5)·`VirtualRows`(스파이크 로직 이식·`RowSource` 추상). GDI 백엔드는 nexa-app `gdi.rs`(ADR-0002 확정까지).
 - ✅ M1-2 [ADR-0002](07-adr-0002-rendering.md) **Accepted**(`feat/m1-adr0002-render`) — 텍스트 렌더링 = **DirectWrite GDI interop**. 실측: 스크롤 벤치 GDI 대비 −28%·RSS +4.1MB(17.4MB)·exe 0.23MB 전 게이트 내. 기본 백엔드 전환.
 - ✅ M1-3 가상화 파일 리스트 초안(`feat/m1-virtual-list`) — **실제 파일시스템 첫 표시**: nexa-tree 평면 스트림 → `RowItem`(들여쓰기·▸/▾ 마커) 투영, 클릭=펼침/접힘. ADR-0002 §5 이행(GDI 삭제·레이아웃 캐시 — 벤치 1,673µs/프레임, RSS 18.2MB·exe 0.27MB).
-- ☐ M1-4 컬럼 시스템(원본 docs/23) · ☐ M1-5~9.
+- ✅ M1-4 컬럼 시스템(`feat/m1-columns`) — 원본 docs/23 이식: 5컬럼·헤더 정렬 **3상태 순환+Shift 다중열**(화살표 앞·순번 뒤 규약)·드래그 리사이즈·가로 스크롤·말줄임 트리밍·TZ 반영 날짜(civil_from_days 순수 구현, crate 0 유지). 벤치 1,813µs·RSS 18.1MB·exe 0.31MB.
+- ☐ M1-5 ★ 인라인 펼침+교차 선택+러버밴드(원본 docs/07) · ☐ M1-6~9.
 
 ## M1+ (요약)
 

@@ -20,9 +20,24 @@ pub enum InputEvent {
     Wheel {
         delta: i32,
     },
+    /// 가로 휠(Shift+휠 포함). 양수 = 오른쪽으로 스크롤.
+    HWheel {
+        delta: i32,
+    },
     Key(Key),
-    /// 마우스 좌클릭(클라이언트 좌표). 캐럿/선택(M1-5) 전까지 행 활성화(펼침 토글)에 사용.
+    /// 마우스 좌클릭(클라이언트 좌표). 행 활성화(펼침 토글)·헤더 정렬/리사이즈 시작.
+    /// `shift` = 다중 컬럼 정렬 트리거(원본 docs/23 COL-3).
     MouseDown {
+        x: i32,
+        y: i32,
+        shift: bool,
+    },
+    /// 마우스 이동(버튼 상태 무관 — 위젯이 드래그 상태를 보유).
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseUp {
         x: i32,
         y: i32,
     },
