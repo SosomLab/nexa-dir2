@@ -3,7 +3,7 @@
 /// Win32 `WHEEL_DELTA` — 휠 1노치의 delta 단위.
 pub const WHEEL_DELTA: i32 = 120;
 
-/// 네비게이션 키(키보드 우선 DR-5). 문자 입력·수식키 조합은 타입어헤드(M1-6)에서 확장.
+/// 네비게이션 키(키보드 우선 DR-5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
     Up,
@@ -12,10 +12,12 @@ pub enum Key {
     PageDown,
     Home,
     End,
-    /// 캐럿 행 인라인 펼침(원본 docs/07 §8).
+    /// 캐럿 행 인라인 펼침, 펼침 상태면 첫 자식으로(원본 docs/07 §8).
     Right,
-    /// 캐럿 행 접힘.
+    /// 캐럿 행 접힘, 접힘 상태면 부모로.
     Left,
+    /// 캐럿 행 선택 토글(원본 docs/32 §7 결정 1 — 타입어헤드에서 제외).
+    Space,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,7 +30,18 @@ pub enum InputEvent {
     HWheel {
         delta: i32,
     },
-    Key(Key),
+    /// 키 입력 + 수식키. `shift` = 범위 선택, `ctrl` = 선택 없이 캐럿만 이동(탐색기 규약).
+    Key {
+        key: Key,
+        shift: bool,
+        ctrl: bool,
+    },
+    /// 인쇄 가능 문자(타입어헤드 — docs/32). `'\u{8}'` = Backspace(접두사 축소).
+    /// `now_ms` = 단조 시각(밀리초) 주입 — 버퍼 타임아웃 판정용(테스트 가능성).
+    Char {
+        c: char,
+        now_ms: u64,
+    },
     /// 현재 가시 노드 전체 선택(Ctrl+A — 원본 docs/07 §8).
     SelectAll,
     /// 마우스 좌클릭(클라이언트 좌표). 헤더 = 정렬/리사이즈, 본문 = 선택/펼침/러버밴드.

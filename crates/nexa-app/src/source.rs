@@ -4,7 +4,7 @@
 
 use nexa_core::FileKind;
 use nexa_gui::widgets::{Marker, RowItem, RowSource, SelectOp};
-use nexa_tree::{SelectMode, SortKey, SortSpec, Tree};
+use nexa_tree::{FindScope, SelectMode, SortKey, SortSpec, Tree};
 
 /// 컬럼 key(Column.key ↔ 이 상수). 0 = 트리 컬럼 관례(nexa-gui).
 pub const COL_NAME: u32 = 0;
@@ -155,6 +155,12 @@ impl RowSource for TreeSource {
         }
         self.tree.clear_selection();
         true
+    }
+
+    fn find_prefix(&self, caret: Option<usize>, prefix: &str) -> Option<usize> {
+        // 범위 = 가시 스트림 위치상대 + wrap(C, 기본 — docs/32 §5). A/B 설정 노출은 M2.
+        self.tree
+            .find_prefix(caret, prefix, FindScope::VisibleStream)
     }
 
     fn set_sort(&mut self, keys: &[(u32, bool)]) -> bool {
@@ -342,6 +348,18 @@ mod tests {
         assert_eq!(s.tree().selection_count(), 5);
         assert!(s.clear_selection());
         assert!(!s.clear_selection(), "이미 비어 있으면 false");
+    }
+
+    #[test]
+    fn find_prefix_delegates_visible_stream() {
+        let base = fixture("find");
+        let s = TreeSource::new(Tree::open(&base).unwrap(), 0);
+        fs::remove_dir_all(&base).unwrap();
+        // [dirA, empty, file1.txt] — 캐럿 없음 → 처음부터
+        assert_eq!(s.find_prefix(None, "fi"), Some(2));
+        assert_eq!(s.find_prefix(Some(0), "e"), Some(1));
+        assert_eq!(s.find_prefix(Some(2), "d"), Some(0), "끝이면 wrap");
+        assert_eq!(s.find_prefix(None, "zzz"), None);
     }
 
     #[test]
