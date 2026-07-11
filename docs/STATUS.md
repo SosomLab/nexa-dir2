@@ -1,8 +1,9 @@
 # STATUS — Nexa Dir 2 진행 현황
 
-> **갱신: 2026-07-11 (KST)** — **M0 완료 · `0.1.0` 태그**. M0-8 게이트 실측(Windows 실기) 전 항목 통과:
-> **B1 RSS 13.22MB ≤30 · B2 exe 0.20MB ≤10 · B3 임포트 OS 인박스만**. CI B3를 화이트리스트 fail 게이트로 강화.
-> 다음: **M1 착수** — M1-1 `nexa-gui` 분리 → M1-2 ADR-0002(GDI vs DirectWrite interop) 렌더링 확정.
+> **갱신: 2026-07-11 (KST)** — **M0 완료(`0.1.0`: B1 13.22MB·B2 0.20MB·B3 인박스만) → M1 착수.**
+> `feat/m1-gui`: **M1-1 `nexa-gui` 분리 완료** — 플랫폼 중립 위젯 trait·무효화(rect 병합)·입력 이벤트·
+> 테마 토큰(원본 docs/39 차용, 다크 기본)·`VirtualRows`(스파이크 로직 이식). 테스트 43 green·실기 확인.
+> 다음: **M1-2 ADR-0002** — GDI vs DirectWrite GDI interop 스파이크 비교(품질·RSS·속도) 확정.
 
 ## 1. 확정된 결정 ([10](10-decision-record.md))
 
@@ -28,7 +29,8 @@
 ## 3. 마일스톤 (상세 [MILESTONES](MILESTONES.md))
 
 - **M0** 기반·게이트 ✅ (`0.1.0`) — 설계 문서·스캐폴딩·코어 3크레이트 이식·Win32 창·렌더 스파이크·CI·게이트 실측.
-- M1 뷰어(★플래그십) ☐ 다음 · M2 셸 골격 · M3 조작 · M4 패널 · M5 마감 — ☐.
+- **M1** 뷰어(★플래그십) 🚧 — M1-1 `nexa-gui` 분리 ✅ · M1-2 ADR-0002 ☐ 다음.
+- M2 셸 골격 · M3 조작 · M4 패널 · M5 마감 — ☐.
 
 ## 4. 개발 모델 ([11](11-dev-environment.md))
 
@@ -36,7 +38,6 @@
 
 ## 5. 다음 단계
 
-1. ~~M0~~ ✅ (07-11) — 스캐폴딩·코어 이식·Win32 스켈레톤·CI·렌더 스파이크·**게이트 실측 통과** → `0.1.0`.
-2. **M1-1**: `nexa-gui` 크레이트 분리(위젯 trait·무효화 rect·입력 라우팅·테마 토큰).
-3. **M1-2**: ADR-0002 렌더링 확정 — GDI vs DirectWrite GDI interop 스파이크 비교(품질·RSS·속도).
-4. M1-3: 가상화 파일 리스트 초안(nexa-tree 배선). → [02](02-roadmap.md)
+1. ~~M0~~ ✅ (07-11) — 게이트 실측 통과 → `0.1.0`. ~~M1-1~~ ✅ (07-11, `feat/m1-gui`) — `nexa-gui` 분리.
+2. **M1-2**: ADR-0002 렌더링 확정 — GDI vs DirectWrite GDI interop 스파이크 비교(품질·RSS·속도).
+3. M1-3: 가상화 파일 리스트 초안(nexa-tree 배선·`RowSource` 자리). → [02](02-roadmap.md)

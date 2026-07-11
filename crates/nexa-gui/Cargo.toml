@@ -1,0 +1,11 @@
+[package]
+name = "nexa-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Nexa Dir 2 GUI — 위젯·드로잉 추상·입력 라우팅·테마 토큰 (플랫폼 중립)"
+
+[dependencies]

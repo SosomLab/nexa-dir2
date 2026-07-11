@@ -6,11 +6,16 @@ version = 4
 name = "nexa-app"
 version = "0.1.0"
 dependencies = [
+ "nexa-gui",
  "windows",
 ]
 
 [[package]]
 name = "nexa-core"
+version = "0.1.0"
+
+[[package]]
+name = "nexa-gui"
 version = "0.1.0"
 
 [[package]]
