@@ -19,7 +19,8 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, VK_DOWN, VK_END, VK_F3, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_F3, VK_HOME, VK_LEFT,
+    VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -33,8 +34,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::dw::{DwBackend, DwCtx};
 use crate::source::{TreeSource, COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
 
-/// wParam 마우스 수식키 비트(winuser.h MK_SHIFT).
+/// wParam 마우스 수식키 비트(winuser.h MK_SHIFT/MK_CONTROL).
 const MK_SHIFT: usize = 0x0004;
+const MK_CONTROL: usize = 0x0008;
 
 /// F3 스크롤 벤치 프레임 수(M1-9 게이트 관측).
 const BENCH_FRAMES: usize = 200;
@@ -200,13 +202,20 @@ unsafe fn route_event(hwnd: HWND, st: &mut State, ev: InputEvent) {
     flush_invalidations(hwnd, &mut inv);
 }
 
-/// 타이틀바 — 루트 경로·행 수·평균 페인트 시간(M1-9 관측).
+/// 타이틀바 — 루트 경로·행 수·선택 수·평균 페인트 시간(M1-9 관측).
 unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
     use nexa_gui::widgets::RowSource;
+    let sel = st.rows.source().tree().selection_count();
+    let sel_txt = if sel > 0 {
+        format!(" · 선택 {sel}")
+    } else {
+        String::new()
+    };
     let text = format!(
-        "Nexa Dir 2 — {} [{}행 · 평균 {}µs]{}\0",
+        "Nexa Dir 2 — {} [{}행{} · 평균 {}µs]{}\0",
         st.rows.source().tree().root_path().display(),
         st.rows.source().len(),
+        sel_txt,
         st.stats.avg_us(),
         note,
     );
@@ -277,6 +286,8 @@ fn vk_to_key(vk: u16) -> Option<Key> {
         k if k == VK_NEXT.0 => Some(Key::PageDown),
         k if k == VK_HOME.0 => Some(Key::Home),
         k if k == VK_END.0 => Some(Key::End),
+        k if k == VK_RIGHT.0 => Some(Key::Right),
+        k if k == VK_LEFT.0 => Some(Key::Left),
         _ => None,
     }
 }
@@ -337,11 +348,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                // 리사이즈 드래그가 창 밖으로 나가도 추적되도록 캡처(MouseUp에서 해제)
+                // 리사이즈·러버밴드 드래그가 창 밖으로 나가도 추적되도록 캡처(MouseUp에서 해제)
                 SetCapture(hwnd);
                 let shift = wparam.0 & MK_SHIFT != 0;
-                route_event(hwnd, st, InputEvent::MouseDown { x, y, shift });
-                update_title(hwnd, st, ""); // 펼침/접힘·정렬로 행 수/헤더 변동 반영
+                let ctrl = wparam.0 & MK_CONTROL != 0;
+                route_event(hwnd, st, InputEvent::MouseDown { x, y, shift, ctrl });
+                update_title(hwnd, st, ""); // 펼침/정렬/선택으로 행·선택 수 변동 반영
             }
             LRESULT(0)
         }
@@ -367,8 +379,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let vk = wparam.0 as u16;
                 if vk == VK_F3.0 {
                     bench(hwnd, st);
+                } else if vk == b'A' as u16 && GetKeyState(VK_CONTROL.0 as i32) < 0 {
+                    route_event(hwnd, st, InputEvent::SelectAll); // Ctrl+A(docs/07 §8)
+                    update_title(hwnd, st, "");
                 } else if let Some(key) = vk_to_key(vk) {
                     route_event(hwnd, st, InputEvent::Key(key));
+                    update_title(hwnd, st, ""); // →/← 펼침으로 행 수 변동 반영
                 }
             }
             LRESULT(0)

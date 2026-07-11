@@ -3,8 +3,8 @@
 //! 플랫폼 중립(비-Windows에서도 테스트) — 창/렌더와 무관한 순수 어댑터.
 
 use nexa_core::FileKind;
-use nexa_gui::widgets::{Marker, RowItem, RowSource};
-use nexa_tree::{SortKey, SortSpec, Tree};
+use nexa_gui::widgets::{Marker, RowItem, RowSource, SelectOp};
+use nexa_tree::{SelectMode, SortKey, SortSpec, Tree};
 
 /// 컬럼 key(Column.key ↔ 이 상수). 0 = 트리 컬럼 관례(nexa-gui).
 pub const COL_NAME: u32 = 0;
@@ -112,6 +112,49 @@ impl RowSource for TreeSource {
             },
             None => false,
         }
+    }
+
+    // ── 선택(원본 docs/07 — 코어 OrderedSet·anchor 모델에 위임) ──
+
+    fn is_selected(&self, index: usize) -> bool {
+        self.tree
+            .visible_id(index)
+            .is_some_and(|id| self.tree.is_selected(id))
+    }
+
+    fn select(&mut self, index: usize, op: SelectOp) -> bool {
+        let Some(id) = self.tree.visible_id(index) else {
+            return false;
+        };
+        match op {
+            SelectOp::Single => self.tree.select(id, SelectMode::Single),
+            SelectOp::Toggle => self.tree.select(id, SelectMode::Toggle),
+            SelectOp::RangeTo => self.tree.select_range(id),
+        }
+        true
+    }
+
+    fn select_span(&mut self, lo: usize, hi: usize) -> bool {
+        let (Some(a), Some(b)) = (self.tree.visible_id(lo), self.tree.visible_id(hi)) else {
+            return false;
+        };
+        // 러버밴드 = anchor 없는 일회성 범위 — Single(a) + range(b)로 코어 범위 선택 재사용
+        self.tree.select(a, SelectMode::Single);
+        self.tree.select_range(b);
+        true
+    }
+
+    fn select_all(&mut self) -> bool {
+        self.tree.select_all_visible();
+        true
+    }
+
+    fn clear_selection(&mut self) -> bool {
+        if self.tree.selection_count() == 0 {
+            return false;
+        }
+        self.tree.clear_selection();
+        true
     }
 
     fn set_sort(&mut self, keys: &[(u32, bool)]) -> bool {
@@ -272,6 +315,33 @@ mod tests {
         assert!(s.set_sort(&[])); // 없음 = 열거 순서(폴더 우선 유지)
         assert_eq!(s.len(), 4);
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn cross_folder_selection_via_widget_ops() {
+        let base = fixture("xsel");
+        let mut s = TreeSource::new(Tree::open(&base).unwrap(), 0);
+        s.toggle(0); // dirA 펼침 → [dirA, x.txt, y.txt, empty, file1.txt]
+        fs::remove_dir_all(&base).unwrap();
+        assert_eq!(s.len(), 5);
+
+        s.select(1, SelectOp::Single); // x.txt (dirA 자식)
+        s.select(4, SelectOp::Toggle); // file1.txt (루트) — 교차폴더(AC2)
+        assert!(s.is_selected(1) && s.is_selected(4));
+        assert_eq!(s.tree().selection_count(), 2);
+        assert_eq!(s.tree().selected_paths().len(), 2); // 작업 엔진 입력(혼합 부모)
+
+        s.select(2, SelectOp::RangeTo); // anchor(file1=4)~2 가시 범위 → {2,3,4}
+        assert_eq!(s.tree().selection_count(), 3);
+        assert!(s.is_selected(3) && !s.is_selected(1));
+
+        assert!(s.select_span(0, 1)); // 러버밴드 범위 대체
+        assert!(s.is_selected(0) && s.is_selected(1) && !s.is_selected(4));
+
+        assert!(s.select_all());
+        assert_eq!(s.tree().selection_count(), 5);
+        assert!(s.clear_selection());
+        assert!(!s.clear_selection(), "이미 비어 있으면 false");
     }
 
     #[test]
