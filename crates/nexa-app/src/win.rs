@@ -20,16 +20,18 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_F3, VK_HOME, VK_LEFT,
-    VK_NEXT, VK_PRIOR, VK_RIGHT, VK_UP,
+    VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
     GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
     SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA,
-    IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
+use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use crate::dw::{DwBackend, DwCtx};
 use crate::source::{TreeSource, COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
@@ -40,6 +42,16 @@ const MK_CONTROL: usize = 0x0008;
 
 /// F3 스크롤 벤치 프레임 수(M1-9 게이트 관측).
 const BENCH_FRAMES: usize = 200;
+/// 타입어헤드 타임아웃 점검 타이머 id·주기(ms).
+const TIMER_TYPEAHEAD: usize = 1;
+const TIMER_TICK_MS: u32 = 250;
+
+/// 단조 시각(ms) — 타입어헤드 버퍼 타임아웃 판정용(프로세스 기동 기준).
+fn now_ms() -> u64 {
+    use std::sync::OnceLock;
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
 
 /// 평균 페인트 시간(µs) 누적 — 벤치 시 리셋.
 #[derive(Default)]
@@ -263,7 +275,15 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
 
 /// F3 — 200프레임 연속 스크롤 벤치(동기 UpdateWindow). 결과는 타이틀바.
 unsafe fn bench(hwnd: HWND, st: &mut State) {
-    route_event(hwnd, st, InputEvent::Key(Key::Home));
+    route_event(
+        hwnd,
+        st,
+        InputEvent::Key {
+            key: Key::Home,
+            shift: false,
+            ctrl: false,
+        },
+    );
     let _ = UpdateWindow(hwnd);
     st.stats.reset();
     for _ in 0..BENCH_FRAMES {
@@ -288,6 +308,7 @@ fn vk_to_key(vk: u16) -> Option<Key> {
         k if k == VK_END.0 => Some(Key::End),
         k if k == VK_RIGHT.0 => Some(Key::Right),
         k if k == VK_LEFT.0 => Some(Key::Left),
+        k if k == VK_SPACE.0 => Some(Key::Space),
         _ => None,
     }
 }
@@ -377,14 +398,53 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_KEYDOWN => {
             if let Some(st) = state_of(hwnd) {
                 let vk = wparam.0 as u16;
+                let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
                 if vk == VK_F3.0 {
                     bench(hwnd, st);
-                } else if vk == b'A' as u16 && GetKeyState(VK_CONTROL.0 as i32) < 0 {
+                } else if vk == b'A' as u16 && ctrl {
                     route_event(hwnd, st, InputEvent::SelectAll); // Ctrl+A(docs/07 §8)
                     update_title(hwnd, st, "");
                 } else if let Some(key) = vk_to_key(vk) {
-                    route_event(hwnd, st, InputEvent::Key(key));
-                    update_title(hwnd, st, ""); // →/← 펼침으로 행 수 변동 반영
+                    route_event(hwnd, st, InputEvent::Key { key, shift, ctrl });
+                    update_title(hwnd, st, ""); // 펼침·선택 변동 반영
+                }
+            }
+            LRESULT(0)
+        }
+        WM_CHAR => {
+            if let Some(st) = state_of(hwnd) {
+                // 타입어헤드(docs/32) — Ctrl 조합(제어문자·Ctrl+H=0x08 충돌 포함) 제외
+                if GetKeyState(VK_CONTROL.0 as i32) >= 0 {
+                    if let Some(c) = char::from_u32(wparam.0 as u32) {
+                        if c == '\u{8}' || (!c.is_control() && c != ' ') {
+                            route_event(
+                                hwnd,
+                                st,
+                                InputEvent::Char {
+                                    c,
+                                    now_ms: now_ms(),
+                                },
+                            );
+                            update_title(hwnd, st, "");
+                            if !st.rows.typeahead_text().is_empty() {
+                                SetTimer(Some(hwnd), TIMER_TYPEAHEAD, TIMER_TICK_MS, None);
+                            }
+                        }
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            if wparam.0 == TIMER_TYPEAHEAD {
+                if let Some(st) = state_of(hwnd) {
+                    let mut inv = Invalidations::default();
+                    st.rows.tick(now_ms(), &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                    if st.rows.typeahead_text().is_empty() {
+                        let _ = KillTimer(Some(hwnd), TIMER_TYPEAHEAD);
+                    }
                 }
             }
             LRESULT(0)
