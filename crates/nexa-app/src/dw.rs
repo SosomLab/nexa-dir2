@@ -1,9 +1,11 @@
-//! DirectWrite GDI interop 백엔드 — ADR-0002(M1-2) 비교 후보.
+//! DirectWrite GDI interop 백엔드 — ADR-0002 채택 구현(docs/07).
 //! `IDWriteBitmapRenderTarget`(자체 메모리 DC = 더블 버퍼)에 텍스트 레이아웃을 그리고
 //! 창 DC로 BitBlt — GPU 스왑체인 없음(docs/01 §3 금지 사항 준수).
-//! 배경 채우기는 같은 메모리 DC에 GDI(ETO_OPAQUE)로 — gdi.rs와 동일 모델.
+//! 배경 채우기는 같은 메모리 DC에 GDI(ETO_OPAQUE) — 행 = fill + DrawGlyphRun.
+//! 텍스트 레이아웃은 텍스트 키 캐시(가시 행은 프레임 간 동일 — ADR-0002 §5 최적화).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use nexa_gui::{Color, DrawCtx, Rect};
@@ -12,14 +14,20 @@ use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteBitmapRenderTarget, IDWriteFactory, IDWriteGdiInterop,
     IDWriteInlineObject, IDWritePixelSnapping_Impl, IDWriteRenderingParams, IDWriteTextFormat,
-    IDWriteTextRenderer, IDWriteTextRenderer_Impl, DWRITE_FACTORY_TYPE_SHARED, DWRITE_GLYPH_RUN,
-    DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_MATRIX, DWRITE_MEASURING_MODE,
+    IDWriteTextLayout, IDWriteTextRenderer, IDWriteTextRenderer_Impl, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_MATRIX, DWRITE_MEASURING_MODE,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_STRIKETHROUGH, DWRITE_UNDERLINE,
     DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Gdi::{ExtTextOutW, SetBkColor, ETO_OPAQUE, HDC};
 
-use crate::gdi::colorref;
+/// [`Color`] → GDI `COLORREF`(0x00BBGGRR).
+pub fn colorref(c: Color) -> COLORREF {
+    COLORREF(((c.b as u32) << 16) | ((c.g as u32) << 8) | c.r as u32)
+}
+
+/// 레이아웃 캐시 상한 — 초과 시 전체 비움(가시 행 수백 개 대비 충분한 여유).
+const LAYOUT_CACHE_CAP: usize = 4096;
 
 /// 텍스트 레이아웃의 글리프 런을 비트맵 렌더 타깃에 그리는 콜백.
 /// 색은 [`DwBackend`]와 공유하는 `Cell`로 전달(그리기 직전에 설정).
@@ -115,6 +123,8 @@ pub struct DwBackend {
     format: IDWriteTextFormat,
     renderer: IDWriteTextRenderer,
     color: Rc<Cell<COLORREF>>,
+    /// 텍스트 → 레이아웃 캐시(NO_WRAP·좌정렬이라 폭 무관). DPI 변경 시 비움.
+    layouts: RefCell<HashMap<String, IDWriteTextLayout>>,
     w: i32,
     h: i32,
 }
@@ -155,9 +165,30 @@ impl DwBackend {
             format,
             renderer,
             color,
+            layouts: RefCell::new(HashMap::new()),
             w,
             h,
         })
+    }
+
+    /// `text`의 레이아웃(캐시 히트 시 재사용). `max_h_dip` = 행 높이(세로 중앙 정렬 기준).
+    fn layout_for(&self, text: &str, max_h_dip: f32) -> Option<IDWriteTextLayout> {
+        if let Some(l) = self.layouts.borrow().get(text) {
+            return Some(l.clone());
+        }
+        let wtext: Vec<u16> = text.encode_utf16().collect();
+        // NO_WRAP + 좌정렬이라 max width는 글리프 배치에 영향 없음 — 충분히 큰 값
+        let layout = unsafe {
+            self.factory
+                .CreateTextLayout(&wtext, &self.format, 65536.0, max_h_dip)
+                .ok()?
+        };
+        let mut cache = self.layouts.borrow_mut();
+        if cache.len() >= LAYOUT_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(text.to_owned(), layout.clone());
+        Some(layout)
     }
 
     pub fn size(&self) -> (i32, i32) {
@@ -172,6 +203,8 @@ impl DwBackend {
     }
 
     pub unsafe fn set_dpi(&mut self, dpi: u32) -> Result<()> {
+        // 행 높이(px)가 바뀌므로 캐시된 maxheight가 무효 — 비움
+        self.layouts.borrow_mut().clear();
         self.brt.SetPixelsPerDip(dpi as f32 / 96.0)
     }
 
@@ -208,15 +241,12 @@ impl DrawCtx for DwCtx<'_> {
     fn text_opaque(&mut self, x: i32, _y: i32, clip: Rect, text: &str, fg: Color, bg: Color) {
         // 배경은 GDI로 불투명 채우기, 글리프는 DirectWrite로 — 행 = fill + Draw 1회
         self.fill_rect(clip, bg);
+        if text.is_empty() {
+            return;
+        }
         unsafe {
             let ppd = self.back.pixels_per_dip();
-            let wtext: Vec<u16> = text.encode_utf16().collect();
-            let Ok(layout) = self.back.factory.CreateTextLayout(
-                &wtext,
-                &self.back.format,
-                (clip.right() - x) as f32 / ppd,
-                clip.h as f32 / ppd, // 세로 중앙 정렬 기준 높이 = 행 높이
-            ) else {
+            let Some(layout) = self.back.layout_for(text, clip.h as f32 / ppd) else {
                 return;
             };
             self.back.color.set(colorref(fg));

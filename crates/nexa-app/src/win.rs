@@ -1,92 +1,41 @@
-//! Win32 창·메시지 루프(M0-5) — M1-1부터 렌더·입력은 nexa-gui 위젯으로 위임.
-//! 이 모듈의 책임: 창 수명·더블 버퍼(메모리 DC)·WM_* → [`nexa_gui::InputEvent`] 번역·
-//! [`nexa_gui::Invalidations`] → `InvalidateRect` 번역. 렌더 모델(docs/01 §3)은 M0-7 계승.
-//!
-//! **ADR-0002(M1-2, Accepted)**: 텍스트 렌더링 = DirectWrite GDI interop(기본).
-//! GDI 백엔드·F2 전환·F3 벤치는 육안 비교용으로 유지 — M1-3(실제 리스트 배선)에서 제거.
-//! 시작 백엔드 강제: `NEXA_RENDER=gdi|dw`.
+//! Win32 창·메시지 루프 — 렌더·입력은 nexa-gui 위젯, 데이터는 nexa-tree(M1-3 배선).
+//! 이 모듈의 책임: 창 수명·백버퍼(DW 비트맵 렌더 타깃)·WM_* → [`nexa_gui::InputEvent`] 번역·
+//! [`nexa_gui::Invalidations`] → `InvalidateRect` 번역. 텍스트 경로 = DirectWrite interop(ADR-0002).
+//! F3 = 200프레임 스크롤 벤치(M1-9 게이트 관측용) — 타이틀바에 평균 페인트 시간 표시.
 
 use std::time::Instant;
 
-use nexa_gui::widgets::{RowSource, VirtualRows};
+use nexa_gui::widgets::VirtualRows;
 use nexa_gui::{InputEvent, Invalidations, Key, Rect as GRect, Theme, Widget};
+use nexa_tree::Tree;
 use windows::core::{w, Result, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::UpdateWindow;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, DeleteDC,
-    DeleteObject, EndPaint, InvalidateRect, SelectObject, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
-    DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE, FW_NORMAL, HBITMAP, HDC, HFONT, HGDIOBJ,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY,
+    BeginPaint, BitBlt, EndPaint, InvalidateRect, UpdateWindow, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_DOWN, VK_END, VK_F2, VK_F3, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
+    VK_DOWN, VK_END, VK_F3, VK_HOME, VK_NEXT, VK_PRIOR, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
     GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG,
-    SWP_NOACTIVATE, SWP_NOZORDER, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
-    WS_VISIBLE,
+    SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA,
+    IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE,
+    WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 use crate::dw::{DwBackend, DwCtx};
-use crate::gdi::GdiCtx;
+use crate::source::TreeSource;
 
-/// 스파이크 데이터셋 — M1-3에서 nexa-tree 평면 스트림으로 대체.
-const TOTAL_ROWS: usize = 100_000;
-/// F3 스크롤 벤치 프레임 수.
+/// F3 스크롤 벤치 프레임 수(M1-9 게이트 관측).
 const BENCH_FRAMES: usize = 200;
 
-struct SpikeRows;
-
-impl RowSource for SpikeRows {
-    fn len(&self) -> usize {
-        TOTAL_ROWS
-    }
-    fn row_text(&self, row: usize) -> String {
-        format!("{row:>6}  spike-entry-{row:06}.txt — 한글 텍스트 렌더 품질 비교 Quality 0Oo 1lI")
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum BackendKind {
-    Gdi,
-    DirectWrite,
-}
-
-impl BackendKind {
-    fn label(self) -> &'static str {
-        match self {
-            BackendKind::Gdi => "GDI",
-            BackendKind::DirectWrite => "DirectWrite interop",
-        }
-    }
-}
-
-/// 클라이언트 크기와 1:1인 오프스크린 버퍼(GDI 백엔드). 크기 변경 시 재생성.
-struct BackBuffer {
-    dc: HDC,
-    bmp: HBITMAP,
-    old_bmp: HGDIOBJ,
-    w: i32,
-    h: i32,
-}
-
-impl BackBuffer {
-    unsafe fn free(self) {
-        SelectObject(self.dc, self.old_bmp);
-        let _ = DeleteObject(self.bmp.into());
-        let _ = DeleteDC(self.dc);
-    }
-}
-
-/// 평균 페인트 시간(µs) 누적 — 백엔드 전환·벤치 시 리셋.
+/// 평균 페인트 시간(µs) 누적 — 벤치 시 리셋.
 #[derive(Default)]
 struct PaintStats {
     total_us: u64,
@@ -112,67 +61,44 @@ impl PaintStats {
 
 /// 창 단위 상태 — `GWLP_USERDATA`에 Box raw 포인터로 보관(WM_NCCREATE~WM_NCDESTROY).
 struct State {
-    rows: VirtualRows<SpikeRows>,
+    rows: VirtualRows<TreeSource>,
     theme: Theme,
-    font: HFONT,
     dpi: u32,
-    backend: BackendKind,
-    back: Option<BackBuffer>,
     dw: Option<DwBackend>,
     stats: PaintStats,
 }
 
-impl State {
-    unsafe fn new(dpi: u32) -> Self {
-        let (font, row_h) = make_font(dpi);
-        // ADR-0002 채택 경로 = DirectWrite interop. GDI는 육안 비교용(M1-3에서 제거)
-        let backend = match std::env::var("NEXA_RENDER").as_deref() {
-            Ok("gdi") => BackendKind::Gdi,
-            _ => BackendKind::DirectWrite,
-        };
-        State {
-            rows: VirtualRows::new(SpikeRows, row_h, pad_x(dpi)),
-            theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2 테마 시스템
-            font,
-            dpi,
-            backend,
-            back: None,
-            dw: None,
-            stats: PaintStats::default(),
-        }
-    }
+/// DPI 의존 지표: (행 높이, 좌 패딩, 트리 들여쓰기 폭). 고밀도 규약 = 20px 행 @96dpi.
+fn metrics(dpi: u32) -> (i32, i32, i32) {
+    let s = |v: i32| (v * dpi as i32) / 96;
+    (s(20).max(14), s(6), s(16))
 }
 
-/// DPI에 맞춘 UI 폰트(Segoe UI 9pt)와 행 높이.
-unsafe fn make_font(dpi: u32) -> (HFONT, i32) {
-    let px_per_pt = dpi as i32; // height(px) = pt * dpi / 72
-    let height = -(9 * px_per_pt) / 72;
-    let font = CreateFontW(
-        height,
-        0,
-        0,
-        0,
-        FW_NORMAL.0 as i32,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY,
-        DEFAULT_PITCH.0 as u32 | FF_DONTCARE.0 as u32,
-        w!("Segoe UI"),
-    );
-    // 고밀도 행(디자인 규약): 텍스트 높이 + 여백 ≈ 20px@96dpi
-    let row_h = (20 * dpi as i32) / 96;
-    (font, row_h.max(14))
-}
-
-fn pad_x(dpi: u32) -> i32 {
-    (12 * dpi as i32) / 96
+/// 표시할 루트 경로: argv[1] → %USERPROFILE% → C:\.
+fn root_path() -> std::path::PathBuf {
+    std::env::args_os()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("C:\\"))
 }
 
 pub fn run() -> Result<()> {
+    // 창 생성 전 트리 로드(초안: 동기 — 백그라운드 열거는 M2 상주 규율에서)
+    let path = root_path();
+    let tree = Tree::open(&path).unwrap_or_else(|e| {
+        eprintln!("{} 열기 실패({e}) — C:\\ 로 대체", path.display());
+        Tree::open("C:\\").expect("C:\\ 열기 실패")
+    });
+    let (row_h, pad_x, indent_w) = metrics(96); // 실제 DPI는 WM_NCCREATE에서 반영
+    let state = Box::new(State {
+        rows: VirtualRows::new(TreeSource::new(tree), row_h, pad_x, indent_w),
+        theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2 테마 시스템
+        dpi: 96,
+        dw: None,
+        stats: PaintStats::default(),
+    });
+
     unsafe {
         // PerMonitorV2 DPI — 매니페스트 도입 전까지 코드로 선언(docs/01 §3)
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -192,7 +118,7 @@ pub fn run() -> Result<()> {
         CreateWindowExW(
             Default::default(),
             class_name,
-            w!("Nexa Dir 2 — ADR-0002 렌더 스파이크"),
+            w!("Nexa Dir 2"),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -201,7 +127,7 @@ pub fn run() -> Result<()> {
             None,
             None,
             Some(hinstance.into()),
-            None,
+            Some(Box::into_raw(state) as *const core::ffi::c_void),
         )?;
 
         let mut msg = MSG::default();
@@ -243,38 +169,26 @@ unsafe fn route_event(hwnd: HWND, st: &mut State, ev: InputEvent) {
     flush_invalidations(hwnd, &mut inv);
 }
 
-/// 백버퍼를 클라이언트 크기와 일치시킨다(불일치 시에만 재생성).
-unsafe fn ensure_backbuffer(st: &mut State, hdc: HDC, w: i32, h: i32) {
-    if let Some(b) = &st.back {
-        if b.w == w && b.h == h {
-            return;
-        }
-    }
-    if let Some(old) = st.back.take() {
-        old.free();
-    }
-    let dc = CreateCompatibleDC(Some(hdc));
-    let bmp = CreateCompatibleBitmap(hdc, w.max(1), h.max(1));
-    let old_bmp = SelectObject(dc, bmp.into());
-    st.back = Some(BackBuffer {
-        dc,
-        bmp,
-        old_bmp,
-        w,
-        h,
-    });
+/// 타이틀바 — 루트 경로·행 수·평균 페인트 시간(M1-9 관측).
+unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
+    use nexa_gui::widgets::RowSource;
+    let text = format!(
+        "Nexa Dir 2 — {} [{}행 · 평균 {}µs]{}\0",
+        st.rows.source().tree().root_path().display(),
+        st.rows.source().len(),
+        st.stats.avg_us(),
+        note,
+    );
+    let wtext: Vec<u16> = text.encode_utf16().collect();
+    let _ = SetWindowTextW(hwnd, PCWSTR(wtext.as_ptr()));
 }
 
-/// DW 렌더 타깃을 클라이언트 크기와 일치시킨다.
-unsafe fn ensure_dw(st: &mut State, hdc: HDC, w: i32, h: i32) {
+/// DW 렌더 타깃을 클라이언트 크기와 일치시킨다(최초 생성 포함).
+unsafe fn ensure_dw(st: &mut State, hdc: windows::Win32::Graphics::Gdi::HDC, w: i32, h: i32) {
     match &mut st.dw {
         None => match DwBackend::new(hdc, w, h, st.dpi) {
             Ok(b) => st.dw = Some(b),
-            Err(e) => {
-                // interop 초기화 실패 — GDI로 폴백(스파이크 한정 처리)
-                eprintln!("DirectWrite 초기화 실패, GDI 폴백: {e}");
-                st.backend = BackendKind::Gdi;
-            }
+            Err(e) => eprintln!("DirectWrite 초기화 실패: {e}"), // OS 인박스 — 실질 도달 불가
         },
         Some(b) => {
             if b.size() != (w, h) {
@@ -284,63 +198,25 @@ unsafe fn ensure_dw(st: &mut State, hdc: HDC, w: i32, h: i32) {
     }
 }
 
-/// 타이틀바에 백엔드·평균 페인트 시간 표시(비교 실측 가시화).
-unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
-    let text = format!(
-        "Nexa Dir 2 — ADR-0002 [{}] 평균 {}µs/{}프레임{} (F2 전환·F3 벤치)\0",
-        st.backend.label(),
-        st.stats.avg_us(),
-        st.stats.frames,
-        note,
-    );
-    let wtext: Vec<u16> = text.encode_utf16().collect();
-    let _ = SetWindowTextW(hwnd, PCWSTR(wtext.as_ptr()));
-}
-
-/// 위젯을 백버퍼에 그린 뒤 화면으로 BitBlt — 가시 영역만(M0-7 계승). 페인트 시간을 누적.
+/// 위젯을 DW 백버퍼에 그린 뒤 화면으로 BitBlt — 가시 영역만(docs/01 §3).
 unsafe fn paint(hwnd: HWND, st: &mut State) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
     let rc = client_rect(hwnd);
     let t0 = Instant::now();
 
-    let src_dc = match st.backend {
-        BackendKind::Gdi => {
-            ensure_backbuffer(st, hdc, rc.w, rc.h);
-            let Some(back) = &st.back else {
-                let _ = EndPaint(hwnd, &ps);
-                return;
-            };
-            let dc = back.dc;
-            let old_font = SelectObject(dc, st.font.into());
-            let mut ctx = GdiCtx { dc };
-            st.rows.paint(&mut ctx, &st.theme);
-            SelectObject(dc, old_font);
-            dc
-        }
-        BackendKind::DirectWrite => {
-            ensure_dw(st, hdc, rc.w, rc.h);
-            match &st.dw {
-                Some(back) if st.backend == BackendKind::DirectWrite => {
-                    let mut ctx = DwCtx { back };
-                    st.rows.paint(&mut ctx, &st.theme);
-                    back.memory_dc()
-                }
-                _ => {
-                    // DW 폴백 직후 프레임 — GDI 경로로 재진입
-                    let _ = EndPaint(hwnd, &ps);
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                    return;
-                }
-            }
-        }
-    };
+    ensure_dw(st, hdc, rc.w, rc.h);
+    if let Some(back) = &st.dw {
+        let mut ctx = DwCtx { back };
+        st.rows.paint(&mut ctx, &st.theme);
+        let _ = BitBlt(hdc, 0, 0, rc.w, rc.h, Some(back.memory_dc()), 0, 0, SRCCOPY);
+    }
 
-    let _ = BitBlt(hdc, 0, 0, rc.w, rc.h, Some(src_dc), 0, 0, SRCCOPY);
     st.stats.add(t0.elapsed().as_micros() as u64);
     let _ = EndPaint(hwnd, &ps);
 
-    if st.stats.frames.is_multiple_of(20) {
+    // 첫 프레임(WM_NCCREATE의 SetWindowText는 창 생성 타이틀로 덮임) + 20프레임마다 갱신
+    if st.stats.frames == 1 || st.stats.frames.is_multiple_of(20) {
         update_title(hwnd, st, "");
     }
 }
@@ -377,8 +253,17 @@ fn vk_to_key(vk: u16) -> Option<Key> {
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_NCCREATE => {
-            let st = Box::new(State::new(GetDpiForWindow(hwnd)));
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+            // run()이 만든 State를 lpCreateParams로 받아 연결 + 실제 DPI 반영
+            let cs = &*(lparam.0 as *const CREATESTRUCTW);
+            let ptr = cs.lpCreateParams as *mut State;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
+            if let Some(st) = ptr.as_mut() {
+                st.dpi = GetDpiForWindow(hwnd);
+                let (row_h, pad_x, indent_w) = metrics(st.dpi);
+                let mut inv = Invalidations::default();
+                st.rows.set_metrics(row_h, pad_x, indent_w, &mut inv);
+                update_title(hwnd, st, "");
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_PAINT => {
@@ -404,19 +289,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        WM_LBUTTONDOWN => {
+            if let Some(st) = state_of(hwnd) {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                route_event(hwnd, st, InputEvent::MouseDown { x, y });
+                update_title(hwnd, st, ""); // 펼침/접힘으로 행 수 변동 반영
+            }
+            LRESULT(0)
+        }
         WM_KEYDOWN => {
             if let Some(st) = state_of(hwnd) {
                 let vk = wparam.0 as u16;
-                if vk == VK_F2.0 {
-                    // 백엔드 전환 — 통계 리셋 후 전체 다시 그리기
-                    st.backend = match st.backend {
-                        BackendKind::Gdi => BackendKind::DirectWrite,
-                        BackendKind::DirectWrite => BackendKind::Gdi,
-                    };
-                    st.stats.reset();
-                    update_title(hwnd, st, " · 전환");
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                } else if vk == VK_F3.0 {
+                if vk == VK_F3.0 {
                     bench(hwnd, st);
                 } else if let Some(key) = vk_to_key(vk) {
                     route_event(hwnd, st, InputEvent::Key(key));
@@ -428,14 +313,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let dpi = (wparam.0 & 0xFFFF) as u32;
                 st.dpi = dpi;
-                let _ = DeleteObject(st.font.into());
-                let (font, row_h) = make_font(dpi);
-                st.font = font;
                 if let Some(dw) = &mut st.dw {
                     let _ = dw.set_dpi(dpi);
                 }
+                let (row_h, pad_x, indent_w) = metrics(dpi);
                 let mut inv = Invalidations::default();
-                st.rows.set_metrics(row_h, pad_x(dpi), &mut inv);
+                st.rows.set_metrics(row_h, pad_x, indent_w, &mut inv);
                 let rc = &*(lparam.0 as *const RECT);
                 let _ = SetWindowPos(
                     hwnd,
@@ -457,12 +340,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_NCDESTROY => {
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut State;
             if !ptr.is_null() {
-                let st = Box::from_raw(ptr);
-                if let Some(b) = st.back {
-                    b.free();
-                }
-                let _ = DeleteObject(st.font.into());
-                // st.dw(COM 참조)는 drop으로 해제
+                drop(Box::from_raw(ptr)); // dw(COM 참조) 포함 전부 drop
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
