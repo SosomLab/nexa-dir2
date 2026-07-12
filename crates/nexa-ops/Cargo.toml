@@ -1,0 +1,11 @@
+[package]
+name = "nexa-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "파일 조작 엔진 — 복사/이동 전송(진행률·취소·충돌), 원본 FileOps/TransferPathsInto 이식"
+
+[dependencies]
