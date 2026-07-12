@@ -32,7 +32,8 @@
 - ✅ M1-5 ★ **플래그십**(`feat/m1-select`) — 원본 docs/07: 삼각형=펼침 vs 본문=선택 분리·**교차폴더 다중 선택**(Ctrl 토글·Shift 범위·Ctrl+A, 코어 OrderedSet·anchor 배선, AC2 테스트)·**러버밴드**(빈 영역 드래그)·캐럿·선택 하이라이트(sel_bg 토큰)·→/← 인라인 펼침. 벤치 1,540µs·RSS 18.2MB.
 - ✅ M1-6 키보드 네비+타입어헤드(`feat/m1-keyboard`) — 원본 docs/32 확정 규약: 캐럿 이동+단일 선택+스크롤 추적·Shift 범위·Ctrl 캐럿만·Space/Ctrl+Space 토글·→자식/←부모·타입어헤드(가시 스트림 C·1s·반복 cycle·Backspace·HUD 배지). Shift+End 실기 "선택 61". Alt+화살표는 M1-8.
 - ✅ M1-7 셸 아이콘(`feat/m1-icons`) — 원본 A-4 이식: icon_key(확장자 공유·exe류 파일별 키)·LRU 256·속도 제한 로딩 큐(80ms×4 — 스크롤 폭주 방지)·SHGetFileInfoW(USEFILEATTRIBUTES). 벤치 2,547µs·**RSS 27.95MB(여유 2MB ⚠ M2-8 트림 감시)**.
-- ☐ M1-8 네비게이션 · ☐ M1-9 게이트.
+- ✅ M1-8 네비게이션(`feat/m1-navigation`) — 더블클릭/Enter 진입·히스토리(Alt+화살표·X버튼, push 시 앞으로 절단)·위로·숨김/점 토글(Ctrl+H·Ctrl+.). 소스 교체 시 정렬 유지. 실기 경로 왕복 확인.
+- ☐ M1-9 게이트(100k <150ms·60fps·RSS) — M1 마지막.
 
 ## M1+ (요약)
 

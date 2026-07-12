@@ -353,13 +353,34 @@ impl<S: RowSource> VirtualRows<S> {
         inv.push(self.bounds); // 매치 없어도 HUD(버퍼) 갱신
     }
 
-    /// 클라이언트 좌표 → 본문 행 인덱스(범위 밖이면 `None`).
-    fn row_at(&self, x: i32, y: i32) -> Option<usize> {
+    /// 데이터 공급자 교체(네비게이션 — M1-8). 스크롤·캐럿·타입어헤드는 리셋,
+    /// 컬럼·정렬 상태는 유지하고 새 소스에 재적용(원본 PanelView.SortKeys 지속 규약).
+    pub fn replace_source(&mut self, src: S, inv: &mut Invalidations) {
+        self.src = src;
+        self.scroll_row = 0;
+        self.scroll_x = 0;
+        self.caret = None;
+        self.band = None;
+        self.typeahead.clear();
+        let keys = self.sort.clone();
+        self.src.set_sort(&keys);
+        self.clamp_scroll();
+        inv.push(self.bounds);
+    }
+
+    /// 클라이언트 좌표 → 본문 행 인덱스(범위 밖이면 `None`). 호스트의 더블클릭 진입 판정에도 사용.
+    pub fn row_at(&self, x: i32, y: i32) -> Option<usize> {
         if !self.bounds.contains(Point { x, y }) || y < self.body_top() {
             return None;
         }
         let row = self.scroll_row + ((y - self.body_top()) / self.row_h) as usize;
         (row < self.src.len()).then_some(row)
+    }
+
+    /// 좌표가 펼침 마커 위인가 — 호스트가 더블클릭 진입과 마커 토글을 구분할 때 사용.
+    pub fn marker_hit(&self, x: i32, y: i32) -> bool {
+        self.row_at(x, y)
+            .is_some_and(|row| self.in_marker_zone(row, x))
     }
 
     /// 클릭 x가 해당 행의 펼침 마커 영역인가(트리 컬럼 안 들여쓰기 자리·마커 있는 행만).
@@ -1409,6 +1430,25 @@ mod tests {
             v.typeahead_text(),
             "",
             "Space는 타입어헤드 제외(docs/32 §7)"
+        );
+    }
+
+    // ── 소스 교체(M1-8 네비게이션) ──
+
+    #[test]
+    fn replace_source_resets_view_but_keeps_sort() {
+        let (mut v, mut inv) = list_with_cols(100, 220);
+        down(&mut v, &mut inv, 50, 5, false); // 이름 ▲ 정렬
+        v.on_event(&key(Key::End), &mut inv); // 스크롤·캐럿 이동
+        assert!(v.scroll_row() > 0 && v.caret().is_some());
+
+        v.replace_source(Rows::new(5), &mut inv); // "다른 폴더 진입"
+        assert_eq!((v.scroll_row(), v.caret()), (0, None), "뷰 상태 리셋");
+        assert_eq!(v.sort(), &[(0, false)], "정렬 상태 유지");
+        assert_eq!(
+            *v.source().sorts.borrow(),
+            vec![vec![(0, false)]],
+            "새 소스에 정렬 재적용"
         );
     }
 
