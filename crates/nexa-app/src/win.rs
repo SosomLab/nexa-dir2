@@ -1,12 +1,13 @@
-//! Win32 창·메시지 루프 — 렌더·입력은 nexa-gui 위젯, 데이터는 nexa-tree(M1-3 배선).
-//! 이 모듈의 책임: 창 수명·백버퍼(DW 비트맵 렌더 타깃)·WM_* → [`nexa_gui::InputEvent`] 번역·
-//! [`nexa_gui::Invalidations`] → `InvalidateRect` 번역. 텍스트 경로 = DirectWrite interop(ADR-0002).
-//! F3 = 200프레임 스크롤 벤치(M1-9 게이트 관측용) — 타이틀바에 평균 페인트 시간 표시.
+//! Win32 창·메시지 루프 — 렌더·입력은 nexa-gui 위젯, 패널 로직은 panel.rs(플랫폼 중립).
+//! 이 모듈의 책임: 창 수명·백버퍼(DW)·**듀얼 패널 배치(스플리터)·활성 패널 라우팅**(M2-2)·
+//! WM_* → [`nexa_gui::InputEvent`] 번역·[`nexa_gui::Invalidations`] → `InvalidateRect` 번역.
+//! F3 = 활성 패널 200프레임 스크롤 벤치. 타이틀바 = 활성 패널 경로·행/선택 수·페인트 시간.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
-use nexa_gui::widgets::{PathBar, VirtualRows};
-use nexa_gui::{Column, InputEvent, Invalidations, Key, Rect as GRect, Theme, Widget};
+use nexa_gui::widgets::RowSource;
+use nexa_gui::{Column, InputEvent, Invalidations, Key, Rect as GRect, Theme};
 use nexa_tree::Tree;
 use windows::core::{w, Result, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -21,37 +22,38 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F3,
     VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
-    VK_UP,
+    VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT,
-    GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR, WM_DESTROY,
-    WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
+    GetWindowLongPtrW, KillTimer, LoadCursorW, PostQuitMessage, RegisterClassW, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CS_DBLCLKS,
+    CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR,
+    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
     WM_RBUTTONDOWN, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
     WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
-use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
-
-use crate::nav::History;
 
 use crate::dw::{DwBackend, DwCtx};
 use crate::icons::shell::ShellIcons;
-use crate::source::{TreeSource, COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
+use crate::panel::{NavCtx, Panel, PanelMetrics};
+use crate::source::{COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
 
 /// wParam 마우스 수식키 비트(winuser.h MK_SHIFT/MK_CONTROL).
 const MK_SHIFT: usize = 0x0004;
 const MK_CONTROL: usize = 0x0008;
 
-/// F3 스크롤 벤치 프레임 수(M1-9 게이트 관측).
+/// F3 스크롤 벤치 프레임 수(게이트 관측).
 const BENCH_FRAMES: usize = 200;
 /// 타입어헤드 타임아웃 점검 타이머 id·주기(ms).
 const TIMER_TYPEAHEAD: usize = 1;
 const TIMER_TICK_MS: u32 = 250;
 /// 셸 아이콘 로딩 큐 타이머 id(주기 = icons::shell::TICK_MS — 원본 A-4 속도 제한).
 const TIMER_ICONS: usize = 2;
+/// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
+const MIN_PANEL: i32 = 200;
+const SPLIT_HALF: i32 = 3;
 
 /// 단조 시각(ms) — 타입어헤드 버퍼 타임아웃 판정용(프로세스 기동 기준).
 fn now_ms() -> u64 {
@@ -60,7 +62,7 @@ fn now_ms() -> u64 {
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
-/// 평균 페인트 시간(µs) 누적 — 벤치 시 리셋. `first_render_ms` = 기동→첫 페인트(M1-9 게이트).
+/// 평균 페인트 시간(µs) 누적 — 벤치 시 리셋. `first_render_ms` = 기동→첫 페인트(게이트).
 #[derive(Default)]
 struct PaintStats {
     total_us: u64,
@@ -83,47 +85,66 @@ impl PaintStats {
     fn reset(&mut self) {
         let first = self.first_render_ms;
         *self = PaintStats::default();
-        self.first_render_ms = first; // 첫 렌더 기록은 벤치 리셋과 무관하게 보존
+        self.first_render_ms = first;
     }
 }
 
 /// 창 단위 상태 — `GWLP_USERDATA`에 Box raw 포인터로 보관(WM_NCCREATE~WM_NCDESTROY).
 struct State {
-    pathbar: PathBar,
-    rows: VirtualRows<TreeSource>,
+    /// 듀얼 패널(0=좌 주, 1=우 — docs/20 §2). 우 패널 숨김 토글은 후속.
+    panels: [Panel; 2],
+    /// 활성 패널(키보드·타이틀 기준). 클릭·Tab으로 전환.
+    active: usize,
+    /// 좌 패널 폭 비율(스플리터 드래그).
+    split: f32,
+    split_drag: bool,
     theme: Theme,
     dpi: u32,
     dw: Option<DwBackend>,
     icons: std::cell::RefCell<ShellIcons>,
     stats: PaintStats,
-    nav: History,
     tz: i32,
-    /// 가시성 필터(원본 ViewOptions — 설정 영속은 M2-5).
+    /// 가시성 필터(전역 ViewOptions — 영속은 M2-5).
     show_hidden: bool,
     show_dotfiles: bool,
 }
 
-/// DPI 의존 지표: (행 높이, 좌 패딩, 트리 들여쓰기 폭). 고밀도 규약 = 20px 행 @96dpi.
-fn metrics(dpi: u32) -> (i32, i32, i32) {
+impl State {
+    fn nav_ctx(&self) -> NavCtx {
+        NavCtx {
+            show_hidden: self.show_hidden,
+            show_dotfiles: self.show_dotfiles,
+            tz: self.tz,
+        }
+    }
+    fn active_panel(&mut self) -> &mut Panel {
+        &mut self.panels[self.active]
+    }
+    /// 좌표가 속한 패널 인덱스(스플리터 존이면 `None`).
+    fn panel_at(&self, x: i32) -> Option<usize> {
+        if x < self.panels[0].bounds().right() {
+            Some(0)
+        } else if x >= self.panels[1].bounds().x {
+            Some(1)
+        } else {
+            None // 스플리터 존
+        }
+    }
+}
+
+/// DPI 의존 지표(고밀도 규약 20px 행 @96dpi).
+fn panel_metrics(dpi: u32) -> PanelMetrics {
     let s = |v: i32| (v * dpi as i32) / 96;
-    (s(20).max(14), s(6), s(16))
+    PanelMetrics {
+        row_h: s(20).max(14),
+        pad_x: s(6),
+        indent_w: s(16),
+        tab_h: s(22),
+        bar_h: s(24),
+    }
 }
 
-/// 경로 바 높이(행 + 상하 여백 — docs/20 네비 바 영역).
-fn bar_h(dpi: u32) -> i32 {
-    let (row_h, _, _) = metrics(dpi);
-    row_h + (4 * dpi as i32) / 96
-}
-
-/// 레이아웃 — 경로 바(상단 1줄) + 리스트(잔여). WM_SIZE·DPI 변경 시 호출.
-unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
-    let rc = client_rect(hwnd);
-    let bh = bar_h(st.dpi).min(rc.h);
-    st.pathbar.set_bounds(GRect::new(0, 0, rc.w, bh), inv);
-    st.rows.set_bounds(GRect::new(0, bh, rc.w, rc.h - bh), inv);
-}
-
-/// 기본 5컬럼(원본 docs/23 §2-1 기본 정의열 중 M1-4 범위). 폭은 dpi 스케일.
+/// 기본 5컬럼(원본 docs/23 §2-1). 폭은 dpi 스케일.
 fn columns(dpi: u32) -> Vec<Column> {
     let s = |v: i32| (v * dpi as i32) / 96;
     vec![
@@ -135,11 +156,10 @@ fn columns(dpi: u32) -> Vec<Column> {
     ]
 }
 
-/// 로컬 타임존 오프셋(분, UTC 동쪽 양수) — 수정한 날짜 표시용(원본은 셸 표시 규약).
+/// 로컬 타임존 오프셋(분, UTC 동쪽 양수).
 unsafe fn tz_offset_min() -> i32 {
     let mut tzi = TIME_ZONE_INFORMATION::default();
     let code = GetTimeZoneInformation(&mut tzi);
-    // Bias는 UTC = local + bias(분, 서쪽 양수) → 표시 오프셋은 부호 반전. DST 활성 시 보정.
     let bias = tzi.Bias
         + match code {
             1 => tzi.StandardBias,
@@ -149,48 +169,57 @@ unsafe fn tz_offset_min() -> i32 {
     -bias
 }
 
-/// 표시할 루트 경로: argv[1] → %USERPROFILE% → C:\.
-fn root_path() -> std::path::PathBuf {
+/// 시작 루트 경로: argv[1] → %USERPROFILE% → C:\.
+fn root_path() -> PathBuf {
     std::env::args_os()
         .nth(1)
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from))
-        .unwrap_or_else(|| std::path::PathBuf::from("C:\\"))
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("C:\\"))
+}
+
+fn open_start_tree(path: &std::path::Path) -> Tree {
+    Tree::open(path).unwrap_or_else(|e| {
+        eprintln!("{} 열기 실패({e}) — C:\\ 로 대체", path.display());
+        Tree::open("C:\\").expect("C:\\ 열기 실패")
+    })
 }
 
 pub fn run() -> Result<()> {
-    let _ = now_ms(); // 기동 시각 고정 — 첫 렌더 계측 기준(M1-9 게이트 B4/100k)
-                      // 창 생성 전 트리 로드(초안: 동기 — 백그라운드 열거는 M2 상주 규율에서)
+    let _ = now_ms(); // 기동 시각 고정 — 첫 렌더 계측 기준
     let path = root_path();
-    let tree = Tree::open(&path).unwrap_or_else(|e| {
-        eprintln!("{} 열기 실패({e}) — C:\\ 로 대체", path.display());
-        Tree::open("C:\\").expect("C:\\ 열기 실패")
-    });
-    let (row_h, pad_x, indent_w) = metrics(96); // 실제 DPI는 WM_NCCREATE에서 반영
     let tz = unsafe { tz_offset_min() };
-    let root = tree.root_path().to_path_buf();
+    let ctx = NavCtx {
+        show_hidden: true,
+        show_dotfiles: true,
+        tz,
+    };
+    let m = panel_metrics(96); // 실제 DPI는 WM_NCCREATE에서 반영
+                               // 좌/우 패널 — 같은 시작 경로의 독립 트리(원본 docs/20: 듀얼 기본, 숨김 토글 후속)
+    let left = Panel::new(open_start_tree(&path), ctx, m, columns(96));
+    let right = Panel::new(open_start_tree(&path), ctx, m, columns(96));
     let state = Box::new(State {
-        pathbar: PathBar::new(root.to_string_lossy(), row_h, pad_x),
-        rows: VirtualRows::new(TreeSource::new(tree, tz), row_h, pad_x, indent_w),
-        theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2 테마 시스템
+        panels: [left, right],
+        active: 0,
+        split: 0.5,
+        split_drag: false,
+        theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2-4
         dpi: 96,
         dw: None,
         icons: std::cell::RefCell::new(ShellIcons::new()),
         stats: PaintStats::default(),
-        nav: History::new(root),
         tz,
-        show_hidden: true, // 초안 기본 = 모두 표시(M1-3 이래 동일). 영속은 M2-5
+        show_hidden: true,
         show_dotfiles: true,
     });
 
     unsafe {
-        // PerMonitorV2 DPI — 매니페스트 도입 전까지 코드로 선언(docs/01 §3)
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         let hinstance = GetModuleHandleW(None)?;
         let class_name = w!("NexaDir2Main");
         let wc = WNDCLASSW {
-            style: CS_DBLCLKS, // 더블클릭 진입(M1-8)
+            style: CS_DBLCLKS,
             hInstance: hinstance.into(),
             lpszClassName: class_name,
             lpfnWndProc: Some(wndproc),
@@ -207,7 +236,7 @@ pub fn run() -> Result<()> {
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            1200,
+            1400,
             800,
             None,
             None,
@@ -235,7 +264,6 @@ unsafe fn client_rect(hwnd: HWND) -> GRect {
     GRect::new(0, 0, rc.right - rc.left, rc.bottom - rc.top)
 }
 
-/// 위젯이 수집한 무효화 rect를 OS 무효화로 번역.
 unsafe fn flush_invalidations(hwnd: HWND, inv: &mut Invalidations) {
     for r in inv.drain() {
         let rc = RECT {
@@ -248,123 +276,31 @@ unsafe fn flush_invalidations(hwnd: HWND, inv: &mut Invalidations) {
     }
 }
 
-unsafe fn route_event(hwnd: HWND, st: &mut State, ev: InputEvent) {
-    let mut inv = Invalidations::default();
-    st.rows.on_event(&ev, &mut inv);
-    flush_invalidations(hwnd, &mut inv);
+/// 스플리터 x(클라이언트) — split 비율에서 계산(패널 최소 폭 클램프).
+unsafe fn splitter_x(hwnd: HWND, st: &State) -> i32 {
+    let rc = client_rect(hwnd);
+    let s = |v: i32| (v * st.dpi as i32) / 96;
+    let min = s(MIN_PANEL);
+    ((rc.w as f32 * st.split) as i32).clamp(min.min(rc.w / 2), (rc.w - min).max(rc.w / 2))
 }
 
-// ── 네비게이션(M1-8) ─────────────────────────────────────────────
-
-/// 현재 필터로 경로를 연다. 실패(권한 등) 시 `None` — 현 위치 유지(오류 격리).
-unsafe fn open_source(st: &State, path: &std::path::Path) -> Option<TreeSource> {
-    match Tree::open_filtered(path, st.show_hidden, st.show_dotfiles) {
-        Ok(t) => Some(TreeSource::new(t, st.tz)),
-        Err(e) => {
-            eprintln!("{} 열기 실패: {e}", path.display());
-            None
-        }
-    }
+/// 듀얼 패널 레이아웃(좌 ║ 우 — docs/20 §1).
+unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
+    let rc = client_rect(hwnd);
+    let sx = splitter_x(hwnd, st);
+    let s = |v: i32| (v * st.dpi as i32) / 96;
+    let half = s(SPLIT_HALF).max(1);
+    st.panels[0].set_bounds(GRect::new(0, 0, (sx - half).max(0), rc.h), inv);
+    st.panels[1].set_bounds(
+        GRect::new(sx + half, 0, (rc.w - sx - half).max(0), rc.h),
+        inv,
+    );
 }
 
-/// 소스 교체 공통부 — 스크롤·캐럿 리셋(정렬 유지)·경로 바·타이틀 갱신.
-unsafe fn apply_source(hwnd: HWND, st: &mut State, src: TreeSource) {
-    let mut inv = Invalidations::default();
-    st.rows.replace_source(src, &mut inv);
-    let path = st
-        .rows
-        .source()
-        .tree()
-        .root_path()
-        .to_string_lossy()
-        .into_owned();
-    st.pathbar.set_path(path, &mut inv);
-    flush_invalidations(hwnd, &mut inv);
-    update_title(hwnd, st, "");
-}
-
-/// 경로 바의 이동 요청 수거 → 네비게이션(원본 §3: 컴포넌트는 통지만, 이동은 호스트).
-unsafe fn drain_pathbar_nav(hwnd: HWND, st: &mut State) {
-    if let Some(p) = st.pathbar.take_navigation() {
-        navigate_to(hwnd, st, std::path::PathBuf::from(p));
-    }
-}
-
-/// 새 경로 진입(히스토리 push — 앞으로 기록 절단).
-unsafe fn navigate_to(hwnd: HWND, st: &mut State, path: std::path::PathBuf) {
-    let Some(src) = open_source(st, &path) else {
-        return;
-    };
-    st.nav.push(path);
-    apply_source(hwnd, st, src);
-}
-
-unsafe fn nav_back(hwnd: HWND, st: &mut State) {
-    let Some(p) = st.nav.back().map(|p| p.to_path_buf()) else {
-        return;
-    };
-    match open_source(st, &p) {
-        Some(src) => apply_source(hwnd, st, src),
-        None => {
-            let _ = st.nav.forward(); // 열기 실패 — 위치 복원
-        }
-    }
-}
-
-unsafe fn nav_forward(hwnd: HWND, st: &mut State) {
-    let Some(p) = st.nav.forward().map(|p| p.to_path_buf()) else {
-        return;
-    };
-    match open_source(st, &p) {
-        Some(src) => apply_source(hwnd, st, src),
-        None => {
-            let _ = st.nav.back();
-        }
-    }
-}
-
-/// 위로(부모 폴더) — Alt+↑.
-unsafe fn nav_up(hwnd: HWND, st: &mut State) {
-    let parent = st
-        .rows
-        .source()
-        .tree()
-        .root_path()
-        .parent()
-        .map(|p| p.to_path_buf());
-    if let Some(p) = parent {
-        navigate_to(hwnd, st, p);
-    }
-}
-
-/// 캐럿/클릭 행이 폴더면 진입(더블클릭·Enter).
-unsafe fn activate_row(hwnd: HWND, st: &mut State, row: usize) {
-    let tree = st.rows.source().tree();
-    let (Some(r), Some(id)) = (tree.row(row), tree.visible_id(row)) else {
-        return;
-    };
-    if r.kind != nexa_core::FileKind::Dir {
-        return; // 파일 실행(ShellExecute)은 M3 조작 단계에서
-    }
-    if let Some(p) = tree.node_path(id).map(|p| p.to_path_buf()) {
-        navigate_to(hwnd, st, p);
-    }
-}
-
-/// 가시성 필터 토글 — 현 위치 재열기(히스토리 이동 없음).
-unsafe fn reopen_filtered(hwnd: HWND, st: &mut State) {
-    let path = st.rows.source().tree().root_path().to_path_buf();
-    let Some(src) = open_source(st, &path) else {
-        return;
-    };
-    st.nav.replace(path);
-    apply_source(hwnd, st, src);
-}
-
-/// 타이틀바 — 루트 경로·행 수·선택 수·평균 페인트·첫 렌더(M1-9 관측).
+/// 타이틀바 — 활성 패널 기준 경로·행/선택 수·페인트 시간.
 unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
-    use nexa_gui::widgets::RowSource;
-    let sel = st.rows.source().tree().selection_count();
+    let p = &st.panels[st.active];
+    let sel = p.rows().source().tree().selection_count();
     let sel_txt = if sel > 0 {
         format!(" · 선택 {sel}")
     } else {
@@ -375,11 +311,14 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
         .first_render_ms
         .map(|ms| format!(" · 첫렌더 {ms}ms"))
         .unwrap_or_default();
+    let side = if st.active == 0 { "좌" } else { "우" };
     let text = format!(
-        "Nexa Dir 2 — {} [{}행{} · 평균 {}µs{}]{}\0",
-        st.rows.source().tree().root_path().display(),
-        st.rows.source().len(),
+        "Nexa Dir 2 — [{side}] {} [{}행{} · 탭 {}/{} · 평균 {}µs{}]{}\0",
+        p.root_path().display(),
+        p.rows().source().len(),
         sel_txt,
+        p.active_index() + 1,
+        p.tab_count(),
         st.stats.avg_us(),
         first_txt,
         note,
@@ -388,12 +327,11 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
     let _ = SetWindowTextW(hwnd, PCWSTR(wtext.as_ptr()));
 }
 
-/// DW 렌더 타깃을 클라이언트 크기와 일치시킨다(최초 생성 포함).
 unsafe fn ensure_dw(st: &mut State, hdc: windows::Win32::Graphics::Gdi::HDC, w: i32, h: i32) {
     match &mut st.dw {
         None => match DwBackend::new(hdc, w, h, st.dpi) {
             Ok(b) => st.dw = Some(b),
-            Err(e) => eprintln!("DirectWrite 초기화 실패: {e}"), // OS 인박스 — 실질 도달 불가
+            Err(e) => eprintln!("DirectWrite 초기화 실패: {e}"),
         },
         Some(b) => {
             if b.size() != (w, h) {
@@ -403,7 +341,7 @@ unsafe fn ensure_dw(st: &mut State, hdc: windows::Win32::Graphics::Gdi::HDC, w: 
     }
 }
 
-/// 위젯을 DW 백버퍼에 그린 뒤 화면으로 BitBlt — 가시 영역만(docs/01 §3).
+/// 두 패널 + 스플리터를 DW 백버퍼에 그린 뒤 BitBlt.
 unsafe fn paint(hwnd: HWND, st: &mut State) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
@@ -416,45 +354,65 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             back,
             icons: &st.icons,
         };
-        st.rows.paint(&mut ctx, &st.theme);
-        st.pathbar.paint(&mut ctx, &st.theme);
+        st.panels[0].paint(&mut ctx, &st.theme);
+        st.panels[1].paint(&mut ctx, &st.theme);
+        // 스플리터(드래그 중 accent)
+        use nexa_gui::DrawCtx;
+        let lx = st.panels[0].bounds().right();
+        let w = st.panels[1].bounds().x - lx;
+        let color = if st.split_drag {
+            st.theme.accent
+        } else {
+            st.theme.border
+        };
+        ctx.fill_rect(GRect::new(lx, 0, w, rc.h), color);
         let _ = BitBlt(hdc, 0, 0, rc.w, rc.h, Some(back.memory_dc()), 0, 0, SRCCOPY);
     }
 
     st.stats.add(t0.elapsed().as_micros() as u64);
     if st.stats.first_render_ms.is_none() {
-        st.stats.first_render_ms = Some(now_ms()); // 기동(run 진입)→첫 페인트 완료
+        st.stats.first_render_ms = Some(now_ms());
     }
     let _ = EndPaint(hwnd, &ps);
 
-    // 미로드 아이콘이 큐에 쌓였으면 속도 제한 로딩 시작(원본 A-4)
     if st.icons.borrow().has_pending() {
         SetTimer(Some(hwnd), TIMER_ICONS, crate::icons::shell::TICK_MS, None);
     }
-
-    // 첫 프레임(WM_NCCREATE의 SetWindowText는 창 생성 타이틀로 덮임) + 20프레임마다 갱신
     if st.stats.frames == 1 || st.stats.frames.is_multiple_of(20) {
         update_title(hwnd, st, "");
     }
 }
 
-/// F3 — 200프레임 연속 스크롤 벤치(동기 UpdateWindow). 결과는 타이틀바.
+/// 활성 패널 전환(클릭·Tab) — 탭 바 accent로 시각화.
+unsafe fn set_active(hwnd: HWND, st: &mut State, idx: usize) {
+    if st.active != idx {
+        st.active = idx;
+        let mut inv = Invalidations::default();
+        st.panels[0].set_focused(idx == 0, &mut inv);
+        st.panels[1].set_focused(idx == 1, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+        update_title(hwnd, st, "");
+    }
+}
+
+/// F3 — 활성 패널 200프레임 스크롤 벤치.
 unsafe fn bench(hwnd: HWND, st: &mut State) {
-    route_event(
-        hwnd,
-        st,
-        InputEvent::Key {
-            key: Key::Home,
-            shift: false,
-            ctrl: false,
-        },
-    );
+    let ctx_ev = InputEvent::Key {
+        key: Key::Home,
+        shift: false,
+        ctrl: false,
+    };
+    let mut inv = Invalidations::default();
+    st.active_panel().on_event(&ctx_ev, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
     let _ = UpdateWindow(hwnd);
     st.stats.reset();
     for _ in 0..BENCH_FRAMES {
-        // 휠 1노치(3행)씩 아래로 — 실사용 스크롤 패턴
         if let Some(s) = state_of(hwnd) {
-            route_event(hwnd, s, InputEvent::Wheel { delta: -120 });
+            let mut inv = Invalidations::default();
+            s.active_panel()
+                .on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+            flush_invalidations(hwnd, &mut inv);
         }
         let _ = UpdateWindow(hwnd);
     }
@@ -481,17 +439,17 @@ fn vk_to_key(vk: u16) -> Option<Key> {
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_NCCREATE => {
-            // run()이 만든 State를 lpCreateParams로 받아 연결 + 실제 DPI 반영
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
             let ptr = cs.lpCreateParams as *mut State;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
             if let Some(st) = ptr.as_mut() {
                 st.dpi = GetDpiForWindow(hwnd);
-                let (row_h, pad_x, indent_w) = metrics(st.dpi);
                 let mut inv = Invalidations::default();
-                st.rows.set_metrics(row_h, pad_x, indent_w, &mut inv);
-                st.rows.set_columns(columns(st.dpi), &mut inv);
-                st.pathbar.set_metrics(row_h, pad_x, &mut inv);
+                let m = panel_metrics(st.dpi);
+                let cols = columns(st.dpi);
+                st.panels[0].set_metrics(m, cols.clone(), &mut inv);
+                st.panels[1].set_metrics(m, cols, &mut inv);
+                st.panels[1].set_focused(false, &mut inv);
                 update_title(hwnd, st, "");
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -502,7 +460,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
-        // 더블 버퍼가 전체를 덮으므로 배경 지우기 생략(깜빡임 제거)
         WM_ERASEBKGND => LRESULT(1),
         WM_SIZE => {
             if let Some(st) = state_of(hwnd) {
@@ -514,20 +471,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSEWHEEL => {
             if let Some(st) = state_of(hwnd) {
-                let delta = (wparam.0 >> 16) as i16 as i32; // WHEEL_DELTA 단위(트랙패드는 분수 노치)
-                if wparam.0 & MK_SHIFT != 0 {
-                    // Shift+휠 = 가로(휠 아래 = 오른쪽 — 관례상 부호 반전)
-                    route_event(hwnd, st, InputEvent::HWheel { delta: -delta });
+                let delta = (wparam.0 >> 16) as i16 as i32;
+                let ev = if wparam.0 & MK_SHIFT != 0 {
+                    InputEvent::HWheel { delta: -delta }
                 } else {
-                    route_event(hwnd, st, InputEvent::Wheel { delta });
-                }
+                    InputEvent::Wheel { delta }
+                };
+                let mut inv = Invalidations::default();
+                st.active_panel().on_event(&ev, &mut inv);
+                flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
         }
         WM_MOUSEHWHEEL => {
             if let Some(st) = state_of(hwnd) {
-                let delta = (wparam.0 >> 16) as i16 as i32; // 양수 = 오른쪽
-                route_event(hwnd, st, InputEvent::HWheel { delta });
+                let delta = (wparam.0 >> 16) as i16 as i32;
+                let mut inv = Invalidations::default();
+                st.active_panel()
+                    .on_event(&InputEvent::HWheel { delta }, &mut inv);
+                flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
         }
@@ -537,21 +499,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let shift = wparam.0 & MK_SHIFT != 0;
                 let ctrl = wparam.0 & MK_CONTROL != 0;
-                let ev = InputEvent::MouseDown { x, y, shift, ctrl };
                 let mut inv = Invalidations::default();
-                if st.pathbar.is_editing() {
-                    // 포커스아웃 = 편집 취소·브레드크럼 복귀(docs/27 §2)
-                    st.pathbar.cancel_edit(&mut inv);
-                } else if y < st.rows.bounds().y {
-                    st.pathbar.on_event(&ev, &mut inv); // 세그먼트 클릭
-                } else {
-                    // 리사이즈·러버밴드 드래그가 창 밖으로 나가도 추적되도록 캡처(MouseUp에서 해제)
-                    SetCapture(hwnd);
-                    st.rows.on_event(&ev, &mut inv);
+                SetCapture(hwnd); // 스플리터·리사이즈·러버밴드 드래그 공용
+                let sx = splitter_x(hwnd, st);
+                let half = (SPLIT_HALF * st.dpi as i32) / 96;
+                if st.active_panel().pathbar.is_editing() {
+                    // 포커스아웃 = 편집 취소(docs/27 §2)
+                    st.active_panel().pathbar.cancel_edit(&mut inv);
+                } else if (x - sx).abs() <= half.max(1) {
+                    st.split_drag = true;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                } else if let Some(idx) = st.panel_at(x) {
+                    set_active(hwnd, st, idx);
+                    let ev = InputEvent::MouseDown { x, y, shift, ctrl };
+                    st.panels[idx].on_event(&ev, &mut inv);
+                    let ctx = st.nav_ctx();
+                    st.panels[idx].drain_actions(ctx, &mut inv);
                 }
                 flush_invalidations(hwnd, &mut inv);
-                drain_pathbar_nav(hwnd, st);
-                update_title(hwnd, st, ""); // 펼침/정렬/선택으로 행·선택 수 변동 반영
+                update_title(hwnd, st, "");
             }
             LRESULT(0)
         }
@@ -559,10 +525,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                let mut inv = Invalidations::default();
-                st.pathbar
-                    .on_event(&InputEvent::RightDown { x, y }, &mut inv); // 편집 모드 진입
-                flush_invalidations(hwnd, &mut inv);
+                if let Some(idx) = st.panel_at(x) {
+                    set_active(hwnd, st, idx);
+                    let mut inv = Invalidations::default();
+                    st.panels[idx].on_event(&InputEvent::RightDown { x, y }, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                }
             }
             LRESULT(0)
         }
@@ -570,10 +538,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                let ev = InputEvent::MouseMove { x, y };
                 let mut inv = Invalidations::default();
-                st.pathbar.on_event(&ev, &mut inv); // hover 추적(영역 밖이면 해제)
-                st.rows.on_event(&ev, &mut inv); // 리사이즈·러버밴드 드래그
+                if st.split_drag {
+                    let rc = client_rect(hwnd);
+                    if rc.w > 0 {
+                        st.split = (x as f32 / rc.w as f32).clamp(0.1, 0.9);
+                        layout(hwnd, st, &mut inv);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                } else {
+                    let ev = InputEvent::MouseMove { x, y };
+                    st.panels[0].on_event(&ev, &mut inv);
+                    st.panels[1].on_event(&ev, &mut inv);
+                }
                 flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
@@ -582,77 +559,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                route_event(hwnd, st, InputEvent::MouseUp { x, y });
+                if st.split_drag {
+                    st.split_drag = false;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                let ev = InputEvent::MouseUp { x, y };
+                let mut inv = Invalidations::default();
+                st.panels[0].on_event(&ev, &mut inv);
+                st.panels[1].on_event(&ev, &mut inv);
+                flush_invalidations(hwnd, &mut inv);
             }
             let _ = ReleaseCapture();
             LRESULT(0)
         }
-        WM_KEYDOWN => {
-            if let Some(st) = state_of(hwnd) {
-                let vk = wparam.0 as u16;
-                let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
-                let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
-                if st.pathbar.is_editing() {
-                    // 편집 모드 키: Enter=제출(이동)·Esc=취소, 나머지는 WM_CHAR로
-                    let mut inv = Invalidations::default();
-                    if vk == VK_RETURN.0 {
-                        st.pathbar.submit_edit(&mut inv);
-                        flush_invalidations(hwnd, &mut inv);
-                        drain_pathbar_nav(hwnd, st);
-                    } else if vk == VK_ESCAPE.0 {
-                        st.pathbar.cancel_edit(&mut inv);
-                        flush_invalidations(hwnd, &mut inv);
-                    }
-                    return LRESULT(0);
-                }
-                if vk == VK_F3.0 {
-                    bench(hwnd, st);
-                } else if vk == b'A' as u16 && ctrl {
-                    route_event(hwnd, st, InputEvent::SelectAll); // Ctrl+A(docs/07 §8)
-                    update_title(hwnd, st, "");
-                } else if vk == VK_RETURN.0 {
-                    // Enter = 캐럿 행 진입(docs/07 §8)
-                    if let Some(c) = st.rows.caret() {
-                        activate_row(hwnd, st, c);
-                    }
-                } else if vk == b'H' as u16 && ctrl {
-                    st.show_hidden = !st.show_hidden; // Ctrl+H = 숨김 토글
-                    reopen_filtered(hwnd, st);
-                } else if vk == VK_OEM_PERIOD.0 && ctrl {
-                    st.show_dotfiles = !st.show_dotfiles; // Ctrl+. = 점 파일 토글
-                    reopen_filtered(hwnd, st);
-                } else if let Some(key) = vk_to_key(vk) {
-                    route_event(hwnd, st, InputEvent::Key { key, shift, ctrl });
-                    update_title(hwnd, st, ""); // 펼침·선택 변동 반영
-                }
-            }
-            LRESULT(0)
-        }
-        // Alt+화살표 = 히스토리/위로(WM_SYSKEYDOWN — Alt 조합은 시스템 키)
-        WM_SYSKEYDOWN => {
-            let vk = wparam.0 as u16;
-            if let Some(st) = state_of(hwnd) {
-                if vk == VK_LEFT.0 {
-                    nav_back(hwnd, st);
-                    return LRESULT(0);
-                } else if vk == VK_RIGHT.0 {
-                    nav_forward(hwnd, st);
-                    return LRESULT(0);
-                } else if vk == VK_UP.0 {
-                    nav_up(hwnd, st);
-                    return LRESULT(0);
-                }
-            }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
-        // 마우스 X버튼 = 뒤로/앞으로(탐색기 규약)
         WM_XBUTTONDOWN => {
             if let Some(st) = state_of(hwnd) {
+                let mut inv = Invalidations::default();
+                let ctx = st.nav_ctx();
                 match (wparam.0 >> 16) & 0xFFFF {
-                    1 => nav_back(hwnd, st),    // XBUTTON1
-                    2 => nav_forward(hwnd, st), // XBUTTON2
+                    1 => st.active_panel().nav_back(ctx, &mut inv),
+                    2 => st.active_panel().nav_forward(ctx, &mut inv),
                     _ => {}
                 }
+                flush_invalidations(hwnd, &mut inv);
+                update_title(hwnd, st, "");
             }
             LRESULT(0)
         }
@@ -660,46 +590,127 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                // 마커 더블클릭은 펼침 토글 영역 — 진입 아님(docs/07 §1-1 공존 규약)
-                if !st.rows.marker_hit(x, y) {
-                    if let Some(row) = st.rows.row_at(x, y) {
-                        activate_row(hwnd, st, row);
+                if let Some(idx) = st.panel_at(x) {
+                    set_active(hwnd, st, idx);
+                    let rows = st.panels[idx].rows();
+                    let hit = (!rows.marker_hit(x, y))
+                        .then(|| rows.row_at(x, y))
+                        .flatten();
+                    if let Some(row) = hit {
+                        let mut inv = Invalidations::default();
+                        let ctx = st.nav_ctx();
+                        st.panels[idx].activate_row(row, ctx, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
                     }
                 }
             }
             LRESULT(0)
         }
-        WM_CHAR => {
+        WM_KEYDOWN => {
             if let Some(st) = state_of(hwnd) {
-                if st.pathbar.is_editing() {
-                    // 경로 편집 입력(공백 허용 — 경로에 공백 가능)
-                    if let Some(c) = char::from_u32(wparam.0 as u32) {
-                        if c == '\u{8}' || !c.is_control() {
-                            let mut inv = Invalidations::default();
-                            st.pathbar.edit_char(c, &mut inv);
-                            flush_invalidations(hwnd, &mut inv);
-                        }
+                let vk = wparam.0 as u16;
+                let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
+                let ctx = st.nav_ctx();
+                let mut inv = Invalidations::default();
+                if st.active_panel().pathbar.is_editing() {
+                    if vk == VK_RETURN.0 {
+                        st.active_panel().pathbar.submit_edit(&mut inv);
+                        st.active_panel().drain_actions(ctx, &mut inv);
+                    } else if vk == VK_ESCAPE.0 {
+                        st.active_panel().pathbar.cancel_edit(&mut inv);
                     }
+                    flush_invalidations(hwnd, &mut inv);
+                    update_title(hwnd, st, "");
                     return LRESULT(0);
                 }
-                // 타입어헤드(docs/32) — Ctrl 조합(제어문자·Ctrl+H=0x08 충돌 포함) 제외
-                if GetKeyState(VK_CONTROL.0 as i32) >= 0 {
-                    if let Some(c) = char::from_u32(wparam.0 as u32) {
-                        if c == '\u{8}' || (!c.is_control() && c != ' ') {
-                            route_event(
-                                hwnd,
-                                st,
-                                InputEvent::Char {
-                                    c,
-                                    now_ms: now_ms(),
-                                },
-                            );
-                            update_title(hwnd, st, "");
-                            if !st.rows.typeahead_text().is_empty() {
-                                SetTimer(Some(hwnd), TIMER_TYPEAHEAD, TIMER_TICK_MS, None);
-                            }
+                if vk == VK_F3.0 {
+                    bench(hwnd, st);
+                } else if vk == VK_TAB.0 {
+                    if ctrl {
+                        st.active_panel().next_tab(&mut inv); // Ctrl+Tab = 다음 탭
+                    } else {
+                        let next = 1 - st.active;
+                        set_active(hwnd, st, next); // Tab = 패널 전환(커맨더 규약)
+                    }
+                } else if vk == b'T' as u16 && ctrl {
+                    st.active_panel().new_tab(ctx, &mut inv); // Ctrl+T = 새 탭
+                } else if vk == b'W' as u16 && ctrl {
+                    let i = st.active_panel().active_index();
+                    st.active_panel().close_tab(i, &mut inv); // Ctrl+W = 탭 닫기
+                } else if vk == b'A' as u16 && ctrl {
+                    st.active_panel().on_event(&InputEvent::SelectAll, &mut inv);
+                } else if vk == VK_RETURN.0 {
+                    if let Some(c) = st.active_panel().rows().caret() {
+                        st.active_panel().activate_row(c, ctx, &mut inv);
+                    }
+                } else if vk == b'H' as u16 && ctrl {
+                    st.show_hidden = !st.show_hidden;
+                    let ctx = st.nav_ctx();
+                    st.active_panel().reopen_filtered(ctx, &mut inv);
+                } else if vk == VK_OEM_PERIOD.0 && ctrl {
+                    st.show_dotfiles = !st.show_dotfiles;
+                    let ctx = st.nav_ctx();
+                    st.active_panel().reopen_filtered(ctx, &mut inv);
+                } else if let Some(key) = vk_to_key(vk) {
+                    st.active_panel()
+                        .on_event(&InputEvent::Key { key, shift, ctrl }, &mut inv);
+                }
+                flush_invalidations(hwnd, &mut inv);
+                update_title(hwnd, st, "");
+            }
+            LRESULT(0)
+        }
+        WM_SYSKEYDOWN => {
+            let vk = wparam.0 as u16;
+            if let Some(st) = state_of(hwnd) {
+                let ctx = st.nav_ctx();
+                let mut inv = Invalidations::default();
+                let handled = if vk == VK_LEFT.0 {
+                    st.active_panel().nav_back(ctx, &mut inv);
+                    true
+                } else if vk == VK_RIGHT.0 {
+                    st.active_panel().nav_forward(ctx, &mut inv);
+                    true
+                } else if vk == VK_UP.0 {
+                    st.active_panel().nav_up(ctx, &mut inv);
+                    true
+                } else {
+                    false
+                };
+                if handled {
+                    flush_invalidations(hwnd, &mut inv);
+                    update_title(hwnd, st, "");
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CHAR => {
+            if let Some(st) = state_of(hwnd) {
+                if let Some(c) = char::from_u32(wparam.0 as u32) {
+                    let mut inv = Invalidations::default();
+                    if st.active_panel().pathbar.is_editing() {
+                        if c == '\u{8}' || !c.is_control() {
+                            st.active_panel().pathbar.edit_char(c, &mut inv);
+                        }
+                    } else if GetKeyState(VK_CONTROL.0 as i32) >= 0
+                        && (c == '\u{8}' || (!c.is_control() && c != ' '))
+                    {
+                        st.active_panel().on_event(
+                            &InputEvent::Char {
+                                c,
+                                now_ms: now_ms(),
+                            },
+                            &mut inv,
+                        );
+                        if !st.active_panel().rows().typeahead_text().is_empty() {
+                            SetTimer(Some(hwnd), TIMER_TYPEAHEAD, TIMER_TICK_MS, None);
                         }
                     }
+                    flush_invalidations(hwnd, &mut inv);
+                    update_title(hwnd, st, "");
                 }
             }
             LRESULT(0)
@@ -708,15 +719,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if wparam.0 == TIMER_TYPEAHEAD {
                 if let Some(st) = state_of(hwnd) {
                     let mut inv = Invalidations::default();
-                    st.rows.tick(now_ms(), &mut inv);
+                    let now = now_ms();
+                    st.panels[0].rows_mut().tick(now, &mut inv);
+                    st.panels[1].rows_mut().tick(now, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
-                    if st.rows.typeahead_text().is_empty() {
+                    if st.panels[0].rows().typeahead_text().is_empty()
+                        && st.panels[1].rows().typeahead_text().is_empty()
+                    {
                         let _ = KillTimer(Some(hwnd), TIMER_TYPEAHEAD);
                     }
                 }
             } else if wparam.0 == TIMER_ICONS {
                 if let Some(st) = state_of(hwnd) {
-                    // 틱당 BATCH개만 로드(속도 제한) — 로드분이 있으면 가시 영역 다시 그리기
                     if st.icons.borrow_mut().tick() {
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
@@ -734,11 +748,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(dw) = &mut st.dw {
                     let _ = dw.set_dpi(dpi);
                 }
-                let (row_h, pad_x, indent_w) = metrics(dpi);
                 let mut inv = Invalidations::default();
-                st.rows.set_metrics(row_h, pad_x, indent_w, &mut inv);
-                st.pathbar.set_metrics(row_h, pad_x, &mut inv);
-                layout(hwnd, st, &mut inv);
+                let m = panel_metrics(dpi);
+                let cols = columns(dpi);
+                st.panels[0].set_metrics(m, cols.clone(), &mut inv);
+                st.panels[1].set_metrics(m, cols, &mut inv);
                 let rc = &*(lparam.0 as *const RECT);
                 let _ = SetWindowPos(
                     hwnd,
@@ -749,6 +763,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     rc.bottom - rc.top,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+                layout(hwnd, st, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
@@ -760,7 +775,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_NCDESTROY => {
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut State;
             if !ptr.is_null() {
-                drop(Box::from_raw(ptr)); // dw(COM 참조) 포함 전부 drop
+                drop(Box::from_raw(ptr));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }

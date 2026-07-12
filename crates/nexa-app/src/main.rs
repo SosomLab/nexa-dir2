@@ -11,6 +11,8 @@ mod icons;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod nav;
 #[cfg_attr(not(windows), allow(dead_code))]
+mod panel;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod source;
 #[cfg(windows)]
 mod win;
