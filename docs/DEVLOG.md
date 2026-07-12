@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-13
+
+- **M2-7 IME(한글) 1차·UIA 1차(`feat/m2-ime-uia`) → M2 셸 골격 완료 `0.3.0`**: 원본 NFR-A1 대응 — ① **IME**: WM_IME_* 에서 조합 창을 편집 캐럿 옆에 배치(`ImmSetCompositionWindow` CFS_POINT, 경로바 편집 대상·결과 문자열은 기존 WM_CHAR 경로). ② **UIA**(`uia.rs`): WM_GETOBJECT 서버측 프로바이더 — **불변 스냅샷 모델**(UIA 콜백=임의 스레드라 가시 행 스냅샷을 Arc로 공유), List(Name=활성 경로)+ListItem(파일명·HasKeyboardFocus·SelectionItem 패턴)·캐럿 변경 시 FocusChanged 이벤트(리스닝 가드). **실기: .NET UIA 클라이언트로 리스트/항목 14·이름·IsSelected 조회 검증**·IME 경로 주입+한글 SendKeys 생존. B3에 imm32·uiautomationcore 등재. 테스트 105 green. **M2 게이트 통과**(듀얼·탭4 26.9MB ≤30) → 태그 `0.3.0`. 1차 한계(스냅샷 정적·선택 조작 no-op)는 M5-3 마감. 상세 [journal/2026-07-13.md](journal/2026-07-13.md).
+
 ## 2026-07-12
 
 - **M2-8 상주 규율(`feat/m2-resident`)**: 원본 01 §5-1·docs/28 이식 — **유휴 60s(자니터 10s 틱)·최소화 시 트림**: DW 백엔드(백버퍼+레이아웃 캐시) 해제·셸 아이콘 HICON 전부 해제·`SetProcessWorkingSetSize(-1,-1)` 작업집합 반납. 화면 무효화 없이 **다음 페인트에서 지연 재적재**(ensure_dw 재생성·아이콘 재요청 — 원본 규약). 자니터는 트림 후 자기 소거, 입력에서 재가동(유휴 백그라운드 0% — 기존 타이머 2종도 자기 소거 확인). **실측: 활성 26.9MB → 최소화 2.9MB / 유휴 78s 0.21MB — 상주 RSS ≤30MB 게이트 통과**(99.5MB 장기 상주 관측 해소). 테스트 105 green·B3 무변(Win32_System_Threading=kernel32). 후속 β: 메모리 압박 구독(NFR-M4)·arena 회수·soak. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
