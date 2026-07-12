@@ -52,6 +52,11 @@ pub enum InputEvent {
         shift: bool,
         ctrl: bool,
     },
+    /// 마우스 우클릭 — 경로 바 편집 모드 진입(docs/27) 등.
+    RightDown {
+        x: i32,
+        y: i32,
+    },
     /// 마우스 이동(버튼 상태 무관 — 위젯이 드래그 상태를 보유).
     MouseMove {
         x: i32,
