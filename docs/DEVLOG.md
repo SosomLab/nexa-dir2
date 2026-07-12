@@ -8,6 +8,7 @@
 
 ## 2026-07-12
 
+- **M2-5 설정/세션 영속(`feat/m2-persistence`)**: 원본 docs/34·40·43 차용 + 포터블 규율(DR-3) — 영속물 = **exe 옆 `data\`**(레지스트리·%APPDATA% 비의존). serde 불채용(DR-8 crate 0) — **key=value 텍스트**(관용 파싱·탭 구분자 `|`)·**원자적 쓰기**(tmp→rename, 원본 SESS 계승). settings.txt(테마 모드·숨김/점 필터·스플리터 비율)·session.txt(활성 패널·패널별 탭 경로/활성 탭) — 기동 로드(`Panel::restore`, argv 경로 지정 시 새 패널)·종료 저장(WM_DESTROY). **실기 재실행 복원**: F6 라이트+Ctrl+T+Alt+↑ → 종료 → 재실행 시 라이트 픽셀·[좌] C:\Users·탭 2/2 복원 확인. 테스트 102 green(config 3)·B3 통과. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
 - **패널별 네비 버튼(`feat/m2-panel-navbar`, 사용자 지시)**: [←][→][↑]를 **각 패널 경로바 옆**(탭 하단 네비 바 — 원본 docs/20 §2)에 배치, 해당 패널의 활성 탭 히스토리에 동작. 전역 도구 모음과 공존(원본 동일). 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
 - **M2-4 테마 시스템(`feat/m2-theme`)**: 원본 docs/39 §3 — **시스템(OS 추종)/라이트/다크** 모드. System = 레지스트리 AppsUseLightTheme + WM_SETTINGCHANGE 실시간 재해석, 보기 메뉴 라디오(체크 동기)·**F6 순환**·타이틀바 DWM 다크 동기. 팔레트는 M1-1 토큰 기이식이라 전환 = 재해석+재그리기뿐. B3에 dwmapi·advapi32 추가(로컬 사전 검증). **실기 픽셀 검증**: #1F242B(다크) ↔ #F5F7FA(라이트)·시스템 추종 확인. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).
 - **M2-3 메뉴·도구·상태바(`feat/m2-chrome`)**: 크롬 3종 위젯(원본 docs/20 §2) — **MenuBar**(드롭다운을 오버레이로: 창 1개 원칙 유지, 체크 토글·Esc/외부 닫기·열린 상태 hover 전환)·**Toolbar**(←→↑⟳ → 활성 패널 네비)·**StatusBar**(항목/선택/탭·필터·페인트 관측). 명령 체계 CMD_* 단일화 — Ctrl+H/. 단축키도 경유해 메뉴 체크와 상시 동기. 실기: 숨김 토글 62→44행·도구 ↑ 이동. **QA 교훈: mouse_event 자동화는 클릭 간 대기 필수(입력 유실 플레이크)**. 테스트 96 green. 상세 [journal/2026-07-12.md](journal/2026-07-12.md).

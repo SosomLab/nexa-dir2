@@ -41,7 +41,8 @@
 - ✅ M2-2 듀얼 패널+패널별 탭(`feat/m2-panels`) — Panel 추출(플랫폼 중립·탭=독립 뷰+독립 히스토리 docs/20 §3)·TabBar 위젯(활성 accent·× 닫기·[+])·스플리터·활성 패널(클릭/Tab)·Ctrl+T/W/Ctrl+Tab. 듀얼 RSS 25.1MB. 탭 드래그·잠금·세션=후속.
 - ✅ M2-3 메뉴·도구·상태바(`feat/m2-chrome`) — 크롬 3종 커스텀 드로잉(자식 HWND 0): MenuBar 드롭다운 오버레이·체크 토글(단축키와 동기)·Toolbar 네비 버튼·StatusBar. 실기 숨김 토글 62→44행 확인.
 - ✅ M2-4 테마 시스템(`feat/m2-theme`) — 시스템(레지스트리 추종·WM_SETTINGCHANGE 실시간)/라이트/다크, 메뉴 라디오·F6 순환·DWM 다크 타이틀바. 실기 픽셀 검증. 모드 영속=M2-5.
-- ☐ M2-5 설정/세션(P0) · ☐ M2-6~8.
+- ✅ M2-5 설정/세션 영속(`feat/m2-persistence`) — 원본 docs/34·40·43 + DR-3: exe 옆 `data\` settings.txt(테마·필터·스플리터)·session.txt(패널별 탭·활성). key=value 텍스트(crate 0·관용 파싱)·원자적 쓰기(tmp→rename)·기동 로드/종료 저장(argv 경로는 명시 의도 우선). 실기 재실행 복원 검증. 주기 저장·창 위치·탭 잠금=후속.
+- ☐ M2-6 i18n(동적 전환 설계 확정) · ☐ M2-7 IME/UIA · ☐ M2-8 상주 규율.
 
 ## M1+ (요약)
 
