@@ -1,0 +1,47 @@
+# Nexa Dir 2 language file — format: original nexa-dir docs/42 §3 (properties style)
+# Lines: '#' comment · '@key = value' metadata · 'key = value' string. Escapes: \n \t \\
+@code = en
+@name = English
+@name.en = English
+@author = SosomLab
+@app = 0.3.0
+@fallback = en
+
+# ── Menu bar ──
+menu.file = File
+menu.file.newTab = New Tab
+menu.file.closeTab = Close Tab
+menu.file.exit = Exit
+menu.view = View
+menu.view.hidden = Show Hidden Files
+menu.view.dot = Show Dot Files
+menu.view.refresh = Refresh
+menu.view.theme.system = Theme: System
+menu.view.theme.light = Theme: Light
+menu.view.theme.dark = Theme: Dark
+menu.view.lang.system = Language: System
+
+# ── Columns (original col.* keys) ──
+col.name = Name
+col.ext = Ext
+col.size = Size
+col.modified = Date modified
+col.kind = Kind
+
+# ── Kind cells (original kind.* keys) ──
+kind.folder = Folder
+kind.link = Link
+kind.file = File
+kind.extFile = {0} file
+
+# ── Status bar · title ──
+status.itemCount = {0} items
+status.selectedCount = {0} selected
+status.tab = Tab {0}/{1}
+status.avg = avg {0}µs
+status.firstRender = first render {0}ms
+status.filters = Hidden: {0} · Dot: {1}
+status.show = shown
+status.hide = hidden
+panel.left = L
+panel.right = R

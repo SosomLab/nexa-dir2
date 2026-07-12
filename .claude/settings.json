@@ -5,6 +5,8 @@
       "Read",
       "Edit",
       "Write",
+      "Edit(./**/*.md)",
+      "Write(./**/*.md)",
       "Bash(git status:*)",
       "Bash(git log:*)",
       "Bash(git diff:*)",

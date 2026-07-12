@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 pub struct Settings {
     /// "system" | "light" | "dark"
     pub theme: String,
+    /// "system" | 언어 코드(en·ko·발견된 `data\lang\*.lang`) — M2-6.
+    pub lang: String,
     pub show_hidden: bool,
     pub show_dotfiles: bool,
     /// 좌 패널 폭 비율.
@@ -22,6 +24,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             theme: "dark".into(), // DR-5 다크 기본
+            lang: "system".into(),
             show_hidden: true,
             show_dotfiles: true,
             split: 0.5,
@@ -67,8 +70,9 @@ fn kv_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
 impl Settings {
     pub fn serialize(&self) -> String {
         format!(
-            "# nexa-dir2 settings v1\ntheme={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\n",
+            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\n",
             self.theme,
+            self.lang,
             u8::from(self.show_hidden),
             u8::from(self.show_dotfiles),
             self.split,
@@ -81,6 +85,8 @@ impl Settings {
         for (k, v) in kv_lines(text) {
             match k {
                 "theme" if matches!(v, "system" | "light" | "dark") => s.theme = v.into(),
+                // 코드 검증은 i18n resolve(발견 목록 대조)가 담당 — 여기선 형태만
+                "lang" if !v.is_empty() && v.len() <= 16 => s.lang = v.into(),
                 "show_hidden" => s.show_hidden = v != "0",
                 "show_dotfiles" => s.show_dotfiles = v != "0",
                 "split" => {
@@ -167,12 +173,14 @@ mod tests {
     fn settings_roundtrip_and_lenient_parse() {
         let s = Settings {
             theme: "light".into(),
+            lang: "ko".into(),
             show_hidden: false,
             show_dotfiles: true,
             split: 0.62,
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");
+        assert_eq!(parsed.lang, "ko");
         assert!(!parsed.show_hidden && parsed.show_dotfiles);
         assert!((parsed.split - 0.62).abs() < 0.001);
         // 손상·미지 키·잘못된 값 → 기본값 유지

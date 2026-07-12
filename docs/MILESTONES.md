@@ -42,7 +42,8 @@
 - ✅ M2-3 메뉴·도구·상태바(`feat/m2-chrome`) — 크롬 3종 커스텀 드로잉(자식 HWND 0): MenuBar 드롭다운 오버레이·체크 토글(단축키와 동기)·Toolbar 네비 버튼·StatusBar. 실기 숨김 토글 62→44행 확인.
 - ✅ M2-4 테마 시스템(`feat/m2-theme`) — 시스템(레지스트리 추종·WM_SETTINGCHANGE 실시간)/라이트/다크, 메뉴 라디오·F6 순환·DWM 다크 타이틀바. 실기 픽셀 검증. 모드 영속=M2-5.
 - ✅ M2-5 설정/세션 영속(`feat/m2-persistence`) — 원본 docs/34·40·43 + DR-3: exe 옆 `data\` settings.txt(테마·필터·스플리터)·session.txt(패널별 탭·활성). key=value 텍스트(crate 0·관용 파싱)·원자적 쓰기(tmp→rename)·기동 로드/종료 저장(argv 경로는 명시 의도 우선). 실기 재실행 복원 검증. 주기 저장·창 위치·탭 잠금=후속.
-- ☐ M2-6 i18n(동적 전환 설계 확정) · ☐ M2-7 IME/UIA · ☐ M2-8 상주 규율.
+- ✅ M2-6 i18n(`feat/m2-i18n`) — 원본 docs/42: properties `.lang`(crate 0)·내장 en/ko 임베드+exe 옆 `data\lang\` 키 단위 오버라이드(DR-3)·폴백 체인(현재→en→키)·**동적 전환**(언어 라디오 → 테이블 스왑+메뉴/컬럼 재구성+재그리기 — 재시작 불요)·"system"=OS 언어 추종·settings `lang` 영속. en/ko 키 파리티 테스트. α 한계: 전환 시 컬럼 폭 리셋.
+- ☐ M2-7 IME/UIA · ☐ M2-8 상주 규율.
 
 ## M1+ (요약)
 

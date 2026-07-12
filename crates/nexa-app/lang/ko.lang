@@ -1,0 +1,46 @@
+# Nexa Dir 2 언어 파일 — 포맷: 원본 nexa-dir docs/42 §3 (properties 스타일)
+@code = ko
+@name = 한국어
+@name.en = Korean
+@author = SosomLab
+@app = 0.3.0
+@fallback = en
+
+# ── 메뉴 바 ──
+menu.file = 파일
+menu.file.newTab = 새 탭
+menu.file.closeTab = 탭 닫기
+menu.file.exit = 종료
+menu.view = 보기
+menu.view.hidden = 숨김 파일 표시
+menu.view.dot = 점 파일 표시
+menu.view.refresh = 새로 고침
+menu.view.theme.system = 테마: 시스템
+menu.view.theme.light = 테마: 라이트
+menu.view.theme.dark = 테마: 다크
+menu.view.lang.system = 언어: 시스템
+
+# ── 컬럼 ──
+col.name = 이름
+col.ext = 확장자
+col.size = 크기
+col.modified = 수정한 날짜
+col.kind = 종류
+
+# ── 종류 셀 ──
+kind.folder = 폴더
+kind.link = 바로가기
+kind.file = 파일
+kind.extFile = {0} 파일
+
+# ── 상태바 · 타이틀 ──
+status.itemCount = {0}개 항목
+status.selectedCount = 선택 {0}
+status.tab = 탭 {0}/{1}
+status.avg = 평균 {0}µs
+status.firstRender = 첫렌더 {0}ms
+status.filters = 숨김 {0} · 점 {1}
+status.show = 표시
+status.hide = 감춤
+panel.left = 좌
+panel.right = 우

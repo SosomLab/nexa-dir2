@@ -99,6 +99,15 @@ impl MenuBar {
         inv.push(self.bounds);
     }
 
+    /// 메뉴 정의 교체(i18n 언어 전환 등) — 열린 드롭다운은 닫고 전체 무효화. 배치·지표 유지.
+    pub fn set_menus(&mut self, menus: Vec<Menu>, inv: &mut Invalidations) {
+        self.close(inv);
+        self.menus = menus;
+        self.hover_title = None;
+        self.title_ranges.borrow_mut().clear();
+        inv.push(self.bounds);
+    }
+
     /// 토글 항목 체크 상태 갱신(id 기준).
     pub fn set_checked(&mut self, id: u32, on: bool, inv: &mut Invalidations) {
         for m in &mut self.menus {
