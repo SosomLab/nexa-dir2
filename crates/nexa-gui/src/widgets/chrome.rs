@@ -21,6 +21,9 @@ pub struct Toolbar {
     bounds: Rect,
     row_h: i32,
     pad_x: i32,
+    /// 고정 버튼 폭(px). `None` = 글리프 폭 기반. 패널 네비 버튼처럼
+    /// 레이아웃이 폭을 미리 알아야 할 때 사용(버튼은 간격 없이 연속 배치).
+    button_w: Option<i32>,
     hover: Option<usize>,
     pending: Option<u32>,
     ranges: RefCell<Vec<(i32, i32)>>,
@@ -33,10 +36,22 @@ impl Toolbar {
             bounds: Rect::default(),
             row_h: row_h.max(1),
             pad_x,
+            button_w: None,
             hover: None,
             pending: None,
             ranges: RefCell::new(Vec::new()),
         }
+    }
+
+    /// 고정 버튼 폭 모드(선두 여백 없이 bounds 시작부터 연속 배치).
+    pub fn with_button_width(mut self, w: i32) -> Self {
+        self.button_w = Some(w.max(1));
+        self
+    }
+
+    pub fn set_button_width(&mut self, w: Option<i32>, inv: &mut Invalidations) {
+        self.button_w = w.map(|v| v.max(1));
+        inv.push(self.bounds);
     }
 
     pub fn take_command(&mut self) -> Option<u32> {
@@ -97,9 +112,16 @@ impl Widget for Toolbar {
         let ty = b.y + (b.h - (b.h * 4) / 5) / 2;
         ctx.fill_rect(b, theme.chrome_bg);
         let mut ranges = Vec::with_capacity(self.buttons.len());
-        let mut x = b.x + self.pad_x;
+        // 고정 폭 모드 = bounds 시작부터, 글리프 폭 모드 = 선두 여백. 버튼은 간격 없이 연속.
+        let mut x = if self.button_w.is_some() {
+            b.x
+        } else {
+            b.x + self.pad_x
+        };
         for (i, btn) in self.buttons.iter().enumerate() {
-            let w = ctx.text_width(&btn.glyph) + self.pad_x * 2;
+            let w = self
+                .button_w
+                .unwrap_or_else(|| ctx.text_width(&btn.glyph) + self.pad_x * 2);
             let cell = Rect::new(x, b.y, w.min((b.right() - x).max(0)), b.h);
             let bg = if self.hover == Some(i) {
                 theme.header_bg
@@ -107,10 +129,17 @@ impl Widget for Toolbar {
                 theme.chrome_bg
             };
             if cell.w > 0 {
-                ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, theme.text, bg);
+                // 고정 폭이면 글리프를 셀 중앙 정렬
+                let tx = if self.button_w.is_some() {
+                    let gw = ctx.text_width(&btn.glyph);
+                    cell.x + ((cell.w - gw) / 2).max(0)
+                } else {
+                    cell.x + self.pad_x
+                };
+                ctx.text_opaque(tx, ty, cell, &btn.glyph, theme.text, bg);
             }
             ranges.push((cell.x, cell.x + w));
-            x += w + self.pad_x / 2;
+            x += w;
         }
         ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.border);
         *self.ranges.borrow_mut() = ranges;

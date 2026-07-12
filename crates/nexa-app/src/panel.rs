@@ -73,7 +73,7 @@ impl Panel {
         rows.set_columns(columns, &mut inv);
         let mut p = Panel {
             tabbar: TabBar::new(m.row_h, m.pad_x),
-            navbtns: Toolbar::new(nav_buttons(), m.row_h, m.pad_x),
+            navbtns: Toolbar::new(nav_buttons(), m.row_h, m.pad_x).with_button_width(nav_btn_w(&m)),
             pathbar: PathBar::new(root.to_string_lossy(), m.row_h, m.pad_x),
             tabs: vec![Tab {
                 rows,
@@ -122,15 +122,16 @@ impl Panel {
         let bar_h = self.m.bar_h.min((bounds.h - tab_h).max(0));
         self.tabbar
             .set_bounds(Rect::new(bounds.x, bounds.y, bounds.w, tab_h), inv);
-        // 네비 버튼 3개 폭(대략 정사각 버튼) — 잔여는 경로 바
-        let nav_w = ((self.m.row_h + self.m.pad_x * 2) * 3).min(bounds.w);
+        // 네비 버튼 3개 = 간격 없이 연속, 경로 바는 4px(@96dpi) 여유 후(사용자 지시)
+        let nav_w = (nav_btn_w(&self.m) * 3).min(bounds.w);
+        let gap = (self.m.pad_x * 2) / 3; // 4px @96dpi(pad_x=6), DPI 비례
         self.navbtns
             .set_bounds(Rect::new(bounds.x, bounds.y + tab_h, nav_w, bar_h), inv);
         self.pathbar.set_bounds(
             Rect::new(
-                bounds.x + nav_w,
+                bounds.x + nav_w + gap,
                 bounds.y + tab_h,
-                (bounds.w - nav_w).max(0),
+                (bounds.w - nav_w - gap).max(0),
                 bar_h,
             ),
             inv,
@@ -153,6 +154,7 @@ impl Panel {
         self.m = m;
         self.tabbar.set_metrics(m.row_h, m.pad_x, inv);
         self.navbtns.set_metrics(m.row_h, m.pad_x, inv);
+        self.navbtns.set_button_width(Some(nav_btn_w(&m)), inv);
         self.pathbar.set_metrics(m.row_h, m.pad_x, inv);
         for tab in &mut self.tabs {
             tab.rows.set_metrics(m.row_h, m.pad_x, m.indent_w, inv);
@@ -352,6 +354,11 @@ impl Panel {
     }
 }
 
+/// 네비 버튼 1개 폭(고정 — 레이아웃이 측정 없이 계산).
+fn nav_btn_w(m: &PanelMetrics) -> i32 {
+    m.row_h + m.pad_x
+}
+
 /// 패널 네비 버튼 정의([←][→][↑] — 원본 docs/20 §2 네비게이션 바).
 fn nav_buttons() -> Vec<ToolButton> {
     [(BTN_BACK, "←"), (BTN_FORWARD, "→"), (BTN_UP, "↑")]
@@ -418,9 +425,9 @@ mod tests {
         let (p, _) = panel(&base);
         fs::remove_dir_all(&base).unwrap();
         assert_eq!(p.tabbar.bounds(), Rect::new(0, 0, 400, 22));
-        // 네비 바 행 = [←][→][↑](3×(20+12)=96) + 경로 바 잔여
-        assert_eq!(p.navbtns.bounds(), Rect::new(0, 22, 96, 24));
-        assert_eq!(p.pathbar.bounds(), Rect::new(96, 22, 304, 24));
+        // 네비 바 행 = [←][→][↑] 간격 없이 3×26=78 + 4px 여유 + 경로 바(사용자 지시)
+        assert_eq!(p.navbtns.bounds(), Rect::new(0, 22, 78, 24));
+        assert_eq!(p.pathbar.bounds(), Rect::new(82, 22, 318, 24));
         assert_eq!(p.rows().bounds(), Rect::new(0, 46, 400, 354));
     }
 
