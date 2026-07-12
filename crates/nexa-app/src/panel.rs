@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use nexa_core::FileKind;
-use nexa_gui::widgets::{PathBar, TabAction, TabBar, VirtualRows};
+use nexa_gui::widgets::{PathBar, TabAction, TabBar, ToolButton, Toolbar, VirtualRows};
 use nexa_gui::{Column, DrawCtx, InputEvent, Invalidations, Rect, Theme, Widget};
 use nexa_tree::Tree;
 
@@ -47,8 +47,15 @@ pub struct PanelMetrics {
     pub bar_h: i32,
 }
 
+/// 패널 네비 버튼 id(원본 docs/20 §2 네비게이션 바 — 탭 하단 [←][→][↑]).
+const BTN_BACK: u32 = 1;
+const BTN_FORWARD: u32 = 2;
+const BTN_UP: u32 = 3;
+
 pub struct Panel {
     pub tabbar: TabBar,
+    /// 경로바 왼쪽의 [←][→][↑] — **이 패널의 활성 탭** 히스토리에 동작(사용자 지시 2026-07-12).
+    navbtns: Toolbar,
     pub pathbar: PathBar,
     tabs: Vec<Tab>,
     active: usize,
@@ -66,6 +73,7 @@ impl Panel {
         rows.set_columns(columns, &mut inv);
         let mut p = Panel {
             tabbar: TabBar::new(m.row_h, m.pad_x),
+            navbtns: Toolbar::new(nav_buttons(), m.row_h, m.pad_x),
             pathbar: PathBar::new(root.to_string_lossy(), m.row_h, m.pad_x),
             tabs: vec![Tab {
                 rows,
@@ -107,15 +115,26 @@ impl Panel {
 
     // ── 레이아웃·표시 ───────────────────────────────────────────
 
-    /// 탭 바(상단) → 경로 바 → 리스트(잔여) 수직 배치(docs/20 §1).
+    /// 탭 바(상단) → 네비 바([←][→][↑] + 경로 바) → 리스트(잔여) 수직 배치(docs/20 §1·§2).
     pub fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
         self.bounds = bounds;
         let tab_h = self.m.tab_h.min(bounds.h);
         let bar_h = self.m.bar_h.min((bounds.h - tab_h).max(0));
         self.tabbar
             .set_bounds(Rect::new(bounds.x, bounds.y, bounds.w, tab_h), inv);
-        self.pathbar
-            .set_bounds(Rect::new(bounds.x, bounds.y + tab_h, bounds.w, bar_h), inv);
+        // 네비 버튼 3개 폭(대략 정사각 버튼) — 잔여는 경로 바
+        let nav_w = ((self.m.row_h + self.m.pad_x * 2) * 3).min(bounds.w);
+        self.navbtns
+            .set_bounds(Rect::new(bounds.x, bounds.y + tab_h, nav_w, bar_h), inv);
+        self.pathbar.set_bounds(
+            Rect::new(
+                bounds.x + nav_w,
+                bounds.y + tab_h,
+                (bounds.w - nav_w).max(0),
+                bar_h,
+            ),
+            inv,
+        );
         let list_y = bounds.y + tab_h + bar_h;
         for tab in &mut self.tabs {
             tab.rows.set_bounds(
@@ -133,6 +152,7 @@ impl Panel {
     pub fn set_metrics(&mut self, m: PanelMetrics, columns: Vec<Column>, inv: &mut Invalidations) {
         self.m = m;
         self.tabbar.set_metrics(m.row_h, m.pad_x, inv);
+        self.navbtns.set_metrics(m.row_h, m.pad_x, inv);
         self.pathbar.set_metrics(m.row_h, m.pad_x, inv);
         for tab in &mut self.tabs {
             tab.rows.set_metrics(m.row_h, m.pad_x, m.indent_w, inv);
@@ -147,6 +167,7 @@ impl Panel {
 
     pub fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         self.rows().paint(ctx, theme);
+        self.navbtns.paint(ctx, theme);
         self.pathbar.paint(ctx, theme);
         self.tabbar.paint(ctx, theme);
     }
@@ -284,17 +305,23 @@ impl Panel {
     /// 패널 내부 y-라우팅(마우스 계열). 키보드·편집은 호스트가 활성 패널에 직접.
     pub fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
-            InputEvent::MouseDown { y, .. } | InputEvent::RightDown { y, .. } => {
+            InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y } => {
                 if y < self.pathbar.bounds().y {
                     self.tabbar.on_event(ev, inv);
                 } else if y < self.rows().bounds().y {
-                    self.pathbar.on_event(ev, inv);
+                    // 네비 바 행: [←][→][↑] | 경로 바
+                    if x < self.pathbar.bounds().x {
+                        self.navbtns.on_event(ev, inv);
+                    } else {
+                        self.pathbar.on_event(ev, inv);
+                    }
                 } else {
                     self.tabs[self.active].rows.on_event(ev, inv);
                 }
             }
             InputEvent::MouseMove { .. } => {
                 self.tabbar.on_event(ev, inv);
+                self.navbtns.on_event(ev, inv);
                 self.pathbar.on_event(ev, inv);
                 self.tabs[self.active].rows.on_event(ev, inv);
             }
@@ -302,7 +329,7 @@ impl Panel {
         }
     }
 
-    /// 위젯들이 쌓아 둔 동작 수거 — 탭 전환/닫기/새 탭 + 경로 바 이동.
+    /// 위젯들이 쌓아 둔 동작 수거 — 탭·경로 바·**패널 네비 버튼**(이 패널의 활성 탭 대상).
     pub fn drain_actions(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
         if let Some(action) = self.tabbar.take_action() {
             match action {
@@ -314,7 +341,26 @@ impl Panel {
         if let Some(p) = self.pathbar.take_navigation() {
             self.navigate_to(PathBuf::from(p), ctx, inv);
         }
+        if let Some(btn) = self.navbtns.take_command() {
+            match btn {
+                BTN_BACK => self.nav_back(ctx, inv),
+                BTN_FORWARD => self.nav_forward(ctx, inv),
+                BTN_UP => self.nav_up(ctx, inv),
+                _ => {}
+            }
+        }
     }
+}
+
+/// 패널 네비 버튼 정의([←][→][↑] — 원본 docs/20 §2 네비게이션 바).
+fn nav_buttons() -> Vec<ToolButton> {
+    [(BTN_BACK, "←"), (BTN_FORWARD, "→"), (BTN_UP, "↑")]
+        .into_iter()
+        .map(|(id, g)| ToolButton {
+            id,
+            glyph: g.into(),
+        })
+        .collect()
 }
 
 /// 현재 필터로 경로를 연다. 실패(권한 등) 시 `None`(오류 격리 — 호출자가 위치 유지).
@@ -367,13 +413,54 @@ mod tests {
     }
 
     #[test]
-    fn layout_stacks_tabbar_pathbar_rows() {
+    fn layout_stacks_tabbar_navbar_rows() {
         let base = fixture("layout");
         let (p, _) = panel(&base);
         fs::remove_dir_all(&base).unwrap();
         assert_eq!(p.tabbar.bounds(), Rect::new(0, 0, 400, 22));
-        assert_eq!(p.pathbar.bounds(), Rect::new(0, 22, 400, 24));
+        // 네비 바 행 = [←][→][↑](3×(20+12)=96) + 경로 바 잔여
+        assert_eq!(p.navbtns.bounds(), Rect::new(0, 22, 96, 24));
+        assert_eq!(p.pathbar.bounds(), Rect::new(96, 22, 304, 24));
         assert_eq!(p.rows().bounds(), Rect::new(0, 46, 400, 354));
+    }
+
+    #[test]
+    fn panel_nav_buttons_drive_this_panels_tab_history() {
+        let base = fixture("navbtn");
+        let (mut p, mut inv) = panel(&base);
+        p.navigate_to(base.join("sub"), ctx(), &mut inv); // 히스토리: base → sub
+        p.paint(&mut PaintProbe, &Theme::dark()); // 버튼 히트 범위 캐시
+                                                  // [←] 클릭(첫 버튼 영역) → 뒤로
+        p.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: 30,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        p.drain_actions(ctx(), &mut inv);
+        assert_eq!(p.root_path(), base, "[←] = 이 패널 활성 탭의 뒤로");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    struct PaintProbe;
+    impl nexa_gui::DrawCtx for PaintProbe {
+        fn fill_rect(&mut self, _r: Rect, _c: nexa_gui::Color) {}
+        fn text_opaque(
+            &mut self,
+            _x: i32,
+            _y: i32,
+            _c: Rect,
+            _t: &str,
+            _f: nexa_gui::Color,
+            _b: nexa_gui::Color,
+        ) {
+        }
+        fn text_width(&mut self, text: &str) -> i32 {
+            text.chars().count() as i32 * 8
+        }
     }
 
     #[test]
