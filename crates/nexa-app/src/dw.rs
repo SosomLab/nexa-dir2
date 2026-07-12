@@ -16,8 +16,9 @@ use windows::Win32::Graphics::DirectWrite::{
     IDWriteInlineObject, IDWritePixelSnapping_Impl, IDWriteRenderingParams, IDWriteTextFormat,
     IDWriteTextLayout, IDWriteTextRenderer, IDWriteTextRenderer_Impl, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_MATRIX, DWRITE_MEASURING_MODE,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_STRIKETHROUGH, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_UNDERLINE, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_STRIKETHROUGH, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_UNDERLINE,
+    DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Gdi::{ExtTextOutW, SetBkColor, ETO_OPAQUE, HDC};
 
@@ -125,6 +126,8 @@ pub struct DwBackend {
     format: IDWriteTextFormat,
     renderer: IDWriteTextRenderer,
     color: Rc<Cell<COLORREF>>,
+    /// 큰 글리프(버튼 화살표 등) 포맷 — 15 DIP·가로 중앙 정렬.
+    icon_format: IDWriteTextFormat,
     /// 컬럼 트리밍(말줄임표) 기호 — 레이아웃마다 SetTrimming으로 부착.
     ellipsis: IDWriteInlineObject,
     /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
@@ -155,6 +158,20 @@ impl DwBackend {
         // 행 rect 안 세로 중앙 정렬(레이아웃 maxheight = 행 높이)
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
+        // 큰 글리프 포맷(네비 화살표 등) — 15 DIP·상하/좌우 중앙(글리프 가시성)
+        let icon_format = factory.CreateTextFormat(
+            w!("Segoe UI"),
+            None,
+            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
+            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
+            15.0,
+            w!("ko-kr"),
+        )?;
+        icon_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        icon_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        icon_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+
         let color = Rc::new(Cell::new(COLORREF(0)));
         let renderer: IDWriteTextRenderer = BrtRenderer {
             brt: brt.clone(),
@@ -170,6 +187,7 @@ impl DwBackend {
             format,
             renderer,
             color,
+            icon_format,
             ellipsis,
             layouts: RefCell::new(HashMap::new()),
             w,
@@ -292,6 +310,57 @@ impl DrawCtx for DwCtx<'_> {
                 return 0;
             }
             (m.widthIncludingTrailingWhitespace * ppd).ceil() as i32
+        }
+    }
+
+    fn glyph_opaque(
+        &mut self,
+        clip: nexa_gui::Rect,
+        text: &str,
+        fg: nexa_gui::Color,
+        bg: nexa_gui::Color,
+    ) {
+        self.fill_rect(clip, bg);
+        if text.is_empty() || clip.w <= 0 {
+            return;
+        }
+        unsafe {
+            let ppd = self.back.pixels_per_dip();
+            // 아이콘 포맷 전용 캐시 키(제어문자 접두사로 본문 캐시와 분리)
+            let key = format!("\u{1}{text}");
+            let layout = self
+                .back
+                .layouts
+                .borrow()
+                .get(&(key.clone(), clip.w))
+                .cloned();
+            let layout = match layout {
+                Some(l) => l,
+                None => {
+                    let wtext: Vec<u16> = text.encode_utf16().collect();
+                    let Ok(l) = self.back.factory.CreateTextLayout(
+                        &wtext,
+                        &self.back.icon_format,
+                        clip.w as f32 / ppd,
+                        clip.h as f32 / ppd,
+                    ) else {
+                        return;
+                    };
+                    let mut cache = self.back.layouts.borrow_mut();
+                    if cache.len() >= LAYOUT_CACHE_CAP {
+                        cache.clear();
+                    }
+                    cache.insert((key, clip.w), l.clone());
+                    l
+                }
+            };
+            self.back.color.set(colorref(fg));
+            let _ = layout.Draw(
+                None,
+                &self.back.renderer,
+                clip.x as f32 / ppd,
+                clip.y as f32 / ppd,
+            );
         }
     }
 
