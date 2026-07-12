@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m2-pathbar` | 2026-07-12 | 2026-07-12 (`3aa46fc`) | — (CI green 후) | 3 | M2-1 α — 계층 경로 바(원본 docs/27): 브레드크럼(클릭 이동·현재 비활성·hover)·편집 모드(우클릭·Enter/Esc)·네비 비종속·바+리스트 레이아웃. 테스트 83 green·실기 왕복 확인 | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m1-gate` | 2026-07-12 | 2026-07-12 (`0c716f5`) | 2026-07-12 | 2 | M1-9 — 게이트 실측: 첫 렌더 계측 추가, 100k 115ms(<150)·스크롤 2,098µs(60fps)·B1 10k 27.87MB 전부 통과 → **M1 완료 `0.2.0`** | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m1-navigation` | 2026-07-12 | 2026-07-12 (`415208f`) | 2026-07-12 | 3 | M1-8 — 네비게이션: History(push 절단·replace)·더블클릭/Enter 진입·Alt+화살표/X버튼·Ctrl+H/. 필터 토글·replace_source(정렬 유지). 테스트 80 green·실기 왕복 확인 | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m1-icons` | 2026-07-12 | 2026-07-12 (`b8833a1`) | 2026-07-12 | 3 | M1-7 — 셸 아이콘: icon_key·IconStore(LRU 256+dedupe 큐)·속도 제한 로딩(80ms×4, 원본 A-4)·SHGetFileInfoW. RSS 27.95MB(⚠ 여유 2MB — M2-8 감시). 테스트 74 green | [2026-07-12](journal/2026-07-12.md) |
@@ -21,6 +22,11 @@
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
+
+## feat/m2-pathbar
+
+- **생성**: 2026-07-12 (분기: main `9bc5bef`). **커밋**: `c2eddd6`(gui: PathBar·split_path·RightDown) → `356f9b9`(app: 레이아웃·라우팅·네비 연동) → `65833a4`(docs 현행화). 병합(`3aa46fc`): 2026-07-12.
+- **검증**: Windows 실기 — `cargo test --workspace` 83 green(pathbar 5) · clippy 0 · 릴리스 실행(ClientToScreen 좌표 자동화: "C:" 세그먼트 클릭 → C:\ 이동·우클릭 편집+Enter → 복귀·정상 종료) · B3 통과. 1차 스모크의 좌표 오프셋 오류(창 rect 기준 추정치)를 ClientToScreen으로 교정해 재검증.
 
 ## feat/m1-gate
 
