@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use nexa_gui::widgets::RowSource;
-use nexa_gui::{Column, InputEvent, Invalidations, Key, Rect as GRect, Theme};
+use nexa_gui::widgets::{Menu, MenuBar, MenuItem, RowSource, StatusBar, ToolButton, Toolbar};
+use nexa_gui::{Column, InputEvent, Invalidations, Key, Rect as GRect, Theme, Widget};
 use nexa_tree::Tree;
 use windows::core::{w, Result, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -20,7 +20,7 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F3,
+    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F3, VK_F5,
     VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
     VK_TAB, VK_UP,
 };
@@ -54,6 +54,57 @@ const TIMER_ICONS: usize = 2;
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
+
+/// 명령 id(메뉴·도구 모음 공용 — docs/20 §2).
+const CMD_NEW_TAB: u32 = 1;
+const CMD_CLOSE_TAB: u32 = 2;
+const CMD_EXIT: u32 = 3;
+const CMD_TOGGLE_HIDDEN: u32 = 10;
+const CMD_TOGGLE_DOTFILES: u32 = 11;
+const CMD_REFRESH: u32 = 12;
+const CMD_NAV_BACK: u32 = 20;
+const CMD_NAV_FORWARD: u32 = 21;
+const CMD_NAV_UP: u32 = 22;
+
+/// 메뉴 정의(파일·보기 — 도구/도움말은 후속 M5).
+fn build_menus(show_hidden: bool, show_dotfiles: bool) -> Vec<Menu> {
+    vec![
+        Menu {
+            title: "파일".into(),
+            items: vec![
+                MenuItem::new(CMD_NEW_TAB, "새 탭", "Ctrl+T"),
+                MenuItem::new(CMD_CLOSE_TAB, "탭 닫기", "Ctrl+W"),
+                MenuItem::separator(),
+                MenuItem::new(CMD_EXIT, "종료", ""),
+            ],
+        },
+        Menu {
+            title: "보기".into(),
+            items: vec![
+                MenuItem::new(CMD_TOGGLE_HIDDEN, "숨김 파일 표시", "Ctrl+H").checked(show_hidden),
+                MenuItem::new(CMD_TOGGLE_DOTFILES, "점 파일 표시", "Ctrl+.").checked(show_dotfiles),
+                MenuItem::separator(),
+                MenuItem::new(CMD_REFRESH, "새로 고침", "F5"),
+            ],
+        },
+    ]
+}
+
+/// 도구 모음 버튼(네비 ←→↑⟳ — docs/20 §2).
+fn build_toolbar() -> Vec<ToolButton> {
+    [
+        (CMD_NAV_BACK, "←"),
+        (CMD_NAV_FORWARD, "→"),
+        (CMD_NAV_UP, "↑"),
+        (CMD_REFRESH, "⟳"),
+    ]
+    .into_iter()
+    .map(|(id, g)| ToolButton {
+        id,
+        glyph: g.into(),
+    })
+    .collect()
+}
 
 /// 단조 시각(ms) — 타입어헤드 버퍼 타임아웃 판정용(프로세스 기동 기준).
 fn now_ms() -> u64 {
@@ -91,6 +142,9 @@ impl PaintStats {
 
 /// 창 단위 상태 — `GWLP_USERDATA`에 Box raw 포인터로 보관(WM_NCCREATE~WM_NCDESTROY).
 struct State {
+    menubar: MenuBar,
+    toolbar: Toolbar,
+    statusbar: StatusBar,
     /// 듀얼 패널(0=좌 주, 1=우 — docs/20 §2). 우 패널 숨김 토글은 후속.
     panels: [Panel; 2],
     /// 활성 패널(키보드·타이틀 기준). 클릭·Tab으로 전환.
@@ -199,6 +253,9 @@ pub fn run() -> Result<()> {
     let left = Panel::new(open_start_tree(&path), ctx, m, columns(96));
     let right = Panel::new(open_start_tree(&path), ctx, m, columns(96));
     let state = Box::new(State {
+        menubar: MenuBar::new(build_menus(true, true), m.row_h, m.pad_x),
+        toolbar: Toolbar::new(build_toolbar(), m.row_h, m.pad_x),
+        statusbar: StatusBar::new(m.row_h, m.pad_x),
         panels: [left, right],
         active: 0,
         split: 0.5,
@@ -284,15 +341,26 @@ unsafe fn splitter_x(hwnd: HWND, st: &State) -> i32 {
     ((rc.w as f32 * st.split) as i32).clamp(min.min(rc.w / 2), (rc.w - min).max(rc.w / 2))
 }
 
-/// 듀얼 패널 레이아웃(좌 ║ 우 — docs/20 §1).
+/// 전체 레이아웃(docs/20 §1): 메뉴 / 도구 모음 / [좌 ║ 우 패널] / 상태바.
 unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     let rc = client_rect(hwnd);
-    let sx = splitter_x(hwnd, st);
     let s = |v: i32| (v * st.dpi as i32) / 96;
+    let (menu_h, tool_h, status_h) = (s(22), s(24), s(22));
+    st.menubar
+        .set_bounds(GRect::new(0, 0, rc.w, menu_h.min(rc.h)), inv);
+    st.toolbar
+        .set_bounds(GRect::new(0, menu_h, rc.w, tool_h), inv);
+    let top = menu_h + tool_h;
+    let bottom = (rc.h - status_h).max(top);
+    st.statusbar
+        .set_bounds(GRect::new(0, bottom, rc.w, rc.h - bottom), inv);
+
+    let sx = splitter_x(hwnd, st);
     let half = s(SPLIT_HALF).max(1);
-    st.panels[0].set_bounds(GRect::new(0, 0, (sx - half).max(0), rc.h), inv);
+    let ph = (bottom - top).max(0);
+    st.panels[0].set_bounds(GRect::new(0, top, (sx - half).max(0), ph), inv);
     st.panels[1].set_bounds(
-        GRect::new(sx + half, 0, (rc.w - sx - half).max(0), rc.h),
+        GRect::new(sx + half, top, (rc.w - sx - half).max(0), ph),
         inv,
     );
 }
@@ -356,16 +424,20 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
         };
         st.panels[0].paint(&mut ctx, &st.theme);
         st.panels[1].paint(&mut ctx, &st.theme);
-        // 스플리터(드래그 중 accent)
+        // 스플리터(패널 영역 한정·드래그 중 accent)
         use nexa_gui::DrawCtx;
         let lx = st.panels[0].bounds().right();
+        let pb = st.panels[0].bounds();
         let w = st.panels[1].bounds().x - lx;
         let color = if st.split_drag {
             st.theme.accent
         } else {
             st.theme.border
         };
-        ctx.fill_rect(GRect::new(lx, 0, w, rc.h), color);
+        ctx.fill_rect(GRect::new(lx, pb.y, w, pb.h), color);
+        st.toolbar.paint(&mut ctx, &st.theme);
+        st.statusbar.paint(&mut ctx, &st.theme);
+        st.menubar.paint(&mut ctx, &st.theme); // 마지막 — 드롭다운 오버레이가 위에
         let _ = BitBlt(hdc, 0, 0, rc.w, rc.h, Some(back.memory_dc()), 0, 0, SRCCOPY);
     }
 
@@ -381,6 +453,69 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
     if st.stats.frames == 1 || st.stats.frames.is_multiple_of(20) {
         update_title(hwnd, st, "");
     }
+}
+
+/// 상태바 갱신 — 좌: 활성 패널 항목/선택/탭, 우: 필터·페인트 관측(docs/20 §2).
+unsafe fn update_status(hwnd: HWND, st: &mut State) {
+    let p = &st.panels[st.active];
+    let sel = p.rows().source().tree().selection_count();
+    let side = if st.active == 0 { "좌" } else { "우" };
+    let left = format!(
+        "[{side}] {}개 항목{} · 탭 {}/{}",
+        p.rows().source().len(),
+        if sel > 0 {
+            format!(" · 선택 {sel}")
+        } else {
+            String::new()
+        },
+        p.active_index() + 1,
+        p.tab_count(),
+    );
+    let right = format!(
+        "숨김 {} · 점 {} · 평균 {}µs",
+        if st.show_hidden { "표시" } else { "감춤" },
+        if st.show_dotfiles { "표시" } else { "감춤" },
+        st.stats.avg_us(),
+    );
+    let mut inv = Invalidations::default();
+    st.statusbar.set_text(left, right, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
+}
+
+/// 명령 실행(메뉴·도구 모음 공용).
+unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
+    let ctx = st.nav_ctx();
+    let mut inv = Invalidations::default();
+    match id {
+        CMD_NEW_TAB => st.active_panel().new_tab(ctx, &mut inv),
+        CMD_CLOSE_TAB => {
+            let i = st.active_panel().active_index();
+            st.active_panel().close_tab(i, &mut inv);
+        }
+        CMD_EXIT => PostQuitMessage(0),
+        CMD_TOGGLE_HIDDEN => {
+            st.show_hidden = !st.show_hidden;
+            let on = st.show_hidden;
+            st.menubar.set_checked(CMD_TOGGLE_HIDDEN, on, &mut inv);
+            let ctx = st.nav_ctx();
+            st.active_panel().reopen_filtered(ctx, &mut inv);
+        }
+        CMD_TOGGLE_DOTFILES => {
+            st.show_dotfiles = !st.show_dotfiles;
+            let on = st.show_dotfiles;
+            st.menubar.set_checked(CMD_TOGGLE_DOTFILES, on, &mut inv);
+            let ctx = st.nav_ctx();
+            st.active_panel().reopen_filtered(ctx, &mut inv);
+        }
+        CMD_REFRESH => st.active_panel().reopen_filtered(ctx, &mut inv),
+        CMD_NAV_BACK => st.active_panel().nav_back(ctx, &mut inv),
+        CMD_NAV_FORWARD => st.active_panel().nav_forward(ctx, &mut inv),
+        CMD_NAV_UP => st.active_panel().nav_up(ctx, &mut inv),
+        _ => {}
+    }
+    flush_invalidations(hwnd, &mut inv);
+    update_title(hwnd, st, "");
+    update_status(hwnd, st);
 }
 
 /// 활성 패널 전환(클릭·Tab) — 탭 바 accent로 시각화.
@@ -450,7 +585,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 st.panels[0].set_metrics(m, cols.clone(), &mut inv);
                 st.panels[1].set_metrics(m, cols, &mut inv);
                 st.panels[1].set_focused(false, &mut inv);
+                st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
+                st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
+                st.statusbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 update_title(hwnd, st, "");
+                update_status(hwnd, st);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -503,6 +642,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 SetCapture(hwnd); // 스플리터·리사이즈·러버밴드 드래그 공용
                 let sx = splitter_x(hwnd, st);
                 let half = (SPLIT_HALF * st.dpi as i32) / 96;
+                let ev = InputEvent::MouseDown { x, y, shift, ctrl };
+                // 메뉴 우선(드롭다운 오버레이) — 열려 있으면 전용 라우팅
+                if st.menubar.is_open() || y < st.toolbar.bounds().y {
+                    st.menubar.on_event(&ev, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                    if let Some(cmd) = st.menubar.take_command() {
+                        run_command(hwnd, st, cmd);
+                    }
+                    return LRESULT(0);
+                }
+                if y < st.panels[0].bounds().y {
+                    // 도구 모음 행
+                    st.toolbar.on_event(&ev, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                    if let Some(cmd) = st.toolbar.take_command() {
+                        run_command(hwnd, st, cmd);
+                    }
+                    return LRESULT(0);
+                }
+                if y >= st.statusbar.bounds().y {
+                    return LRESULT(0); // 상태바 — 표시 전용
+                }
                 if st.active_panel().pathbar.is_editing() {
                     // 포커스아웃 = 편집 취소(docs/27 §2)
                     st.active_panel().pathbar.cancel_edit(&mut inv);
@@ -511,13 +672,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 } else if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
-                    let ev = InputEvent::MouseDown { x, y, shift, ctrl };
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
                 }
                 flush_invalidations(hwnd, &mut inv);
                 update_title(hwnd, st, "");
+                update_status(hwnd, st);
             }
             LRESULT(0)
         }
@@ -548,8 +709,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 } else {
                     let ev = InputEvent::MouseMove { x, y };
-                    st.panels[0].on_event(&ev, &mut inv);
-                    st.panels[1].on_event(&ev, &mut inv);
+                    st.menubar.on_event(&ev, &mut inv);
+                    st.toolbar.on_event(&ev, &mut inv);
+                    if !st.menubar.is_open() {
+                        // 드롭다운 아래 hover 잔상 방지
+                        st.panels[0].on_event(&ev, &mut inv);
+                        st.panels[1].on_event(&ev, &mut inv);
+                    }
                 }
                 flush_invalidations(hwnd, &mut inv);
             }
@@ -625,7 +791,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     update_title(hwnd, st, "");
                     return LRESULT(0);
                 }
-                if vk == VK_F3.0 {
+                if vk == VK_ESCAPE.0 && st.menubar.is_open() {
+                    st.menubar.close(&mut inv);
+                } else if vk == VK_F5.0 {
+                    run_command(hwnd, st, CMD_REFRESH);
+                    return LRESULT(0);
+                } else if vk == VK_F3.0 {
                     bench(hwnd, st);
                 } else if vk == VK_TAB.0 {
                     if ctrl {
@@ -646,19 +817,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.active_panel().activate_row(c, ctx, &mut inv);
                     }
                 } else if vk == b'H' as u16 && ctrl {
-                    st.show_hidden = !st.show_hidden;
-                    let ctx = st.nav_ctx();
-                    st.active_panel().reopen_filtered(ctx, &mut inv);
+                    run_command(hwnd, st, CMD_TOGGLE_HIDDEN); // 메뉴 체크와 동기
+                    return LRESULT(0);
                 } else if vk == VK_OEM_PERIOD.0 && ctrl {
-                    st.show_dotfiles = !st.show_dotfiles;
-                    let ctx = st.nav_ctx();
-                    st.active_panel().reopen_filtered(ctx, &mut inv);
+                    run_command(hwnd, st, CMD_TOGGLE_DOTFILES);
+                    return LRESULT(0);
                 } else if let Some(key) = vk_to_key(vk) {
                     st.active_panel()
                         .on_event(&InputEvent::Key { key, shift, ctrl }, &mut inv);
                 }
                 flush_invalidations(hwnd, &mut inv);
                 update_title(hwnd, st, "");
+                update_status(hwnd, st);
             }
             LRESULT(0)
         }
@@ -753,6 +923,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let cols = columns(dpi);
                 st.panels[0].set_metrics(m, cols.clone(), &mut inv);
                 st.panels[1].set_metrics(m, cols, &mut inv);
+                st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
+                st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
+                st.statusbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 let rc = &*(lparam.0 as *const RECT);
                 let _ = SetWindowPos(
                     hwnd,
