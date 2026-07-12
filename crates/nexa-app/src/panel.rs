@@ -122,16 +122,16 @@ impl Panel {
         let bar_h = self.m.bar_h.min((bounds.h - tab_h).max(0));
         self.tabbar
             .set_bounds(Rect::new(bounds.x, bounds.y, bounds.w, tab_h), inv);
-        // 네비 버튼 3개 = 간격 없이 연속, 경로 바는 4px(@96dpi) 여유 후(사용자 지시)
+        // 네비 버튼 3개 = 간격 없이 연속, 경로 바도 바로 이어 붙임(사용자 지시 —
+        // 이전 4px 틈은 미도색 영역이 검게 비치던 것이라 제거)
         let nav_w = (nav_btn_w(&self.m) * 3).min(bounds.w);
-        let gap = (self.m.pad_x * 2) / 3; // 4px @96dpi(pad_x=6), DPI 비례
         self.navbtns
             .set_bounds(Rect::new(bounds.x, bounds.y + tab_h, nav_w, bar_h), inv);
         self.pathbar.set_bounds(
             Rect::new(
-                bounds.x + nav_w + gap,
+                bounds.x + nav_w,
                 bounds.y + tab_h,
-                (bounds.w - nav_w - gap).max(0),
+                (bounds.w - nav_w).max(0),
                 bar_h,
             ),
             inv,
@@ -425,9 +425,9 @@ mod tests {
         let (p, _) = panel(&base);
         fs::remove_dir_all(&base).unwrap();
         assert_eq!(p.tabbar.bounds(), Rect::new(0, 0, 400, 22));
-        // 네비 바 행 = [←][→][↑] 간격 없이 3×26=78 + 4px 여유 + 경로 바(사용자 지시)
+        // 네비 바 행 = [←][→][↑] 연속 3×26=78 + 경로 바 바로 이어 붙임(사용자 지시)
         assert_eq!(p.navbtns.bounds(), Rect::new(0, 22, 78, 24));
-        assert_eq!(p.pathbar.bounds(), Rect::new(82, 22, 318, 24));
+        assert_eq!(p.pathbar.bounds(), Rect::new(78, 22, 322, 24));
         assert_eq!(p.rows().bounds(), Rect::new(0, 46, 400, 354));
     }
 
