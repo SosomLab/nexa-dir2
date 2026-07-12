@@ -48,7 +48,7 @@
 
 | ID | 항목 | 우선 | 규모 | 상태 |
 |---|---|---|---|---|
-| M3-1 | `nexa-ops` 전송 엔진(복사/이동·진행률·충돌·취소) — 원본 TransferPathsInto 스펙 | P0 | 대 | ☐ |
+| M3-1 | `nexa-ops` 전송 엔진(복사/이동·진행률·충돌·취소) — 원본 TransferPathsInto 스펙 | P0 | 대 | ✅ (07-13 — rlib 신설·transfer 단일 경로(같은 폴더 규칙·충돌 순차·4MB 진행·취소·개별 격리·fast path)+Ctrl+C/X/V 배선·워커·세대 가드·Esc 취소·양쪽 재로드. α: 충돌=건너뜀(확인 모달 후속)·진행 창 없음·내부 클립보드만) |
 | M3-2 | 삭제(휴지통 IFileOperation/완전)·이름변경·새로 만들기 | P0 | 중 | ☐ |
 | M3-3 | **Undo/Redo**(OperationHistory 이식 — 휴지통 복원 포함) | P0 | 중 | ☐ |
 | M3-4 | `nexa-shell` 셸 컨텍스트 메뉴(IContextMenu+고유 병합 — 원본 ADR-0005·커스텀 레지스트리) | P0 | 대 | ☐ |
