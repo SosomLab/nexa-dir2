@@ -87,6 +87,54 @@ impl Panel {
         p
     }
 
+    /// 세션 복원 — 경로 목록으로 탭들을 연다(열기 실패 탭은 건너뜀·전부 실패면 `fallback`).
+    pub fn restore(
+        paths: &[PathBuf],
+        active: usize,
+        fallback: &Path,
+        ctx: NavCtx,
+        m: PanelMetrics,
+        columns: Vec<Column>,
+    ) -> Panel {
+        let mut valid: Vec<Tree> = paths
+            .iter()
+            .filter_map(|p| Tree::open_filtered(p, ctx.show_hidden, ctx.show_dotfiles).ok())
+            .collect();
+        if valid.is_empty() {
+            valid.push(
+                Tree::open_filtered(fallback, ctx.show_hidden, ctx.show_dotfiles)
+                    .or_else(|_| Tree::open("C:\\"))
+                    .expect("C:\\ 열기 실패"),
+            );
+        }
+        let first = valid.remove(0);
+        let mut p = Panel::new(first, ctx, m, columns.clone());
+        let mut inv = Invalidations::default();
+        for tree in valid {
+            let root = tree.root_path().to_path_buf();
+            let mut rows =
+                VirtualRows::new(TreeSource::new(tree, ctx.tz), m.row_h, m.pad_x, m.indent_w);
+            rows.set_columns(columns.clone(), &mut inv);
+            p.tabs.push(Tab {
+                rows,
+                nav: History::new(root),
+            });
+        }
+        p.active = active.min(p.tabs.len() - 1);
+        p.sync_chrome(&mut inv);
+        p
+    }
+
+    /// 세션 스냅샷 — (탭 경로들, 활성 탭 인덱스).
+    pub fn session(&self) -> (Vec<PathBuf>, usize) {
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|t| t.rows.source().tree().root_path().to_path_buf())
+            .collect();
+        (tabs, self.active)
+    }
+
     // ── 접근 ───────────────────────────────────────────────────
 
     pub fn tab_count(&self) -> usize {

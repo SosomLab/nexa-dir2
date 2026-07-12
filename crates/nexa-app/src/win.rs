@@ -35,6 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
+use crate::config::{self, PanelSession, Session, Settings, SESSION_FILE, SETTINGS_FILE};
 use crate::dw::{DwBackend, DwCtx};
 use crate::icons::shell::ShellIcons;
 use crate::panel::{NavCtx, Panel, PanelMetrics};
@@ -121,8 +122,25 @@ unsafe fn apply_titlebar_theme(hwnd: HWND, dark: bool) {
     );
 }
 
+impl ThemeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            ThemeMode::System => "system",
+            ThemeMode::Light => "light",
+            ThemeMode::Dark => "dark",
+        }
+    }
+    fn from_str(s: &str) -> ThemeMode {
+        match s {
+            "system" => ThemeMode::System,
+            "light" => ThemeMode::Light,
+            _ => ThemeMode::Dark,
+        }
+    }
+}
+
 /// 메뉴 정의(파일·보기 — 도구/도움말은 후속 M5).
-fn build_menus(show_hidden: bool, show_dotfiles: bool) -> Vec<Menu> {
+fn build_menus(show_hidden: bool, show_dotfiles: bool, mode: ThemeMode) -> Vec<Menu> {
     vec![
         Menu {
             title: "파일".into(),
@@ -141,10 +159,12 @@ fn build_menus(show_hidden: bool, show_dotfiles: bool) -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::new(CMD_REFRESH, "새로 고침", "F5"),
                 MenuItem::separator(),
-                // 테마 라디오(원본 docs/39 §3 메뉴 토글 대응) — 시작 기본 다크(DR-5), F6 = 순환
-                MenuItem::new(CMD_THEME_SYSTEM, "테마: 시스템", "F6").checked(false),
-                MenuItem::new(CMD_THEME_LIGHT, "테마: 라이트", "F6").checked(false),
-                MenuItem::new(CMD_THEME_DARK, "테마: 다크", "F6").checked(true),
+                // 테마 라디오(원본 docs/39 §3) — 설정 복원값 반영, F6 = 순환
+                MenuItem::new(CMD_THEME_SYSTEM, "테마: 시스템", "F6")
+                    .checked(mode == ThemeMode::System),
+                MenuItem::new(CMD_THEME_LIGHT, "테마: 라이트", "F6")
+                    .checked(mode == ThemeMode::Light),
+                MenuItem::new(CMD_THEME_DARK, "테마: 다크", "F6").checked(mode == ThemeMode::Dark),
             ],
         },
     ]
@@ -302,34 +322,73 @@ fn open_start_tree(path: &std::path::Path) -> Tree {
 
 pub fn run() -> Result<()> {
     let _ = now_ms(); // 기동 시각 고정 — 첫 렌더 계측 기준
-    let path = root_path();
     let tz = unsafe { tz_offset_min() };
+    // 설정/세션 로드(data\ — 없으면 기본값. M2-5)
+    let data = config::data_dir();
+    let settings = config::load(&data, SETTINGS_FILE)
+        .map(|t| Settings::parse(&t))
+        .unwrap_or_default();
+    let session = config::load(&data, SESSION_FILE)
+        .map(|t| Session::parse(&t))
+        .unwrap_or_default();
+    let theme_mode = ThemeMode::from_str(&settings.theme);
     let ctx = NavCtx {
-        show_hidden: true,
-        show_dotfiles: true,
+        show_hidden: settings.show_hidden,
+        show_dotfiles: settings.show_dotfiles,
         tz,
     };
     let m = panel_metrics(96); // 실제 DPI는 WM_NCCREATE에서 반영
-                               // 좌/우 패널 — 같은 시작 경로의 독립 트리(원본 docs/20: 듀얼 기본, 숨김 토글 후속)
-    let left = Panel::new(open_start_tree(&path), ctx, m, columns(96));
-    let right = Panel::new(open_start_tree(&path), ctx, m, columns(96));
+    let fallback = root_path();
+    let arg_given = std::env::args_os().nth(1).is_some();
+    // argv 경로 = 명시 의도 → 세션 대신 그 경로로 시작. 그 외 = 세션 복원(원본 SESS)
+    let (left, right, active_panel) = if arg_given {
+        (
+            Panel::new(open_start_tree(&fallback), ctx, m, columns(96)),
+            Panel::new(open_start_tree(&fallback), ctx, m, columns(96)),
+            0,
+        )
+    } else {
+        (
+            Panel::restore(
+                &session.panels[0].tabs,
+                session.panels[0].active,
+                &fallback,
+                ctx,
+                m,
+                columns(96),
+            ),
+            Panel::restore(
+                &session.panels[1].tabs,
+                session.panels[1].active,
+                &fallback,
+                ctx,
+                m,
+                columns(96),
+            ),
+            session.active_panel,
+        )
+    };
     let state = Box::new(State {
-        menubar: MenuBar::new(build_menus(true, true), m.row_h, m.pad_x),
+        menubar: MenuBar::new(
+            build_menus(settings.show_hidden, settings.show_dotfiles, theme_mode),
+            m.row_h,
+            m.pad_x,
+        ),
         toolbar: Toolbar::new(build_toolbar(), m.row_h, m.pad_x),
         statusbar: StatusBar::new(m.row_h, m.pad_x),
         panels: [left, right],
-        active: 0,
-        split: 0.5,
+        active: active_panel,
+        split: settings.split,
         split_drag: false,
-        theme: Theme::default(), // 시작 = 다크(DR-5). 모드 전환은 보기 메뉴, 영속은 M2-5
-        theme_mode: ThemeMode::Dark,
+        theme: unsafe { resolve_theme(theme_mode) },
+        theme_mode,
         dpi: 96,
         dw: None,
         icons: std::cell::RefCell::new(ShellIcons::new()),
         stats: PaintStats::default(),
         tz,
-        show_hidden: true,
-        show_dotfiles: true,
+        show_hidden: settings.show_hidden,
+        show_dotfiles: settings.show_dotfiles,
     });
 
     unsafe {
@@ -1046,6 +1105,36 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => {
+            // 종료 저장(M2-5 — data\ 원자적 쓰기). 주기 저장·코얼레싱은 후속(원본 SESS)
+            if let Some(st) = state_of(hwnd) {
+                let settings = Settings {
+                    theme: st.theme_mode.as_str().into(),
+                    show_hidden: st.show_hidden,
+                    show_dotfiles: st.show_dotfiles,
+                    split: st.split,
+                };
+                let (t0, a0) = st.panels[0].session();
+                let (t1, a1) = st.panels[1].session();
+                let session = Session {
+                    active_panel: st.active,
+                    panels: [
+                        PanelSession {
+                            tabs: t0,
+                            active: a0,
+                        },
+                        PanelSession {
+                            tabs: t1,
+                            active: a1,
+                        },
+                    ],
+                };
+                let dir = config::data_dir();
+                if let Err(e) = config::save(&dir, SETTINGS_FILE, &settings.serialize())
+                    .and_then(|_| config::save(&dir, SESSION_FILE, &session.serialize()))
+                {
+                    eprintln!("설정/세션 저장 실패: {e}");
+                }
+            }
             PostQuitMessage(0);
             LRESULT(0)
         }
