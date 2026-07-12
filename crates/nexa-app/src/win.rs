@@ -37,6 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::config::{self, PanelSession, Session, Settings, SESSION_FILE, SETTINGS_FILE};
 use crate::dw::{DwBackend, DwCtx};
+use crate::i18n::{self, tr, trf};
 use crate::icons::shell::ShellIcons;
 use crate::panel::{NavCtx, Panel, PanelMetrics};
 use crate::source::{COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
@@ -69,6 +70,9 @@ const CMD_NAV_UP: u32 = 22;
 const CMD_THEME_SYSTEM: u32 = 30;
 const CMD_THEME_LIGHT: u32 = 31;
 const CMD_THEME_DARK: u32 = 32;
+/// 언어 라디오 — 40 = 시스템, 41+idx = State.langs[idx](발견 목록 순).
+const CMD_LANG_SYSTEM: u32 = 40;
+const CMD_LANG_BASE: u32 = 41;
 
 /// 테마 모드(원본 docs/39 §3 — System/Light/Dark). 영속은 M2-5.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -110,6 +114,18 @@ unsafe fn resolve_theme(mode: ThemeMode) -> Theme {
     }
 }
 
+/// OS UI 언어(BCP-47, 예: "ko-KR") — i18n "system" 해석용(1차 서브태그만 사용).
+unsafe fn system_ui_lang() -> String {
+    use windows::Win32::Globalization::GetUserDefaultLocaleName;
+    let mut buf = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
+    let n = GetUserDefaultLocaleName(&mut buf);
+    if n > 1 {
+        String::from_utf16_lossy(&buf[..n as usize - 1]) // 종단 NUL 제외
+    } else {
+        "en".into()
+    }
+}
+
 /// 타이틀바 다크 모드(DWMWA_USE_IMMERSIVE_DARK_MODE) — 본문 테마와 일치.
 unsafe fn apply_titlebar_theme(hwnd: HWND, dark: bool) {
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
@@ -139,33 +155,49 @@ impl ThemeMode {
     }
 }
 
-/// 메뉴 정의(파일·보기 — 도구/도움말은 후속 M5).
-fn build_menus(show_hidden: bool, show_dotfiles: bool, mode: ThemeMode) -> Vec<Menu> {
+/// 메뉴 정의(파일·보기 — 도구/도움말은 후속 M5). 라벨 = i18n(언어 전환 시 재호출·set_menus).
+/// `langs` = 발견된 언어 (code, 표기) — 라디오는 시스템 + 각 언어(원본 docs/42 §4-3 동적 목록).
+fn build_menus(
+    show_hidden: bool,
+    show_dotfiles: bool,
+    mode: ThemeMode,
+    lang_setting: &str,
+    langs: &[(String, String)],
+) -> Vec<Menu> {
+    let mut view_items = vec![
+        MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
+        MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
+        MenuItem::separator(),
+        MenuItem::new(CMD_REFRESH, tr("menu.view.refresh"), "F5"),
+        MenuItem::separator(),
+        // 테마 라디오(원본 docs/39 §3) — 설정 복원값 반영, F6 = 순환
+        MenuItem::new(CMD_THEME_SYSTEM, tr("menu.view.theme.system"), "F6")
+            .checked(mode == ThemeMode::System),
+        MenuItem::new(CMD_THEME_LIGHT, tr("menu.view.theme.light"), "F6")
+            .checked(mode == ThemeMode::Light),
+        MenuItem::new(CMD_THEME_DARK, tr("menu.view.theme.dark"), "F6")
+            .checked(mode == ThemeMode::Dark),
+        MenuItem::separator(),
+        MenuItem::new(CMD_LANG_SYSTEM, tr("menu.view.lang.system"), "")
+            .checked(lang_setting == "system"),
+    ];
+    for (i, (code, name)) in langs.iter().enumerate() {
+        view_items
+            .push(MenuItem::new(CMD_LANG_BASE + i as u32, name, "").checked(lang_setting == code));
+    }
     vec![
         Menu {
-            title: "파일".into(),
+            title: tr("menu.file"),
             items: vec![
-                MenuItem::new(CMD_NEW_TAB, "새 탭", "Ctrl+T"),
-                MenuItem::new(CMD_CLOSE_TAB, "탭 닫기", "Ctrl+W"),
+                MenuItem::new(CMD_NEW_TAB, tr("menu.file.newTab"), "Ctrl+T"),
+                MenuItem::new(CMD_CLOSE_TAB, tr("menu.file.closeTab"), "Ctrl+W"),
                 MenuItem::separator(),
-                MenuItem::new(CMD_EXIT, "종료", ""),
+                MenuItem::new(CMD_EXIT, tr("menu.file.exit"), ""),
             ],
         },
         Menu {
-            title: "보기".into(),
-            items: vec![
-                MenuItem::new(CMD_TOGGLE_HIDDEN, "숨김 파일 표시", "Ctrl+H").checked(show_hidden),
-                MenuItem::new(CMD_TOGGLE_DOTFILES, "점 파일 표시", "Ctrl+.").checked(show_dotfiles),
-                MenuItem::separator(),
-                MenuItem::new(CMD_REFRESH, "새로 고침", "F5"),
-                MenuItem::separator(),
-                // 테마 라디오(원본 docs/39 §3) — 설정 복원값 반영, F6 = 순환
-                MenuItem::new(CMD_THEME_SYSTEM, "테마: 시스템", "F6")
-                    .checked(mode == ThemeMode::System),
-                MenuItem::new(CMD_THEME_LIGHT, "테마: 라이트", "F6")
-                    .checked(mode == ThemeMode::Light),
-                MenuItem::new(CMD_THEME_DARK, "테마: 다크", "F6").checked(mode == ThemeMode::Dark),
-            ],
+            title: tr("menu.view"),
+            items: view_items,
         },
     ]
 }
@@ -242,6 +274,9 @@ struct State {
     /// 가시성 필터(전역 ViewOptions — 영속은 M2-5).
     show_hidden: bool,
     show_dotfiles: bool,
+    /// 언어 설정값("system"|코드)·발견 목록(메뉴 라디오 CMD_LANG_BASE+idx 매핑) — M2-6.
+    lang_setting: String,
+    langs: Vec<(String, String)>,
 }
 
 impl State {
@@ -279,15 +314,15 @@ fn panel_metrics(dpi: u32) -> PanelMetrics {
     }
 }
 
-/// 기본 5컬럼(원본 docs/23 §2-1). 폭은 dpi 스케일.
+/// 기본 5컬럼(원본 docs/23 §2-1). 폭은 dpi 스케일, 제목 = i18n(원본 col.* 키).
 fn columns(dpi: u32) -> Vec<Column> {
     let s = |v: i32| (v * dpi as i32) / 96;
     vec![
-        Column::new(COL_NAME, "이름", s(340)),
-        Column::new(COL_EXT, "확장자", s(64)),
-        Column::new(COL_SIZE, "크기", s(96)).right_aligned(),
-        Column::new(COL_MODIFIED, "수정한 날짜", s(140)),
-        Column::new(COL_KIND, "종류", s(110)),
+        Column::new(COL_NAME, tr("col.name"), s(340)),
+        Column::new(COL_EXT, tr("col.ext"), s(64)),
+        Column::new(COL_SIZE, tr("col.size"), s(96)).right_aligned(),
+        Column::new(COL_MODIFIED, tr("col.modified"), s(140)),
+        Column::new(COL_KIND, tr("col.kind"), s(110)),
     ]
 }
 
@@ -332,6 +367,10 @@ pub fn run() -> Result<()> {
         .map(|t| Session::parse(&t))
         .unwrap_or_default();
     let theme_mode = ThemeMode::from_str(&settings.theme);
+    // i18n 활성화(M2-6) — 패널·메뉴 생성 전에(컬럼 제목·라벨이 tr() 경유)
+    let langs = i18n::discover(&data);
+    let code = i18n::resolve_code(&settings.lang, &unsafe { system_ui_lang() }, &langs);
+    i18n::activate(i18n::load(&code, &data));
     let ctx = NavCtx {
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
@@ -370,7 +409,13 @@ pub fn run() -> Result<()> {
     };
     let state = Box::new(State {
         menubar: MenuBar::new(
-            build_menus(settings.show_hidden, settings.show_dotfiles, theme_mode),
+            build_menus(
+                settings.show_hidden,
+                settings.show_dotfiles,
+                theme_mode,
+                &settings.lang,
+                &langs,
+            ),
             m.row_h,
             m.pad_x,
         ),
@@ -389,6 +434,8 @@ pub fn run() -> Result<()> {
         tz,
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
+        lang_setting: settings.lang,
+        langs,
     });
 
     unsafe {
@@ -491,24 +538,33 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
     let p = &st.panels[st.active];
     let sel = p.rows().source().tree().selection_count();
     let sel_txt = if sel > 0 {
-        format!(" · 선택 {sel}")
+        format!(" · {}", trf("status.selectedCount", &[&sel.to_string()]))
     } else {
         String::new()
     };
     let first_txt = st
         .stats
         .first_render_ms
-        .map(|ms| format!(" · 첫렌더 {ms}ms"))
+        .map(|ms| format!(" · {}", trf("status.firstRender", &[&ms.to_string()])))
         .unwrap_or_default();
-    let side = if st.active == 0 { "좌" } else { "우" };
+    let side = tr(if st.active == 0 {
+        "panel.left"
+    } else {
+        "panel.right"
+    });
     let text = format!(
-        "Nexa Dir 2 — [{side}] {} [{}행{} · 탭 {}/{} · 평균 {}µs{}]{}\0",
+        "Nexa Dir 2 — [{side}] {} [{}{} · {} · {}{}]{}\0",
         p.root_path().display(),
-        p.rows().source().len(),
+        trf("status.itemCount", &[&p.rows().source().len().to_string()]),
         sel_txt,
-        p.active_index() + 1,
-        p.tab_count(),
-        st.stats.avg_us(),
+        trf(
+            "status.tab",
+            &[
+                &(p.active_index() + 1).to_string(),
+                &p.tab_count().to_string(),
+            ],
+        ),
+        trf("status.avg", &[&st.stats.avg_us().to_string()]),
         first_txt,
         note,
     );
@@ -580,23 +636,35 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
 unsafe fn update_status(hwnd: HWND, st: &mut State) {
     let p = &st.panels[st.active];
     let sel = p.rows().source().tree().selection_count();
-    let side = if st.active == 0 { "좌" } else { "우" };
+    let side = tr(if st.active == 0 {
+        "panel.left"
+    } else {
+        "panel.right"
+    });
     let left = format!(
-        "[{side}] {}개 항목{} · 탭 {}/{}",
-        p.rows().source().len(),
+        "[{side}] {}{} · {}",
+        trf("status.itemCount", &[&p.rows().source().len().to_string()]),
         if sel > 0 {
-            format!(" · 선택 {sel}")
+            format!(" · {}", trf("status.selectedCount", &[&sel.to_string()]))
         } else {
             String::new()
         },
-        p.active_index() + 1,
-        p.tab_count(),
+        trf(
+            "status.tab",
+            &[
+                &(p.active_index() + 1).to_string(),
+                &p.tab_count().to_string(),
+            ],
+        ),
     );
+    let onoff = |on: bool| tr(if on { "status.show" } else { "status.hide" });
     let right = format!(
-        "숨김 {} · 점 {} · 평균 {}µs",
-        if st.show_hidden { "표시" } else { "감춤" },
-        if st.show_dotfiles { "표시" } else { "감춤" },
-        st.stats.avg_us(),
+        "{} · {}",
+        trf(
+            "status.filters",
+            &[&onoff(st.show_hidden), &onoff(st.show_dotfiles)],
+        ),
+        trf("status.avg", &[&st.stats.avg_us().to_string()]),
     );
     let mut inv = Invalidations::default();
     st.statusbar.set_text(left, right, &mut inv);
@@ -640,6 +708,14 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             };
             apply_theme(hwnd, st, &mut inv);
         }
+        CMD_LANG_SYSTEM => {
+            st.lang_setting = "system".into();
+            apply_lang(hwnd, st, &mut inv);
+        }
+        i if i >= CMD_LANG_BASE && ((i - CMD_LANG_BASE) as usize) < st.langs.len() => {
+            st.lang_setting = st.langs[(i - CMD_LANG_BASE) as usize].0.clone();
+            apply_lang(hwnd, st, &mut inv);
+        }
         _ => {}
     }
     flush_invalidations(hwnd, &mut inv);
@@ -657,6 +733,31 @@ unsafe fn apply_theme(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     st.menubar
         .set_checked(CMD_THEME_DARK, st.theme_mode == ThemeMode::Dark, inv);
     apply_titlebar_theme(hwnd, st.theme == Theme::dark());
+    let _ = InvalidateRect(Some(hwnd), None, false);
+}
+
+/// 언어 전환(M2-6) — 재시작 없음: 테이블 스왑 + 메뉴/컬럼 라벨 재구성 + 전체 재그리기.
+/// 행 셀(종류)·상태바는 페인트 시점 tr() 조회라 재그리기만으로 반영.
+/// 한계(α): 컬럼 폭이 기본값으로 재설정된다(제목 재구성이 set_metrics 경유).
+unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
+    let data = config::data_dir();
+    st.langs = i18n::discover(&data);
+    let code = i18n::resolve_code(&st.lang_setting, &system_ui_lang(), &st.langs);
+    i18n::activate(i18n::load(&code, &data));
+    st.menubar.set_menus(
+        build_menus(
+            st.show_hidden,
+            st.show_dotfiles,
+            st.theme_mode,
+            &st.lang_setting,
+            &st.langs,
+        ),
+        inv,
+    );
+    let m = panel_metrics(st.dpi);
+    let cols = columns(st.dpi);
+    st.panels[0].set_metrics(m, cols.clone(), inv);
+    st.panels[1].set_metrics(m, cols, inv);
     let _ = InvalidateRect(Some(hwnd), None, false);
 }
 
@@ -1109,6 +1210,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let settings = Settings {
                     theme: st.theme_mode.as_str().into(),
+                    lang: st.lang_setting.clone(),
                     show_hidden: st.show_hidden,
                     show_dotfiles: st.show_dotfiles,
                     split: st.split,

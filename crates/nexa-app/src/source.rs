@@ -2,6 +2,7 @@
 //! M1-4: 컬럼 셀 값(확장자·크기·수정한 날짜·종류)·헤더 정렬(`set_sort`) 배선 — 원본 docs/23.
 //! 플랫폼 중립(비-Windows에서도 테스트) — 창/렌더와 무관한 순수 어댑터.
 
+use crate::i18n::{tr, trf};
 use nexa_core::FileKind;
 use nexa_gui::widgets::{Marker, RowItem, RowSource, SelectOp};
 use nexa_tree::{FindScope, SelectMode, SortKey, SortSpec, Tree};
@@ -83,15 +84,16 @@ impl RowSource for TreeSource {
                 }
             }
             COL_MODIFIED => fmt_datetime(r.modified_unix_ms, self.tz_offset_min),
+            // 페인트 시점 tr() 조회 — 언어 전환 시 재그리기만으로 반영(M2-6, 원본 kind.* 키)
             COL_KIND => match r.kind {
-                FileKind::Dir => "폴더".to_string(),
-                FileKind::Symlink => "바로가기".to_string(),
+                FileKind::Dir => tr("kind.folder"),
+                FileKind::Symlink => tr("kind.link"),
                 FileKind::File => {
                     let ext = ext_of(&r.name);
                     if ext.is_empty() {
-                        "파일".to_string()
+                        tr("kind.file")
                     } else {
-                        format!("{} 파일", ext.to_uppercase())
+                        trf("kind.extFile", &[&ext.to_uppercase()])
                     }
                 }
             },
@@ -308,11 +310,11 @@ mod tests {
         let s = TreeSource::new(Tree::open(&base).unwrap(), 0);
         // [dirA, empty, file1.txt]
         assert_eq!(s.cell(0, COL_SIZE), ""); // 폴더 크기 없음
-        assert_eq!(s.cell(0, COL_KIND), "폴더");
+        assert_eq!(s.cell(0, COL_KIND), "Folder"); // 활성 언어 기본 = 내장 en(i18n)
         assert_eq!(s.cell(0, COL_EXT), "");
         assert_eq!(s.cell(2, COL_SIZE), "1 B");
         assert_eq!(s.cell(2, COL_EXT), "txt");
-        assert_eq!(s.cell(2, COL_KIND), "TXT 파일");
+        assert_eq!(s.cell(2, COL_KIND), "TXT file");
         assert!(!s.cell(2, COL_MODIFIED).is_empty()); // 방금 만든 파일 — 날짜 표시
         fs::remove_dir_all(&base).unwrap();
     }
