@@ -698,6 +698,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     inv.push(self.bounds); // 밴드 사각형 지우기
                 }
             }
+            InputEvent::RightDown { .. } => {} // 컨텍스트 메뉴는 M3-4(셸 메뉴)
         }
     }
 

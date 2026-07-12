@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use nexa_gui::widgets::VirtualRows;
+use nexa_gui::widgets::{PathBar, VirtualRows};
 use nexa_gui::{Column, InputEvent, Invalidations, Key, Rect as GRect, Theme, Widget};
 use nexa_tree::Tree;
 use windows::core::{w, Result, PCWSTR};
@@ -19,8 +19,9 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_F3, VK_HOME, VK_LEFT,
-    VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F3,
+    VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
+    VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -28,8 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT,
     GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR, WM_DESTROY,
     WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE,
-    WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
+    WM_RBUTTONDOWN, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
@@ -87,6 +89,7 @@ impl PaintStats {
 
 /// 창 단위 상태 — `GWLP_USERDATA`에 Box raw 포인터로 보관(WM_NCCREATE~WM_NCDESTROY).
 struct State {
+    pathbar: PathBar,
     rows: VirtualRows<TreeSource>,
     theme: Theme,
     dpi: u32,
@@ -104,6 +107,20 @@ struct State {
 fn metrics(dpi: u32) -> (i32, i32, i32) {
     let s = |v: i32| (v * dpi as i32) / 96;
     (s(20).max(14), s(6), s(16))
+}
+
+/// 경로 바 높이(행 + 상하 여백 — docs/20 네비 바 영역).
+fn bar_h(dpi: u32) -> i32 {
+    let (row_h, _, _) = metrics(dpi);
+    row_h + (4 * dpi as i32) / 96
+}
+
+/// 레이아웃 — 경로 바(상단 1줄) + 리스트(잔여). WM_SIZE·DPI 변경 시 호출.
+unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
+    let rc = client_rect(hwnd);
+    let bh = bar_h(st.dpi).min(rc.h);
+    st.pathbar.set_bounds(GRect::new(0, 0, rc.w, bh), inv);
+    st.rows.set_bounds(GRect::new(0, bh, rc.w, rc.h - bh), inv);
 }
 
 /// 기본 5컬럼(원본 docs/23 §2-1 기본 정의열 중 M1-4 범위). 폭은 dpi 스케일.
@@ -153,6 +170,7 @@ pub fn run() -> Result<()> {
     let tz = unsafe { tz_offset_min() };
     let root = tree.root_path().to_path_buf();
     let state = Box::new(State {
+        pathbar: PathBar::new(root.to_string_lossy(), row_h, pad_x),
         rows: VirtualRows::new(TreeSource::new(tree, tz), row_h, pad_x, indent_w),
         theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2 테마 시스템
         dpi: 96,
@@ -249,12 +267,27 @@ unsafe fn open_source(st: &State, path: &std::path::Path) -> Option<TreeSource> 
     }
 }
 
-/// 소스 교체 공통부 — 스크롤·캐럿 리셋(정렬 유지)·타이틀 갱신.
+/// 소스 교체 공통부 — 스크롤·캐럿 리셋(정렬 유지)·경로 바·타이틀 갱신.
 unsafe fn apply_source(hwnd: HWND, st: &mut State, src: TreeSource) {
     let mut inv = Invalidations::default();
     st.rows.replace_source(src, &mut inv);
+    let path = st
+        .rows
+        .source()
+        .tree()
+        .root_path()
+        .to_string_lossy()
+        .into_owned();
+    st.pathbar.set_path(path, &mut inv);
     flush_invalidations(hwnd, &mut inv);
     update_title(hwnd, st, "");
+}
+
+/// 경로 바의 이동 요청 수거 → 네비게이션(원본 §3: 컴포넌트는 통지만, 이동은 호스트).
+unsafe fn drain_pathbar_nav(hwnd: HWND, st: &mut State) {
+    if let Some(p) = st.pathbar.take_navigation() {
+        navigate_to(hwnd, st, std::path::PathBuf::from(p));
+    }
 }
 
 /// 새 경로 진입(히스토리 push — 앞으로 기록 절단).
@@ -384,6 +417,7 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             icons: &st.icons,
         };
         st.rows.paint(&mut ctx, &st.theme);
+        st.pathbar.paint(&mut ctx, &st.theme);
         let _ = BitBlt(hdc, 0, 0, rc.w, rc.h, Some(back.memory_dc()), 0, 0, SRCCOPY);
     }
 
@@ -457,6 +491,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let mut inv = Invalidations::default();
                 st.rows.set_metrics(row_h, pad_x, indent_w, &mut inv);
                 st.rows.set_columns(columns(st.dpi), &mut inv);
+                st.pathbar.set_metrics(row_h, pad_x, &mut inv);
                 update_title(hwnd, st, "");
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -472,7 +507,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_SIZE => {
             if let Some(st) = state_of(hwnd) {
                 let mut inv = Invalidations::default();
-                st.rows.set_bounds(client_rect(hwnd), &mut inv);
+                layout(hwnd, st, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
@@ -500,12 +535,34 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                // 리사이즈·러버밴드 드래그가 창 밖으로 나가도 추적되도록 캡처(MouseUp에서 해제)
-                SetCapture(hwnd);
                 let shift = wparam.0 & MK_SHIFT != 0;
                 let ctrl = wparam.0 & MK_CONTROL != 0;
-                route_event(hwnd, st, InputEvent::MouseDown { x, y, shift, ctrl });
+                let ev = InputEvent::MouseDown { x, y, shift, ctrl };
+                let mut inv = Invalidations::default();
+                if st.pathbar.is_editing() {
+                    // 포커스아웃 = 편집 취소·브레드크럼 복귀(docs/27 §2)
+                    st.pathbar.cancel_edit(&mut inv);
+                } else if y < st.rows.bounds().y {
+                    st.pathbar.on_event(&ev, &mut inv); // 세그먼트 클릭
+                } else {
+                    // 리사이즈·러버밴드 드래그가 창 밖으로 나가도 추적되도록 캡처(MouseUp에서 해제)
+                    SetCapture(hwnd);
+                    st.rows.on_event(&ev, &mut inv);
+                }
+                flush_invalidations(hwnd, &mut inv);
+                drain_pathbar_nav(hwnd, st);
                 update_title(hwnd, st, ""); // 펼침/정렬/선택으로 행·선택 수 변동 반영
+            }
+            LRESULT(0)
+        }
+        WM_RBUTTONDOWN => {
+            if let Some(st) = state_of(hwnd) {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let mut inv = Invalidations::default();
+                st.pathbar
+                    .on_event(&InputEvent::RightDown { x, y }, &mut inv); // 편집 모드 진입
+                flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
         }
@@ -513,7 +570,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                route_event(hwnd, st, InputEvent::MouseMove { x, y });
+                let ev = InputEvent::MouseMove { x, y };
+                let mut inv = Invalidations::default();
+                st.pathbar.on_event(&ev, &mut inv); // hover 추적(영역 밖이면 해제)
+                st.rows.on_event(&ev, &mut inv); // 리사이즈·러버밴드 드래그
+                flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
         }
@@ -531,6 +592,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let vk = wparam.0 as u16;
                 let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
                 let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
+                if st.pathbar.is_editing() {
+                    // 편집 모드 키: Enter=제출(이동)·Esc=취소, 나머지는 WM_CHAR로
+                    let mut inv = Invalidations::default();
+                    if vk == VK_RETURN.0 {
+                        st.pathbar.submit_edit(&mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                        drain_pathbar_nav(hwnd, st);
+                    } else if vk == VK_ESCAPE.0 {
+                        st.pathbar.cancel_edit(&mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                    }
+                    return LRESULT(0);
+                }
                 if vk == VK_F3.0 {
                     bench(hwnd, st);
                 } else if vk == b'A' as u16 && ctrl {
@@ -597,6 +671,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_CHAR => {
             if let Some(st) = state_of(hwnd) {
+                if st.pathbar.is_editing() {
+                    // 경로 편집 입력(공백 허용 — 경로에 공백 가능)
+                    if let Some(c) = char::from_u32(wparam.0 as u32) {
+                        if c == '\u{8}' || !c.is_control() {
+                            let mut inv = Invalidations::default();
+                            st.pathbar.edit_char(c, &mut inv);
+                            flush_invalidations(hwnd, &mut inv);
+                        }
+                    }
+                    return LRESULT(0);
+                }
                 // 타입어헤드(docs/32) — Ctrl 조합(제어문자·Ctrl+H=0x08 충돌 포함) 제외
                 if GetKeyState(VK_CONTROL.0 as i32) >= 0 {
                     if let Some(c) = char::from_u32(wparam.0 as u32) {
@@ -652,6 +737,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let (row_h, pad_x, indent_w) = metrics(dpi);
                 let mut inv = Invalidations::default();
                 st.rows.set_metrics(row_h, pad_x, indent_w, &mut inv);
+                st.pathbar.set_metrics(row_h, pad_x, &mut inv);
+                layout(hwnd, st, &mut inv);
                 let rc = &*(lparam.0 as *const RECT);
                 let _ = SetWindowPos(
                     hwnd,
