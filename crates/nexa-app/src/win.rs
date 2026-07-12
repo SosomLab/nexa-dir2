@@ -21,8 +21,8 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F3, VK_F5,
-    VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
-    VK_TAB, VK_UP,
+    VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
+    VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR,
     WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_RBUTTONDOWN, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+    WM_RBUTTONDOWN, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
     WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
@@ -65,6 +65,61 @@ const CMD_REFRESH: u32 = 12;
 const CMD_NAV_BACK: u32 = 20;
 const CMD_NAV_FORWARD: u32 = 21;
 const CMD_NAV_UP: u32 = 22;
+const CMD_THEME_SYSTEM: u32 = 30;
+const CMD_THEME_LIGHT: u32 = 31;
+const CMD_THEME_DARK: u32 = 32;
+
+/// 테마 모드(원본 docs/39 §3 — System/Light/Dark). 영속은 M2-5.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ThemeMode {
+    System,
+    Light,
+    Dark,
+}
+
+/// OS 앱 테마가 라이트인가 — 레지스트리 `AppsUseLightTheme`(없으면 라이트 간주).
+unsafe fn os_uses_light_theme() -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut val: u32 = 1;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let ok = RegGetValueW(
+        HKEY_CURRENT_USER,
+        w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+        w!("AppsUseLightTheme"),
+        RRF_RT_REG_DWORD,
+        None,
+        Some(&mut val as *mut u32 as *mut core::ffi::c_void),
+        Some(&mut size),
+    );
+    ok.is_ok() && val != 0 || ok.is_err() // 조회 실패 = 라이트 기본
+}
+
+/// 모드 → 실효 테마(System = OS 설정 추종 — docs/39 §3).
+unsafe fn resolve_theme(mode: ThemeMode) -> Theme {
+    match mode {
+        ThemeMode::Light => Theme::light(),
+        ThemeMode::Dark => Theme::dark(),
+        ThemeMode::System => {
+            if os_uses_light_theme() {
+                Theme::light()
+            } else {
+                Theme::dark()
+            }
+        }
+    }
+}
+
+/// 타이틀바 다크 모드(DWMWA_USE_IMMERSIVE_DARK_MODE) — 본문 테마와 일치.
+unsafe fn apply_titlebar_theme(hwnd: HWND, dark: bool) {
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+    let on: i32 = if dark { 1 } else { 0 };
+    let _ = DwmSetWindowAttribute(
+        hwnd,
+        DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &on as *const i32 as *const core::ffi::c_void,
+        std::mem::size_of::<i32>() as u32,
+    );
+}
 
 /// 메뉴 정의(파일·보기 — 도구/도움말은 후속 M5).
 fn build_menus(show_hidden: bool, show_dotfiles: bool) -> Vec<Menu> {
@@ -85,6 +140,11 @@ fn build_menus(show_hidden: bool, show_dotfiles: bool) -> Vec<Menu> {
                 MenuItem::new(CMD_TOGGLE_DOTFILES, "점 파일 표시", "Ctrl+.").checked(show_dotfiles),
                 MenuItem::separator(),
                 MenuItem::new(CMD_REFRESH, "새로 고침", "F5"),
+                MenuItem::separator(),
+                // 테마 라디오(원본 docs/39 §3 메뉴 토글 대응) — 시작 기본 다크(DR-5), F6 = 순환
+                MenuItem::new(CMD_THEME_SYSTEM, "테마: 시스템", "F6").checked(false),
+                MenuItem::new(CMD_THEME_LIGHT, "테마: 라이트", "F6").checked(false),
+                MenuItem::new(CMD_THEME_DARK, "테마: 다크", "F6").checked(true),
             ],
         },
     ]
@@ -153,6 +213,7 @@ struct State {
     split: f32,
     split_drag: bool,
     theme: Theme,
+    theme_mode: ThemeMode,
     dpi: u32,
     dw: Option<DwBackend>,
     icons: std::cell::RefCell<ShellIcons>,
@@ -260,7 +321,8 @@ pub fn run() -> Result<()> {
         active: 0,
         split: 0.5,
         split_drag: false,
-        theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2-4
+        theme: Theme::default(), // 시작 = 다크(DR-5). 모드 전환은 보기 메뉴, 영속은 M2-5
+        theme_mode: ThemeMode::Dark,
         dpi: 96,
         dw: None,
         icons: std::cell::RefCell::new(ShellIcons::new()),
@@ -511,11 +573,32 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         CMD_NAV_BACK => st.active_panel().nav_back(ctx, &mut inv),
         CMD_NAV_FORWARD => st.active_panel().nav_forward(ctx, &mut inv),
         CMD_NAV_UP => st.active_panel().nav_up(ctx, &mut inv),
+        CMD_THEME_SYSTEM | CMD_THEME_LIGHT | CMD_THEME_DARK => {
+            st.theme_mode = match id {
+                CMD_THEME_LIGHT => ThemeMode::Light,
+                CMD_THEME_DARK => ThemeMode::Dark,
+                _ => ThemeMode::System,
+            };
+            apply_theme(hwnd, st, &mut inv);
+        }
         _ => {}
     }
     flush_invalidations(hwnd, &mut inv);
     update_title(hwnd, st, "");
     update_status(hwnd, st);
+}
+
+/// 테마 모드 적용 — 실효 테마 재해석·메뉴 라디오 동기·타이틀바·전체 다시 그리기(docs/39 §3).
+unsafe fn apply_theme(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
+    st.theme = resolve_theme(st.theme_mode);
+    st.menubar
+        .set_checked(CMD_THEME_SYSTEM, st.theme_mode == ThemeMode::System, inv);
+    st.menubar
+        .set_checked(CMD_THEME_LIGHT, st.theme_mode == ThemeMode::Light, inv);
+    st.menubar
+        .set_checked(CMD_THEME_DARK, st.theme_mode == ThemeMode::Dark, inv);
+    apply_titlebar_theme(hwnd, st.theme == Theme::dark());
+    let _ = InvalidateRect(Some(hwnd), None, false);
 }
 
 /// 활성 패널 전환(클릭·Tab) — 탭 바 accent로 시각화.
@@ -588,6 +671,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.statusbar.set_metrics(m.row_h, m.pad_x, &mut inv);
+                apply_titlebar_theme(hwnd, st.theme == Theme::dark()); // 본문과 타이틀바 일치
                 update_title(hwnd, st, "");
                 update_status(hwnd, st);
             }
@@ -796,6 +880,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == VK_F5.0 {
                     run_command(hwnd, st, CMD_REFRESH);
                     return LRESULT(0);
+                } else if vk == VK_F6.0 {
+                    // F6 = 테마 순환(다크→라이트→시스템)
+                    let next = match st.theme_mode {
+                        ThemeMode::Dark => CMD_THEME_LIGHT,
+                        ThemeMode::Light => CMD_THEME_SYSTEM,
+                        ThemeMode::System => CMD_THEME_DARK,
+                    };
+                    run_command(hwnd, st, next);
+                    return LRESULT(0);
                 } else if vk == VK_F3.0 {
                     bench(hwnd, st);
                 } else if vk == VK_TAB.0 {
@@ -940,6 +1033,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
+        }
+        // OS 테마 변경(ImmersiveColorSet 등) — 시스템 모드일 때 재해석(docs/39 §3)
+        WM_SETTINGCHANGE => {
+            if let Some(st) = state_of(hwnd) {
+                if st.theme_mode == ThemeMode::System {
+                    let mut inv = Invalidations::default();
+                    apply_theme(hwnd, st, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => {
             PostQuitMessage(0);
