@@ -7,7 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `feat/m2-ime-uia` | 2026-07-12 | 2026-07-13 (`474515f`) | — | 3 | M2-7 — IME 1차(조합 창을 경로바 편집 캐럿에 배치·WM_IME_*)·UIA 1차(스냅샷 프로바이더: List/ListItem·SelectionItem·FocusChanged). .NET UIA 클라이언트 실기 검증·테스트 105 green → **M2 완료 `0.3.0`** | [2026-07-13](journal/2026-07-13.md) |
+| `feat/m2-ime-uia` | 2026-07-12 | 2026-07-13 (`474515f`) | 2026-07-13 | 3 | M2-7 — IME 1차(조합 창을 경로바 편집 캐럿에 배치·WM_IME_*)·UIA 1차(스냅샷 프로바이더: List/ListItem·SelectionItem·FocusChanged). .NET UIA 클라이언트 실기 검증·테스트 105 green → **M2 완료 `0.3.0`** | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m2-resident` | 2026-07-12 | 2026-07-12 (`b848904`) | 2026-07-12 | 3 | M2-8 — 상주 규율: 유휴 60s(자니터)·최소화 시 트림(DW 백버퍼+레이아웃 캐시·HICON 해제·작업집합 반납)·지연 재적재·유휴 백그라운드 0%. 실측 활성 26.9→트림 0.21~2.9MB 게이트 통과·테스트 105 green | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m2-i18n` | 2026-07-12 | 2026-07-12 (`7a50692`) | 2026-07-12 | 3 | M2-6 — i18n: properties `.lang`(crate 0)·내장 en/ko+`data\lang\` 키 단위 오버라이드·폴백 체인·동적 전환(라디오·재시작 불요)·system=OS 추종·`lang` 영속. 테스트 104 green·실기 ko/en 타이틀 검증 | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m2-persistence` | 2026-07-12 | 2026-07-12 (`e04e9d4`) | 2026-07-12 | 2 | M2-5 — 설정/세션 영속: exe 옆 `data\` key=value 텍스트(crate 0)·원자 쓰기·기동 로드/종료 저장. 실기 재실행 복원 검증·테스트 102 green | [2026-07-12](journal/2026-07-12.md) |
@@ -36,7 +36,7 @@
 
 ## feat/m2-ime-uia
 
-- **생성**: 2026-07-12 (분기: main `5dc548f`). **커밋**: `2fab4bc`(IME 조합 창 캐럿 배치) → `1764257`(UIA 프로바이더·포커스 이벤트) → `2a155f7`(docs 현행화·M2 완료). 병합(`474515f`)·태그 `0.3.0`: 2026-07-13. 삭제: CI green 확인 후.
+- **생성**: 2026-07-12 (분기: main `5dc548f`). **커밋**: `2fab4bc`(IME 조합 창 캐럿 배치) → `1764257`(UIA 프로바이더·포커스 이벤트) → `2a155f7`(docs 현행화·M2 완료). 병합(`474515f`)·태그 `0.3.0`: 2026-07-13. 삭제: 2026-07-13(CI green 확인 — run 29197548967).
 - **검증**: Windows 실기 — `cargo test` 105 green · clippy 0 · fmt · **UIA**: .NET System.Windows.Automation 클라이언트로 List Name(활성 경로)·가시 항목 14·항목 이름·SelectionItem IsSelected 조회 정상 · **IME**: 편집 모드에서 WM_IME_STARTCOMPOSITION/COMPOSITION 주입+한글 SendKeys 생존·Esc 복귀·정상 종료(실제 IME 조합 창 위치는 수동 확인 항목) · B2 0.50MB·B3 통과(imm32·uiautomationcore 등재 — 근거 커밋 메시지).
 
 ## feat/m2-resident
