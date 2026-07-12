@@ -9,6 +9,8 @@ mod dw;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod icons;
 #[cfg_attr(not(windows), allow(dead_code))]
+mod nav;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod source;
 #[cfg(windows)]
 mod win;

@@ -20,18 +20,20 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_F3, VK_HOME, VK_LEFT,
-    VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP,
+    VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
     GetWindowLongPtrW, LoadCursorW, PostQuitMessage, RegisterClassW, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA,
-    IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSW,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT,
+    GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR, WM_DESTROY,
+    WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE,
+    WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
+
+use crate::nav::History;
 
 use crate::dw::{DwBackend, DwCtx};
 use crate::icons::shell::ShellIcons;
@@ -88,6 +90,11 @@ struct State {
     dw: Option<DwBackend>,
     icons: std::cell::RefCell<ShellIcons>,
     stats: PaintStats,
+    nav: History,
+    tz: i32,
+    /// 가시성 필터(원본 ViewOptions — 설정 영속은 M2-5).
+    show_hidden: bool,
+    show_dotfiles: bool,
 }
 
 /// DPI 의존 지표: (행 높이, 좌 패딩, 트리 들여쓰기 폭). 고밀도 규약 = 20px 행 @96dpi.
@@ -140,6 +147,7 @@ pub fn run() -> Result<()> {
     });
     let (row_h, pad_x, indent_w) = metrics(96); // 실제 DPI는 WM_NCCREATE에서 반영
     let tz = unsafe { tz_offset_min() };
+    let root = tree.root_path().to_path_buf();
     let state = Box::new(State {
         rows: VirtualRows::new(TreeSource::new(tree, tz), row_h, pad_x, indent_w),
         theme: Theme::default(), // 다크(DR-5) — 모드 선택은 M2 테마 시스템
@@ -147,6 +155,10 @@ pub fn run() -> Result<()> {
         dw: None,
         icons: std::cell::RefCell::new(ShellIcons::new()),
         stats: PaintStats::default(),
+        nav: History::new(root),
+        tz,
+        show_hidden: true, // 초안 기본 = 모두 표시(M1-3 이래 동일). 영속은 M2-5
+        show_dotfiles: true,
     });
 
     unsafe {
@@ -156,6 +168,7 @@ pub fn run() -> Result<()> {
         let hinstance = GetModuleHandleW(None)?;
         let class_name = w!("NexaDir2Main");
         let wc = WNDCLASSW {
+            style: CS_DBLCLKS, // 더블클릭 진입(M1-8)
             hInstance: hinstance.into(),
             lpszClassName: class_name,
             lpfnWndProc: Some(wndproc),
@@ -217,6 +230,98 @@ unsafe fn route_event(hwnd: HWND, st: &mut State, ev: InputEvent) {
     let mut inv = Invalidations::default();
     st.rows.on_event(&ev, &mut inv);
     flush_invalidations(hwnd, &mut inv);
+}
+
+// ── 네비게이션(M1-8) ─────────────────────────────────────────────
+
+/// 현재 필터로 경로를 연다. 실패(권한 등) 시 `None` — 현 위치 유지(오류 격리).
+unsafe fn open_source(st: &State, path: &std::path::Path) -> Option<TreeSource> {
+    match Tree::open_filtered(path, st.show_hidden, st.show_dotfiles) {
+        Ok(t) => Some(TreeSource::new(t, st.tz)),
+        Err(e) => {
+            eprintln!("{} 열기 실패: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// 소스 교체 공통부 — 스크롤·캐럿 리셋(정렬 유지)·타이틀 갱신.
+unsafe fn apply_source(hwnd: HWND, st: &mut State, src: TreeSource) {
+    let mut inv = Invalidations::default();
+    st.rows.replace_source(src, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
+    update_title(hwnd, st, "");
+}
+
+/// 새 경로 진입(히스토리 push — 앞으로 기록 절단).
+unsafe fn navigate_to(hwnd: HWND, st: &mut State, path: std::path::PathBuf) {
+    let Some(src) = open_source(st, &path) else {
+        return;
+    };
+    st.nav.push(path);
+    apply_source(hwnd, st, src);
+}
+
+unsafe fn nav_back(hwnd: HWND, st: &mut State) {
+    let Some(p) = st.nav.back().map(|p| p.to_path_buf()) else {
+        return;
+    };
+    match open_source(st, &p) {
+        Some(src) => apply_source(hwnd, st, src),
+        None => {
+            let _ = st.nav.forward(); // 열기 실패 — 위치 복원
+        }
+    }
+}
+
+unsafe fn nav_forward(hwnd: HWND, st: &mut State) {
+    let Some(p) = st.nav.forward().map(|p| p.to_path_buf()) else {
+        return;
+    };
+    match open_source(st, &p) {
+        Some(src) => apply_source(hwnd, st, src),
+        None => {
+            let _ = st.nav.back();
+        }
+    }
+}
+
+/// 위로(부모 폴더) — Alt+↑.
+unsafe fn nav_up(hwnd: HWND, st: &mut State) {
+    let parent = st
+        .rows
+        .source()
+        .tree()
+        .root_path()
+        .parent()
+        .map(|p| p.to_path_buf());
+    if let Some(p) = parent {
+        navigate_to(hwnd, st, p);
+    }
+}
+
+/// 캐럿/클릭 행이 폴더면 진입(더블클릭·Enter).
+unsafe fn activate_row(hwnd: HWND, st: &mut State, row: usize) {
+    let tree = st.rows.source().tree();
+    let (Some(r), Some(id)) = (tree.row(row), tree.visible_id(row)) else {
+        return;
+    };
+    if r.kind != nexa_core::FileKind::Dir {
+        return; // 파일 실행(ShellExecute)은 M3 조작 단계에서
+    }
+    if let Some(p) = tree.node_path(id).map(|p| p.to_path_buf()) {
+        navigate_to(hwnd, st, p);
+    }
+}
+
+/// 가시성 필터 토글 — 현 위치 재열기(히스토리 이동 없음).
+unsafe fn reopen_filtered(hwnd: HWND, st: &mut State) {
+    let path = st.rows.source().tree().root_path().to_path_buf();
+    let Some(src) = open_source(st, &path) else {
+        return;
+    };
+    st.nav.replace(path);
+    apply_source(hwnd, st, src);
 }
 
 /// 타이틀바 — 루트 경로·행 수·선택 수·평균 페인트 시간(M1-9 관측).
@@ -418,9 +523,61 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == b'A' as u16 && ctrl {
                     route_event(hwnd, st, InputEvent::SelectAll); // Ctrl+A(docs/07 §8)
                     update_title(hwnd, st, "");
+                } else if vk == VK_RETURN.0 {
+                    // Enter = 캐럿 행 진입(docs/07 §8)
+                    if let Some(c) = st.rows.caret() {
+                        activate_row(hwnd, st, c);
+                    }
+                } else if vk == b'H' as u16 && ctrl {
+                    st.show_hidden = !st.show_hidden; // Ctrl+H = 숨김 토글
+                    reopen_filtered(hwnd, st);
+                } else if vk == VK_OEM_PERIOD.0 && ctrl {
+                    st.show_dotfiles = !st.show_dotfiles; // Ctrl+. = 점 파일 토글
+                    reopen_filtered(hwnd, st);
                 } else if let Some(key) = vk_to_key(vk) {
                     route_event(hwnd, st, InputEvent::Key { key, shift, ctrl });
                     update_title(hwnd, st, ""); // 펼침·선택 변동 반영
+                }
+            }
+            LRESULT(0)
+        }
+        // Alt+화살표 = 히스토리/위로(WM_SYSKEYDOWN — Alt 조합은 시스템 키)
+        WM_SYSKEYDOWN => {
+            let vk = wparam.0 as u16;
+            if let Some(st) = state_of(hwnd) {
+                if vk == VK_LEFT.0 {
+                    nav_back(hwnd, st);
+                    return LRESULT(0);
+                } else if vk == VK_RIGHT.0 {
+                    nav_forward(hwnd, st);
+                    return LRESULT(0);
+                } else if vk == VK_UP.0 {
+                    nav_up(hwnd, st);
+                    return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        // 마우스 X버튼 = 뒤로/앞으로(탐색기 규약)
+        WM_XBUTTONDOWN => {
+            if let Some(st) = state_of(hwnd) {
+                match (wparam.0 >> 16) & 0xFFFF {
+                    1 => nav_back(hwnd, st),    // XBUTTON1
+                    2 => nav_forward(hwnd, st), // XBUTTON2
+                    _ => {}
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDBLCLK => {
+            if let Some(st) = state_of(hwnd) {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                // 마커 더블클릭은 펼침 토글 영역 — 진입 아님(docs/07 §1-1 공존 규약)
+                if !st.rows.marker_hit(x, y) {
+                    if let Some(row) = st.rows.row_at(x, y) {
+                        activate_row(hwnd, st, row);
+                    }
                 }
             }
             LRESULT(0)
