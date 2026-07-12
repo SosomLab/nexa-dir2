@@ -53,6 +53,11 @@ const TIMER_TYPEAHEAD: usize = 1;
 const TIMER_TICK_MS: u32 = 250;
 /// 셸 아이콘 로딩 큐 타이머 id(주기 = icons::shell::TICK_MS — 원본 A-4 속도 제한).
 const TIMER_ICONS: usize = 2;
+/// 상주 자니터 타이머 id·점검 주기·유휴 트림 임계(M2-8 — 원본 01 §5-1·NFR-M3).
+/// 활성 중에만 저빈도로 돌고, 트림 후엔 스스로 꺼진다(유휴 백그라운드 0%).
+const TIMER_JANITOR: usize = 3;
+const JANITOR_TICK_MS: u32 = 10_000;
+const IDLE_TRIM_MS: u64 = 60_000;
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -277,6 +282,9 @@ struct State {
     /// 언어 설정값("system"|코드)·발견 목록(메뉴 라디오 CMD_LANG_BASE+idx 매핑) — M2-6.
     lang_setting: String,
     langs: Vec<(String, String)>,
+    /// 상주 자니터(M2-8): 마지막 입력 활동 시각(now_ms 기준)·트림 완료 플래그.
+    last_activity_ms: u64,
+    trimmed: bool,
 }
 
 impl State {
@@ -436,6 +444,8 @@ pub fn run() -> Result<()> {
         show_dotfiles: settings.show_dotfiles,
         lang_setting: settings.lang,
         langs,
+        last_activity_ms: 0,
+        trimmed: false,
     });
 
     unsafe {
@@ -583,6 +593,31 @@ unsafe fn ensure_dw(st: &mut State, hdc: windows::Win32::Graphics::Gdi::HDC, w: 
                 let _ = b.resize(w, h);
             }
         }
+    }
+}
+
+/// 유휴 트림 판정(순수) — 마지막 활동 후 [`IDLE_TRIM_MS`] 경과 && 아직 미트림.
+fn should_trim(now: u64, last_activity: u64, trimmed: bool) -> bool {
+    !trimmed && now.saturating_sub(last_activity) >= IDLE_TRIM_MS
+}
+
+/// 상주 트림(M2-8 — 원본 01 §5-1 "유휴/최소화 시 작업집합 트림" 이식):
+/// DW 백엔드(백버퍼 비트맵·레이아웃 캐시)·셸 아이콘 캐시(HICON) 해제 후 작업집합 반납.
+/// 화면 무효화는 하지 않는다 — 다음 실제 페인트에서 지연 재적재(ensure_dw 재생성·아이콘 재요청).
+unsafe fn trim_resident(st: &mut State) {
+    st.dw = None;
+    st.icons.borrow_mut().trim();
+    use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+    // (-1, -1) = 작업집합 반납 — OS가 미사용 페이지 회수(RSS 즉시 반영)
+    let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+}
+
+/// 입력 활동 기록(M2-8) — 트림 상태 해제(재적재는 페인트가 담당)·자니터 재가동.
+unsafe fn note_activity(hwnd: HWND, st: &mut State) {
+    st.last_activity_ms = now_ms();
+    if st.trimmed {
+        st.trimmed = false;
+        SetTimer(Some(hwnd), TIMER_JANITOR, JANITOR_TICK_MS, None);
     }
 }
 
@@ -815,6 +850,12 @@ fn vk_to_key(vk: u16) -> Option<Key> {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // 상주 자니터 활동 기록(M2-8) — 키보드(0x100~0x109)·마우스(0x200~0x20E) 입력 전 범위
+    if (0x0100..=0x0109).contains(&msg) || (0x0200..=0x020E).contains(&msg) {
+        if let Some(st) = state_of(hwnd) {
+            note_activity(hwnd, st);
+        }
+    }
     match msg {
         WM_NCCREATE => {
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
@@ -834,6 +875,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 apply_titlebar_theme(hwnd, st.theme == Theme::dark()); // 본문과 타이틀바 일치
                 update_title(hwnd, st, "");
                 update_status(hwnd, st);
+                st.last_activity_ms = now_ms();
+                SetTimer(Some(hwnd), TIMER_JANITOR, JANITOR_TICK_MS, None); // 상주 자니터(M2-8)
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -846,9 +889,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_ERASEBKGND => LRESULT(1),
         WM_SIZE => {
             if let Some(st) = state_of(hwnd) {
-                let mut inv = Invalidations::default();
-                layout(hwnd, st, &mut inv);
-                flush_invalidations(hwnd, &mut inv);
+                if wparam.0 == windows::Win32::UI::WindowsAndMessaging::SIZE_MINIMIZED as usize {
+                    // 최소화 = 즉시 트림(원본 §5-1) — 복원 시 WM_SIZE+페인트가 재적재
+                    trim_resident(st);
+                    st.trimmed = true;
+                    let _ = KillTimer(Some(hwnd), TIMER_JANITOR);
+                } else {
+                    note_activity(hwnd, st);
+                    let mut inv = Invalidations::default();
+                    layout(hwnd, st, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                }
             }
             LRESULT(0)
         }
@@ -1161,6 +1212,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let _ = KillTimer(Some(hwnd), TIMER_ICONS);
                     }
                 }
+            } else if wparam.0 == TIMER_JANITOR {
+                if let Some(st) = state_of(hwnd) {
+                    if should_trim(now_ms(), st.last_activity_ms, st.trimmed) {
+                        trim_resident(st);
+                        st.trimmed = true;
+                        // 유휴 동안 백그라운드 0% — 다음 입력(note_activity)이 재가동
+                        let _ = KillTimer(Some(hwnd), TIMER_JANITOR);
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -1248,5 +1308,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_trim;
+
+    #[test]
+    fn idle_trim_threshold_and_once() {
+        assert!(!should_trim(59_999, 0, false), "임계 미달");
+        assert!(should_trim(60_000, 0, false), "60s 유휴 = 트림");
+        assert!(!should_trim(120_000, 0, true), "이미 트림 — 재실행 없음");
+        assert!(!should_trim(70_000, 30_000, false), "활동 후 40s — 미달");
+        assert!(
+            !should_trim(10, 20, false),
+            "시계 역전은 포화 감산으로 안전"
+        );
     }
 }

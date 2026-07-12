@@ -186,6 +186,18 @@ pub mod shell {
         }
     }
 
+    impl ShellIcons {
+        /// 상주 트림(M2-8 — 원본 01 §5-1) — 전 핸들 해제·큐 비움.
+        /// 가시 행이 다음 페인트에서 재요청하므로 지연 재적재로 복원된다.
+        pub fn trim(&mut self) {
+            for h in self.store.drain() {
+                unsafe {
+                    let _ = DestroyIcon(h);
+                }
+            }
+        }
+    }
+
     impl Drop for ShellIcons {
         fn drop(&mut self) {
             for h in self.store.drain() {
