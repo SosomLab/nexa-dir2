@@ -129,14 +129,12 @@ impl Widget for Toolbar {
                 theme.chrome_bg
             };
             if cell.w > 0 {
-                // 고정 폭이면 글리프를 셀 중앙 정렬
-                let tx = if self.button_w.is_some() {
-                    let gw = ctx.text_width(&btn.glyph);
-                    cell.x + ((cell.w - gw) / 2).max(0)
+                if self.button_w.is_some() {
+                    // 고정 폭(네비 버튼) — 큰 글리프를 셀 중앙에(방향 가시성, 사용자 지시)
+                    ctx.glyph_opaque(cell, &btn.glyph, theme.text, bg);
                 } else {
-                    cell.x + self.pad_x
-                };
-                ctx.text_opaque(tx, ty, cell, &btn.glyph, theme.text, bg);
+                    ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, theme.text, bg);
+                }
             }
             ranges.push((cell.x, cell.x + w));
             x += w;

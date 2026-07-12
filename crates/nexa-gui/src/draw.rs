@@ -22,4 +22,12 @@ pub trait DrawCtx {
     fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) {
         let _ = (x, y, size, key, hint);
     }
+
+    /// 큰 글리프(버튼 화살표 등) — `clip` 안에 **가운데 정렬**로 본문보다 큰 크기로 그린다.
+    /// 백엔드가 지원하지 않으면 text_opaque로 폴백(기본).
+    fn glyph_opaque(&mut self, clip: Rect, text: &str, fg: Color, bg: Color) {
+        let ty = clip.y + (clip.h - (clip.h * 4) / 5) / 2;
+        let tx = clip.x + (clip.w - self.text_width(text)).max(0) / 2;
+        self.text_opaque(tx, ty, clip, text, fg, bg);
+    }
 }

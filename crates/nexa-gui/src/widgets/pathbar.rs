@@ -212,11 +212,13 @@ impl Widget for PathBar {
         let ty = b.y + (b.h - (b.h * 4) / 5) / 2;
 
         if let Some(buf) = &self.edit {
-            // 편집 모드 — 필드 배경 + 버퍼 + 끝 커서(_) + accent 테두리
+            // 편집 모드 — 필드 배경 + 버퍼 + 끝 커서(_) + accent 테두리(4변)
             let text = format!("{buf}_");
             ctx.text_opaque(b.x + self.pad_x, ty, b, &text, theme.text, theme.field_bg);
             ctx.fill_rect(Rect::new(b.x, b.y, b.w, 1), theme.accent);
             ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.accent);
+            ctx.fill_rect(Rect::new(b.x, b.y, 1, b.h), theme.accent);
+            ctx.fill_rect(Rect::new(b.right() - 1, b.y, 1, b.h), theme.accent);
             self.ranges.borrow_mut().clear();
             return;
         }
