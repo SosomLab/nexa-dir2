@@ -29,10 +29,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, KillTimer, LoadCursorW, PostQuitMessage, RegisterClassW, SetTimer,
     SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CS_DBLCLKS,
     CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR,
-    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION,
-    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_SETTINGCHANGE, WM_SIZE,
-    WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETOBJECT, WM_IME_COMPOSITION,
+    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
+    WM_RBUTTONDOWN, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 use crate::config::{self, PanelSession, Session, Settings, SESSION_FILE, SETTINGS_FILE};
@@ -285,6 +286,8 @@ struct State {
     /// 상주 자니터(M2-8): 마지막 입력 활동 시각(now_ms 기준)·트림 완료 플래그.
     last_activity_ms: u64,
     trimmed: bool,
+    /// UIA 포커스 이벤트 중복 억제(M2-7): 마지막 통지한 (활성 패널, 캐럿).
+    uia_caret: Option<(usize, Option<usize>)>,
 }
 
 impl State {
@@ -446,6 +449,7 @@ pub fn run() -> Result<()> {
         langs,
         last_activity_ms: 0,
         trimmed: false,
+        uia_caret: None,
     });
 
     unsafe {
@@ -621,6 +625,54 @@ unsafe fn note_activity(hwnd: HWND, st: &mut State) {
     }
 }
 
+/// 활성 패널 가시 행의 UIA 스냅샷(M2-7) — 화면 좌표로 변환한 불변 공유 데이터.
+/// UIA 콜백은 임의 스레드에서 오므로 프로바이더는 이 스냅샷만 읽는다(uia.rs 참조).
+unsafe fn uia_snapshot(hwnd: HWND, st: &State) -> std::sync::Arc<crate::uia::Snap> {
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    let p = &st.panels[st.active];
+    let rows = p.rows();
+    let src = rows.source();
+    let b = rows.bounds();
+    let mut origin = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+    let _ = ClientToScreen(hwnd, &mut origin);
+    let m = panel_metrics(st.dpi);
+    let header = m.row_h; // 컬럼 헤더 행 근사(1차)
+    let first = rows.scroll_row();
+    let visible =
+        ((((b.h - header) / m.row_h).max(0)) as usize).min(src.len().saturating_sub(first));
+    let caret = rows.caret();
+    let mut out = Vec::with_capacity(visible);
+    for k in 0..visible {
+        let i = first + k;
+        let y = b.y + header + (k as i32) * m.row_h;
+        out.push(crate::uia::RowSnap {
+            name: src.row(i).text,
+            selected: src.is_selected(i),
+            focused: caret == Some(i),
+            rect: (origin.x + b.x, origin.y + y, b.w, m.row_h),
+        });
+    }
+    std::sync::Arc::new(crate::uia::Snap {
+        name: p.root_path().display().to_string(),
+        rect: (origin.x + b.x, origin.y + b.y, b.w, b.h),
+        first_row: first,
+        rows: out,
+    })
+}
+
+/// 캐럿 변경 시 UIA 포커스 이벤트 발행(M2-7) — 클라이언트가 붙어 있을 때만(가드 비용 0).
+unsafe fn uia_notify(hwnd: HWND, st: &mut State) {
+    let cur = (st.active, st.panels[st.active].rows().caret());
+    if st.uia_caret == Some(cur) {
+        return;
+    }
+    st.uia_caret = Some(cur);
+    if cur.1.is_none() || !crate::uia::listening() {
+        return;
+    }
+    crate::uia::raise_focus(hwnd, uia_snapshot(hwnd, st));
+}
+
 /// IME 조합 창을 편집 캐럿 옆에 배치(M2-7 근접 조합 — 원본 NFR-A1).
 /// 대상 = 편집 중인 경로바(활성 패널 우선). 없으면 IME 기본 위치에 둔다.
 /// 결과 문자열은 기존 WM_CHAR 경로로 수신(DefWindowProc의 WM_IME_CHAR 변환).
@@ -740,6 +792,7 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     );
     let mut inv = Invalidations::default();
     st.statusbar.set_text(left, right, &mut inv);
+    uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
     flush_invalidations(hwnd, &mut inv);
 }
 
@@ -1194,6 +1247,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     flush_invalidations(hwnd, &mut inv);
                     update_title(hwnd, st, "");
                     return LRESULT(0);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        // UIA 루트 요청(스크린리더 등) — 활성 패널 가시 행 스냅샷 프로바이더 반환(M2-7)
+        m if m == WM_GETOBJECT => {
+            if lparam.0 as i32 == crate::uia::UIA_ROOT_OBJECT_ID {
+                if let Some(st) = state_of(hwnd) {
+                    let snap = uia_snapshot(hwnd, st);
+                    return crate::uia::return_provider(hwnd, wparam, lparam, snap);
                 }
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
