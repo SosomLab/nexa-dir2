@@ -58,11 +58,12 @@ fn now_ms() -> u64 {
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
-/// 평균 페인트 시간(µs) 누적 — 벤치 시 리셋.
+/// 평균 페인트 시간(µs) 누적 — 벤치 시 리셋. `first_render_ms` = 기동→첫 페인트(M1-9 게이트).
 #[derive(Default)]
 struct PaintStats {
     total_us: u64,
     frames: u32,
+    first_render_ms: Option<u64>,
 }
 
 impl PaintStats {
@@ -78,7 +79,9 @@ impl PaintStats {
         }
     }
     fn reset(&mut self) {
+        let first = self.first_render_ms;
         *self = PaintStats::default();
+        self.first_render_ms = first; // 첫 렌더 기록은 벤치 리셋과 무관하게 보존
     }
 }
 
@@ -139,7 +142,8 @@ fn root_path() -> std::path::PathBuf {
 }
 
 pub fn run() -> Result<()> {
-    // 창 생성 전 트리 로드(초안: 동기 — 백그라운드 열거는 M2 상주 규율에서)
+    let _ = now_ms(); // 기동 시각 고정 — 첫 렌더 계측 기준(M1-9 게이트 B4/100k)
+                      // 창 생성 전 트리 로드(초안: 동기 — 백그라운드 열거는 M2 상주 규율에서)
     let path = root_path();
     let tree = Tree::open(&path).unwrap_or_else(|e| {
         eprintln!("{} 열기 실패({e}) — C:\\ 로 대체", path.display());
@@ -324,7 +328,7 @@ unsafe fn reopen_filtered(hwnd: HWND, st: &mut State) {
     apply_source(hwnd, st, src);
 }
 
-/// 타이틀바 — 루트 경로·행 수·선택 수·평균 페인트 시간(M1-9 관측).
+/// 타이틀바 — 루트 경로·행 수·선택 수·평균 페인트·첫 렌더(M1-9 관측).
 unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
     use nexa_gui::widgets::RowSource;
     let sel = st.rows.source().tree().selection_count();
@@ -333,12 +337,18 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
     } else {
         String::new()
     };
+    let first_txt = st
+        .stats
+        .first_render_ms
+        .map(|ms| format!(" · 첫렌더 {ms}ms"))
+        .unwrap_or_default();
     let text = format!(
-        "Nexa Dir 2 — {} [{}행{} · 평균 {}µs]{}\0",
+        "Nexa Dir 2 — {} [{}행{} · 평균 {}µs{}]{}\0",
         st.rows.source().tree().root_path().display(),
         st.rows.source().len(),
         sel_txt,
         st.stats.avg_us(),
+        first_txt,
         note,
     );
     let wtext: Vec<u16> = text.encode_utf16().collect();
@@ -378,6 +388,9 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
     }
 
     st.stats.add(t0.elapsed().as_micros() as u64);
+    if st.stats.first_render_ms.is_none() {
+        st.stats.first_render_ms = Some(now_ms()); // 기동(run 진입)→첫 페인트 완료
+    }
     let _ = EndPaint(hwnd, &ps);
 
     // 미로드 아이콘이 큐에 쌓였으면 속도 제한 로딩 시작(원본 A-4)
