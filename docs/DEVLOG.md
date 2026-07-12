@@ -8,6 +8,7 @@
 
 ## 2026-07-13
 
+- **M3-1 nexa-ops 전송 엔진(`feat/m3-ops-transfer`) — M3 파일 조작 착수**: 원본 docs/33 TRANSFER-ENGINE·FileOps.cs 이식 — **`nexa-ops` rlib 신설**(플랫폼 중립·crate 0): `transfer()` 단일 경로(같은 폴더 규칙=이동 무동작/복사 순번 복제·충돌 항목만 순차 Overwrite/Skip·4MB 청크 바이트 진행률·취소·항목 실패 개별 격리·동일 볼륨 rename fast path·순환 이동 금지). 안전 개선: 취소/실패 시 부분 파일 정리. 앱 배선 = 내부 클립보드 Ctrl+C/X/V → **워커 스레드+WM_APP_TRANSFER(세대 가드, 원본 A-1)** → 타이틀 진행 %·Esc 취소·완료 시 양쪽 재로드·i18n 결과 요약. **실기: 같은 폴더 복사 " (2)" 복제("전송 3")·제자리 이동 무동작("건너뜀 6")**. 테스트 113 green(ops 8)·B2 0.54MB·B3 무변. α 한계: 충돌=건너뜀(확인 모달 후속)·진행 창 없음·내부 클립보드만. 상세 [journal/2026-07-13.md](journal/2026-07-13.md).
 - **M2-7 IME(한글) 1차·UIA 1차(`feat/m2-ime-uia`) → M2 셸 골격 완료 `0.3.0`**: 원본 NFR-A1 대응 — ① **IME**: WM_IME_* 에서 조합 창을 편집 캐럿 옆에 배치(`ImmSetCompositionWindow` CFS_POINT, 경로바 편집 대상·결과 문자열은 기존 WM_CHAR 경로). ② **UIA**(`uia.rs`): WM_GETOBJECT 서버측 프로바이더 — **불변 스냅샷 모델**(UIA 콜백=임의 스레드라 가시 행 스냅샷을 Arc로 공유), List(Name=활성 경로)+ListItem(파일명·HasKeyboardFocus·SelectionItem 패턴)·캐럿 변경 시 FocusChanged 이벤트(리스닝 가드). **실기: .NET UIA 클라이언트로 리스트/항목 14·이름·IsSelected 조회 검증**·IME 경로 주입+한글 SendKeys 생존. B3에 imm32·uiautomationcore 등재. 테스트 105 green. **M2 게이트 통과**(듀얼·탭4 26.9MB ≤30) → 태그 `0.3.0`. 1차 한계(스냅샷 정적·선택 조작 no-op)는 M5-3 마감. 상세 [journal/2026-07-13.md](journal/2026-07-13.md).
 
 ## 2026-07-12

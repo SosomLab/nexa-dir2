@@ -4,6 +4,8 @@
 //! F3 = 활성 패널 200프레임 스크롤 벤치. 타이틀바 = 활성 패널 경로·행/선택 수·페인트 시간.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use nexa_gui::widgets::{Menu, MenuBar, MenuItem, RowSource, StatusBar, ToolButton, Toolbar};
@@ -26,10 +28,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, KillTimer, LoadCursorW, PostQuitMessage, RegisterClassW, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW, CS_DBLCLKS,
-    CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER, WM_CHAR,
-    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETOBJECT, WM_IME_COMPOSITION,
+    GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW,
+    CS_DBLCLKS, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
+    WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETOBJECT, WM_IME_COMPOSITION,
     WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
     WM_RBUTTONDOWN, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
@@ -54,6 +56,8 @@ const TIMER_TYPEAHEAD: usize = 1;
 const TIMER_TICK_MS: u32 = 250;
 /// 셸 아이콘 로딩 큐 타이머 id(주기 = icons::shell::TICK_MS — 원본 A-4 속도 제한).
 const TIMER_ICONS: usize = 2;
+/// 전송 잡 통지(워커 → UI, M3-1) — wparam=세대(원본 A-1 가드 계승), lparam: 0=진행/1=완료.
+const WM_APP_TRANSFER: u32 = 0x8001; // WM_APP + 1
 /// 상주 자니터 타이머 id·점검 주기·유휴 트림 임계(M2-8 — 원본 01 §5-1·NFR-M3).
 /// 활성 중에만 저빈도로 돌고, 트림 후엔 스스로 꺼진다(유휴 백그라운드 0%).
 const TIMER_JANITOR: usize = 3;
@@ -288,6 +292,24 @@ struct State {
     trimmed: bool,
     /// UIA 포커스 이벤트 중복 억제(M2-7): 마지막 통지한 (활성 패널, 캐럿).
     uia_caret: Option<(usize, Option<usize>)>,
+    /// 내부 클립보드(원본 FileClipboard — 경로+모드). OS 클립보드 상호운용은 M3-5.
+    clipboard: Option<(Vec<PathBuf>, nexa_ops::Op)>,
+    /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
+    transfer: Option<TransferJob>,
+    transfer_gen: u64,
+}
+
+/// 전송 워커와 UI 스레드가 공유하는 상태(원자/뮤텍스 — 워커는 State 접근 금지).
+struct TransferShared {
+    cancel: AtomicBool,
+    done_bytes: AtomicU64,
+    total_bytes: AtomicU64,
+    outcome: Mutex<Option<nexa_ops::Outcome>>,
+}
+
+struct TransferJob {
+    shared: Arc<TransferShared>,
+    gen: u64,
 }
 
 impl State {
@@ -450,6 +472,9 @@ pub fn run() -> Result<()> {
         last_activity_ms: 0,
         trimmed: false,
         uia_caret: None,
+        clipboard: None,
+        transfer: None,
+        transfer_gen: 0,
     });
 
     unsafe {
@@ -671,6 +696,116 @@ unsafe fn uia_notify(hwnd: HWND, st: &mut State) {
         return;
     }
     crate::uia::raise_focus(hwnd, uia_snapshot(hwnd, st));
+}
+
+/// 활성 패널 선택 → 클립보드 항목(M3-1). 선택이 없으면 `None`(클립보드 유지).
+fn clip_from_selection(st: &mut State, op: nexa_ops::Op) -> Option<(Vec<PathBuf>, nexa_ops::Op)> {
+    let paths: Vec<PathBuf> = st
+        .active_panel()
+        .rows()
+        .source()
+        .tree()
+        .selected_paths()
+        .into_iter()
+        .map(|p| p.to_path_buf())
+        .collect();
+    (!paths.is_empty()).then_some((paths, op))
+}
+
+/// 전송 시작(M3-1, 원본 TransferPathsInto의 UI측) — 워커 스레드 + PostMessage 통지.
+/// 충돌은 α 정책 = 전부 건너뜀(확인 모달은 후속 — 원본 확인창 자리). 동시 1잡.
+unsafe fn start_transfer(
+    hwnd: HWND,
+    st: &mut State,
+    sources: Vec<PathBuf>,
+    dest: PathBuf,
+    op: nexa_ops::Op,
+) {
+    if sources.is_empty() || st.transfer.is_some() {
+        return;
+    }
+    st.transfer_gen += 1;
+    let gen = st.transfer_gen;
+    let shared = Arc::new(TransferShared {
+        cancel: AtomicBool::new(false),
+        done_bytes: AtomicU64::new(0),
+        total_bytes: AtomicU64::new(0),
+        outcome: Mutex::new(None),
+    });
+    let sh = shared.clone();
+    let hwnd_raw = hwnd.0 as isize; // HWND는 !Send — 원시값으로 워커에 전달
+    std::thread::spawn(move || {
+        let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+        let out = nexa_ops::transfer(
+            &sources,
+            &dest,
+            op,
+            &mut |_| nexa_ops::Conflict::Skip, // α: 충돌 = 건너뜀
+            &mut |p, _| {
+                sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
+                sh.total_bytes.store(p.total_bytes, Ordering::Relaxed);
+                // 4MB 청크 단위 통지 — 저빈도라 스로틀 불요
+                unsafe {
+                    let _ =
+                        PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(0));
+                }
+            },
+            &sh.cancel,
+        );
+        *sh.outcome.lock().unwrap() = Some(out);
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(1));
+        }
+    });
+    st.transfer = Some(TransferJob { shared, gen });
+    update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &["0"])));
+}
+
+/// 전송 통지 처리(WM_APP_TRANSFER) — 세대 불일치(낡은 워커)는 무시(원본 A-1 계승).
+unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: bool) {
+    let Some(job) = &st.transfer else { return };
+    if job.gen != gen {
+        return; // 낡은 워커 통지
+    }
+    if !done_phase {
+        let (d, t) = (
+            job.shared.done_bytes.load(Ordering::Relaxed),
+            job.shared.total_bytes.load(Ordering::Relaxed),
+        );
+        let pct = (d * 100).checked_div(t).unwrap_or(100);
+        update_title(
+            hwnd,
+            st,
+            &format!(" · {}", trf("ops.progress", &[&pct.to_string()])),
+        );
+        return;
+    }
+    let job = st.transfer.take().unwrap();
+    let out = job
+        .shared
+        .outcome
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap_or_default();
+    // 완료 후 양쪽 재로드(원본 TRANSFER-ENGINE 규약 — watcher는 M3-6)
+    let ctx = st.nav_ctx();
+    let mut inv = Invalidations::default();
+    st.panels[0].reopen_filtered(ctx, &mut inv);
+    st.panels[1].reopen_filtered(ctx, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
+    let mut parts = vec![trf("ops.done", &[&out.transferred.len().to_string()])];
+    if !out.skipped.is_empty() {
+        parts.push(trf("ops.skipped", &[&out.skipped.len().to_string()]));
+    }
+    if !out.errors.is_empty() {
+        parts.push(trf("ops.errors", &[&out.errors.len().to_string()]));
+    }
+    if out.canceled {
+        parts.push(tr("ops.canceled"));
+    }
+    update_title(hwnd, st, &format!(" · {}", parts.join(" · ")));
+    update_status(hwnd, st);
 }
 
 /// IME 조합 창을 편집 캐럿 옆에 배치(M2-7 근접 조합 — 원본 NFR-A1).
@@ -1176,7 +1311,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     update_title(hwnd, st, "");
                     return LRESULT(0);
                 }
-                if vk == VK_ESCAPE.0 && st.menubar.is_open() {
+                if vk == VK_ESCAPE.0 && st.transfer.is_some() {
+                    // Esc = 진행 중 전송 취소(원본 CancellationToken 대응)
+                    if let Some(j) = &st.transfer {
+                        j.shared.cancel.store(true, Ordering::Relaxed);
+                    }
+                    return LRESULT(0);
+                } else if vk == VK_ESCAPE.0 && st.menubar.is_open() {
                     st.menubar.close(&mut inv);
                 } else if vk == VK_F5.0 {
                     run_command(hwnd, st, CMD_REFRESH);
@@ -1206,6 +1347,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.active_panel().close_tab(i, &mut inv); // Ctrl+W = 탭 닫기
                 } else if vk == b'A' as u16 && ctrl {
                     st.active_panel().on_event(&InputEvent::SelectAll, &mut inv);
+                } else if vk == b'C' as u16 && ctrl {
+                    // 내부 클립보드 복사/잘라내기(M3-1) — 선택 없으면 클립보드 유지
+                    if let Some(c) = clip_from_selection(st, nexa_ops::Op::Copy) {
+                        st.clipboard = Some(c);
+                    }
+                } else if vk == b'X' as u16 && ctrl {
+                    if let Some(c) = clip_from_selection(st, nexa_ops::Op::Move) {
+                        st.clipboard = Some(c);
+                    }
+                } else if vk == b'V' as u16 && ctrl {
+                    if let Some((paths, op)) = st.clipboard.clone() {
+                        if op == nexa_ops::Op::Move {
+                            st.clipboard = None; // 잘라내기는 1회성(원본 관례)
+                        }
+                        let dest = st.active_panel().root_path().to_path_buf();
+                        start_transfer(hwnd, st, paths, dest, op);
+                        return LRESULT(0);
+                    }
                 } else if vk == VK_RETURN.0 {
                     if let Some(c) = st.active_panel().rows().caret() {
                         st.active_panel().activate_row(c, ctx, &mut inv);
@@ -1250,6 +1409,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        // 전송 워커 통지(M3-1) — 진행률·완료(양쪽 재로드)
+        m if m == WM_APP_TRANSFER => {
+            if let Some(st) = state_of(hwnd) {
+                on_transfer_message(hwnd, st, wparam.0 as u64, lparam.0 == 1);
+            }
+            LRESULT(0)
         }
         // UIA 루트 요청(스크린리더 등) — 활성 패널 가시 행 스냅샷 프로바이더 반환(M2-7)
         m if m == WM_GETOBJECT => {

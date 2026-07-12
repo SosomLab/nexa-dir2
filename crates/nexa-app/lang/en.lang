@@ -34,6 +34,13 @@ kind.link = Link
 kind.file = File
 kind.extFile = {0} file
 
+# ── File ops (M3-1 transfer) ──
+ops.progress = transferring {0}%
+ops.done = transferred {0}
+ops.skipped = {0} skipped
+ops.errors = {0} failed
+ops.canceled = canceled
+
 # ── Status bar · title ──
 status.itemCount = {0} items
 status.selectedCount = {0} selected
