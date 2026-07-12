@@ -33,6 +33,13 @@ kind.link = 바로가기
 kind.file = 파일
 kind.extFile = {0} 파일
 
+# ── 파일 조작(M3-1 전송) ──
+ops.progress = 전송 {0}%
+ops.done = 전송 {0}
+ops.skipped = 건너뜀 {0}
+ops.errors = 실패 {0}
+ops.canceled = 취소됨
+
 # ── 상태바 · 타이틀 ──
 status.itemCount = {0}개 항목
 status.selectedCount = 선택 {0}

@@ -11,6 +11,7 @@ description = "Nexa Dir 2 앱 (Win32 창·메시지 루프·조립)"
 [dependencies]
 nexa-core = { workspace = true }
 nexa-gui = { workspace = true }
+nexa-ops = { workspace = true }
 nexa-tree = { workspace = true }
 
 [target."cfg(windows)".dependencies]
