@@ -11,7 +11,9 @@ $whitelist = @(
   "bcryptprimitives.dll",          # rust std HashMap RandomState(BCryptGenRandom)
   "shell32.dll",                   # M1-7 셸 아이콘(SHGetFileInfoW)
   "dwmapi.dll",                    # M2-4 다크 타이틀바(DwmSetWindowAttribute)
-  "advapi32.dll"                   # M2-4 테마 감지(RegGetValueW)
+  "advapi32.dll",                  # M2-4 테마 감지(RegGetValueW)
+  "imm32.dll",                     # M2-7 IME 조합 창 위치(ImmSetCompositionWindow)
+  "uiautomationcore.dll"           # M2-7 UIA 프로바이더(UiaReturnRawElementProvider)
 )
 
 if (-not (Test-Path $Exe)) { throw "exe 없음: $Exe — cargo build --release 먼저" }

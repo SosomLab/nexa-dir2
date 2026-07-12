@@ -90,6 +90,12 @@ impl PathBar {
         self.edit.is_some()
     }
 
+    /// IME 조합 창 배치용(M2-7) — 편집 중이면 (버퍼, 필드 rect, pad_x).
+    /// 캐럿 = `rect.x + pad_x + text_width(버퍼)` (커서는 끝 고정 — α 편집 모델과 일치).
+    pub fn edit_info(&self) -> Option<(&str, Rect, i32)> {
+        self.edit.as_deref().map(|b| (b, self.bounds, self.pad_x))
+    }
+
     /// 호스트가 수행할 이동 요청 수거(있으면 1회성).
     pub fn take_navigation(&mut self) -> Option<String> {
         self.pending_nav.take()
