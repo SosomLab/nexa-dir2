@@ -11,6 +11,8 @@
 menu.file = File
 menu.file.newTab = New Tab
 menu.file.closeTab = Close Tab
+menu.file.newFolder = New Folder
+menu.file.newFile = New File
 menu.file.exit = Exit
 menu.view = View
 menu.view.hidden = Show Hidden Files
@@ -34,12 +36,21 @@ kind.link = Link
 kind.file = File
 kind.extFile = {0} file
 
-# ── File ops (M3-1 transfer) ──
+# ── File ops (M3-1 transfer · M3-2 delete/rename/new) ──
 ops.progress = transferring {0}%
 ops.done = transferred {0}
 ops.skipped = {0} skipped
 ops.errors = {0} failed
 ops.canceled = canceled
+del.title = Delete
+del.confirm = Permanently delete {0} item(s)?
+del.kindRecycle = Recycle Bin
+del.kindPermanent = permanent
+del.done = {0}: {1} deleted
+rename.fail = rename failed: {0}
+new.folderBase = New Folder
+new.fileBase = New File
+new.fail = create failed: {0}
 
 # ── Status bar · title ──
 status.itemCount = {0} items

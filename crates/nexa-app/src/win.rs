@@ -11,7 +11,7 @@ use std::time::Instant;
 use nexa_gui::widgets::{Menu, MenuBar, MenuItem, RowSource, StatusBar, ToolButton, Toolbar};
 use nexa_gui::{Column, InputEvent, Invalidations, Key, Rect as GRect, Theme, Widget};
 use nexa_tree::Tree;
-use windows::core::{w, Result, PCWSTR};
+use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, EndPaint, InvalidateRect, UpdateWindow, PAINTSTRUCT, SRCCOPY,
@@ -22,9 +22,9 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_F3, VK_F5,
-    VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
-    VK_SPACE, VK_TAB, VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE,
+    VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN,
+    VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -71,6 +71,8 @@ const SPLIT_HALF: i32 = 3;
 const CMD_NEW_TAB: u32 = 1;
 const CMD_CLOSE_TAB: u32 = 2;
 const CMD_EXIT: u32 = 3;
+const CMD_NEW_FOLDER: u32 = 4;
+const CMD_NEW_FILE: u32 = 5;
 const CMD_TOGGLE_HIDDEN: u32 = 10;
 const CMD_TOGGLE_DOTFILES: u32 = 11;
 const CMD_REFRESH: u32 = 12;
@@ -201,6 +203,9 @@ fn build_menus(
             items: vec![
                 MenuItem::new(CMD_NEW_TAB, tr("menu.file.newTab"), "Ctrl+T"),
                 MenuItem::new(CMD_CLOSE_TAB, tr("menu.file.closeTab"), "Ctrl+W"),
+                MenuItem::separator(),
+                MenuItem::new(CMD_NEW_FOLDER, tr("menu.file.newFolder"), "Ctrl+Shift+N"),
+                MenuItem::new(CMD_NEW_FILE, tr("menu.file.newFile"), ""),
                 MenuItem::separator(),
                 MenuItem::new(CMD_EXIT, tr("menu.file.exit"), ""),
             ],
@@ -712,6 +717,172 @@ fn clip_from_selection(st: &mut State, op: nexa_ops::Op) -> Option<(Vec<PathBuf>
     (!paths.is_empty()).then_some((paths, op))
 }
 
+/// 키보드 조작 대상(M3-2, 원본 KeyboardTargets) — 선택(있으면) 아니면 캐럿 행.
+fn keyboard_targets(st: &mut State) -> Vec<PathBuf> {
+    let rows = st.active_panel().rows();
+    let tree = rows.source().tree();
+    let sel: Vec<PathBuf> = tree
+        .selected_paths()
+        .into_iter()
+        .map(|p| p.to_path_buf())
+        .collect();
+    if !sel.is_empty() {
+        return sel;
+    }
+    rows.caret()
+        .and_then(|c| tree.visible_id(c))
+        .and_then(|id| tree.node_path(id))
+        .map(|p| vec![p.to_path_buf()])
+        .unwrap_or_default()
+}
+
+/// 휴지통 삭제 — `SHFileOperationW`(FO_DELETE+FOF_ALLOWUNDO, 배치). α 채택 근거:
+/// COM 초기화 불요·인박스(shell32). 원본 문서의 IFileOperation은 M3-3(휴지통 복원)과 함께 재검토.
+unsafe fn delete_to_recycle_bin(paths: &[PathBuf]) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW,
+    };
+    let mut list: Vec<u16> = Vec::new();
+    for p in paths {
+        list.extend(p.as_os_str().encode_wide());
+        list.push(0);
+    }
+    list.push(0); // 이중 NUL 종단
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(list.as_ptr()),
+        fFlags: (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_SILENT.0) as u16,
+        ..Default::default()
+    };
+    SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool()
+}
+
+/// 양쪽 패널 재로드(원본 ReloadBothPanels — watcher(M3-6) 전 임시) + 타이틀/상태 갱신.
+unsafe fn reload_both(hwnd: HWND, st: &mut State, note: &str) {
+    let ctx = st.nav_ctx();
+    let mut inv = Invalidations::default();
+    st.panels[0].reopen_filtered(ctx, &mut inv);
+    st.panels[1].reopen_filtered(ctx, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
+    update_title(hwnd, st, note);
+    update_status(hwnd, st);
+}
+
+/// 삭제(M3-2, 원본 DeletePaths): Del=휴지통(확인 없음)·Shift+Del=완전(확인창 방어, 기본=취소).
+/// 완전 삭제는 항목별 개별 격리, 휴지통은 셸 배치.
+unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
+    let targets = keyboard_targets(st);
+    if targets.is_empty() {
+        return;
+    }
+    if permanent {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
+        };
+        let text = HSTRING::from(trf("del.confirm", &[&targets.len().to_string()]));
+        let title = HSTRING::from(tr("del.title"));
+        let r = MessageBoxW(
+            Some(hwnd),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        );
+        if r != IDYES {
+            return;
+        }
+    }
+    let (mut ok, mut fail) = (0usize, 0usize);
+    if permanent {
+        for p in &targets {
+            match nexa_ops::delete_permanent(p) {
+                Ok(()) => ok += 1,
+                Err(_) => fail += 1, // 개별 격리(원본)
+            }
+        }
+    } else if delete_to_recycle_bin(&targets) {
+        ok = targets.len();
+    } else {
+        fail = targets.len();
+    }
+    let kind = tr(if permanent {
+        "del.kindPermanent"
+    } else {
+        "del.kindRecycle"
+    });
+    let mut note = trf("del.done", &[&kind, &ok.to_string()]);
+    if fail > 0 {
+        note = format!("{note} · {}", trf("ops.errors", &[&fail.to_string()]));
+    }
+    reload_both(hwnd, st, &format!(" · {note}"));
+}
+
+/// F2 — 캐럿 행 인라인 이름변경 시작(원본 B-6).
+unsafe fn begin_rename_caret(hwnd: HWND, st: &mut State) {
+    let target = {
+        let rows = st.active_panel().rows();
+        rows.caret().map(|c| (c, rows.source().row(c).text))
+    };
+    let Some((row, name)) = target else { return };
+    let mut inv = Invalidations::default();
+    st.active_panel()
+        .rows_mut()
+        .begin_rename(row, &name, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
+}
+
+/// 인라인 이름변경 확정(M3-2) — 행 경로 조회 → `nexa_ops::rename` → 양쪽 재로드.
+unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
+    let path = {
+        let tree = st.active_panel().rows().source().tree();
+        tree.visible_id(row)
+            .and_then(|id| tree.node_path(id))
+            .map(|p| p.to_path_buf())
+    };
+    let Some(path) = path else { return };
+    let note = match nexa_ops::rename(&path, new_name) {
+        Ok(_) => String::new(),
+        Err(e) => format!(" · {}", trf("rename.fail", &[&e.to_string()])),
+    };
+    reload_both(hwnd, st, &note);
+}
+
+/// 새로 만들기(M3-2, 원본 BG-N1/N2) — 생성 → 재로드 → 그 행 즉시 인라인 이름변경(RevealAndRename).
+unsafe fn create_new(hwnd: HWND, st: &mut State, folder: bool) {
+    let dir = st.active_panel().root_path().to_path_buf();
+    let created = if folder {
+        nexa_ops::create_new_dir(&dir, &tr("new.folderBase"))
+    } else {
+        nexa_ops::create_new_file(&dir, &format!("{}.txt", tr("new.fileBase")))
+    };
+    match created {
+        Err(e) => {
+            update_title(
+                hwnd,
+                st,
+                &format!(" · {}", trf("new.fail", &[&e.to_string()])),
+            );
+        }
+        Ok(path) => {
+            reload_both(hwnd, st, "");
+            let row = st
+                .active_panel()
+                .rows()
+                .source()
+                .tree()
+                .index_of_path(&path.to_string_lossy());
+            if let Some(row) = row {
+                let name = nexa_ops::leaf_name(&path);
+                let mut inv = Invalidations::default();
+                st.active_panel()
+                    .rows_mut()
+                    .begin_rename(row, &name, &mut inv);
+                flush_invalidations(hwnd, &mut inv);
+            }
+        }
+    }
+}
+
 /// 전송 시작(M3-1, 원본 TransferPathsInto의 UI측) — 워커 스레드 + PostMessage 통지.
 /// 충돌은 α 정책 = 전부 건너뜀(확인 모달은 후속 — 원본 확인창 자리). 동시 1잡.
 unsafe fn start_transfer(
@@ -955,6 +1126,9 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.menubar.set_checked(CMD_TOGGLE_DOTFILES, on, &mut inv);
             let ctx = st.nav_ctx();
             st.active_panel().reopen_filtered(ctx, &mut inv);
+        }
+        CMD_NEW_FOLDER | CMD_NEW_FILE => {
+            create_new(hwnd, st, id == CMD_NEW_FOLDER);
         }
         CMD_REFRESH => st.active_panel().reopen_filtered(ctx, &mut inv),
         CMD_NAV_BACK => st.active_panel().nav_back(ctx, &mut inv),
@@ -1311,6 +1485,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     update_title(hwnd, st, "");
                     return LRESULT(0);
                 }
+                if st.active_panel().rows().is_renaming() {
+                    // 인라인 이름변경 중 — Enter=확정·Esc=취소, 그 외 키는 편집기가 차단(M3-2)
+                    if vk == VK_RETURN.0 {
+                        if let Some((row, new_name)) =
+                            st.active_panel().rows_mut().submit_rename(&mut inv)
+                        {
+                            flush_invalidations(hwnd, &mut inv);
+                            apply_rename(hwnd, st, row, &new_name);
+                            return LRESULT(0);
+                        }
+                    } else if vk == VK_ESCAPE.0 {
+                        st.active_panel().rows_mut().cancel_rename(&mut inv);
+                    }
+                    flush_invalidations(hwnd, &mut inv);
+                    return LRESULT(0);
+                }
                 if vk == VK_ESCAPE.0 && st.transfer.is_some() {
                     // Esc = 진행 중 전송 취소(원본 CancellationToken 대응)
                     if let Some(j) = &st.transfer {
@@ -1369,6 +1559,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Some(c) = st.active_panel().rows().caret() {
                         st.active_panel().activate_row(c, ctx, &mut inv);
                     }
+                } else if vk == VK_F2.0 {
+                    begin_rename_caret(hwnd, st); // F2 = 인라인 이름변경(M3-2)
+                    return LRESULT(0);
+                } else if vk == VK_DELETE.0 {
+                    do_delete(hwnd, st, shift); // Del=휴지통·Shift+Del=완전(M3-2)
+                    return LRESULT(0);
+                } else if vk == b'N' as u16 && ctrl && shift {
+                    run_command(hwnd, st, CMD_NEW_FOLDER); // Ctrl+Shift+N = 새 폴더(탐색기 관례)
+                    return LRESULT(0);
                 } else if vk == b'H' as u16 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_HIDDEN); // 메뉴 체크와 동기
                     return LRESULT(0);
@@ -1444,7 +1643,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             st.active_panel().pathbar.edit_char(c, &mut inv);
                         }
                     } else if GetKeyState(VK_CONTROL.0 as i32) >= 0
-                        && (c == '\u{8}' || (!c.is_control() && c != ' '))
+                        && (c == '\u{8}'
+                            || (!c.is_control()
+                                // 스페이스는 선택 토글 키 — 단 이름변경 중엔 버퍼로(M3-2)
+                                && (c != ' ' || st.active_panel().rows().is_renaming())))
                     {
                         st.active_panel().on_event(
                             &InputEvent::Char {
