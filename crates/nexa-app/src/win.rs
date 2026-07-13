@@ -68,6 +68,11 @@ const WM_APP_TRANSFER: u32 = 0x8001; // WM_APP + 1
 const TIMER_JANITOR: usize = 3;
 const JANITOR_TICK_MS: u32 = 10_000;
 const IDLE_TRIM_MS: u64 = 60_000;
+/// 폴더 watcher 통지(M3-6) — wparam=패널, lparam=세대(낡은 스레드 무시). 디바운스 타이머는
+/// 패널별(TIMER_WATCH_BASE+패널), 300ms 코얼레싱(원본 FolderWatcher 동일).
+const WM_APP_FSCHANGE: u32 = 0x8002; // WM_APP + 2
+const TIMER_WATCH_BASE: usize = 10;
+const WATCH_DEBOUNCE_MS: u32 = 300;
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -314,6 +319,9 @@ struct State {
     slow_click: Option<(usize, String, u64)>,
     /// 느린 재클릭 리네임 예약 — **MouseUp에서 진입**(드래그가 시작되면 취소 = DnD 우선).
     rename_on_up: bool,
+    /// 패널별 폴더 watcher(M3-6) — 활성 탭 현재 폴더 감시(비재귀). 경로 변경 시 재구독.
+    watchers: [Option<crate::watcher::DirWatcher>; 2],
+    watch_gen: u64,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -498,6 +506,8 @@ pub fn run() -> Result<()> {
         drag_press: None,
         slow_click: None,
         rename_on_up: false,
+        watchers: [None, None],
+        watch_gen: 0,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -1105,6 +1115,21 @@ unsafe fn do_undo_redo(hwnd: HWND, st: &mut State, redo: bool) {
     reload_both(hwnd, st, &format!(" · {note}"));
 }
 
+/// 패널별 watcher를 현재 폴더와 동기화(M3-6) — 경로 무변경이면 무비용(문자열 비교 2회).
+/// 네비게이션·탭 전환 등 경로가 바뀔 수 있는 모든 경로가 update_status를 지나므로 그곳에서 호출.
+unsafe fn sync_watchers(hwnd: HWND, st: &mut State) {
+    for i in 0..2 {
+        let want = st.panels[i].root_path();
+        if st.watchers[i].as_ref().is_some_and(|w| w.path == want) {
+            continue;
+        }
+        st.watch_gen += 1; // 낡은 스레드 통지 무시(세대 가드 — 원본 A-1)
+        st.watchers[i] =
+            crate::watcher::DirWatcher::start(hwnd, WM_APP_FSCHANGE, i, st.watch_gen, &want);
+        // 실패(권한 등) = None — 수동 F5 폴백(원본 규약)
+    }
+}
+
 /// 양쪽 패널 재로드(원본 ReloadBothPanels — watcher(M3-6) 전 임시) + 타이틀/상태 갱신.
 unsafe fn reload_both(hwnd: HWND, st: &mut State, note: &str) {
     let ctx = st.nav_ctx();
@@ -1527,6 +1552,7 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     let mut inv = Invalidations::default();
     st.statusbar.set_text(left, right, &mut inv);
     uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
+    sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
     flush_invalidations(hwnd, &mut inv);
 }
 
@@ -2186,6 +2212,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
+        // 폴더 변경 통지(M3-6 watcher) — 세대 가드 후 디바운스 타이머 무장(300ms 코얼레싱)
+        m if m == WM_APP_FSCHANGE => {
+            if let Some(st) = state_of(hwnd) {
+                let panel = wparam.0.min(1);
+                let gen = lparam.0 as u64;
+                if st.watchers[panel].as_ref().is_some_and(|w| w.gen == gen) {
+                    SetTimer(
+                        Some(hwnd),
+                        TIMER_WATCH_BASE + panel,
+                        WATCH_DEBOUNCE_MS,
+                        None,
+                    );
+                }
+            }
+            LRESULT(0)
+        }
         // 전송 워커 통지(M3-1) — 진행률·완료(양쪽 재로드)
         m if m == WM_APP_TRANSFER => {
             if let Some(st) = state_of(hwnd) {
@@ -2243,6 +2285,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_TIMER => {
+            if wparam.0 >= TIMER_WATCH_BASE && wparam.0 < TIMER_WATCH_BASE + 2 {
+                // watcher 디바운스 만료(M3-6) — 무간섭 재로드(펼침·선택·캐럿·스크롤 보존).
+                // 편집/전송 중엔 미루고 재무장(재로드가 편집 행 인덱스를 흔들지 않게)
+                let panel = wparam.0 - TIMER_WATCH_BASE;
+                let _ = KillTimer(Some(hwnd), wparam.0);
+                if let Some(st) = state_of(hwnd) {
+                    if st.panels[panel].rows().is_renaming()
+                        || st.panels[panel].pathbar.is_editing()
+                        || st.transfer.is_some()
+                    {
+                        SetTimer(Some(hwnd), wparam.0, WATCH_DEBOUNCE_MS, None);
+                    } else {
+                        let ctx = st.nav_ctx();
+                        let mut inv = Invalidations::default();
+                        st.panels[panel].reopen_filtered(ctx, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
+                        update_status(hwnd, st);
+                    }
+                }
+                return LRESULT(0);
+            }
             if wparam.0 == TIMER_TYPEAHEAD {
                 if let Some(st) = state_of(hwnd) {
                     let mut inv = Invalidations::default();

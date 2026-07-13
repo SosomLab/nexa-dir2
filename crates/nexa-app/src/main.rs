@@ -29,6 +29,8 @@ mod source;
 #[cfg(windows)]
 mod uia;
 #[cfg(windows)]
+mod watcher;
+#[cfg(windows)]
 mod win;
 
 #[cfg(windows)]
