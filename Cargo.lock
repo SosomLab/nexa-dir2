@@ -9,6 +9,7 @@ dependencies = [
  "nexa-core",
  "nexa-gui",
  "nexa-ops",
+ "nexa-term",
  "nexa-tree",
  "windows",
  "windows-core",
@@ -24,6 +25,10 @@ version = "0.1.0"
 
 [[package]]
 name = "nexa-ops"
+version = "0.1.0"
+
+[[package]]
+name = "nexa-term"
 version = "0.1.0"
 
 [[package]]

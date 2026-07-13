@@ -1,0 +1,11 @@
+[package]
+name = "nexa-term"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "터미널 VT/ANSI 파서 + 화면 버퍼 — 원본 VtScreen 이식(플랫폼 중립)"
+
+[dependencies]

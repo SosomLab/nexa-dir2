@@ -8,6 +8,7 @@ members = [
   "crates/nexa-tree",
   "crates/nexa-gui",
   "crates/nexa-ops",
+  "crates/nexa-term",
   "crates/nexa-app",
 ]
 
@@ -25,6 +26,7 @@ nexa-vfs = { path = "crates/nexa-vfs" }
 nexa-tree = { path = "crates/nexa-tree" }
 nexa-gui = { path = "crates/nexa-gui" }
 nexa-ops = { path = "crates/nexa-ops" }
+nexa-term = { path = "crates/nexa-term" }
 
 # 릴리스 = 예산 B2(단일 exe ≤10MB) 최적화 (docs/18 §3)
 [profile.release]

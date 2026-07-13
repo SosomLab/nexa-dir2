@@ -48,9 +48,20 @@ impl InfoDock {
         }
     }
 
-    /// 활성 종류 인덱스(호스트가 내용 공급 분기 — 0=정보·1=미리보기).
+    /// 활성 종류 인덱스(호스트가 내용 공급 분기 — 0=정보·1=미리보기·2=터미널).
     pub fn active_kind(&self) -> usize {
         self.active
+    }
+
+    /// 종류 스트립 아래 내용 영역(터미널 등 호스트 직접 렌더용 — M4-3).
+    pub fn content_rect(&self) -> Rect {
+        let strip_h = 1 + self.row_h.min((self.bounds.h - 1).max(0));
+        Rect::new(
+            self.bounds.x,
+            self.bounds.y + strip_h,
+            self.bounds.w,
+            (self.bounds.h - strip_h).max(0),
+        )
     }
 
     pub fn set_metrics(&mut self, row_h: i32, pad_x: i32, inv: &mut Invalidations) {

@@ -135,6 +135,8 @@ pub struct DwBackend {
     icon_format: IDWriteTextFormat,
     /// 컬럼 트리밍(말줄임표) 기호 — 레이아웃마다 SetTrimming으로 부착.
     ellipsis: IDWriteInlineObject,
+    /// 터미널 모노스페이스 포맷(M4-3 — Consolas 12 DIP, 셀 그리드 정렬).
+    mono_format: IDWriteTextFormat,
     /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
     layouts: RefCell<HashMap<(String, i32), IDWriteTextLayout>>,
     /// 미리보기 이미지 캐시(M4-2) — (경로, 맞춤 폭, 높이) → 디코드 결과. 상한 초과 시 비움.
@@ -181,6 +183,19 @@ impl DwBackend {
         icon_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         icon_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
 
+        // 터미널 모노스페이스(M4-3) — Consolas(비스타+ 인박스)·랩 없음·세로 중앙
+        let mono_format = factory.CreateTextFormat(
+            w!("Consolas"),
+            None,
+            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
+            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
+            12.0,
+            w!("ko-kr"),
+        )?;
+        mono_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        mono_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+
         let color = Rc::new(Cell::new(COLORREF(0)));
         let renderer: IDWriteTextRenderer = BrtRenderer {
             brt: brt.clone(),
@@ -198,6 +213,7 @@ impl DwBackend {
             color,
             icon_format,
             ellipsis,
+            mono_format,
             layouts: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
             wic: RefCell::new(None),
@@ -373,6 +389,54 @@ impl DrawCtx for DwCtx<'_> {
             let ppd = self.back.pixels_per_dip();
             let max_w = clip.right() - x;
             let Some(layout) = self.back.layout_for(text, max_w, clip.h as f32 / ppd) else {
+                return;
+            };
+            self.back.color.set(colorref(fg));
+            let _ = layout.Draw(
+                None,
+                &self.back.renderer,
+                x as f32 / ppd,
+                clip.y as f32 / ppd,
+            );
+        }
+    }
+
+    fn term_cell_w(&mut self) -> i32 {
+        // Consolas 12 DIP "0" 폭(px) — 모노라 전 반각 문자 동일(M4-3)
+        unsafe {
+            let ppd = self.back.pixels_per_dip();
+            let wtext: Vec<u16> = "0".encode_utf16().collect();
+            let Ok(layout) =
+                self.back
+                    .factory
+                    .CreateTextLayout(&wtext, &self.back.mono_format, 1000.0, 100.0)
+            else {
+                return 8;
+            };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() {
+                return 8;
+            }
+            ((m.widthIncludingTrailingWhitespace * ppd).ceil() as i32).max(1)
+        }
+    }
+
+    fn term_text(&mut self, x: i32, _y: i32, clip: Rect, text: &str, fg: Color, bg: Color) {
+        // 모노스페이스 런(M4-3) — 배경 채움 + Consolas 레이아웃(캐시 없음: 터미널 출력은
+        // 프레임마다 변함·가시 행 수십 개 수준)
+        self.fill_rect(clip, bg);
+        if text.is_empty() || x >= clip.right() {
+            return;
+        }
+        unsafe {
+            let ppd = self.back.pixels_per_dip();
+            let wtext: Vec<u16> = text.encode_utf16().collect();
+            let Ok(layout) = self.back.factory.CreateTextLayout(
+                &wtext,
+                &self.back.mono_format,
+                (clip.right() - x) as f32 / ppd,
+                clip.h as f32 / ppd,
+            ) else {
                 return;
             };
             self.back.color.set(colorref(fg));

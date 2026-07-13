@@ -13,6 +13,8 @@ mod i18n;
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod conpty;
+#[cfg(windows)]
 mod dnd;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod icons;
