@@ -766,7 +766,22 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     inv.push(self.bounds); // 밴드 사각형 지우기
                 }
             }
-            InputEvent::RightDown { .. } => {} // 컨텍스트 메뉴는 M3-4(셸 메뉴)
+            InputEvent::RightDown { x, y } => {
+                // 선택 규약만 처리(탐색기: 미선택 행=단독 선택·선택 행=유지) — 메뉴 표시는 호스트(M3-4).
+                if let Some(row) = self.row_at(x, y) {
+                    if !self.in_marker_zone(row, x) {
+                        if !self.src.is_selected(row) {
+                            self.src.select(row, SelectOp::Single);
+                        }
+                        self.caret = Some(row);
+                        inv.push(self.bounds);
+                    }
+                } else if y >= self.body_top() && self.bounds.contains(Point { x, y }) {
+                    // 빈 본문 영역 = 선택 해제(배경 셸 메뉴는 S3)
+                    self.src.clear_selection();
+                    inv.push(self.bounds);
+                }
+            }
         }
     }
 
@@ -1392,6 +1407,24 @@ mod tests {
         assert_eq!(v.caret(), Some(4));
         sdown(&mut v, &mut inv, 45, false, true); // Ctrl 토글 해제
         assert!(!v.source().is_selected(2));
+    }
+
+    #[test]
+    fn right_down_selects_unselected_keeps_selection_clears_on_empty() {
+        let (mut v, mut inv) = sel_list(5, 200);
+        // 미선택 행 우클릭 = 단독 선택 + 캐럿(탐색기 규약, M3-4)
+        v.on_event(&InputEvent::RightDown { x: 30, y: 45 }, &mut inv); // 2행
+        assert!(v.source().is_selected(2) && v.source().sel.len() == 1);
+        assert_eq!(v.caret(), Some(2));
+        // 기존 다중 선택 위 우클릭 = 선택 유지(축소 안 함)
+        sdown(&mut v, &mut inv, 5, false, false); // 0행 단일
+        sdown(&mut v, &mut inv, 45, true, false); // Shift+2행 → {0,1,2}
+        v.on_event(&InputEvent::RightDown { x: 30, y: 25 }, &mut inv); // 선택된 1행
+        assert_eq!(v.source().sel.len(), 3, "선택 유지");
+        assert_eq!(v.caret(), Some(1));
+        // 빈 본문 영역 우클릭 = 선택 해제(배경 메뉴는 S3)
+        v.on_event(&InputEvent::RightDown { x: 30, y: 150 }, &mut inv);
+        assert!(v.source().sel.is_empty());
     }
 
     #[test]

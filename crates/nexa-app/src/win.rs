@@ -33,8 +33,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
     WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETOBJECT, WM_IME_COMPOSITION,
     WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_RBUTTONDOWN, WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+    WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
     WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
@@ -749,6 +750,30 @@ fn keyboard_targets(st: &mut State) -> Vec<PathBuf> {
         .and_then(|id| tree.node_path(id))
         .map(|p| vec![p.to_path_buf()])
         .unwrap_or_default()
+}
+
+/// 우클릭 컨텍스트 대상(M3-4) — 선택(없으면 캐럿)을 **캐럿 항목의 부모 폴더 기준으로 축소**
+/// (ADR-0003 §다중 선택 규칙: GetUIObjectOf는 단일 부모만 표현. 교차 부모 확장은 후속).
+fn context_targets(st: &mut State) -> Vec<PathBuf> {
+    let targets = keyboard_targets(st);
+    let caret_path = {
+        let rows = st.active_panel().rows();
+        let tree = rows.source().tree();
+        rows.caret()
+            .and_then(|c| tree.visible_id(c))
+            .and_then(|id| tree.node_path(id))
+            .map(|p| p.to_path_buf())
+    };
+    let Some(caret_path) = caret_path else {
+        return targets;
+    };
+    let Some(parent) = caret_path.parent() else {
+        return targets;
+    };
+    targets
+        .into_iter()
+        .filter(|p| p.parent() == Some(parent))
+        .collect()
 }
 
 /// 휴지통 삭제 — `SHFileOperationW`(FO_DELETE+FOF_ALLOWUNDO, 배치). α 채택 근거:
@@ -1552,6 +1577,49 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             }
             LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            // 행 우클릭 = 셸 컨텍스트 메뉴(M3-4 S1, ADR-0003). 선택 규약은 RBUTTONDOWN에서 반영됨.
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut req: Option<(Vec<PathBuf>, bool)> = None;
+            if let Some(st) = state_of(hwnd) {
+                if st.panel_at(x) == Some(st.active)
+                    && st.active_panel().rows().row_at(x, y).is_some()
+                {
+                    let targets = context_targets(st);
+                    if !targets.is_empty() {
+                        let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                        req = Some((targets, shift));
+                    }
+                }
+            }
+            if let Some((targets, shift)) = req {
+                // 모달 메뉴 펌프 동안 wndproc 재진입 — State 참조를 끊고 표시(ADR-0003)
+                let outcome = crate::shellmenu::show(hwnd, &targets, shift, &["delete", "rename"]);
+                if let Some(st) = state_of(hwnd) {
+                    match outcome {
+                        crate::shellmenu::Outcome::Shell => reload_both(hwnd, st, ""),
+                        crate::shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("delete") => {
+                            // 앱 경로 합류 — undo 기록(M3-3). Shift 열림 = 완전 삭제(확인창 방어)
+                            do_delete(hwnd, st, shift);
+                        }
+                        crate::shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("rename") => {
+                            begin_rename_caret(hwnd, st); // 인라인 리네임 합류(M3-2)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        // 셸 메뉴 표시 구간 — IContextMenu2/3 메시지 포워딩(동적 서브메뉴·아이콘, ADR-0003:
+        // 자기 wndproc 보유 → 원본의 comctl32 서브클래스 불요)
+        m if matches!(m, WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR) => {
+            match crate::shellmenu::forward_menu_msg(m, wparam, lparam) {
+                Some(r) => r,
+                None => DefWindowProcW(hwnd, msg, wparam, lparam),
+            }
         }
         WM_MOUSEMOVE => {
             if let Some(st) = state_of(hwnd) {
