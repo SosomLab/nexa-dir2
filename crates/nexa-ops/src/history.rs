@@ -425,7 +425,10 @@ mod tests {
             h.undo().unwrap().unwrap_err(),
             OpError::MissingSource("gone.txt".into())
         );
-        assert!(!h.can_undo() && !h.can_redo(), "실패한 연산은 소실(무결성 우선)");
+        assert!(
+            !h.can_undo() && !h.can_redo(),
+            "실패한 연산은 소실(무결성 우선)"
+        );
         fs::remove_dir_all(&d).unwrap();
     }
 

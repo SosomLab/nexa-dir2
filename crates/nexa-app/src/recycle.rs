@@ -13,8 +13,7 @@ use std::path::{Path, PathBuf};
 use windows::core::PCSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
-    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
-    COINIT_DISABLE_OLE1DDE,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
 };
 use windows::Win32::UI::Shell::Common::{ITEMIDLIST, STRRET};
 use windows::Win32::UI::Shell::{
@@ -133,7 +132,10 @@ unsafe fn restore_inner(original_paths: &[PathBuf]) -> windows::core::Result<usi
 /// 휴지통 상세 컬럼 텍스트 — STRRET 직접 파싱(WSTR 우선·CSTR/OFFSET는 ANSI 최선, 실패 격리).
 unsafe fn details_of(folder: &IShellFolder2, pidl: *mut ITEMIDLIST, col: u32) -> String {
     let mut sd = windows::Win32::UI::Shell::Common::SHELLDETAILS::default();
-    if folder.GetDetailsOf(pidl as *const ITEMIDLIST, col, &mut sd).is_err() {
+    if folder
+        .GetDetailsOf(pidl as *const ITEMIDLIST, col, &mut sd)
+        .is_err()
+    {
         return String::new(); // 개별 항목 실패 격리(원본 동일)
     }
     // SHELLDETAILS는 packed(1) — str 필드를 정렬된 지역으로 복사 후 파싱(참조 금지).
@@ -181,11 +183,11 @@ mod tests {
     /// 휴지통으로 삭제(테스트 전용 — win.rs delete_to_recycle_bin과 동일 SHFileOperationW).
     unsafe fn recycle(path: &Path) -> bool {
         use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
         use windows::Win32::UI::Shell::{
             SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FO_DELETE,
             SHFILEOPSTRUCTW,
         };
-        use windows::core::PCWSTR;
         let mut list: Vec<u16> = path.as_os_str().encode_wide().collect();
         list.push(0);
         list.push(0);
