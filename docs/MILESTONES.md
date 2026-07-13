@@ -50,7 +50,8 @@
 ## M3 — 파일 조작 🚧 착수
 
 - ✅ M3-1 `nexa-ops` 전송 엔진(`feat/m3-ops-transfer`) — 원본 docs/33 TRANSFER-ENGINE·FileOps.cs 이식: **rlib 신설**(플랫폼 중립·crate 0), `transfer()` 단일 경로 — 같은 폴더 규칙(이동 무동작/복사 " (2)" 순번 복제)·충돌 항목만 순차 Overwrite/Skip·4MB 청크 진행률·취소(부분 파일 정리 — 안전 개선)·개별 격리·동일 볼륨 fast path·순환 금지. 배선: 내부 클립보드 Ctrl+C/X/V·워커+세대 가드(A-1)·Esc 취소·양쪽 재로드. 실기 순번 복제/무동작 검증·테스트 8.
-- ☐ M3-2 삭제·이름변경·새로 만들기 · ☐ M3-3 Undo/Redo(전송 쌍 기록 준비됨) · ☐ M3-4 셸 메뉴 · ☐ M3-5 클립보드 상호운용·DnD · ☐ M3-6 watcher.
+- ✅ M3-2 삭제·이름변경·새로 만들기(`feat/m3-fileops`) — 원본 DeletePaths·B-6·BG-N1/N2 이식: Del=휴지통(SHFileOperationW FOF_ALLOWUNDO — α)·Shift+Del=완전(MessageBoxW 확인창·기본 취소·개별 격리)·F2=**인라인 이름변경**(VirtualRows 오버레이 편집기: 문자/Backspace·Enter/Esc·키 차단·클릭 취소)·Ctrl+Shift+N/파일 메뉴=새 폴더·새 파일(생성→즉시 리네임 = RevealAndRename). nexa-ops delete_permanent/rename/create_new. 실기 4종 통과.
+- ☐ M3-3 Undo/Redo(전송 쌍 기록 준비됨·휴지통 복원=IFileOperation 재검토) · ☐ M3-4 셸 메뉴 · ☐ M3-5 클립보드 상호운용·DnD · ☐ M3-6 watcher.
 
 ## M1+ (요약)
 
