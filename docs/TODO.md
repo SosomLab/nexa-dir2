@@ -51,7 +51,7 @@
 | M3-1 | `nexa-ops` 전송 엔진(복사/이동·진행률·충돌·취소) — 원본 TransferPathsInto 스펙 | P0 | 대 | ✅ (07-13 — rlib 신설·transfer 단일 경로(같은 폴더 규칙·충돌 순차·4MB 진행·취소·개별 격리·fast path)+Ctrl+C/X/V 배선·워커·세대 가드·Esc 취소·양쪽 재로드. α: 충돌=건너뜀(확인 모달 후속)·진행 창 없음·내부 클립보드만) |
 | M3-2 | 삭제(휴지통 IFileOperation/완전)·이름변경·새로 만들기 | P0 | 중 | ✅ (07-13 — Del=휴지통(SHFileOperationW α — IFileOperation은 M3-3과 재검토)·Shift+Del=완전(확인창)·F2 인라인 리네임(rows 오버레이)·Ctrl+Shift+N/메뉴 새 폴더·파일(즉시 리네임). 리네임 IME 창 위치=α 한계) |
 | M3-3 | **Undo/Redo**(OperationHistory 이식 — 휴지통 복원 포함) | P0 | 중 | ✅ (07-13 — history 모듈(스택 2개·실패 소실=무결성)+연산 4종(Move/Copy/Rename/Create)·Ctrl+Z/Y·Ctrl+Shift+Z·편집 메뉴·전송/이름변경/새로 만들기 undo 기록·휴지통 복원(셸 undelete)·완전 삭제는 undo 불가. 실 휴지통 왕복 통합 테스트 통과·exe 0.58MB·RSS 25.51MB·B3 통과(ole32). α: 메뉴 활성 표시 없음·다중 버전 최초 일치 1건) |
-| M3-4 | `nexa-shell` 셸 컨텍스트 메뉴(IContextMenu+고유 병합 — 원본 ADR-0005·커스텀 레지스트리) | P0 | 대 | ☐ |
+| M3-4 | 셸 컨텍스트 메뉴(IContextMenu+고유 병합 — 원본 ADR-0005 계승 = [ADR-0003](08-adr-0003-shell-context-menu.md)) | P0 | 대 | ✅ (07-13 — 행 우클릭=셸 메뉴(HMENU 호스팅·IContextMenu2/3 포워딩은 자기 wndproc — comctl32 불요)·빈 영역=배경 메뉴(CreateViewObject·새로 만들기)·고유 병합 0x8000+(완전 삭제·붙여넣기·Undo/Redo)·delete/rename/paste 동사 가로채기(undo·인라인·전송 합류)·Apps/Shift+F10. 크레이트 분리 대신 앱 모듈(shellmenu.rs — recycle.rs 동일 계층). 후속(M5): 커스텀 레지스트리 §7·Checksum·VerbReplacement·교차 부모) |
 | M3-5 | 클립보드 상호운용(CF_HDROP 읽기/쓰기) · OLE DnD(IDropTarget/DoDragDrop) | P1 | 대 | ☐ |
 | M3-6 | watcher(무간섭 갱신 — 선택·캐럿·스크롤 보존, 원본 NAV-UPFOCUS) | P1 | 중 | ☐ |
 

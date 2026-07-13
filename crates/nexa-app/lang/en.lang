@@ -72,6 +72,12 @@ rename.done = rename: {0} → {1}
 new.folderOp = new folder
 new.fileOp = new file
 
+# ── Shell context menu (M3-4) ──
+ctx.deletePermanent = Delete Permanently
+ctx.pasteInto = Paste into Folder
+ctx.undoOf = Undo: {0}
+ctx.redoOf = Redo: {0}
+
 # ── Status bar · title ──
 status.itemCount = {0} items
 status.selectedCount = {0} selected

@@ -18,6 +18,8 @@ mod nav;
 mod panel;
 #[cfg(windows)]
 mod recycle;
+#[cfg(windows)]
+mod shellmenu;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod source;
 #[cfg(windows)]
