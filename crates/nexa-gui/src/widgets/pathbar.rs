@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 
 use crate::draw::DrawCtx;
+use crate::edit::{EditKey, EditState};
 use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
@@ -58,8 +59,8 @@ pub struct PathBar {
     row_h: i32,
     pad_x: i32,
     hover: Option<usize>,
-    /// 편집 모드 버퍼(Some = 편집 중). 커서는 끝 고정(α — 전체 편집은 β).
-    edit: Option<String>,
+    /// 편집 모드 상태(Some = 편집 중) — 캐럿·선택·클릭 배치(edit.rs 공용 모델).
+    edit: Option<EditState>,
     /// 호스트가 수거할 이동 요청(세그먼트 클릭·편집 제출).
     pending_nav: Option<String>,
     /// 페인트 시 계산한 세그먼트 x 범위(히트 테스트용 — 텍스트 측정은 DrawCtx에서만 가능).
@@ -90,10 +91,12 @@ impl PathBar {
         self.edit.is_some()
     }
 
-    /// IME 조합 창 배치용(M2-7) — 편집 중이면 (버퍼, 필드 rect, pad_x).
-    /// 캐럿 = `rect.x + pad_x + text_width(버퍼)` (커서는 끝 고정 — α 편집 모델과 일치).
-    pub fn edit_info(&self) -> Option<(&str, Rect, i32)> {
-        self.edit.as_deref().map(|b| (b, self.bounds, self.pad_x))
+    /// IME 조합 창 배치용(M2-7) — 편집 중이면 (캐럿 앞 텍스트, 필드 rect, pad_x).
+    /// 캐럿 = `rect.x + pad_x + text_width(캐럿 앞 텍스트)`.
+    pub fn edit_info(&self) -> Option<(String, Rect, i32)> {
+        self.edit
+            .as_ref()
+            .map(|e| (e.text_before_caret(), self.bounds, self.pad_x))
     }
 
     /// 호스트가 수행할 이동 요청 수거(있으면 1회성).
@@ -116,9 +119,9 @@ impl PathBar {
         inv.push(self.bounds);
     }
 
-    /// 편집 모드 진입(우클릭) — 버퍼 = 현재 경로(원본: 전체 선택 상태에 대응).
+    /// 편집 모드 진입(우클릭) — **전체 선택** 상태로 시작(사용자 지시 07-13·원본 대응).
     pub fn begin_edit(&mut self, inv: &mut Invalidations) {
-        self.edit = Some(self.path.clone());
+        self.edit = Some(EditState::new(&self.path, true));
         inv.push(self.bounds);
     }
 
@@ -131,8 +134,9 @@ impl PathBar {
 
     /// 편집 제출(Enter) — 이동 요청으로 통지(검증·이동은 호스트).
     pub fn submit_edit(&mut self, inv: &mut Invalidations) {
-        if let Some(buf) = self.edit.take() {
-            let trimmed = buf.trim();
+        if let Some(es) = self.edit.take() {
+            let text = es.text();
+            let trimmed = text.trim();
             if !trimmed.is_empty() {
                 self.pending_nav = Some(trimmed.to_string());
             }
@@ -140,17 +144,25 @@ impl PathBar {
         }
     }
 
-    /// 편집 문자 입력(`'\u{8}'` = Backspace).
+    /// 편집 문자 입력(`'\u{8}'` = Backspace) — 선택이 있으면 대체/삭제.
     pub fn edit_char(&mut self, c: char, inv: &mut Invalidations) {
-        let Some(buf) = &mut self.edit else {
+        let Some(es) = &mut self.edit else {
             return;
         };
         if c == '\u{8}' {
-            buf.pop();
+            es.backspace();
         } else if !c.is_control() {
-            buf.push(c);
+            es.insert(c);
         }
         inv.push(self.bounds);
+    }
+
+    /// 편집 키(←→/Home/End/Shift 선택·Ctrl+A·Delete — 실기 QA 07-13).
+    pub fn edit_key(&mut self, k: EditKey, shift: bool, inv: &mut Invalidations) {
+        if let Some(es) = &mut self.edit {
+            es.key(k, shift);
+            inv.push(self.bounds);
+        }
     }
 
     /// 좌표의 세그먼트 인덱스(페인트가 캐시한 범위 기준).
@@ -181,8 +193,13 @@ impl Widget for PathBar {
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
             InputEvent::MouseDown { x, y, .. } => {
-                if self.is_editing() {
-                    return; // 편집 중 클릭은 호스트가 포커스아웃(cancel)으로 처리
+                if let Some(es) = &mut self.edit {
+                    // 필드 안 클릭 = 캐럿 배치(실기 QA 07-13). 밖 = 호스트가 포커스아웃(cancel)
+                    if es.hit(x, y) {
+                        es.click(x);
+                        inv.push(self.bounds);
+                    }
+                    return;
                 }
                 if let Some(i) = self.segment_at(x, y) {
                     // 현재(마지막) 세그먼트는 비활성(§1-3)
@@ -217,25 +234,68 @@ impl Widget for PathBar {
         let b = self.bounds;
         let ty = b.y + (b.h - (b.h * 4) / 5) / 2;
 
-        if let Some(buf) = &self.edit {
-            // 편집 모드 — 필드 배경 + 버퍼 + 끝 커서(_) + accent 테두리(4변)
-            let text = format!("{buf}_");
-            ctx.text_opaque(b.x + self.pad_x, ty, b, &text, theme.text, theme.field_bg);
-            ctx.fill_rect(Rect::new(b.x, b.y, b.w, 1), theme.accent);
-            ctx.fill_rect(Rect::new(b.x, b.bottom() - 1, b.w, 1), theme.accent);
-            ctx.fill_rect(Rect::new(b.x, b.y, 1, b.h), theme.accent);
-            ctx.fill_rect(Rect::new(b.right() - 1, b.y, 1, b.h), theme.accent);
+        if let Some(es) = &self.edit {
+            // 편집 모드 — 공용 필드 페인트(선택 하이라이트·세로바 캐럿·끝 정렬 오버플로)
+            es.paint_field(ctx, b, self.pad_x, theme);
             self.ranges.borrow_mut().clear();
             return;
         }
 
         // 브레드크럼 — 세그먼트 + 구분자, hover 강조. x 범위 캐시(히트 테스트)
         let mut ranges = Vec::with_capacity(self.segments.len());
-        let mut x = b.x + self.pad_x;
         let last = self.segments.len().saturating_sub(1);
         // 남은 영역 배경 먼저(세그먼트가 덮어씀)
         ctx.fill_rect(b, theme.chrome_bg);
-        for (i, seg) in self.segments.iter().enumerate() {
+        // 오버플로 = 끝 정렬(사용자 지시 07-13): 뒤(최근 폴더)부터 역으로 채워 시작 인덱스 결정,
+        // 잘린 앞부분은 "…" 표시(원본 breadcrumb 긴 경로 끝 정렬 계승)
+        let sep_w = ctx.text_width("›") + self.pad_x;
+        let widths: Vec<i32> = self
+            .segments
+            .iter()
+            .map(|s| ctx.text_width(&s.label) + self.pad_x * 2)
+            .collect();
+        let avail = b.w - self.pad_x * 2;
+        let mut start = 0usize;
+        let total: i32 = widths.iter().sum::<i32>() + sep_w * last as i32;
+        if total > avail {
+            let ell_w = ctx.text_width("…") + self.pad_x;
+            let mut acc = ell_w + sep_w;
+            start = self.segments.len(); // 최소한 마지막 세그먼트는 그린다(아래 min)
+            for i in (0..self.segments.len()).rev() {
+                acc += widths[i] + if i == last { 0 } else { sep_w };
+                if acc > avail {
+                    break;
+                }
+                start = i;
+            }
+            start = start.min(last);
+        }
+        let mut x = b.x + self.pad_x;
+        if start > 0 {
+            // 생략 표지 — 클릭 불가(범위 캐시에는 빈 항목으로 채워 인덱스 정렬 유지)
+            let ell = Rect::new(
+                x,
+                b.y,
+                (ctx.text_width("…") + self.pad_x).min(b.right() - x),
+                b.h,
+            );
+            ctx.text_opaque(ell.x, ty, ell, "…", theme.text_dim, theme.chrome_bg);
+            x += ell.w;
+            let sep_cell = Rect::new(x, b.y, sep_w.min((b.right() - x).max(0)), b.h);
+            if sep_cell.w > 0 {
+                ctx.text_opaque(
+                    sep_cell.x,
+                    ty,
+                    sep_cell,
+                    "›",
+                    theme.text_dim,
+                    theme.chrome_bg,
+                );
+            }
+            x += sep_w;
+            ranges.extend(std::iter::repeat_n((0, 0), start)); // 생략 세그먼트 = 빈 범위
+        }
+        for (i, seg) in self.segments.iter().enumerate().skip(start) {
             let w = ctx.text_width(&seg.label) + self.pad_x * 2;
             let cell = Rect::new(x, b.y, w.min(b.right() - x), b.h);
             if cell.w <= 0 {
@@ -347,6 +407,7 @@ mod tests {
         let (mut p, mut inv) = bar();
         p.on_event(&InputEvent::RightDown { x: 100, y: 5 }, &mut inv);
         assert!(p.is_editing());
+        p.edit_key(EditKey::End, false, &mut inv); // 전체 선택 해제 — 끝 편집
         p.edit_char('\u{8}', &mut inv); // "…kiros3"
         p.edit_char('2', &mut inv);
         p.submit_edit(&mut inv);
@@ -359,6 +420,34 @@ mod tests {
         assert!(!p.is_editing());
         assert_eq!(p.take_navigation(), None);
         assert_eq!(p.path(), "C:\\Users\\kiros33");
+    }
+
+    #[test]
+    fn edit_starts_fully_selected_and_click_places_caret() {
+        let (mut p, mut inv) = bar();
+        p.on_event(&InputEvent::RightDown { x: 100, y: 5 }, &mut inv);
+        p.edit_char('D', &mut inv); // 전체 선택 → 대체(사용자 지시: 진입=전체 선택)
+        p.edit_char(':', &mut inv);
+        p.submit_edit(&mut inv);
+        assert_eq!(p.take_navigation().as_deref(), Some("D:"));
+
+        // 클릭 캐럿 배치: 편집 필드 재진입 → paint로 오프셋 캐시 → 클릭 → 그 위치에 삽입
+        p.set_path("C:\\ab", &mut inv);
+        p.on_event(&InputEvent::RightDown { x: 100, y: 5 }, &mut inv);
+        p.paint(&mut Probe, &Theme::dark());
+        p.on_event(
+            &InputEvent::MouseDown {
+                x: 6 + 8 * 3, // 문자 폭 8 — "C:\" 뒤 경계
+                y: 5,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert!(p.is_editing(), "필드 안 클릭은 편집 유지(캐럿 배치)");
+        p.edit_char('Z', &mut inv);
+        p.submit_edit(&mut inv);
+        assert_eq!(p.take_navigation().as_deref(), Some("C:\\Zab"));
     }
 
     #[test]

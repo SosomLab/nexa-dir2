@@ -372,7 +372,13 @@ impl Panel {
                 .and_then(|c| tree.visible_id(c))
                 .and_then(|id| tree.node_path(id))
                 .map(|p| p.to_string_lossy().into_owned());
-            (expanded, selected, caret_path, rows.scroll_row(), rows.scroll_x())
+            (
+                expanded,
+                selected,
+                caret_path,
+                rows.scroll_row(),
+                rows.scroll_x(),
+            )
         };
         // 2) 재열기
         self.tabs[self.active].nav.replace(path);
