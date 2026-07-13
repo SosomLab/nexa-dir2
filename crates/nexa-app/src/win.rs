@@ -1264,13 +1264,41 @@ unsafe fn start_transfer(
     });
     let sh = shared.clone();
     let hwnd_raw = hwnd.0 as isize; // HWND는 !Send — 원시값으로 워커에 전달
+                                    // 충돌 확인 문구는 UI 스레드에서 선확정(i18n 전역을 워커에서 조회하지 않음)
+    let ow_title = tr("ops.overwriteTitle");
+    let ow_text = tr("ops.overwrite");
     std::thread::spawn(move || {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
         let out = nexa_ops::transfer(
             &sources,
             &dest,
             op,
-            &mut |_| nexa_ops::Conflict::Skip, // α: 충돌 = 건너뜀
+            // 충돌 항목만 순차 확인(원본 TRANSFER-ENGINE 규약 — 실기 QA로 α '무조건 건너뜀' 해소):
+            // 예=덮어쓰기 · 아니오=건너뜀 · 취소=전체 중단. 워커 스레드 모달(자체 메시지 루프) —
+            // UI 스레드는 계속 펌프(진행 표시 유지).
+            &mut |conflict| {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL,
+                };
+                let text = HSTRING::from(ow_text.replace("{0}", &nexa_ops::leaf_name(conflict)));
+                let title = HSTRING::from(ow_title.as_str());
+                let r = unsafe {
+                    MessageBoxW(
+                        Some(hwnd),
+                        PCWSTR(text.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        MB_YESNOCANCEL | MB_ICONQUESTION,
+                    )
+                };
+                if r == IDYES {
+                    nexa_ops::Conflict::Overwrite
+                } else {
+                    if r != windows::Win32::UI::WindowsAndMessaging::IDNO {
+                        sh.cancel.store(true, Ordering::Relaxed); // 취소 = 전체 중단
+                    }
+                    nexa_ops::Conflict::Skip
+                }
+            },
             &mut |p, _| {
                 sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
                 sh.total_bytes.store(p.total_bytes, Ordering::Relaxed);

@@ -12,9 +12,13 @@ use std::path::PathBuf;
 
 use windows::core::implement;
 use windows::Win32::Foundation::{
-    DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, POINTL, S_OK,
+    DATA_S_SAMEFORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
+    DV_E_FORMATETC, E_NOTIMPL, E_OUTOFMEMORY, HWND, OLE_E_ADVISENOTSUPPORTED, POINTL, S_OK,
 };
-use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+use windows::Win32::System::Com::{
+    IDataObject, IDataObject_Impl, IEnumFORMATETC, DVASPECT_CONTENT, FORMATETC, STGMEDIUM,
+    STGMEDIUM_0, TYMED_HGLOBAL,
+};
 use windows::Win32::System::Ole::CF_HDROP;
 use windows::Win32::System::Ole::{
     DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, ReleaseStgMedium,
@@ -123,8 +127,104 @@ impl IDropSource_Impl for DropSource_Impl {
     }
 }
 
-/// 앱→외부 드래그 시작(S4) — 경로들을 셸 표준 `IDataObject`(CF_HDROP 등 셸이 구성)로 담아
-/// `DoDragDrop`(모달 — 반환 시 드래그 종료). 반환: 드롭이 수행됐는가(취소=false).
+/// 발신 데이터 객체 — **CF_HDROP을 직접 제공**하는 최소 IDataObject.
+/// 실기 QA(07-13): `SHCreateDataObject`(절대 PIDL)는 셸 IDList 포맷만 내고 CF_HDROP을
+/// 렌더링하지 않아 탐색기·자기 수신부가 드롭을 거부(🚫) → 직접 구현으로 교체.
+/// 부수 효과: 같은 부모 폴더 제약이 없어 교차폴더 선택 드래그도 지원.
+#[implement(IDataObject)]
+struct FileListDataObject {
+    paths: Vec<PathBuf>,
+}
+
+/// CF_HDROP·TYMED_HGLOBAL·DVASPECT_CONTENT 요청인가.
+fn is_hdrop_fmt(fmt: &FORMATETC) -> bool {
+    fmt.cfFormat == CF_HDROP.0
+        && fmt.tymed & TYMED_HGLOBAL.0 as u32 != 0
+        && fmt.dwAspect == DVASPECT_CONTENT.0
+}
+
+impl IDataObject_Impl for FileListDataObject_Impl {
+    fn GetData(&self, fmt: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+        if fmt.is_null() || !is_hdrop_fmt(unsafe { &*fmt }) {
+            return Err(DV_E_FORMATETC.into());
+        }
+        let hmem = unsafe { crate::clipboard::hglobal_file_list(&self.paths) }
+            .ok_or_else(|| windows::core::Error::from(E_OUTOFMEMORY))?;
+        Ok(STGMEDIUM {
+            tymed: TYMED_HGLOBAL.0 as u32,
+            u: STGMEDIUM_0 { hGlobal: hmem }, // 소유권은 수신자(ReleaseStgMedium)
+            pUnkForRelease: std::mem::ManuallyDrop::new(None),
+        })
+    }
+
+    fn GetDataHere(&self, _: *const FORMATETC, _: *mut STGMEDIUM) -> windows::core::Result<()> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn QueryGetData(&self, fmt: *const FORMATETC) -> windows_core::HRESULT {
+        if !fmt.is_null() && is_hdrop_fmt(unsafe { &*fmt }) {
+            S_OK
+        } else {
+            DV_E_FORMATETC
+        }
+    }
+
+    fn GetCanonicalFormatEtc(
+        &self,
+        _: *const FORMATETC,
+        out: *mut FORMATETC,
+    ) -> windows_core::HRESULT {
+        if !out.is_null() {
+            unsafe { (*out).ptd = std::ptr::null_mut() };
+        }
+        DATA_S_SAMEFORMATETC
+    }
+
+    fn SetData(
+        &self,
+        _: *const FORMATETC,
+        _: *const STGMEDIUM,
+        _: windows_core::BOOL,
+    ) -> windows::core::Result<()> {
+        Err(E_NOTIMPL.into()) // 대상의 Performed DropEffect 통지는 무시(α — 원본 미삭제 방향)
+    }
+
+    fn EnumFormatEtc(&self, direction: u32) -> windows::core::Result<IEnumFORMATETC> {
+        use windows::Win32::System::Com::DATADIR_GET;
+        use windows::Win32::UI::Shell::SHCreateStdEnumFmtEtc;
+        if direction != DATADIR_GET.0 as u32 {
+            return Err(E_NOTIMPL.into());
+        }
+        let fmt = FORMATETC {
+            cfFormat: CF_HDROP.0,
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        };
+        unsafe { SHCreateStdEnumFmtEtc(&[fmt]) }
+    }
+
+    fn DAdvise(
+        &self,
+        _: *const FORMATETC,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::System::Com::IAdviseSink>,
+    ) -> windows::core::Result<u32> {
+        Err(OLE_E_ADVISENOTSUPPORTED.into())
+    }
+
+    fn DUnadvise(&self, _: u32) -> windows::core::Result<()> {
+        Err(OLE_E_ADVISENOTSUPPORTED.into())
+    }
+
+    fn EnumDAdvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
+        Err(OLE_E_ADVISENOTSUPPORTED.into())
+    }
+}
+
+/// 앱→외부 드래그 시작(S4) — 경로들을 CF_HDROP IDataObject로 담아 `DoDragDrop`
+/// (모달 — 반환 시 드래그 종료). 반환: 드롭이 수행됐는가(취소=false).
 ///
 /// 이동 결과 처리: 대상이 최적화 이동이면 NONE이 돌아온다(파일은 이미 이동됨). MOVE가
 /// 돌아와도 **원본을 삭제하지 않는다**(α — 비최적화 대상의 이동은 복사로 남는 안전 방향.
@@ -135,50 +235,22 @@ impl IDropSource_Impl for DropSource_Impl {
 /// UI 스레드에서 호출(OLE STA — OleInitialize 완료 전제). 모달 루프 동안 wndproc 재진입 —
 /// 호출자는 State 가변 참조를 넘기지 말 것(shellmenu와 동일 규약).
 pub unsafe fn begin_drag(paths: &[PathBuf]) -> bool {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
-    use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-    use windows::Win32::UI::Shell::{SHCreateDataObject, SHParseDisplayName};
-
     if paths.is_empty() {
         return false;
     }
-    // 경로 → 절대 PIDL 목록(pidlfolder=None ⇒ apidl은 절대 PIDL 규약)
-    let mut pidls: Vec<*mut ITEMIDLIST> = Vec::new();
-    for p in paths {
-        let wide: Vec<u16> = p
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-        if SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_ok() {
-            pidls.push(pidl);
-        }
+    let data: IDataObject = FileListDataObject {
+        paths: paths.to_vec(),
     }
-    let performed = (|| {
-        if pidls.is_empty() {
-            return false;
-        }
-        let apidl: Vec<*const ITEMIDLIST> = pidls.iter().map(|p| *p as *const ITEMIDLIST).collect();
-        let Ok(data) = SHCreateDataObject::<_, IDataObject>(None, Some(&apidl), None) else {
-            return false;
-        };
-        let source: IDropSource = DropSource.into();
-        let mut effect = DROPEFFECT_NONE;
-        let hr = DoDragDrop(
-            &data,
-            &source,
-            DROPEFFECT_COPY | DROPEFFECT_MOVE,
-            &mut effect,
-        );
-        hr == DRAGDROP_S_DROP
-    })();
-    for pidl in pidls {
-        CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
-    }
-    performed
+    .into();
+    let source: IDropSource = DropSource.into();
+    let mut effect = DROPEFFECT_NONE;
+    let hr = DoDragDrop(
+        &data,
+        &source,
+        DROPEFFECT_COPY | DROPEFFECT_MOVE,
+        &mut effect,
+    );
+    hr == DRAGDROP_S_DROP
 }
 
 impl IDropTarget_Impl for DropTarget_Impl {

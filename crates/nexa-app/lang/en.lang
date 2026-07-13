@@ -45,6 +45,8 @@ ops.done = transferred {0}
 ops.skipped = {0} skipped
 ops.errors = {0} failed
 ops.canceled = canceled
+ops.overwriteTitle = Confirm Overwrite
+ops.overwrite = '{0}' already exists in the destination. Overwrite?\n(No = skip this item · Cancel = stop all)
 del.title = Delete
 del.confirm = Permanently delete {0} item(s)?
 del.kindRecycle = Recycle Bin
