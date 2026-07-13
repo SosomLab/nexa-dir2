@@ -122,12 +122,8 @@ pub unsafe fn write_file_list(hwnd: HWND, paths: &[PathBuf], op: nexa_ops::Op) -
     true
 }
 
-/// OS 클립보드에서 파일 목록을 읽는다(Ctrl+V — S1 읽기측).
-/// 반환 `op`: Preferred DropEffect가 MOVE면 이동(잘라내기), 그 외/없음 = 복사(원본 규약 동일).
-pub unsafe fn read_file_list() -> Option<(Vec<PathBuf>, nexa_ops::Op)> {
-    let _open = Open::new(None)?;
-    let h = GetClipboardData(CF_HDROP.0 as u32).ok()?;
-    let hdrop = HDROP(h.0);
+/// HDROP에서 경로 목록 추출(클립보드·OLE DnD 공용 — 원본 DragQueryFile 루프).
+pub unsafe fn paths_from_hdrop(hdrop: HDROP) -> Vec<PathBuf> {
     let count = DragQueryFileW(hdrop, u32::MAX, None);
     let mut paths = Vec::with_capacity(count as usize);
     for i in 0..count {
@@ -144,6 +140,15 @@ pub unsafe fn read_file_list() -> Option<(Vec<PathBuf>, nexa_ops::Op)> {
             &buf[..copied as usize],
         )));
     }
+    paths
+}
+
+/// OS 클립보드에서 파일 목록을 읽는다(Ctrl+V — S1 읽기측).
+/// 반환 `op`: Preferred DropEffect가 MOVE면 이동(잘라내기), 그 외/없음 = 복사(원본 규약 동일).
+pub unsafe fn read_file_list() -> Option<(Vec<PathBuf>, nexa_ops::Op)> {
+    let _open = Open::new(None)?;
+    let h = GetClipboardData(CF_HDROP.0 as u32).ok()?;
+    let paths = paths_from_hdrop(HDROP(h.0));
     if paths.is_empty() {
         return None;
     }

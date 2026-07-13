@@ -504,7 +504,10 @@ pub fn run() -> Result<()> {
         let atom = RegisterClassW(&wc);
         debug_assert_ne!(atom, 0, "RegisterClassW 실패");
 
-        CreateWindowExW(
+        // OLE DnD 수신(M3-5 S3) — OleInitialize는 RegisterDragDrop 전제(STA·UI 스레드)
+        let _ = windows::Win32::System::Ole::OleInitialize(None);
+
+        let hwnd = CreateWindowExW(
             Default::default(),
             class_name,
             w!("Nexa Dir 2"),
@@ -518,6 +521,19 @@ pub fn run() -> Result<()> {
             Some(hinstance.into()),
             Some(Box::into_raw(state) as *const core::ffi::c_void),
         )?;
+
+        // 외부(탐색기 등)→앱 드롭 수신 등록 — 수명은 OLE가 보유(AddRef), 해제는 WM_NCDESTROY
+        let drop_target: windows::Win32::System::Ole::IDropTarget = crate::dnd::DropTarget::new(
+            hwnd,
+            crate::dnd::DropHooks {
+                dest_at: drop_dest_at,
+                drop: handle_external_drop,
+            },
+        )
+        .into();
+        if let Err(e) = windows::Win32::System::Ole::RegisterDragDrop(hwnd, &drop_target) {
+            eprintln!("DnD 수신 등록 실패(계속 진행): {e}");
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -940,6 +956,32 @@ unsafe fn delete_to_recycle_bin(paths: &[PathBuf]) -> bool {
         ..Default::default()
     };
     SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool()
+}
+
+/// 화면 좌표의 드롭 대상 폴더(M3-5 S3, dnd.rs 훅) — 폴더 행=그 폴더·그 외=좌표 패널의 루트.
+unsafe fn drop_dest_at(hwnd: HWND, sx: i32, sy: i32) -> Option<PathBuf> {
+    let mut pt = windows::Win32::Foundation::POINT { x: sx, y: sy };
+    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+    let st = state_of(hwnd)?;
+    let idx = st.panel_at(pt.x)?;
+    let rows = st.panels[idx].rows();
+    if let Some(row) = rows.row_at(pt.x, pt.y) {
+        let tree = rows.source().tree();
+        if let Some(p) = tree.visible_id(row).and_then(|id| tree.node_path(id)) {
+            let p = p.to_path_buf();
+            if p.is_dir() {
+                return Some(p); // 폴더 행 = 그 폴더로 드롭
+            }
+        }
+    }
+    Some(st.panels[idx].root_path().to_path_buf()) // 파일 행/빈 본문 = 패널 현재 폴더
+}
+
+/// 외부 드롭 확정(M3-5 S3, dnd.rs 훅) — 전송 엔진 합류(진행·취소·undo 기록·양쪽 재로드).
+unsafe fn handle_external_drop(hwnd: HWND, paths: Vec<PathBuf>, dest: PathBuf, op: nexa_ops::Op) {
+    if let Some(st) = state_of(hwnd) {
+        start_transfer(hwnd, st, paths, dest, op);
+    }
 }
 
 /// 휴지통 삭제 배치(원본 DeleteBatchOp — RecycleBin.cs와 동일 배치) — undo: 셸 undelete로
@@ -2152,6 +2194,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_NCDESTROY => {
+            let _ = windows::Win32::System::Ole::RevokeDragDrop(hwnd); // DnD 수신 해제(M3-5)
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut State;
             if !ptr.is_null() {
                 drop(Box::from_raw(ptr));

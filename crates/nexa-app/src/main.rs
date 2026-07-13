@@ -12,6 +12,8 @@ mod i18n;
 // 비-Windows에선 창이 없어 미사용이지만 순수 로직이라 테스트는 전 플랫폼 실행
 #[cfg(windows)]
 mod clipboard;
+#[cfg(windows)]
+mod dnd;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod icons;
 #[cfg_attr(not(windows), allow(dead_code))]
