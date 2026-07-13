@@ -46,7 +46,8 @@ use crate::icons::shell::ShellIcons;
 use crate::panel::{NavCtx, Panel, PanelMetrics};
 use crate::source::{COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
 
-/// wParam 마우스 수식키 비트(winuser.h MK_SHIFT/MK_CONTROL).
+/// wParam 마우스 수식키 비트(winuser.h MK_LBUTTON/MK_SHIFT/MK_CONTROL).
+const MK_LBUTTON: usize = 0x0001;
 const MK_SHIFT: usize = 0x0004;
 const MK_CONTROL: usize = 0x0008;
 
@@ -301,11 +302,11 @@ struct State {
     trimmed: bool,
     /// UIA 포커스 이벤트 중복 억제(M2-7): 마지막 통지한 (활성 패널, 캐럿).
     uia_caret: Option<(usize, Option<usize>)>,
-    /// 내부 클립보드(원본 FileClipboard — 경로+모드). OS 클립보드 상호운용은 M3-5.
-    clipboard: Option<(Vec<PathBuf>, nexa_ops::Op)>,
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
     transfer_gen: u64,
+    /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
+    drag_press: Option<(i32, i32)>,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -485,9 +486,9 @@ pub fn run() -> Result<()> {
         last_activity_ms: 0,
         trimmed: false,
         uia_caret: None,
-        clipboard: None,
         transfer: None,
         transfer_gen: 0,
+        drag_press: None,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -507,7 +508,10 @@ pub fn run() -> Result<()> {
         let atom = RegisterClassW(&wc);
         debug_assert_ne!(atom, 0, "RegisterClassW 실패");
 
-        CreateWindowExW(
+        // OLE DnD 수신(M3-5 S3) — OleInitialize는 RegisterDragDrop 전제(STA·UI 스레드)
+        let _ = windows::Win32::System::Ole::OleInitialize(None);
+
+        let hwnd = CreateWindowExW(
             Default::default(),
             class_name,
             w!("Nexa Dir 2"),
@@ -521,6 +525,19 @@ pub fn run() -> Result<()> {
             Some(hinstance.into()),
             Some(Box::into_raw(state) as *const core::ffi::c_void),
         )?;
+
+        // 외부(탐색기 등)→앱 드롭 수신 등록 — 수명은 OLE가 보유(AddRef), 해제는 WM_NCDESTROY
+        let drop_target: windows::Win32::System::Ole::IDropTarget = crate::dnd::DropTarget::new(
+            hwnd,
+            crate::dnd::DropHooks {
+                dest_at: drop_dest_at,
+                drop: handle_external_drop,
+            },
+        )
+        .into();
+        if let Err(e) = windows::Win32::System::Ole::RegisterDragDrop(hwnd, &drop_target) {
+            eprintln!("DnD 수신 등록 실패(계속 진행): {e}");
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -813,10 +830,10 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
     match outcome {
         shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 새로 만들기 등 FS 변경 가능
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("paste") => {
-            // 내부 클립보드 붙여넣기 합류(M3-1 전송 엔진 — undo 기록 포함)
-            if let Some((paths, op)) = st.clipboard.clone() {
+            // OS 클립보드 붙여넣기 합류(M3-5 — 전송 엔진 경유 = undo 기록 포함)
+            if let Some((paths, op)) = crate::clipboard::read_file_list() {
                 if op == nexa_ops::Op::Move {
-                    st.clipboard = None;
+                    crate::clipboard::clear(hwnd);
                 }
                 start_transfer(hwnd, st, paths, dir, op);
             }
@@ -874,7 +891,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
             label: tr("ctx.deletePermanent"),
             enabled: true,
         }];
-        if paste_dir.is_some() && st.clipboard.is_some() {
+        if paste_dir.is_some() && crate::clipboard::has_files() {
             custom.push(CustomItem {
                 id: CTX_PASTE_INTO,
                 label: tr("ctx.pasteInto"),
@@ -910,9 +927,11 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         }
         shellmenu::Outcome::Custom(CTX_DELETE_PERMANENT) => do_delete(hwnd, st, true),
         shellmenu::Outcome::Custom(CTX_PASTE_INTO) => {
-            if let (Some(dir), Some((paths, op))) = (req.paste_dir, st.clipboard.clone()) {
+            if let (Some(dir), Some((paths, op))) =
+                (req.paste_dir, crate::clipboard::read_file_list())
+            {
                 if op == nexa_ops::Op::Move {
-                    st.clipboard = None; // 잘라내기는 1회성(원본 관례)
+                    crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
                 }
                 start_transfer(hwnd, st, paths, dir, op);
             }
@@ -941,6 +960,32 @@ unsafe fn delete_to_recycle_bin(paths: &[PathBuf]) -> bool {
         ..Default::default()
     };
     SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool()
+}
+
+/// 화면 좌표의 드롭 대상 폴더(M3-5 S3, dnd.rs 훅) — 폴더 행=그 폴더·그 외=좌표 패널의 루트.
+unsafe fn drop_dest_at(hwnd: HWND, sx: i32, sy: i32) -> Option<PathBuf> {
+    let mut pt = windows::Win32::Foundation::POINT { x: sx, y: sy };
+    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+    let st = state_of(hwnd)?;
+    let idx = st.panel_at(pt.x)?;
+    let rows = st.panels[idx].rows();
+    if let Some(row) = rows.row_at(pt.x, pt.y) {
+        let tree = rows.source().tree();
+        if let Some(p) = tree.visible_id(row).and_then(|id| tree.node_path(id)) {
+            let p = p.to_path_buf();
+            if p.is_dir() {
+                return Some(p); // 폴더 행 = 그 폴더로 드롭
+            }
+        }
+    }
+    Some(st.panels[idx].root_path().to_path_buf()) // 파일 행/빈 본문 = 패널 현재 폴더
+}
+
+/// 외부 드롭 확정(M3-5 S3, dnd.rs 훅) — 전송 엔진 합류(진행·취소·undo 기록·양쪽 재로드).
+unsafe fn handle_external_drop(hwnd: HWND, paths: Vec<PathBuf>, dest: PathBuf, op: nexa_ops::Op) {
+    if let Some(st) = state_of(hwnd) {
+        start_transfer(hwnd, st, paths, dest, op);
+    }
 }
 
 /// 휴지통 삭제 배치(원본 DeleteBatchOp — RecycleBin.cs와 동일 배치) — undo: 셸 undelete로
@@ -1703,6 +1748,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
+                    // 행 본문 누름 = OLE 드래그 발신 후보(M3-5 S4) — 임계 이동 시 시작
+                    let rows = st.panels[idx].rows();
+                    if rows.row_at(x, y).is_some() && !rows.marker_hit(x, y) {
+                        st.drag_press = Some((x, y));
+                    }
                 }
                 flush_invalidations(hwnd, &mut inv);
                 update_title(hwnd, st, "");
@@ -1754,6 +1804,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
         }
         WM_MOUSEMOVE => {
+            // OLE 드래그 발신(M3-5 S4): 행 누름 후 좌버튼 유지 + 임계 이동 → 모달 드래그.
+            // 모달 루프 동안 wndproc 재진입 — State 참조를 끊고 시작(shellmenu 동일 규약).
+            {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let drag_paths = if wparam.0 & MK_LBUTTON != 0 {
+                    state_of(hwnd).and_then(|st| {
+                        let (px, py) = st.drag_press?;
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            GetSystemMetrics, SM_CXDRAG, SM_CYDRAG,
+                        };
+                        let tx = GetSystemMetrics(SM_CXDRAG).max(4);
+                        let ty = GetSystemMetrics(SM_CYDRAG).max(4);
+                        if (x - px).abs() < tx && (y - py).abs() < ty {
+                            return None;
+                        }
+                        st.drag_press = None;
+                        let paths = keyboard_targets(st);
+                        (!paths.is_empty()).then_some(paths)
+                    })
+                } else {
+                    None
+                };
+                if let Some(paths) = drag_paths {
+                    let _ = ReleaseCapture(); // LBUTTONDOWN의 캡처 해제 — OLE가 소유
+                    crate::dnd::begin_drag(&paths);
+                    if let Some(st) = state_of(hwnd) {
+                        reload_both(hwnd, st, ""); // 이동/복사 결과 반영(수행은 드롭 대상 몫)
+                    }
+                    return LRESULT(0);
+                }
+            }
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
@@ -1783,6 +1865,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
                 if st.split_drag {
                     st.split_drag = false;
                     let _ = InvalidateRect(Some(hwnd), None, false);
@@ -1902,18 +1985,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == b'A' as u16 && ctrl {
                     st.active_panel().on_event(&InputEvent::SelectAll, &mut inv);
                 } else if vk == b'C' as u16 && ctrl {
-                    // 내부 클립보드 복사/잘라내기(M3-1) — 선택 없으면 클립보드 유지
-                    if let Some(c) = clip_from_selection(st, nexa_ops::Op::Copy) {
-                        st.clipboard = Some(c);
+                    // OS 클립보드 복사/잘라내기(M3-5 — CF_HDROP 단일 출처) — 선택 없으면 유지
+                    if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Copy) {
+                        crate::clipboard::write_file_list(hwnd, &paths, op);
                     }
                 } else if vk == b'X' as u16 && ctrl {
-                    if let Some(c) = clip_from_selection(st, nexa_ops::Op::Move) {
-                        st.clipboard = Some(c);
+                    if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Move) {
+                        crate::clipboard::write_file_list(hwnd, &paths, op);
                     }
                 } else if vk == b'V' as u16 && ctrl {
-                    if let Some((paths, op)) = st.clipboard.clone() {
+                    if let Some((paths, op)) = crate::clipboard::read_file_list() {
                         if op == nexa_ops::Op::Move {
-                            st.clipboard = None; // 잘라내기는 1회성(원본 관례)
+                            crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
                         }
                         let dest = st.active_panel().root_path().to_path_buf();
                         start_transfer(hwnd, st, paths, dest, op);
@@ -2153,6 +2236,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_NCDESTROY => {
+            let _ = windows::Win32::System::Ole::RevokeDragDrop(hwnd); // DnD 수신 해제(M3-5)
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut State;
             if !ptr.is_null() {
                 drop(Box::from_raw(ptr));
