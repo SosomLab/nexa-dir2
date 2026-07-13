@@ -6,6 +6,7 @@
 
 pub mod columns;
 pub mod draw;
+pub mod edit;
 pub mod event;
 pub mod geom;
 pub mod theme;
@@ -15,6 +16,7 @@ pub mod widgets;
 
 pub use columns::{Align, Column};
 pub use draw::DrawCtx;
+pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use theme::{Color, Theme};

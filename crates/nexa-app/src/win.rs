@@ -1389,12 +1389,11 @@ unsafe fn position_ime(hwnd: HWND, st: &mut State) {
     use windows::Win32::UI::Input::Ime::{
         ImmGetContext, ImmReleaseContext, ImmSetCompositionWindow, CFS_POINT, COMPOSITIONFORM,
     };
-    let Some((buf, field, pad)) = [st.active, 1 - st.active].into_iter().find_map(|i| {
-        st.panels[i]
-            .pathbar
-            .edit_info()
-            .map(|(b, r, p)| (b.to_string(), r, p))
-    }) else {
+    // (캐럿 앞 텍스트, 필드, pad) — 캐럿 위치 기준 조합 창 배치(edit.rs 캐럿 모델)
+    let Some((buf, field, pad)) = [st.active, 1 - st.active]
+        .into_iter()
+        .find_map(|i| st.panels[i].pathbar.edit_info())
+    else {
         return;
     };
     let Some(back) = &st.dw else { return };
@@ -1640,6 +1639,20 @@ unsafe fn bench(hwnd: HWND, st: &mut State) {
     }
 }
 
+/// 편집 모드 키 매핑(경로바 편집·인라인 리네임 공용 — edit.rs EditKey).
+fn edit_key_of(vk: u16, ctrl: bool) -> Option<nexa_gui::EditKey> {
+    use nexa_gui::EditKey;
+    match vk {
+        k if k == VK_LEFT.0 => Some(EditKey::Left),
+        k if k == VK_RIGHT.0 => Some(EditKey::Right),
+        k if k == VK_HOME.0 => Some(EditKey::Home),
+        k if k == VK_END.0 => Some(EditKey::End),
+        k if k == VK_DELETE.0 => Some(EditKey::DeleteForward),
+        k if k == b'A' as u16 && ctrl => Some(EditKey::SelectAll),
+        _ => None,
+    }
+}
+
 fn vk_to_key(vk: u16) -> Option<Key> {
     match vk {
         k if k == VK_UP.0 => Some(Key::Up),
@@ -1766,8 +1779,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0); // 상태바 — 표시 전용
                 }
                 if st.active_panel().pathbar.is_editing() {
-                    // 포커스아웃 = 편집 취소(docs/27 §2)
-                    st.active_panel().pathbar.cancel_edit(&mut inv);
+                    if st
+                        .active_panel()
+                        .pathbar
+                        .bounds()
+                        .contains(nexa_gui::Point { x, y })
+                    {
+                        // 필드 안 클릭 = 캐럿 배치(QA 07-13 — 위젯이 처리)
+                        st.active_panel().pathbar.on_event(&ev, &mut inv);
+                    } else {
+                        // 포커스아웃 = 편집 취소(docs/27 §2)
+                        st.active_panel().pathbar.cancel_edit(&mut inv);
+                    }
                 } else if (x - sx).abs() <= half.max(1) {
                     st.split_drag = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
@@ -1955,13 +1978,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.active_panel().drain_actions(ctx, &mut inv);
                     } else if vk == VK_ESCAPE.0 {
                         st.active_panel().pathbar.cancel_edit(&mut inv);
+                    } else if let Some(k) = edit_key_of(vk, ctrl) {
+                        // 캐럿 이동·선택·삭제(QA 07-13 — edit.rs 공용 모델)
+                        st.active_panel().pathbar.edit_key(k, shift, &mut inv);
                     }
                     flush_invalidations(hwnd, &mut inv);
                     update_title(hwnd, st, "");
                     return LRESULT(0);
                 }
                 if st.active_panel().rows().is_renaming() {
-                    // 인라인 이름변경 중 — Enter=확정·Esc=취소, 그 외 키는 편집기가 차단(M3-2)
+                    // 인라인 이름변경 중 — Enter=확정·Esc=취소·편집 키 라우팅(M3-2·QA 07-13)
                     if vk == VK_RETURN.0 {
                         if let Some((row, new_name)) =
                             st.active_panel().rows_mut().submit_rename(&mut inv)
@@ -1972,6 +1998,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     } else if vk == VK_ESCAPE.0 {
                         st.active_panel().rows_mut().cancel_rename(&mut inv);
+                    } else if let Some(k) = edit_key_of(vk, ctrl) {
+                        st.active_panel().rows_mut().rename_key(k, shift, &mut inv);
                     }
                     flush_invalidations(hwnd, &mut inv);
                     return LRESULT(0);

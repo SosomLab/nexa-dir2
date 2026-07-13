@@ -32,6 +32,11 @@ impl TreeSource {
     pub fn tree(&self) -> &Tree {
         &self.tree
     }
+
+    /// 재로드 상태 복원(펼침·선택 — M3-6 무간섭 갱신 선행)용 가변 접근.
+    pub fn tree_mut(&mut self) -> &mut Tree {
+        &mut self.tree
+    }
 }
 
 impl RowSource for TreeSource {

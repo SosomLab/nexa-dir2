@@ -340,14 +340,64 @@ impl Panel {
         }
     }
 
-    /// 가시성 필터 토글 후 현 위치 재열기(히스토리 무이동).
+    /// 가시성 필터 토글·파일 조작 후 현 위치 재열기(히스토리 무이동).
+    /// **무간섭 갱신**(원본 NAV-UPFOCUS 계승 — M3-6 선행): 펼침·선택·캐럿·스크롤을
+    /// 스냅샷 후 새 소스에 복원한다(소실 항목은 개별 무시 — 외부 변경).
     pub fn reopen_filtered(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
         let path = self.root_path();
         let Some(src) = open_source(&path, ctx) else {
             return;
         };
+        // 1) 스냅샷(경로 기준 — 재열기 후 인덱스/ID는 무효)
+        let (expanded, selected, caret_path, scroll_row, scroll_x) = {
+            let rows = self.rows();
+            let tree = rows.source().tree();
+            let mut expanded = Vec::new();
+            for i in 0..tree.visible_len() {
+                if let Some(r) = tree.row(i) {
+                    if r.expanded {
+                        if let Some(p) = tree.node_path(r.id) {
+                            expanded.push(p.to_string_lossy().into_owned()); // 가시 순 = 부모 우선
+                        }
+                    }
+                }
+            }
+            let selected: Vec<String> = tree
+                .selected_paths()
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            let caret_path = rows
+                .caret()
+                .and_then(|c| tree.visible_id(c))
+                .and_then(|id| tree.node_path(id))
+                .map(|p| p.to_string_lossy().into_owned());
+            (
+                expanded,
+                selected,
+                caret_path,
+                rows.scroll_row(),
+                rows.scroll_x(),
+            )
+        };
+        // 2) 재열기
         self.tabs[self.active].nav.replace(path);
         self.apply_source(src, inv);
+        // 3) 복원 — 펼침(부모 우선 순서)·선택·캐럿·스크롤
+        let rows = self.rows_mut();
+        let tree = rows.source_mut().tree_mut();
+        for p in &expanded {
+            let _ = tree.expand_path(p); // 소실 폴더 무시
+        }
+        for p in &selected {
+            if let Some(id) = tree.index_of_path(p).and_then(|i| tree.visible_id(i)) {
+                if !tree.is_selected(id) {
+                    tree.select(id, nexa_tree::SelectMode::Toggle);
+                }
+            }
+        }
+        let caret = caret_path.as_deref().and_then(|p| tree.index_of_path(p));
+        rows.restore_view(caret, scroll_row, scroll_x, inv);
     }
 
     // ── 이벤트 ─────────────────────────────────────────────────
@@ -465,6 +515,56 @@ mod tests {
         let mut p = Panel::new(Tree::open(base).unwrap(), ctx(), metrics(), Vec::new());
         p.set_bounds(Rect::new(0, 0, 400, 400), &mut inv);
         (p, inv)
+    }
+
+    #[test]
+    fn reopen_preserves_expanded_selection_caret_scroll() {
+        let base = fixture("reopen");
+        fs::create_dir_all(base.join("sub").join("inner")).unwrap();
+        fs::write(base.join("sub").join("x.txt"), b"x").unwrap();
+        let (mut p, mut inv) = panel(&base);
+        // 펼침(sub) + 선택/캐럿(sub/x.txt) 구성
+        let sub = base.join("sub");
+        {
+            let tree = p.rows_mut().source_mut().tree_mut();
+            tree.expand_path(&sub.to_string_lossy()).unwrap();
+            let xi = tree
+                .index_of_path(&base.join("sub").join("x.txt").to_string_lossy())
+                .expect("펼침 후 x.txt 가시");
+            let id = tree.visible_id(xi).unwrap();
+            tree.select(id, nexa_tree::SelectMode::Single);
+        }
+        let caret_row = p
+            .rows()
+            .source()
+            .tree()
+            .index_of_path(&base.join("sub").join("x.txt").to_string_lossy())
+            .unwrap();
+        p.rows_mut().restore_view(Some(caret_row), 0, 0, &mut inv);
+        // 외부 변경(파일 추가) 후 재열기 — 무간섭 갱신(M3-6 선행)
+        fs::write(base.join("new.txt"), b"n").unwrap();
+        p.reopen_filtered(ctx(), &mut inv);
+        let tree = p.rows().source().tree();
+        let sub_i = tree.index_of_path(&sub.to_string_lossy()).unwrap();
+        let sub_id = tree.visible_id(sub_i).unwrap();
+        assert_eq!(tree.is_expanded(sub_id), Some(true), "펼침 보존");
+        assert_eq!(
+            tree.selected_paths(),
+            vec![base.join("sub").join("x.txt").as_path()],
+            "선택 보존"
+        );
+        let caret = p.rows().caret().expect("캐럿 보존");
+        assert_eq!(
+            tree.visible_id(caret).and_then(|id| tree.node_path(id)),
+            Some(base.join("sub").join("x.txt").as_path()),
+            "캐럿 = 같은 경로"
+        );
+        assert!(
+            tree.index_of_path(&base.join("new.txt").to_string_lossy())
+                .is_some(),
+            "새 항목 반영"
+        );
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

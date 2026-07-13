@@ -162,8 +162,8 @@ pub struct VirtualRows<S> {
     /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
     typeahead: TypeAhead,
-    /// 인라인 이름변경 버퍼(M3-2, 원본 B-6) — Some((행, 버퍼)) = 편집 중. 커서는 끝 고정(α).
-    rename: Option<(usize, String)>,
+    /// 인라인 이름변경(M3-2, 원본 B-6) — Some((행, 편집 상태)). 캐럿·선택은 edit.rs 공용 모델.
+    rename: Option<(usize, crate::edit::EditState)>,
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -194,35 +194,56 @@ impl<S: RowSource> VirtualRows<S> {
         self.rename.is_some()
     }
 
-    /// 편집 상태 (행, 버퍼) — IME 배치·호스트 표시용.
-    pub fn rename_state(&self) -> Option<(usize, &str)> {
-        self.rename.as_ref().map(|(r, b)| (*r, b.as_str()))
+    /// 편집 상태 (행, 현재 버퍼) — IME 배치·호스트 표시용.
+    pub fn rename_state(&self) -> Option<(usize, String)> {
+        self.rename.as_ref().map(|(r, e)| (*r, e.text()))
     }
 
     /// 인라인 이름변경 시작 — 캐럿을 그 행으로, 가시 범위로 스크롤.
+    /// 초기 선택 = 파일이면 **이름부**(마지막 `.` 앞), 폴더면 전체(탐색기 관례 — QA 07-13).
     pub fn begin_rename(&mut self, row: usize, initial: &str, inv: &mut Invalidations) {
         if row >= self.src.len() {
             return;
         }
         self.caret = Some(row);
         self.scroll_into_view(row);
-        self.rename = Some((row, initial.to_string()));
+        let is_dir = self.src.row(row).marker != Marker::None;
+        let sel_to = if is_dir {
+            initial.chars().count()
+        } else {
+            match initial.rfind('.') {
+                Some(i) if i > 0 => initial[..i].chars().count(),
+                _ => initial.chars().count(),
+            }
+        };
+        self.rename = Some((
+            row,
+            crate::edit::EditState::with_selection_to(initial, sel_to),
+        ));
         inv.push(self.bounds);
     }
 
-    /// 편집 문자 입력(`'\u{8}'` = Backspace, 그 외 제어 문자 무시).
+    /// 편집 문자 입력(`'\u{8}'` = Backspace, 그 외 제어 문자 무시) — 선택은 대체/삭제.
     pub fn rename_char(&mut self, c: char, inv: &mut Invalidations) {
-        let Some((_, buf)) = &mut self.rename else {
+        let Some((_, es)) = &mut self.rename else {
             return;
         };
         if c == '\u{8}' {
-            buf.pop();
+            es.backspace();
         } else if !c.is_control() {
-            buf.push(c);
+            es.insert(c);
         } else {
             return;
         }
         inv.push(self.bounds);
+    }
+
+    /// 편집 키(←→/Home/End/Shift 선택·Ctrl+A·Delete — 실기 QA 07-13).
+    pub fn rename_key(&mut self, k: crate::edit::EditKey, shift: bool, inv: &mut Invalidations) {
+        if let Some((_, es)) = &mut self.rename {
+            es.key(k, shift);
+            inv.push(self.bounds);
+        }
     }
 
     /// 편집 취소(Esc·외부 클릭) — 입력 무시.
@@ -234,7 +255,7 @@ impl<S: RowSource> VirtualRows<S> {
 
     /// 편집 제출(Enter) — (행, 새 이름) 반환. 실제 rename·재로드는 호스트 책임.
     pub fn submit_rename(&mut self, inv: &mut Invalidations) -> Option<(usize, String)> {
-        let taken = self.rename.take();
+        let taken = self.rename.take().map(|(r, e)| (r, e.text()));
         if taken.is_some() {
             inv.push(self.bounds);
         }
@@ -407,6 +428,27 @@ impl<S: RowSource> VirtualRows<S> {
             self.scroll_into_view(idx);
         }
         inv.push(self.bounds); // 매치 없어도 HUD(버퍼) 갱신
+    }
+
+    /// 소스 가변 접근 — 재로드 상태 복원(펼침·선택) 등 호스트 주도 변형용(M3-6 선행).
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.src
+    }
+
+    /// 재로드 후 뷰 상태 복원(M3-6 무간섭 갱신 선행) — 캐럿·스크롤(범위 밖은 clamp).
+    /// 선택·펼침은 소스([`Self::source_mut`])가 복원한다.
+    pub fn restore_view(
+        &mut self,
+        caret: Option<usize>,
+        scroll_row: usize,
+        scroll_x: i32,
+        inv: &mut Invalidations,
+    ) {
+        self.caret = caret.filter(|&c| c < self.src.len());
+        self.scroll_row = scroll_row;
+        self.scroll_x = scroll_x;
+        self.clamp_scroll();
+        inv.push(self.bounds);
     }
 
     /// 데이터 공급자 교체(네비게이션 — M1-8). 스크롤·캐럿·타입어헤드는 리셋,
@@ -592,15 +634,25 @@ impl<S: RowSource> Widget for VirtualRows<S> {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        // 인라인 이름변경 중: 문자는 버퍼로, 키 네비는 차단, 클릭은 취소 후 정상 처리(M3-2)
+        // 인라인 이름변경 중: 문자는 버퍼로, 키 네비는 차단, 필드 안 클릭=캐럿 배치·
+        // 밖 클릭=취소 후 정상 처리(M3-2·QA 07-13)
         if self.is_renaming() {
             match *ev {
                 InputEvent::Char { c, .. } => {
                     self.rename_char(c, inv);
                     return;
                 }
-                InputEvent::Key { .. } => return, // Enter/Esc는 호스트가 submit/cancel
-                InputEvent::MouseDown { .. } => self.cancel_rename(inv),
+                InputEvent::Key { .. } => return, // Enter/Esc·편집 키는 호스트가 라우팅
+                InputEvent::MouseDown { x, y, .. } => {
+                    if let Some((_, es)) = &mut self.rename {
+                        if es.hit(x, y) {
+                            es.click(x);
+                            inv.push(self.bounds);
+                            return;
+                        }
+                    }
+                    self.cancel_rename(inv);
+                }
                 _ => {}
             }
         }
@@ -933,8 +985,9 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             }
         }
 
-        // ── 인라인 이름변경 필드(M3-2) — 트리 컬럼 이름부 위 오버레이 ──
-        if let Some((row, buf)) = &self.rename {
+        // ── 인라인 이름변경 필드(M3-2) — 트리 컬럼 이름부 위 오버레이,
+        //    공용 필드 페인트(선택 하이라이트·세로바 캐럿·캐럿 가시 정렬) ──
+        if let Some((row, es)) = &self.rename {
             if *row >= first && *row < first + count {
                 let y = body_top + (*row - first) as i32 * self.row_h;
                 let (tc_x, tc_w) = if self.columns.is_empty() {
@@ -949,19 +1002,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 }
                 let fw = (tc_x + tc_w - fx).max(self.indent_w * 3);
                 let rc = Rect::new(fx, y, fw, self.row_h);
-                let ty = y + (self.row_h - (self.row_h * 4) / 5) / 2;
-                ctx.text_opaque(
-                    rc.x + 1,
-                    ty,
-                    rc,
-                    &format!("{buf}_"),
-                    theme.text,
-                    theme.field_bg,
-                );
-                ctx.fill_rect(Rect::new(rc.x, rc.y, rc.w, 1), theme.accent);
-                ctx.fill_rect(Rect::new(rc.x, rc.bottom() - 1, rc.w, 1), theme.accent);
-                ctx.fill_rect(Rect::new(rc.x, rc.y, 1, rc.h), theme.accent);
-                ctx.fill_rect(Rect::new(rc.right() - 1, rc.y, 1, rc.h), theme.accent);
+                es.paint_field(ctx, rc, 2, theme);
             }
         }
 
@@ -1012,8 +1053,10 @@ mod tests {
         let mut inv = Invalidations::default();
         v.set_bounds(Rect::new(0, 0, 300, 200), &mut inv);
         v.begin_rename(2, "행 2", &mut inv);
-        assert_eq!(v.rename_state(), Some((2, "행 2")));
+        assert_eq!(v.rename_state(), Some((2, "행 2".to_string())));
         assert_eq!(v.caret(), Some(2), "편집 행으로 캐럿 이동");
+        // 시작 = 선택 상태(확장자 없음 → 전체) — End로 접어 끝 편집으로 전환
+        v.rename_key(crate::edit::EditKey::End, false, &mut inv);
         // 문자 입력·Backspace — Char 이벤트 경유(타입어헤드 대신 버퍼로)
         v.on_event(
             &InputEvent::Char {
@@ -1023,7 +1066,7 @@ mod tests {
             &mut inv,
         );
         v.on_event(&InputEvent::Char { c: '3', now_ms: 0 }, &mut inv);
-        assert_eq!(v.rename_state(), Some((2, "행 3")));
+        assert_eq!(v.rename_state(), Some((2, "행 3".to_string())));
         assert_eq!(v.typeahead_text(), "", "편집 중 타입어헤드 미동작");
         // 키 네비 차단
         v.on_event(
