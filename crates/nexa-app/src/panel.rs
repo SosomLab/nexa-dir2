@@ -281,7 +281,27 @@ impl Panel {
     // ── 네비게이션(활성 탭 — docs/20 §3 탭별 독립) ──────────────
 
     fn apply_source(&mut self, src: TreeSource, inv: &mut Invalidations) {
+        // 펼침 상태 이월(사용자 지시 07-13): 하위 진입 = 새 루트 아래의 기존 펼침 유지 ·
+        // 상위 이동 = 직전 루트(와 그 하위 펼침)를 펼친 채 표시. 새 루트 밖 경로는
+        // expand_path가 무시하므로 방향 구분 불요.
+        let mut expanded: Vec<String> = vec![self.root_path().to_string_lossy().into_owned()];
+        {
+            let tree = self.rows().source().tree();
+            for i in 0..tree.visible_len() {
+                if let Some(r) = tree.row(i) {
+                    if r.expanded {
+                        if let Some(p) = tree.node_path(r.id) {
+                            expanded.push(p.to_string_lossy().into_owned()); // 부모 우선 순
+                        }
+                    }
+                }
+            }
+        }
         self.tabs[self.active].rows.replace_source(src, inv);
+        let tree = self.rows_mut().source_mut().tree_mut();
+        for p in &expanded {
+            let _ = tree.expand_path(p);
+        }
         self.sync_chrome(inv);
     }
 
@@ -520,6 +540,40 @@ mod tests {
         let mut p = Panel::new(Tree::open(base).unwrap(), ctx(), metrics(), Vec::new());
         p.set_bounds(Rect::new(0, 0, 400, 400), &mut inv);
         (p, inv)
+    }
+
+    #[test]
+    fn navigation_carries_expansion_down_and_up() {
+        let base = fixture("navexp");
+        fs::create_dir_all(base.join("sub").join("inner")).unwrap();
+        let (mut p, mut inv) = panel(&base);
+        let sub = base.join("sub");
+        let inner = sub.join("inner");
+        // base 뷰에서 sub·sub/inner 펼침
+        {
+            let tree = p.rows_mut().source_mut().tree_mut();
+            tree.expand_path(&sub.to_string_lossy()).unwrap();
+            tree.expand_path(&inner.to_string_lossy()).unwrap();
+        }
+        // 하위 진입(sub) — inner 펼침 유지
+        p.navigate_to(sub.clone(), ctx(), &mut inv);
+        {
+            let tree = p.rows().source().tree();
+            let i = tree.index_of_path(&inner.to_string_lossy()).unwrap();
+            let id = tree.visible_id(i).unwrap();
+            assert_eq!(tree.is_expanded(id), Some(true), "하위 진입 시 펼침 이월");
+        }
+        // 상위 이동(base) — 직전 루트(sub)와 그 하위(inner) 펼침 유지
+        p.navigate_to(base.clone(), ctx(), &mut inv);
+        {
+            let tree = p.rows().source().tree();
+            for q in [&sub, &inner] {
+                let i = tree.index_of_path(&q.to_string_lossy()).unwrap();
+                let id = tree.visible_id(i).unwrap();
+                assert_eq!(tree.is_expanded(id), Some(true), "상위 이동 시 펼침 이월");
+            }
+        }
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
