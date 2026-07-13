@@ -21,7 +21,7 @@
 | DR-4 | 원본 nexa-core/vfs/tree **rlib 이식**(cdylib/FFI/ABI 폐지) |
 | DR-5 | 원본 M1 기능 패리티 + 디자인 규약(고밀도·다크·키보드 우선) 계승 |
 | DR-6 | PolyForm NC + 의존성 **퍼미시브 온리**(GPL 금지 — Slint 배제 근거) |
-| DR-7 | .NET 플러그인 SDK 비이관(내장 미리보기 대체) · WASM 보류 |
+| DR-7 | **개정(07-14)**: .NET SDK 비이관 유지 + **Starlark 미리보기 플러그인 도입**(ADR-0004 — 내장은 폴백) · WASM 보류 |
 | DR-8 | 외부 crate 기본 0 지향 — 추가는 docs/10 §1-2 원장에 건별 기록 |
 
 ## 3. 아키텍처 요약 ([docs/01](docs/01-architecture.md))

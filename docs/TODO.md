@@ -78,3 +78,4 @@
 | ID | 항목 | 우선 | 규모 | 의존 | 상태 |
 |---|---|---|---|---|---|
 | X-1 | **QA 확인 대상: Apps 키/Shift+F10** — 캐럿 행 앵커 위치에 셸 메뉴 표시(M3-4 S2). 나머지 M3-4 QA 5건은 07-13 통과 | P2 | 소 | M3-4 | ☐ QA 대기 |
+| X-2 | **Starlark 미리보기 플러그인**([ADR-0004](09-adr-0004-preview-plugins.md) — 사용자 결정 07-14, DR-7 개정) — S1 공급자 시임(내장을 PreviewProvider 뒤로·확장자 레지스트리) → S2 starlark crate 도입(원장·B2 실측) → S3 호스트 API(file.read/exif)·설정 preview_map·**다중 매치 공급자 콤보**(도크 우상단·선택 영속) → S4 exif.star 예시+개발 가이드 | P1 | 대 | M4-2 | ☐ |

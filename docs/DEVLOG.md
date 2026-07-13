@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-14
+
+- **ADR-0004 — 미리보기 플러그인(Starlark)·DR-7 개정(사용자 결정)**: "EXIF 미리보기를 Python처럼 개발" 요구 → **Starlark 임베드** 채택(문법 호환·샌드박스·정적 링크=단일 exe·Apache-2.0. CPython/WASM/.NET 기각·보류). 계약=`data\plugins\*.star`(ID/NAME/**EXTS 선언**+preview — lines/image/kv 반환·호스트 API file.read/exif) · **설정 preview_map 오버라이드**(확장자↔플러그인 직접 연결) · **다중 매치 시 도크 우상단 공급자 콤보**(선택 영속) · 내장은 폴백 존치. starlark crate=승인 대기(B2 실측 후 원장 확정). 백로그 TODO §7 X-2(S1 시임→S4 exif.star). 상세 [journal/2026-07-14.md](journal/2026-07-14.md).
+
 ## 2026-07-13
 
 - **M4-2 내장 미리보기(`feat/m4-preview`)**: **내장 방식**(DR-7 — 플러그인 SDK 비이관, 사용자 질의 답변 명시) — 도크 [정보|미리보기] 종류 스트립(클릭 전환)·**텍스트**(16KB·UTF-8 lossy·이진 판정)·**이미지**(WIC Fant 스케일·비율 유지·캐시 8건·트림 시 소멸 — png/jpg/jpeg/bmp/gif/ico/tif). `DrawCtx::draw_image` 신설. WIC=CoCreateInstance 지연 활성화 → **임포트 무변(B3 통과)**. 독립 검증 예제 `examples/preview_image.rs`(동일 파이프라인·실기 jpg 표시 확인). 상세 [journal/2026-07-13.md](journal/2026-07-13.md).
