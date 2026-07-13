@@ -1,22 +1,28 @@
-//! OLE **DnD 수신**(M3-5 S3) — `IDropTarget`/`RegisterDragDrop`: 외부(탐색기·다른 앱)→앱 드롭.
-//! **원본 대응**: `OleDropTarget.cs`(DND-EXT — 상승 프로세스 OLE 폴백) + docs/33 **B-14dnd**
-//! (디스크별 기본 동작: 같은 볼륨=이동/다른 볼륨=복사 · Ctrl=복사 강제/Shift=이동 강제).
+//! OLE **DnD**(M3-5 S3/S4) — 수신 `IDropTarget`/`RegisterDragDrop`(외부→앱 드롭) +
+//! 발신 `DoDragDrop`/`IDropSource`(앱→외부·탐색기).
+//! **원본 대응**: `OleDropTarget.cs`(DND-EXT)·`OnRowDragStarting`(StorageItems — dir2는
+//! 셸 `SHCreateDataObject`로 대체) + docs/33 **B-14dnd**(디스크별 기본 동작: 같은 볼륨=이동/
+//! 다른 볼륨=복사 · Ctrl=복사 강제/Shift=이동 강제).
 //!
-//! 콜백은 OLE 모달 드래그 루프 중 **UI 스레드(STA)** 에서 온다 — 드롭 대상 판정과 전송 시작은
-//! win.rs 훅([`DropHooks`])에 위임(State 접근 지점을 win.rs 한곳으로 격리).
+//! 콜백은 OLE 모달 드래그/드롭 루프 중 **UI 스레드(STA)** 에서 온다 — 드롭 대상 판정과 전송
+//! 시작은 win.rs 훅([`DropHooks`])에 위임(State 접근 지점을 win.rs 한곳으로 격리).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 
 use windows::core::implement;
-use windows::Win32::Foundation::{HWND, POINTL};
+use windows::Win32::Foundation::{
+    DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, POINTL, S_OK,
+};
 use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
 use windows::Win32::System::Ole::CF_HDROP;
 use windows::Win32::System::Ole::{
-    IDropTarget, IDropTarget_Impl, ReleaseStgMedium, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE,
-    DROPEFFECT_NONE,
+    DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, ReleaseStgMedium,
+    DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
-use windows::Win32::System::SystemServices::{MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS};
+use windows::Win32::System::SystemServices::{
+    MK_CONTROL, MK_LBUTTON, MK_SHIFT, MODIFIERKEYS_FLAGS,
+};
 use windows::Win32::UI::Shell::HDROP;
 
 use crate::clipboard::paths_from_hdrop;
@@ -91,6 +97,88 @@ impl DropTarget_Impl {
         };
         (Some(dest), op, effect)
     }
+}
+
+/// 드래그 발신원(S4) — 표준 종료 판정·기본 커서(원본 WinUI DragStarting의 OLE 대응).
+#[implement(IDropSource)]
+struct DropSource;
+
+impl IDropSource_Impl for DropSource_Impl {
+    fn QueryContinueDrag(
+        &self,
+        escape_pressed: windows_core::BOOL,
+        keys: MODIFIERKEYS_FLAGS,
+    ) -> windows_core::HRESULT {
+        if escape_pressed.as_bool() {
+            return DRAGDROP_S_CANCEL; // Esc = 취소(원본 ESC 취소 계승)
+        }
+        if keys.0 & MK_LBUTTON.0 == 0 {
+            return DRAGDROP_S_DROP; // 왼쪽 버튼 해제 = 드롭 확정
+        }
+        S_OK
+    }
+
+    fn GiveFeedback(&self, _effect: DROPEFFECT) -> windows_core::HRESULT {
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+/// 앱→외부 드래그 시작(S4) — 경로들을 셸 표준 `IDataObject`(CF_HDROP 등 셸이 구성)로 담아
+/// `DoDragDrop`(모달 — 반환 시 드래그 종료). 반환: 드롭이 수행됐는가(취소=false).
+///
+/// 이동 결과 처리: 대상이 최적화 이동이면 NONE이 돌아온다(파일은 이미 이동됨). MOVE가
+/// 돌아와도 **원본을 삭제하지 않는다**(α — 비최적화 대상의 이동은 복사로 남는 안전 방향.
+/// 탐색기는 파일 드롭에서 최적화 이동을 수행하므로 실사용 영향 없음). 호출자는 반환값과
+/// 무관하게 재로드로 수렴.
+///
+/// # Safety
+/// UI 스레드에서 호출(OLE STA — OleInitialize 완료 전제). 모달 루프 동안 wndproc 재진입 —
+/// 호출자는 State 가변 참조를 넘기지 말 것(shellmenu와 동일 규약).
+pub unsafe fn begin_drag(paths: &[PathBuf]) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::Common::ITEMIDLIST;
+    use windows::Win32::UI::Shell::{SHCreateDataObject, SHParseDisplayName};
+
+    if paths.is_empty() {
+        return false;
+    }
+    // 경로 → 절대 PIDL 목록(pidlfolder=None ⇒ apidl은 절대 PIDL 규약)
+    let mut pidls: Vec<*mut ITEMIDLIST> = Vec::new();
+    for p in paths {
+        let wide: Vec<u16> = p
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
+        if SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_ok() {
+            pidls.push(pidl);
+        }
+    }
+    let performed = (|| {
+        if pidls.is_empty() {
+            return false;
+        }
+        let apidl: Vec<*const ITEMIDLIST> = pidls.iter().map(|p| *p as *const ITEMIDLIST).collect();
+        let Ok(data) = SHCreateDataObject::<_, IDataObject>(None, Some(&apidl), None) else {
+            return false;
+        };
+        let source: IDropSource = DropSource.into();
+        let mut effect = DROPEFFECT_NONE;
+        let hr = DoDragDrop(
+            &data,
+            &source,
+            DROPEFFECT_COPY | DROPEFFECT_MOVE,
+            &mut effect,
+        );
+        hr == DRAGDROP_S_DROP
+    })();
+    for pidl in pidls {
+        CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+    }
+    performed
 }
 
 impl IDropTarget_Impl for DropTarget_Impl {

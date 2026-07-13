@@ -46,7 +46,8 @@ use crate::icons::shell::ShellIcons;
 use crate::panel::{NavCtx, Panel, PanelMetrics};
 use crate::source::{COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
 
-/// wParam 마우스 수식키 비트(winuser.h MK_SHIFT/MK_CONTROL).
+/// wParam 마우스 수식키 비트(winuser.h MK_LBUTTON/MK_SHIFT/MK_CONTROL).
+const MK_LBUTTON: usize = 0x0001;
 const MK_SHIFT: usize = 0x0004;
 const MK_CONTROL: usize = 0x0008;
 
@@ -304,6 +305,8 @@ struct State {
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
     transfer_gen: u64,
+    /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
+    drag_press: Option<(i32, i32)>,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -485,6 +488,7 @@ pub fn run() -> Result<()> {
         uia_caret: None,
         transfer: None,
         transfer_gen: 0,
+        drag_press: None,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -1744,6 +1748,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
+                    // 행 본문 누름 = OLE 드래그 발신 후보(M3-5 S4) — 임계 이동 시 시작
+                    let rows = st.panels[idx].rows();
+                    if rows.row_at(x, y).is_some() && !rows.marker_hit(x, y) {
+                        st.drag_press = Some((x, y));
+                    }
                 }
                 flush_invalidations(hwnd, &mut inv);
                 update_title(hwnd, st, "");
@@ -1795,6 +1804,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
         }
         WM_MOUSEMOVE => {
+            // OLE 드래그 발신(M3-5 S4): 행 누름 후 좌버튼 유지 + 임계 이동 → 모달 드래그.
+            // 모달 루프 동안 wndproc 재진입 — State 참조를 끊고 시작(shellmenu 동일 규약).
+            {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let drag_paths = if wparam.0 & MK_LBUTTON != 0 {
+                    state_of(hwnd).and_then(|st| {
+                        let (px, py) = st.drag_press?;
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            GetSystemMetrics, SM_CXDRAG, SM_CYDRAG,
+                        };
+                        let tx = GetSystemMetrics(SM_CXDRAG).max(4);
+                        let ty = GetSystemMetrics(SM_CYDRAG).max(4);
+                        if (x - px).abs() < tx && (y - py).abs() < ty {
+                            return None;
+                        }
+                        st.drag_press = None;
+                        let paths = keyboard_targets(st);
+                        (!paths.is_empty()).then_some(paths)
+                    })
+                } else {
+                    None
+                };
+                if let Some(paths) = drag_paths {
+                    let _ = ReleaseCapture(); // LBUTTONDOWN의 캡처 해제 — OLE가 소유
+                    crate::dnd::begin_drag(&paths);
+                    if let Some(st) = state_of(hwnd) {
+                        reload_both(hwnd, st, ""); // 이동/복사 결과 반영(수행은 드롭 대상 몫)
+                    }
+                    return LRESULT(0);
+                }
+            }
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
@@ -1824,6 +1865,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
                 if st.split_drag {
                     st.split_drag = false;
                     let _ = InvalidateRect(Some(hwnd), None, false);
