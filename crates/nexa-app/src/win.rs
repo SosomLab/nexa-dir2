@@ -2301,6 +2301,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let mut inv = Invalidations::default();
                         st.panels[panel].reopen_filtered(ctx, &mut inv);
                         flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
                         update_status(hwnd, st);
                     }
                 }
