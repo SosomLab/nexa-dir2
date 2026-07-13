@@ -312,6 +312,8 @@ struct State {
     drag_press: Option<(i32, i32)>,
     /// 직전 행 클릭 (패널, 경로, 시각) — 기선택 항목 느린 재클릭=이름 바꾸기 판정(탐색기 관례).
     slow_click: Option<(usize, String, u64)>,
+    /// 느린 재클릭 리네임 예약 — **MouseUp에서 진입**(드래그가 시작되면 취소 = DnD 우선).
+    rename_on_up: bool,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -495,6 +497,7 @@ pub fn run() -> Result<()> {
         transfer_gen: 0,
         drag_press: None,
         slow_click: None,
+        rename_on_up: false,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -797,6 +800,7 @@ const CTX_DELETE_PERMANENT: u32 = crate::shellmenu::ID_CUSTOM_FIRST;
 const CTX_PASTE_INTO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 1;
 const CTX_UNDO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 2;
 const CTX_REDO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 3;
+const CTX_PASTE_BG: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 4;
 
 /// 빈 본문 우클릭 = 폴더 **배경** 셸 메뉴(M3-4 S3, 원본 ADR-0005 S2) — 새로 만들기 서브메뉴·
 /// 속성 등 + 고유 Undo/Redo 병합(원본 빈영역 메뉴 항목 계승). paste 동사는 내부 클립보드로
@@ -815,6 +819,13 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
             None => tr("menu.edit.redo"),
         };
         let custom = vec![
+            // 고유 붙여넣기 — 셸 배경 메뉴가 paste 동사를 안 내는 환경 대비(QA 07-13:
+            // 복사 후 빈영역 우클릭에 붙여넣기 부재). 클립보드에 파일 있을 때만 활성
+            CustomItem {
+                id: CTX_PASTE_BG,
+                label: tr("ctx.paste"),
+                enabled: crate::clipboard::has_files(),
+            },
             CustomItem {
                 id: CTX_UNDO,
                 label: undo_label,
@@ -837,6 +848,15 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
         shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 새로 만들기 등 FS 변경 가능
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("paste") => {
             // OS 클립보드 붙여넣기 합류(M3-5 — 전송 엔진 경유 = undo 기록 포함)
+            if let Some((paths, op)) = crate::clipboard::read_file_list() {
+                if op == nexa_ops::Op::Move {
+                    crate::clipboard::clear(hwnd);
+                }
+                start_transfer(hwnd, st, paths, dir, op);
+            }
+        }
+        shellmenu::Outcome::Custom(CTX_PASTE_BG) => {
+            // 고유 붙여넣기 — paste 동사 가로채기와 동일 경로(전송 엔진 = undo 기록)
             if let Some((paths, op)) = crate::clipboard::read_file_list() {
                 if op == nexa_ops::Op::Move {
                     crate::clipboard::clear(hwnd);
@@ -1821,29 +1841,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
-                    // 기선택 항목 재클릭(1s 이상 간격) = 인라인 이름 바꾸기(탐색기 관례 —
-                    // 사용자 지시 07-13. 짧은 간격은 더블클릭 시도로 보고 무시)
+                    // 기선택 항목 재클릭(1s 이상 간격) = 이름 바꾸기 **예약**(진입은 MouseUp —
+                    // 드래그가 시작되면 취소 = DnD 우선. 짧은 간격은 더블클릭 시도로 무시)
                     let now = now_ms();
-                    let mut renaming = false;
+                    st.rename_on_up = false;
                     if let Some((_, path)) = &hit {
                         if was_selected && !shift && !ctrl {
                             if let Some((p_idx, p_path, t)) = &st.slow_click {
-                                if *p_idx == idx
+                                st.rename_on_up = *p_idx == idx
                                     && p_path == path
-                                    && now.saturating_sub(*t) >= SLOW_CLICK_RENAME_MS
-                                {
-                                    flush_invalidations(hwnd, &mut inv);
-                                    inv = Invalidations::default();
-                                    begin_rename_caret(hwnd, st); // 캐럿 = 방금 클릭한 행
-                                    renaming = true;
-                                }
+                                    && now.saturating_sub(*t) >= SLOW_CLICK_RENAME_MS;
                             }
                         }
                         st.slow_click = Some((idx, path.clone(), now));
                     } else {
                         st.slow_click = None;
                     }
-                    if was_selected && !renaming {
+                    if was_selected {
                         st.drag_press = Some((x, y)); // 임계 이동 시 OLE 드래그 발신(M3-5 S4)
                     }
                 }
@@ -1914,6 +1928,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             return None;
                         }
                         st.drag_press = None;
+                        st.rename_on_up = false; // 드래그 시작 = 느린 재클릭 리네임 취소(DnD 우선)
                         let paths = keyboard_targets(st);
                         (!paths.is_empty()).then_some(paths)
                     })
@@ -1968,6 +1983,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 st.panels[0].on_event(&ev, &mut inv);
                 st.panels[1].on_event(&ev, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
+                // 느린 재클릭 리네임 — 클릭 확정(무드래그) 시점에 진입(드래그였다면 이미 취소)
+                if st.rename_on_up {
+                    st.rename_on_up = false;
+                    begin_rename_caret(hwnd, st);
+                }
             }
             let _ = ReleaseCapture();
             LRESULT(0)

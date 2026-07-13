@@ -164,6 +164,9 @@ pub struct VirtualRows<S> {
     typeahead: TypeAhead,
     /// 인라인 이름변경(M3-2, 원본 B-6) — Some((행, 편집 상태)). 캐럿·선택은 edit.rs 공용 모델.
     rename: Option<(usize, crate::edit::EditState)>,
+    /// 기선택 행 프레스(무수정키) — 클릭 확정(MouseUp·무드래그) 시 단일 선택으로 붕괴
+    /// (프레스 시점 유지 = 다중 선택 드래그 DnD, 탐색기 규약 — QA 07-13).
+    press_pending: Option<usize>,
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -185,6 +188,7 @@ impl<S: RowSource> VirtualRows<S> {
             caret: None,
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
             rename: None,
+            press_pending: None,
         }
     }
 
@@ -207,6 +211,7 @@ impl<S: RowSource> VirtualRows<S> {
         }
         self.caret = Some(row);
         self.scroll_into_view(row);
+        self.press_pending = None; // 리네임 진입 — 클릭 확정 붕괴 취소
         let is_dir = self.src.row(row).marker != Marker::None;
         let sel_to = if is_dir {
             initial.chars().count()
@@ -801,24 +806,31 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         }
                     } else {
                         let was_selected = self.src.is_selected(row);
-                        let op = if shift {
-                            SelectOp::RangeTo
-                        } else if ctrl {
-                            SelectOp::Toggle
+                        if was_selected && !shift && !ctrl {
+                            // 기선택 행 프레스 = **선택 유지**(다중 선택 드래그 DnD — 탐색기
+                            // 규약, QA 07-13). 단일화는 클릭 확정(MouseUp·무드래그)에서.
+                            self.caret = Some(row);
+                            self.press_pending = Some(row);
                         } else {
-                            SelectOp::Single
-                        };
-                        self.src.select(row, op);
-                        self.caret = Some(row);
-                        // **미선택 행** 프레스(수정키 없음) = 러버밴드 시작(원본 B-4 —
-                        // 드래그=다중 선택·클릭만=단일 선택. 기선택 행은 호스트 파일 DnD 후보)
-                        if !was_selected && !shift && !ctrl {
-                            self.band = Some(BandDrag {
-                                ox: x,
-                                oy: y,
-                                cx: x,
-                                cy: y,
-                            });
+                            let op = if shift {
+                                SelectOp::RangeTo
+                            } else if ctrl {
+                                SelectOp::Toggle
+                            } else {
+                                SelectOp::Single
+                            };
+                            self.src.select(row, op);
+                            self.caret = Some(row);
+                            // **미선택 행** 프레스(수정키 없음) = 러버밴드 시작(원본 B-4 —
+                            // 드래그=다중 선택·클릭만=단일 선택)
+                            if !was_selected && !shift && !ctrl {
+                                self.band = Some(BandDrag {
+                                    ox: x,
+                                    oy: y,
+                                    cx: x,
+                                    cy: y,
+                                });
+                            }
                         }
                         inv.push(self.bounds); // 하이라이트·캐럿 갱신
                     }
@@ -847,6 +859,11 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     band.cx = x;
                     band.cy = y;
                     self.band = Some(band);
+                    // 최소 이동 임계 미만 = 클릭 지터 — 선택 미변경(높이 0 rect가
+                    // clear_selection으로 떨어져 선택이 풀리던 결함, QA 07-13 4차)
+                    if (band.cx - band.ox).abs() < 4 && (band.cy - band.oy).abs() < 4 {
+                        return;
+                    }
                     // 밴드 세로 범위와 교차하는 가시 행 범위로 선택 대체
                     let r = band.rect();
                     let top = r.y.max(self.body_top());
@@ -869,6 +886,14 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             }
             InputEvent::MouseUp { .. } => {
                 self.resize = None;
+                // 클릭 확정(무드래그) — 기선택 행 프레스를 단일 선택으로 붕괴(탐색기 규약).
+                // 파일 DnD가 시작됐으면 MouseUp이 오지 않아 다중 선택이 유지된다.
+                if let Some(row) = self.press_pending.take() {
+                    if row < self.src.len() {
+                        self.src.select(row, SelectOp::Single);
+                        inv.push(self.bounds);
+                    }
+                }
                 if self.band.take().is_some() {
                     inv.push(self.bounds); // 밴드 사각형 지우기
                 }
