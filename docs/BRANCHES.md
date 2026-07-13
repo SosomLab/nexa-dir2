@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `fix/m3-5-dnd-conflicts` | 2026-07-13 | 2026-07-13 (`6a2dc70`) | — | 2 | M3-5 QA 결함 2건 — 발신 CF_HDROP 자체 IDataObject(SHCreateDataObject 미렌더링 → 앱→탐색기/패널 간 드래그 해소·교차폴더 지원)·충돌 순차 확인창(예/아니오/취소 — M3-1 α 해소) | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-clipboard-dnd` | 2026-07-13 | 2026-07-13 (`2e93db2`) | — | 6 | M3-5 — OS 클립보드 단일 출처(CF_HDROP·Preferred DropEffect — 내부 클립보드 제거·탐색기↔앱 Ctrl+C/X/V·왕복 테스트)·OLE DnD 수신(IDropTarget — 볼륨별 기본+Ctrl/Shift·최적화 이동 NONE)·발신(SHCreateDataObject+DoDragDrop — 원본 미삭제 안전 방향). B3 무변·DnD 실기 QA 대기 | [2026-07-13](journal/2026-07-13.md) |
 | `fix/toolbar-refresh-only` | 2026-07-13 | 2026-07-13 (`4d4281b`) | — | 1 | 사용자 지시 — 전역 도구 모음 이전/다음 오동작 보고 → 네비 버튼 제거(패널별 네비 바 전담)·⟳만 유지 | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-shellmenu` | 2026-07-13 | 2026-07-13 (`e28fed3`) | — | 5 | M3-4 — 셸 컨텍스트 메뉴(ADR-0003, 원본 ADR-0005·ShellContextMenu.cs 계승): 행 우클릭=IContextMenu 셸 메뉴·빈 영역=배경 메뉴(CreateViewObject)·고유 병합 0x8000+(완전 삭제·붙여넣기·Undo/Redo)·delete/rename/paste 가로채기·Apps/Shift+F10·자기 wndproc 포워딩(comctl32 불요). 테스트 127 green·exe 0.60MB·B3 무변·셸 메뉴 상호작용 실기 QA 대기 | [2026-07-13](journal/2026-07-13.md) |
