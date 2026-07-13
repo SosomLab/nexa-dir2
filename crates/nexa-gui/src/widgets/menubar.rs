@@ -139,6 +139,15 @@ impl MenuBar {
             .position(|&(lo, hi)| x >= lo && x < hi)
     }
 
+    /// 열리는 드롭다운의 **보수적 무효 영역**(스트립 아래·항목 수 기준 높이·전폭).
+    /// 정확한 rect(폭=텍스트 측정)는 paint에서야 결정되므로, 열기/전환 시점의 무효화는
+    /// 이 근사를 쓴다 — 이전 캐시(빈/다른 메뉴 rect)만 push하면 첫 프레임의 BitBlt가
+    /// 무효 영역에 잘려 드롭다운이 깨져 보인다(QA 07-13: 첫 클릭 깨짐·마우스 이동 시 정상).
+    fn drop_area_estimate(&self, menu: usize) -> Rect {
+        let h = self.menus[menu].items.len() as i32 * self.row_h + 2;
+        Rect::new(self.bounds.x, self.bounds.bottom(), self.bounds.w, h)
+    }
+
     /// 드롭다운 항목 인덱스(열려 있을 때).
     fn item_at(&self, x: i32, y: i32) -> Option<usize> {
         let open = self.open?;
@@ -172,7 +181,10 @@ impl Widget for MenuBar {
                     self.open = if self.open == Some(i) { None } else { Some(i) };
                     self.hover_item = None;
                     inv.push(self.bounds);
-                    inv.push(*self.drop_rect.borrow());
+                    inv.push(*self.drop_rect.borrow()); // 이전 드롭다운 지우기
+                    if let Some(open) = self.open {
+                        inv.push(self.drop_area_estimate(open)); // 새 드롭다운 영역(근사)
+                    }
                 } else if let Some(item) = self.item_at(x, y) {
                     let open = self.open.unwrap();
                     let it = &self.menus[open].items[item];
@@ -192,7 +204,8 @@ impl Widget for MenuBar {
                     if let (Some(t), Some(_)) = (ht, self.open) {
                         if self.open != Some(t) {
                             self.open = Some(t);
-                            inv.push(*self.drop_rect.borrow());
+                            inv.push(*self.drop_rect.borrow()); // 이전 드롭다운 지우기
+                            inv.push(self.drop_area_estimate(t)); // 새 드롭다운 영역(근사)
                         }
                     }
                     self.hover_title = ht;
@@ -356,6 +369,20 @@ mod tests {
                 ctrl: false,
             },
             inv,
+        );
+    }
+
+    #[test]
+    fn open_invalidates_dropdown_area_on_first_frame() {
+        // 열기 직후 무효 영역이 스트립 아래 드롭다운 높이를 덮어야 함 — 이전엔 빈 drop_rect만
+        // push돼 첫 프레임 BitBlt가 잘려 깨져 보임(QA 07-13)
+        let (mut m, _) = bar();
+        let mut inv = Invalidations::default();
+        down(&mut m, &mut inv, 10, 5); // "파일"(항목 3개) 열기 — paint 전
+        let need_bottom = 22 + 3 * 20 + 2;
+        assert!(
+            inv.drain().any(|r| r.y <= 22 && r.bottom() >= need_bottom),
+            "드롭다운 예상 영역이 무효화돼야 첫 프레임에 표시"
         );
     }
 
