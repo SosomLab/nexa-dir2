@@ -80,8 +80,13 @@ ctx.deletePermanent = Delete Permanently
 ctx.pasteInto = Paste into Folder
 ctx.paste = Paste
 
-# ── Bottom dock (M4-1) ──
+# ── Bottom dock (M4-1·M4-2) ──
 dock.info = Info
+dock.preview = Preview
+preview.none = nothing to preview
+preview.empty = (empty file)
+preview.binary = binary file — no text preview
+preview.fail = read failed
 info.selected = {0} selected
 info.kind = Kind: {0}
 info.size = Size: {0} B

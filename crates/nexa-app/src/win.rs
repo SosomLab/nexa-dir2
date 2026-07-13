@@ -820,12 +820,51 @@ fn dock_info(p: &Panel) -> Vec<String> {
     )]
 }
 
-/// 양 패널 도크 정보 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
+/// 단일 선택 파일의 텍스트 미리보기(M4-2 S1 — 원본 docs/35 텍스트 공급자 대응).
+/// 첫 16KB만 읽어 표시(대용량 안전). 첫 1KB에 NUL이 있으면 이진 파일로 판정.
+fn preview_lines(p: &Panel) -> Vec<String> {
+    use std::io::Read;
+    let tree = p.rows().source().tree();
+    if tree.selection_count() != 1 {
+        return vec![tr("preview.none")];
+    }
+    let Some(path) = tree.selected_path(0).map(std::path::Path::to_path_buf) else {
+        return vec![tr("preview.none")];
+    };
+    if path.is_dir() {
+        return vec![tr("preview.none")];
+    }
+    let Ok(mut f) = std::fs::File::open(&path) else {
+        return vec![tr("preview.fail")];
+    };
+    let mut buf = vec![0u8; 16 * 1024];
+    let n = f.read(&mut buf).unwrap_or(0);
+    buf.truncate(n);
+    if n == 0 {
+        return vec![tr("preview.empty")];
+    }
+    if buf[..n.min(1024)].contains(&0) {
+        return vec![tr("preview.binary")]; // WIC 이미지 미리보기는 S2
+    }
+    String::from_utf8_lossy(&buf)
+        .lines()
+        .take(200) // 도크 높이 초과분은 그리지 않음 — 여유 상한
+        .map(|l| l.replace('\t', "    "))
+        .collect()
+}
+
+/// 양 패널 도크 내용 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
+/// 활성 종류: 0=정보(원본 DockInfo) · 1=미리보기(M4-2).
 fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
     for i in 0..2 {
         if st.panels[i].dock_visible() {
-            let lines = dock_info(&st.panels[i]);
-            st.panels[i].dock.set_title(tr("dock.info"), inv);
+            st.panels[i]
+                .dock
+                .set_kinds(vec![tr("dock.info"), tr("dock.preview")], inv);
+            let lines = match st.panels[i].dock.active_kind() {
+                1 => preview_lines(&st.panels[i]),
+                _ => dock_info(&st.panels[i]),
+            };
             st.panels[i].dock.set_lines(lines, inv);
         }
     }

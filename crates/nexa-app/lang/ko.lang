@@ -79,8 +79,13 @@ ctx.deletePermanent = 완전 삭제
 ctx.pasteInto = 폴더에 붙여넣기
 ctx.paste = 붙여넣기
 
-# ── 하단 도크(M4-1) ──
+# ── 하단 도크(M4-1·M4-2) ──
 dock.info = 정보
+dock.preview = 미리보기
+preview.none = 미리보기할 항목 없음
+preview.empty = (빈 파일)
+preview.binary = 이진 파일 — 텍스트 미리보기 없음
+preview.fail = 읽기 실패
 info.selected = {0}개 선택
 info.kind = 종류: {0}
 info.size = 크기: {0} B
