@@ -52,7 +52,8 @@
 - ✅ M3-1 `nexa-ops` 전송 엔진(`feat/m3-ops-transfer`) — 원본 docs/33 TRANSFER-ENGINE·FileOps.cs 이식: **rlib 신설**(플랫폼 중립·crate 0), `transfer()` 단일 경로 — 같은 폴더 규칙(이동 무동작/복사 " (2)" 순번 복제)·충돌 항목만 순차 Overwrite/Skip·4MB 청크 진행률·취소(부분 파일 정리 — 안전 개선)·개별 격리·동일 볼륨 fast path·순환 금지. 배선: 내부 클립보드 Ctrl+C/X/V·워커+세대 가드(A-1)·Esc 취소·양쪽 재로드. 실기 순번 복제/무동작 검증·테스트 8.
 - ✅ M3-2 삭제·이름변경·새로 만들기(`feat/m3-fileops`) — 원본 DeletePaths·B-6·BG-N1/N2 이식: Del=휴지통(SHFileOperationW FOF_ALLOWUNDO — α)·Shift+Del=완전(MessageBoxW 확인창·기본 취소·개별 격리)·F2=**인라인 이름변경**(VirtualRows 오버레이 편집기: 문자/Backspace·Enter/Esc·키 차단·클릭 취소)·Ctrl+Shift+N/파일 메뉴=새 폴더·새 파일(생성→즉시 리네임 = RevealAndRename). nexa-ops delete_permanent/rename/create_new. 실기 4종 통과.
 - ✅ M3-3 Undo/Redo(`feat/m3-undo`) — 원본 OperationHistory.cs·RecycleBin.cs 이식(B-13u·docs/33): **nexa-ops `history` 모듈**(플랫폼 중립) = `ReversibleOp` trait + `OperationHistory`(스택 2개·새 push 시 redo 무효화·상한 100·실패 연산 소실=무결성 우선) + 연산 4종(Move 역이동·Copy 사본 삭제 주입·Rename·Create 재생성 주입), 오류 `OpError` 구조화(i18n=앱). 배선: `State.history`+push 3곳(전송 완료=수행 쌍만·이름변경·새로 만들기)·**Ctrl+Z / Ctrl+Y·Ctrl+Shift+Z**·편집 메뉴·양쪽 재로드·타이틀 노트. **휴지통 복원**(`recycle.rs`): 셸 폴더 열거→원위치 매칭→**undelete 동사**(STRRET 직접 파싱=shlwapi 회피)·`DeleteBatchOp`(undo=복원/redo=재삭제). **완전 삭제는 undo 불가**(설계). 실 휴지통 왕복 통합 테스트 통과·exe 0.58MB·RSS 25.51MB·**B3 통과**(ole32 신규=OS 인박스). α: 메뉴 활성 표시 없음·다중 버전 최초 일치 1건.
-- ☐ M3-4 셸 컨텍스트 메뉴(IContextMenu+고유 병합, ADR-0005) · ☐ M3-5 클립보드 상호운용(CF_HDROP)·DnD · ☐ M3-6 watcher.
+- ✅ M3-4 셸 컨텍스트 메뉴(`feat/m3-shellmenu`, [ADR-0003](08-adr-0003-shell-context-menu.md) — 원본 ADR-0005 계승) — 행 우클릭=클래식 IContextMenu 셸 메뉴(HMENU 호스팅·동적 서브메뉴는 자기 wndproc 포워딩 = comctl32 불요·B3 무변)·빈 영역=배경 메뉴(CreateViewObject·새로 만들기 서브메뉴)·고유 병합 0x8000+(완전 삭제·붙여넣기·Undo/Redo)·delete/rename/paste 동사 가로채기(undo·인라인·전송 합류)·Apps/Shift+F10·우클릭 선택 규약(rows). 앱 모듈(shellmenu.rs — 크레이트 분리 회피). 테스트 127 green·셸 메뉴 상호작용 실기 QA 대기. 후속(M5): 레지스트리 §7·Checksum·VerbReplacement·교차 부모.
+- ☐ M3-5 클립보드 상호운용(CF_HDROP)·DnD · ☐ M3-6 watcher.
 
 ## M1+ (요약)
 
