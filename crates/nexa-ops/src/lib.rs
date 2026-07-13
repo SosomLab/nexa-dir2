@@ -256,6 +256,59 @@ pub fn move_onto_with_progress(
     }
 }
 
+/// 완전 삭제(휴지통 아님, 폴더 재귀) — 없으면 무동작(원본 DeletePermanent).
+/// 휴지통 삭제는 셸 API가 필요해 앱 계층(win.rs) 담당.
+pub fn delete_permanent(path: &Path) -> io::Result<()> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else if exists(path) {
+        fs::remove_file(path)
+    } else {
+        Ok(())
+    }
+}
+
+/// 제자리 이름변경(원본 B-6 인라인 리네임 — 같은 폴더 내 rename). 반환: 새 경로.
+/// 규칙: 공백 트림·빈 이름/구분자 포함 = 오류·동일 이름 = 무동작·기존 이름과 충돌 = 오류.
+pub fn rename(path: &Path, new_name: &str) -> io::Result<PathBuf> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() || new_name.contains(['\\', '/']) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "잘못된 이름"));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "루트는 이름변경 불가"))?;
+    let dest = parent.join(new_name);
+    if path_equals(path, &dest) {
+        return Ok(path.to_path_buf()); // 동일 이름 = 무동작
+    }
+    if exists(&dest) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "같은 이름이 이미 있음",
+        ));
+    }
+    fs::rename(path, &dest)?;
+    Ok(dest)
+}
+
+/// 새 폴더 생성 — 충돌 없는 이름("base"·"base (2)"…, 원본 UniqueChildPath). 반환: 생성 경로.
+pub fn create_new_dir(dir: &Path, base: &str) -> io::Result<PathBuf> {
+    let dest = unique_dest(dir, base, true);
+    fs::create_dir(&dest)?;
+    Ok(dest)
+}
+
+/// 새 빈 파일 생성 — `base_with_ext`(예: "새 파일.txt")로 충돌 없는 이름. 반환: 생성 경로.
+pub fn create_new_file(dir: &Path, base_with_ext: &str) -> io::Result<PathBuf> {
+    let dest = unique_dest(dir, base_with_ext, false);
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&dest)?;
+    Ok(dest)
+}
+
 /// 전송 진행 스냅샷 — UI 표시용.
 #[derive(Clone, Copy, Debug)]
 pub struct Progress {
@@ -564,6 +617,51 @@ mod tests {
         assert!(out.transferred.is_empty());
         assert!(!b.join("big.bin").exists(), "부분 파일 정리");
         assert!(a.join("big.bin").exists(), "원본 무손상");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn rename_rules() {
+        let d = fixture("rename");
+        fs::write(d.join("a.txt"), "x").unwrap();
+        fs::write(d.join("b.txt"), "y").unwrap();
+        assert_eq!(rename(&d.join("a.txt"), "c.txt").unwrap(), d.join("c.txt"));
+        assert!(!d.join("a.txt").exists() && d.join("c.txt").exists());
+        assert_eq!(
+            rename(&d.join("c.txt"), "c.txt").unwrap(),
+            d.join("c.txt"),
+            "동일 이름 = 무동작"
+        );
+        assert_eq!(
+            rename(&d.join("c.txt"), "b.txt").unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(rename(&d.join("c.txt"), "  ").is_err(), "빈 이름");
+        assert!(rename(&d.join("c.txt"), "x/y").is_err(), "구분자 금지");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn create_new_numbering_and_delete_permanent() {
+        let d = fixture("createnew");
+        assert_eq!(create_new_dir(&d, "새 폴더").unwrap(), d.join("새 폴더"));
+        assert_eq!(
+            create_new_dir(&d, "새 폴더").unwrap(),
+            d.join("새 폴더 (2)")
+        );
+        assert_eq!(
+            create_new_file(&d, "새 파일.txt").unwrap(),
+            d.join("새 파일.txt")
+        );
+        assert_eq!(
+            create_new_file(&d, "새 파일.txt").unwrap(),
+            d.join("새 파일 (2).txt"),
+            "확장자 앞 순번(원본 규약)"
+        );
+        fs::write(d.join("새 폴더/x.txt"), "z").unwrap();
+        delete_permanent(&d.join("새 폴더")).unwrap(); // 폴더 재귀
+        assert!(!d.join("새 폴더").exists());
+        delete_permanent(&d.join("없는 경로")).unwrap(); // 무동작
         fs::remove_dir_all(&d).unwrap();
     }
 

@@ -162,6 +162,8 @@ pub struct VirtualRows<S> {
     /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
     typeahead: TypeAhead,
+    /// 인라인 이름변경 버퍼(M3-2, 원본 B-6) — Some((행, 버퍼)) = 편집 중. 커서는 끝 고정(α).
+    rename: Option<(usize, String)>,
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -182,7 +184,61 @@ impl<S: RowSource> VirtualRows<S> {
             band: None,
             caret: None,
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
+            rename: None,
         }
+    }
+
+    // ── 인라인 이름변경(M3-2, 원본 B-6) ─────────────────────────────
+
+    pub fn is_renaming(&self) -> bool {
+        self.rename.is_some()
+    }
+
+    /// 편집 상태 (행, 버퍼) — IME 배치·호스트 표시용.
+    pub fn rename_state(&self) -> Option<(usize, &str)> {
+        self.rename.as_ref().map(|(r, b)| (*r, b.as_str()))
+    }
+
+    /// 인라인 이름변경 시작 — 캐럿을 그 행으로, 가시 범위로 스크롤.
+    pub fn begin_rename(&mut self, row: usize, initial: &str, inv: &mut Invalidations) {
+        if row >= self.src.len() {
+            return;
+        }
+        self.caret = Some(row);
+        self.scroll_into_view(row);
+        self.rename = Some((row, initial.to_string()));
+        inv.push(self.bounds);
+    }
+
+    /// 편집 문자 입력(`'\u{8}'` = Backspace, 그 외 제어 문자 무시).
+    pub fn rename_char(&mut self, c: char, inv: &mut Invalidations) {
+        let Some((_, buf)) = &mut self.rename else {
+            return;
+        };
+        if c == '\u{8}' {
+            buf.pop();
+        } else if !c.is_control() {
+            buf.push(c);
+        } else {
+            return;
+        }
+        inv.push(self.bounds);
+    }
+
+    /// 편집 취소(Esc·외부 클릭) — 입력 무시.
+    pub fn cancel_rename(&mut self, inv: &mut Invalidations) {
+        if self.rename.take().is_some() {
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 편집 제출(Enter) — (행, 새 이름) 반환. 실제 rename·재로드는 호스트 책임.
+    pub fn submit_rename(&mut self, inv: &mut Invalidations) -> Option<(usize, String)> {
+        let taken = self.rename.take();
+        if taken.is_some() {
+            inv.push(self.bounds);
+        }
+        taken
     }
 
     /// 타입어헤드 버퍼(HUD·타이머 판단용). 빈 값 = 비활성.
@@ -519,6 +575,18 @@ impl<S: RowSource> Widget for VirtualRows<S> {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 인라인 이름변경 중: 문자는 버퍼로, 키 네비는 차단, 클릭은 취소 후 정상 처리(M3-2)
+        if self.is_renaming() {
+            match *ev {
+                InputEvent::Char { c, .. } => {
+                    self.rename_char(c, inv);
+                    return;
+                }
+                InputEvent::Key { .. } => return, // Enter/Esc는 호스트가 submit/cancel
+                InputEvent::MouseDown { .. } => self.cancel_rename(inv),
+                _ => {}
+            }
+        }
         let cur = self.scroll_row as isize;
         let page = (self.body_h() / self.row_h).max(1) as isize;
         match *ev {
@@ -833,6 +901,38 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             }
         }
 
+        // ── 인라인 이름변경 필드(M3-2) — 트리 컬럼 이름부 위 오버레이 ──
+        if let Some((row, buf)) = &self.rename {
+            if *row >= first && *row < first + count {
+                let y = body_top + (*row - first) as i32 * self.row_h;
+                let (tc_x, tc_w) = if self.columns.is_empty() {
+                    (b.x, b.w)
+                } else {
+                    (self.col_x(0), self.columns[0].width)
+                };
+                let item = self.src.row(*row);
+                let mut fx = tc_x + self.pad_x + item.depth as i32 * self.indent_w + self.indent_w;
+                if self.src.icon(*row).is_some() {
+                    fx += self.indent_w + self.pad_x / 2;
+                }
+                let fw = (tc_x + tc_w - fx).max(self.indent_w * 3);
+                let rc = Rect::new(fx, y, fw, self.row_h);
+                let ty = y + (self.row_h - (self.row_h * 4) / 5) / 2;
+                ctx.text_opaque(
+                    rc.x + 1,
+                    ty,
+                    rc,
+                    &format!("{buf}_"),
+                    theme.text,
+                    theme.field_bg,
+                );
+                ctx.fill_rect(Rect::new(rc.x, rc.y, rc.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(rc.x, rc.bottom() - 1, rc.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(rc.x, rc.y, 1, rc.h), theme.accent);
+                ctx.fill_rect(Rect::new(rc.right() - 1, rc.y, 1, rc.h), theme.accent);
+            }
+        }
+
         // ── 타입어헤드 HUD(본문 좌하단 플로팅 배지 — 원본 docs/32 §7-A) ──
         if !self.typeahead.text().is_empty() {
             let label = format!("찾기: {}", self.typeahead.text());
@@ -865,6 +965,53 @@ mod tests {
     use super::*;
     use crate::theme::Color;
     use std::cell::RefCell;
+
+    #[test]
+    fn inline_rename_flow_and_key_block() {
+        let mut v = VirtualRows::new(
+            Rows {
+                n: 5,
+                sorts: RefCell::new(Vec::new()),
+            },
+            20,
+            6,
+            16,
+        );
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 300, 200), &mut inv);
+        v.begin_rename(2, "행 2", &mut inv);
+        assert_eq!(v.rename_state(), Some((2, "행 2")));
+        assert_eq!(v.caret(), Some(2), "편집 행으로 캐럿 이동");
+        // 문자 입력·Backspace — Char 이벤트 경유(타입어헤드 대신 버퍼로)
+        v.on_event(
+            &InputEvent::Char {
+                c: '\u{8}',
+                now_ms: 0,
+            },
+            &mut inv,
+        );
+        v.on_event(&InputEvent::Char { c: '3', now_ms: 0 }, &mut inv);
+        assert_eq!(v.rename_state(), Some((2, "행 3")));
+        assert_eq!(v.typeahead_text(), "", "편집 중 타입어헤드 미동작");
+        // 키 네비 차단
+        v.on_event(
+            &InputEvent::Key {
+                key: Key::Down,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.caret(), Some(2), "편집 중 캐럿 이동 차단");
+        // 제출 — (행, 새 이름), 편집 종료
+        assert_eq!(v.submit_rename(&mut inv), Some((2, "행 3".to_string())));
+        assert!(!v.is_renaming());
+        // 취소 경로
+        v.begin_rename(1, "x", &mut inv);
+        v.cancel_rename(&mut inv);
+        assert!(!v.is_renaming());
+        assert_eq!(v.submit_rename(&mut inv), None);
+    }
 
     /// 정적 N행 소스(토글 없음) + set_sort 기록.
     struct Rows {
