@@ -241,24 +241,26 @@ impl Widget for PathBar {
             return;
         }
 
-        // 브레드크럼 — 세그먼트 + 구분자, hover 강조. x 범위 캐시(히트 테스트)
+        // 브레드크럼 — 구분자 `\`·여백 최소(사용자 지시 07-13: 실제 경로 문자열처럼 조밀하게),
+        // hover 강조. x 범위 캐시(히트 테스트)
+        const SEG_PAD: i32 = 2; // 세그먼트 좌우 미세 여백(hover 가독 최소치)
         let mut ranges = Vec::with_capacity(self.segments.len());
         let last = self.segments.len().saturating_sub(1);
         // 남은 영역 배경 먼저(세그먼트가 덮어씀)
         ctx.fill_rect(b, theme.chrome_bg);
         // 오버플로 = 끝 정렬(사용자 지시 07-13): 뒤(최근 폴더)부터 역으로 채워 시작 인덱스 결정,
         // 잘린 앞부분은 "…" 표시(원본 breadcrumb 긴 경로 끝 정렬 계승)
-        let sep_w = ctx.text_width("›") + self.pad_x;
+        let sep_w = ctx.text_width("\\");
         let widths: Vec<i32> = self
             .segments
             .iter()
-            .map(|s| ctx.text_width(&s.label) + self.pad_x * 2)
+            .map(|s| ctx.text_width(&s.label) + SEG_PAD * 2)
             .collect();
-        let avail = b.w - self.pad_x * 2;
+        let avail = b.w - SEG_PAD * 2;
         let mut start = 0usize;
         let total: i32 = widths.iter().sum::<i32>() + sep_w * last as i32;
         if total > avail {
-            let ell_w = ctx.text_width("…") + self.pad_x;
+            let ell_w = ctx.text_width("…");
             let mut acc = ell_w + sep_w;
             start = self.segments.len(); // 최소한 마지막 세그먼트는 그린다(아래 min)
             for i in (0..self.segments.len()).rev() {
@@ -270,15 +272,10 @@ impl Widget for PathBar {
             }
             start = start.min(last);
         }
-        let mut x = b.x + self.pad_x;
+        let mut x = b.x + SEG_PAD;
         if start > 0 {
             // 생략 표지 — 클릭 불가(범위 캐시에는 빈 항목으로 채워 인덱스 정렬 유지)
-            let ell = Rect::new(
-                x,
-                b.y,
-                (ctx.text_width("…") + self.pad_x).min(b.right() - x),
-                b.h,
-            );
+            let ell = Rect::new(x, b.y, ctx.text_width("…").min(b.right() - x), b.h);
             ctx.text_opaque(ell.x, ty, ell, "…", theme.text_dim, theme.chrome_bg);
             x += ell.w;
             let sep_cell = Rect::new(x, b.y, sep_w.min((b.right() - x).max(0)), b.h);
@@ -287,7 +284,7 @@ impl Widget for PathBar {
                     sep_cell.x,
                     ty,
                     sep_cell,
-                    "›",
+                    "\\",
                     theme.text_dim,
                     theme.chrome_bg,
                 );
@@ -296,7 +293,7 @@ impl Widget for PathBar {
             ranges.extend(std::iter::repeat_n((0, 0), start)); // 생략 세그먼트 = 빈 범위
         }
         for (i, seg) in self.segments.iter().enumerate().skip(start) {
-            let w = ctx.text_width(&seg.label) + self.pad_x * 2;
+            let w = widths[i];
             let cell = Rect::new(x, b.y, w.min(b.right() - x), b.h);
             if cell.w <= 0 {
                 ranges.push((x, x)); // 화면 밖 — 빈 범위
@@ -312,18 +309,17 @@ impl Widget for PathBar {
             } else {
                 theme.text_dim
             };
-            ctx.text_opaque(cell.x + self.pad_x, ty, cell, &seg.label, fg, bg);
+            ctx.text_opaque(cell.x + SEG_PAD, ty, cell, &seg.label, fg, bg);
             ranges.push((cell.x, cell.x + w));
             x += w;
             if i != last {
-                let sep_w = ctx.text_width("›") + self.pad_x;
                 let sep_cell = Rect::new(x, b.y, sep_w.min((b.right() - x).max(0)), b.h);
                 if sep_cell.w > 0 {
                     ctx.text_opaque(
                         sep_cell.x,
                         ty,
                         sep_cell,
-                        "›",
+                        "\\",
                         theme.text_dim,
                         theme.chrome_bg,
                     );
