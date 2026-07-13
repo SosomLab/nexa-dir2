@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m4-terminal` | 2026-07-14 | 2026-07-14 (`acbbdae`) | — | 4 | M4-3 — ConPTY 터미널(원본 VtScreen.cs·ConPtySession.cs 이식): nexa-term rlib(VT 파서·SGR 3계열·CSI·DECSTBM·스크롤백 800·전각·테스트 9)·ConPTY 세션(pwsh→cmd 폴백·UTF-8 경계 읽기 스레드·EXIT 통지·세대 가드)·도크 [터미널] 종류(Consolas 모노 그리드·런 병합·캐럿·클릭 포커스·VT 키·아무 키 재시작·리사이즈 동기). 테스트 148 green → **M4 전 항목 구현 완료** | [2026-07-14](journal/2026-07-14.md) |
 | `feat/m4-preview` | 2026-07-13 | 2026-07-14 (`30bd7b6`) | — | 4 | M4-2 — 내장 미리보기(DR-7 — 플러그인 아님): 도크 [정보\|미리보기] 스트립·텍스트(16KB·이진 판정)·이미지(WIC Fant·비율 유지·캐시 8건·CoCreateInstance 지연=임포트 무변)·draw_image 프리미티브·독립 예제(examples/preview_image.rs — 실기 jpg 확인) | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m4-dock` | 2026-07-13 | 2026-07-13 (`b9942e7`) | — | 3 | M4-1 — 하단 도크(원본 BottomDockView·DockInfo·도크 대원칙): InfoDock 위젯·정보 뷰(다중=개수/단일=속성/없음=현재 폴더)·Ctrl+` 토글·높이 드래그(비율 0.15~0.5)·settings 영속(dock·dock_ratio). 테스트 140 green·실기 QA 대기 | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-watcher` | 2026-07-13 | 2026-07-13 (`8ba60f6`) | — | 5 | M3-6 — watcher(원본 FolderWatcher.cs): ReadDirectoryChangesW 비재귀·300ms 디바운스·무간섭 재로드(펼침·선택·캐럿·스크롤 보존)·편집/전송 중 지연·세대 가드. 실기 생성/삭제 자동 반영. + 폴더 이동 펼침 이월 + 드롭다운 첫 프레임 무효 영역 수정. 테스트 138 green → **M3 전 항목 구현 완료** | [2026-07-13](journal/2026-07-13.md) |
@@ -45,7 +46,11 @@
 
 ---
 
-## feat/m3-clipboard-dnd
+## feat/m4-terminal
+
+- **생성**: 2026-07-14 (분기: main `17421cd` — ADR-0004 직후). **커밋**: `db266f0`(S1 — nexa-term 크레이트·VtScreen 이식·테스트 9) → `817eeb4`(S2 — conpty.rs ConPTY 세션·읽기/종료 스레드·폴백) → `4e96a0b`(S3 — 도크 통합·term_paint 셀 그리드·키 라우팅·재시작) → `d8c73fc`(docs 현행화). 병합(`acbbdae`): 2026-07-14. 삭제: CI green 확인 후.
+- **검증**: Windows 실기 — `cargo test` 워크스페이스 **148 green**(nexa-term 9: CUP/SGR/줄바꿈 스크롤/ED/EL/ECH/ICH·DCH/DECSTBM/전각/리사이즈) · clippy 0 · fmt · B2 **0.69MB** · **B3 통과(임포트 무변** — Console/Pipes 피처는 kernel32 계열) · 릴리스 재기동 스모크(procs=1). **실기 QA 대기**: 도크 [터미널] 전환→셸 프롬프트·dir/ls 출력·한글 입출력·화살표(히스토리)·도크 리사이즈·exit 후 아무 키 재시작.
+- **α 한계**: 스크롤백 휠 스크롤 표시·마우스 선택 복사·bold 별도 폰트 렌더 미구현(속성만 보존) · faint=배경 블렌드 근사 · 셸 종료 코드 미표시(안내 문구만).
 
 - **생성**: 2026-07-13 (분기: main `d051cec`). **커밋**: `32175a4`(S1/S2 — clipboard.rs·CF_HDROP+DropEffect 읽기/쓰기·내부 클립보드 제거·왕복 테스트) → `8c06960`(S3 — dnd.rs IDropTarget 수신·B-14dnd 연산 결정·최적화 이동·훅 격리) → `549b2f9`(S4 — IDropSource+SHCreateDataObject 발신·drag_press 임계 감지) → `6627715`·`b963fde`(docs 현행화). 병합(`2e93db2`): 2026-07-13. 삭제: CI green 확인 후.
 - **검증**: Windows 실기 — `cargo test` green · clippy 0 · fmt · **실 클립보드 왕복 통합 테스트**(비ASCII·cut effect, `#[ignore]` 수동) 통과 · B2 무변 · **B3 통과(임포트 무변** — DataExchange/Memory/StructuredStorage 피처는 컴파일 게이트) · 릴리스 기동 스모크. **DnD 실기 QA 대기**: 탐색기→앱 드롭(Ctrl/Shift 커서)·앱→탐색기 드래그·내부 패널 간·탐색기↔앱 Ctrl+C/V 왕복(모달 드래그 루프 — 자동화 불가).
