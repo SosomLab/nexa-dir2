@@ -173,3 +173,50 @@ unsafe fn strret_to_string(s: &mut STRRET, pidl: *mut ITEMIDLIST) -> String {
         _ => String::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 휴지통으로 삭제(테스트 전용 — win.rs delete_to_recycle_bin과 동일 SHFileOperationW).
+    unsafe fn recycle(path: &Path) -> bool {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::UI::Shell::{
+            SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FO_DELETE,
+            SHFILEOPSTRUCTW,
+        };
+        use windows::core::PCWSTR;
+        let mut list: Vec<u16> = path.as_os_str().encode_wide().collect();
+        list.push(0);
+        list.push(0);
+        let mut op = SHFILEOPSTRUCTW {
+            wFunc: FO_DELETE,
+            pFrom: PCWSTR(list.as_ptr()),
+            fFlags: (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_SILENT.0) as u16,
+            ..Default::default()
+        };
+        SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool()
+    }
+
+    /// 실 휴지통 왕복 — 삭제 → 복원 → 원위치 확인. 실제 셸 휴지통을 건드리므로 #[ignore]
+    /// (수동/실기 QA 전용). 고유 이름이라 다른 항목과 충돌하지 않고, 성공 시 자기 정리.
+    #[test]
+    #[ignore = "실 휴지통 부수효과 — 수동 실행(cargo test -p nexa-app -- --ignored)"]
+    fn recycle_round_trip_restores_original() {
+        let dir = std::env::temp_dir().join(format!("nexa_recycle_qa_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(format!("복원대상_{}.txt", std::process::id()));
+        std::fs::write(&file, "restore me").unwrap();
+
+        assert!(unsafe { recycle(&file) }, "휴지통 삭제 실패");
+        assert!(!file.exists(), "삭제 후 원위치 비어야 함");
+
+        let restored = restore_by_original_paths(std::slice::from_ref(&file));
+        assert_eq!(restored, 1, "1건 복원 보고");
+        assert!(file.exists(), "원위치로 복원되어야 함");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "restore me");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
