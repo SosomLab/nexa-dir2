@@ -46,6 +46,9 @@ use crate::icons::shell::ShellIcons;
 use crate::panel::{NavCtx, Panel, PanelMetrics};
 use crate::source::{COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
 
+/// 기선택 항목 재클릭 → 이름 바꾸기 최소 간격(ms) — 이보다 짧으면 더블클릭 시도로 무시.
+const SLOW_CLICK_RENAME_MS: u64 = 1_000;
+
 /// wParam 마우스 수식키 비트(winuser.h MK_LBUTTON/MK_SHIFT/MK_CONTROL).
 const MK_LBUTTON: usize = 0x0001;
 const MK_SHIFT: usize = 0x0004;
@@ -307,6 +310,8 @@ struct State {
     transfer_gen: u64,
     /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
     drag_press: Option<(i32, i32)>,
+    /// 직전 행 클릭 (패널, 경로, 시각) — 기선택 항목 느린 재클릭=이름 바꾸기 판정(탐색기 관례).
+    slow_click: Option<(usize, String, u64)>,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -489,6 +494,7 @@ pub fn run() -> Result<()> {
         transfer: None,
         transfer_gen: 0,
         drag_press: None,
+        slow_click: None,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -1796,9 +1802,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 } else if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
-                    // 프레스 시점(선택 반영 전) 기선택 행 판정 — **기선택 행만 OLE DnD 후보**.
+                    // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
                     // 미선택 행 드래그=러버밴드(원본 B-4)·리네임 중=텍스트 드래그(QA 07-13 3차)
-                    let was_selected = {
+                    let hit = {
                         let rows = st.panels[idx].rows();
                         (!rows.is_renaming())
                             .then(|| rows.row_at(x, y))
@@ -1806,14 +1812,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             .filter(|_| !rows.marker_hit(x, y))
                             .and_then(|r| {
                                 let tree = rows.source().tree();
-                                tree.visible_id(r).map(|id| tree.is_selected(id))
+                                let id = tree.visible_id(r)?;
+                                let path = tree.node_path(id)?.to_string_lossy().into_owned();
+                                Some((tree.is_selected(id), path))
                             })
-                            .unwrap_or(false)
                     };
+                    let was_selected = hit.as_ref().is_some_and(|(sel, _)| *sel);
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
-                    if was_selected {
+                    // 기선택 항목 재클릭(1s 이상 간격) = 인라인 이름 바꾸기(탐색기 관례 —
+                    // 사용자 지시 07-13. 짧은 간격은 더블클릭 시도로 보고 무시)
+                    let now = now_ms();
+                    let mut renaming = false;
+                    if let Some((_, path)) = &hit {
+                        if was_selected && !shift && !ctrl {
+                            if let Some((p_idx, p_path, t)) = &st.slow_click {
+                                if *p_idx == idx
+                                    && p_path == path
+                                    && now.saturating_sub(*t) >= SLOW_CLICK_RENAME_MS
+                                {
+                                    flush_invalidations(hwnd, &mut inv);
+                                    inv = Invalidations::default();
+                                    begin_rename_caret(hwnd, st); // 캐럿 = 방금 클릭한 행
+                                    renaming = true;
+                                }
+                            }
+                        }
+                        st.slow_click = Some((idx, path.clone(), now));
+                    } else {
+                        st.slow_click = None;
+                    }
+                    if was_selected && !renaming {
                         st.drag_press = Some((x, y)); // 임계 이동 시 OLE 드래그 발신(M3-5 S4)
                     }
                 }
