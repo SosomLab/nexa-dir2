@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m3-undo` | 2026-07-13 | 2026-07-13 (`_병합대기_`) | — | 4 | M3-3 — Undo/Redo(원본 OperationHistory.cs·RecycleBin.cs): nexa-ops `history` 모듈(ReversibleOp·스택 2개·실패 소실=무결성·연산 4종)·`OpError` 구조화·앱 배선(push 3곳·Ctrl+Z/Y·Ctrl+Shift+Z·편집 메뉴)·휴지통 복원(셸 undelete·STRRET 직접 파싱). 실 휴지통 왕복 통합 테스트 통과·exe 0.58MB·RSS 25.51MB·B3(ole32) | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-fileops` | 2026-07-13 | 2026-07-13 (`f86c021`) | — | 3 | M3-2 — 삭제(Del=휴지통 FOF_ALLOWUNDO·Shift+Del=완전+확인창)·F2 인라인 이름변경(rows 오버레이 편집기)·새 폴더/파일(생성→즉시 리네임). nexa-ops delete/rename/create_new. 실기 4종·테스트 116 green | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-ops-transfer` | 2026-07-13 | 2026-07-13 (`844b1e3`) | 2026-07-13 | 3 | M3-1 — `nexa-ops` rlib 신설(원본 docs/33·FileOps 이식): transfer 단일 경로(같은 폴더 규칙·충돌 순차·4MB 진행·취소·개별 격리·fast path) + Ctrl+C/X/V·워커·세대 가드·Esc 취소·양쪽 재로드. 실기 순번 복제/무동작·테스트 113 green | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m2-ime-uia` | 2026-07-12 | 2026-07-13 (`474515f`) | 2026-07-13 | 3 | M2-7 — IME 1차(조합 창을 경로바 편집 캐럿에 배치·WM_IME_*)·UIA 1차(스냅샷 프로바이더: List/ListItem·SelectionItem·FocusChanged). .NET UIA 클라이언트 실기 검증·테스트 105 green → **M2 완료 `0.3.0`** | [2026-07-13](journal/2026-07-13.md) |
@@ -35,6 +36,12 @@
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
+
+## feat/m3-undo
+
+- **생성**: 2026-07-13 (분기: main `1670bfb`). **커밋**: `faf4086`(nexa-ops history 모듈·테스트 9) → `71fcd29`(앱 배선 — State.history·push 3곳·Ctrl+Z/Y·편집 메뉴·i18n) → `4fcab3c`(휴지통 복원 recycle.rs·DeleteBatchOp) → `a45da5b`(휴지통 왕복 통합 테스트·B3 ole32). 병합(`_병합대기_`): 2026-07-13. 삭제: CI green 확인 후.
+- **검증**: Windows 실기 — `cargo test` 워크스페이스 green(history 9: 스택 규약 5 + 연산 왕복 4 · ops 20) · clippy 0 · **실 휴지통 왕복 통합 테스트**(삭제→셸 undelete 복원→원위치·내용 무손상, `#[ignore]` 수동 `-- --ignored`) 통과 · 릴리스 기동 스모크(RSS 25.51MB·정상 종료) · B2 0.58MB·B3 통과(**ole32.dll 신규** — CoInitializeEx/CoTaskMemFree, OS 인박스라 DR-2 준수·화이트리스트 근거 등재).
+- **α 한계**: 편집 메뉴 Undo/Redo 활성/비활성 표시 없음(위젯 enabled 미지원 — 타이틀 노트로 알림) · 다중 버전 휴지통 항목은 경로당 최초 일치 1건(삭제 시각 비교=후속) · 완전 삭제는 undo 불가(설계상 제외 — 확인창 방어).
 
 ## feat/m3-fileops
 
