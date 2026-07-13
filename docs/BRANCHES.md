@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m3-watcher` | 2026-07-13 | 2026-07-13 (`8ba60f6`) | — | 5 | M3-6 — watcher(원본 FolderWatcher.cs): ReadDirectoryChangesW 비재귀·300ms 디바운스·무간섭 재로드(펼침·선택·캐럿·스크롤 보존)·편집/전송 중 지연·세대 가드. 실기 생성/삭제 자동 반영. + 폴더 이동 펼침 이월 + 드롭다운 첫 프레임 무효 영역 수정. 테스트 138 green → **M3 전 항목 구현 완료** | [2026-07-13](journal/2026-07-13.md) |
 | `fix/ux-reload-editor` | 2026-07-13 | 2026-07-13 (`511619b`) | — | 3 | 실기 QA 6건 — 재로드 무간섭 갱신(펼침·선택·캐럿·스크롤 보존 = M3-6 선행·통합 테스트)·편집기 캐럿 모델(edit.rs EditState 공용 — 방향키/Ctrl+A/클릭 배치/세로바 캐럿/기본 선택[경로바 전체·리네임 이름부])·경로바 끝 정렬 오버플로(편집 캐럿 가시·브레드크럼 `…`). 테스트 135 green | [2026-07-13](journal/2026-07-13.md) |
 | `fix/m3-5-dnd-conflicts` | 2026-07-13 | 2026-07-13 (`6a2dc70`) | — | 2 | M3-5 QA 결함 2건 — 발신 CF_HDROP 자체 IDataObject(SHCreateDataObject 미렌더링 → 앱→탐색기/패널 간 드래그 해소·교차폴더 지원)·충돌 순차 확인창(예/아니오/취소 — M3-1 α 해소) | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-clipboard-dnd` | 2026-07-13 | 2026-07-13 (`2e93db2`) | — | 6 | M3-5 — OS 클립보드 단일 출처(CF_HDROP·Preferred DropEffect — 내부 클립보드 제거·탐색기↔앱 Ctrl+C/X/V·왕복 테스트)·OLE DnD 수신(IDropTarget — 볼륨별 기본+Ctrl/Shift·최적화 이동 NONE)·발신(SHCreateDataObject+DoDragDrop — 원본 미삭제 안전 방향). B3 무변·DnD 실기 QA 대기 | [2026-07-13](journal/2026-07-13.md) |
