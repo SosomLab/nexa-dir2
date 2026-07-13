@@ -14,6 +14,9 @@ menu.file.closeTab = Close Tab
 menu.file.newFolder = New Folder
 menu.file.newFile = New File
 menu.file.exit = Exit
+menu.edit = Edit
+menu.edit.undo = Undo
+menu.edit.redo = Redo
 menu.view = View
 menu.view.hidden = Show Hidden Files
 menu.view.dot = Show Dot Files
@@ -51,6 +54,22 @@ rename.fail = rename failed: {0}
 new.folderBase = New Folder
 new.fileBase = New File
 new.fail = create failed: {0}
+
+# ── Undo/Redo (M3-3) ──
+undo.none = nothing to undo
+redo.none = nothing to redo
+undo.done = undone: {0}
+redo.done = redone: {0}
+undo.fail = undo failed ({0}): {1}
+redo.fail = redo failed ({0}): {1}
+history.failedItems = {0} item(s) failed
+history.missingSource = source missing: {0}
+history.nameExists = name already exists: {0}
+op.moveCount = move {0} item(s)
+op.copyCount = copy {0} item(s)
+rename.done = rename: {0} → {1}
+new.folderOp = new folder
+new.fileOp = new file
 
 # ── Status bar · title ──
 status.itemCount = {0} items
