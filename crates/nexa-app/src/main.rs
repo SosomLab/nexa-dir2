@@ -19,6 +19,8 @@ mod panel;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod source;
 #[cfg(windows)]
+mod recycle;
+#[cfg(windows)]
 mod uia;
 #[cfg(windows)]
 mod win;

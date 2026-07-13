@@ -773,6 +773,46 @@ unsafe fn delete_to_recycle_bin(paths: &[PathBuf]) -> bool {
     SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool()
 }
 
+/// 휴지통 삭제 배치(원본 DeleteBatchOp — RecycleBin.cs와 동일 배치) — undo: 셸 undelete로
+/// 원래 위치 복원 / redo: 다시 휴지통 삭제. 셸 COM 의존이라 앱 계층(연산 계약은 nexa-ops).
+struct DeleteBatchOp {
+    paths: Vec<PathBuf>,
+    description: String,
+}
+
+impl nexa_ops::history::ReversibleOp for DeleteBatchOp {
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn undo(&mut self) -> std::result::Result<(), nexa_ops::history::OpError> {
+        let restored = crate::recycle::restore_by_original_paths(&self.paths);
+        if restored < self.paths.len() {
+            return Err(nexa_ops::history::OpError::Failed(
+                self.paths.len() - restored,
+            ));
+        }
+        Ok(())
+    }
+
+    fn redo(&mut self) -> std::result::Result<(), nexa_ops::history::OpError> {
+        let existing: Vec<PathBuf> = self
+            .paths
+            .iter()
+            .filter(|p| nexa_ops::exists(p))
+            .cloned()
+            .collect();
+        if existing.is_empty() {
+            return Ok(());
+        }
+        if unsafe { delete_to_recycle_bin(&existing) } {
+            Ok(())
+        } else {
+            Err(nexa_ops::history::OpError::Failed(existing.len()))
+        }
+    }
+}
+
 /// 단일 경로 휴지통 삭제 — undo용 사본/생성물 제거 주입(원본 FileOps.DeleteToRecycleBin 대응).
 fn recycle_delete_one(p: &std::path::Path) -> std::io::Result<()> {
     if unsafe { delete_to_recycle_bin(&[p.to_path_buf()]) } {
@@ -868,6 +908,11 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
         }
     } else if delete_to_recycle_bin(&targets) {
         ok = targets.len();
+        // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
+        st.history.push(Box::new(DeleteBatchOp {
+            description: trf("del.recycleOp", &[&ok.to_string()]),
+            paths: targets.clone(),
+        }));
     } else {
         fail = targets.len();
     }

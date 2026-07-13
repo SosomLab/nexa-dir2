@@ -50,6 +50,7 @@ del.confirm = Permanently delete {0} item(s)?
 del.kindRecycle = Recycle Bin
 del.kindPermanent = permanent
 del.done = {0}: {1} deleted
+del.recycleOp = recycle {0} item(s)
 rename.fail = rename failed: {0}
 new.folderBase = New Folder
 new.fileBase = New File

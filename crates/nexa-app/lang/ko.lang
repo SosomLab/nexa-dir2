@@ -49,6 +49,7 @@ del.confirm = {0}개 항목을 영구 삭제할까요?
 del.kindRecycle = 휴지통
 del.kindPermanent = 완전 삭제
 del.done = {0}: {1}개 삭제
+del.recycleOp = 휴지통 삭제 {0}개
 rename.fail = 이름변경 실패: {0}
 new.folderBase = 새 폴더
 new.fileBase = 새 파일
