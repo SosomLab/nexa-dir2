@@ -9,6 +9,7 @@ dependencies = [
  "nexa-core",
  "nexa-gui",
  "nexa-ops",
+ "nexa-term",
  "nexa-tree",
  "windows",
  "windows-core",
