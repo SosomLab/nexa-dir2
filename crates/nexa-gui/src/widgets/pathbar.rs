@@ -214,16 +214,24 @@ impl Widget for PathBar {
                 }
             }
             InputEvent::MouseMove { x, y } => {
-                let hover = if self.is_editing() {
-                    None
-                } else {
-                    // 마지막(현재) 세그먼트는 hover 없음(§1-3)
-                    self.segment_at(x, y)
-                        .filter(|&i| i + 1 < self.segments.len())
-                };
+                if let Some(es) = &mut self.edit {
+                    // 드래그 선택(click~release — QA 07-13)
+                    if es.drag(x) {
+                        inv.push(self.bounds);
+                    }
+                    return;
+                }
+                let hover = self
+                    .segment_at(x, y)
+                    .filter(|&i| i + 1 < self.segments.len()); // 마지막(현재)은 hover 없음(§1-3)
                 if hover != self.hover {
                     self.hover = hover;
                     inv.push(self.bounds);
+                }
+            }
+            InputEvent::MouseUp { .. } => {
+                if let Some(es) = &mut self.edit {
+                    es.release();
                 }
             }
             _ => {}

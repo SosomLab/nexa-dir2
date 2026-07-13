@@ -653,6 +653,21 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     }
                     self.cancel_rename(inv);
                 }
+                InputEvent::MouseMove { x, .. } => {
+                    // 드래그 선택(click~release — QA 07-13)
+                    if let Some((_, es)) = &mut self.rename {
+                        if es.drag(x) {
+                            inv.push(self.bounds);
+                        }
+                        return;
+                    }
+                }
+                InputEvent::MouseUp { .. } => {
+                    if let Some((_, es)) = &mut self.rename {
+                        es.release();
+                        return;
+                    }
+                }
                 _ => {}
             }
         }

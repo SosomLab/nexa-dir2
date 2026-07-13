@@ -425,6 +425,11 @@ impl Panel {
                 self.pathbar.on_event(ev, inv);
                 self.tabs[self.active].rows.on_event(ev, inv);
             }
+            InputEvent::MouseUp { .. } => {
+                // 경로바 편집 드래그 선택 종료(QA 07-13) + 리스트 밴드/리사이즈 종료
+                self.pathbar.on_event(ev, inv);
+                self.tabs[self.active].rows.on_event(ev, inv);
+            }
             _ => self.tabs[self.active].rows.on_event(ev, inv),
         }
     }

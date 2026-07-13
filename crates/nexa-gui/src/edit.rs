@@ -30,6 +30,8 @@ pub struct EditState {
     buf: Vec<char>,
     caret: usize,
     anchor: Option<usize>,
+    /// 마우스 드래그 선택 진행 중(click~release).
+    dragging: bool,
     /// paint 캐시: (필드 rect, 그리기 원점 x, 문자 경계 오프셋 0..=len) — 클릭 캐럿 배치용.
     layout: RefCell<(Rect, i32, Vec<i32>)>,
 }
@@ -43,6 +45,7 @@ impl EditState {
             anchor: (select_all && !buf.is_empty()).then_some(0),
             caret,
             buf,
+            dragging: false,
             layout: RefCell::new((Rect::default(), 0, Vec::new())),
         }
     }
@@ -151,28 +154,52 @@ impl EditState {
         !offs.is_empty() && rc.contains(crate::geom::Point { x, y })
     }
 
-    /// 클릭 x → 최근접 문자 경계로 캐럿 배치(선택 해제).
-    pub fn click(&mut self, x: i32) {
-        let (best, found) = {
-            let (_, ox, offs) = &*self.layout.borrow();
-            if offs.is_empty() {
-                (0, false)
-            } else {
-                let rel = x - ox;
-                let mut best = 0usize;
-                let mut bd = i32::MAX;
-                for (i, o) in offs.iter().enumerate() {
-                    let d = (o - rel).abs();
-                    if d < bd {
-                        bd = d;
-                        best = i;
-                    }
-                }
-                (best, true)
+    /// 클릭 x → 최근접 문자 경계(paint 캐시 역참조). 없으면 `None`.
+    fn index_at(&self, x: i32) -> Option<usize> {
+        let (_, ox, offs) = &*self.layout.borrow();
+        if offs.is_empty() {
+            return None;
+        }
+        let rel = x - ox;
+        let mut best = 0usize;
+        let mut bd = i32::MAX;
+        for (i, o) in offs.iter().enumerate() {
+            let d = (o - rel).abs();
+            if d < bd {
+                bd = d;
+                best = i;
             }
-        };
-        if found {
-            self.caret = best;
+        }
+        Some(best)
+    }
+
+    /// 마우스 누름 — 캐럿 배치 + 드래그 선택 시작점(anchor) 기록.
+    pub fn click(&mut self, x: i32) {
+        if let Some(i) = self.index_at(x) {
+            self.caret = i;
+            self.anchor = Some(i); // 드래그 선택 시작점(이동 없으면 release에서 해제)
+            self.dragging = true;
+        }
+    }
+
+    /// 마우스 드래그 — 시작점(anchor)부터 현재 x까지 선택 확장. 변화가 있었으면 `true`.
+    pub fn drag(&mut self, x: i32) -> bool {
+        if !self.dragging {
+            return false;
+        }
+        match self.index_at(x) {
+            Some(i) if i != self.caret => {
+                self.caret = i;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 마우스 해제 — 드래그 종료(이동 없었으면 선택 해제 = 단순 클릭).
+    pub fn release(&mut self) {
+        self.dragging = false;
+        if self.anchor == Some(self.caret) {
             self.anchor = None;
         }
     }
@@ -182,18 +209,16 @@ impl EditState {
     /// 긴 경로에서 최근 폴더 가시, 사용자 지시 07-13). 문자 경계 오프셋을 캐시한다.
     pub fn paint_field(&self, ctx: &mut dyn DrawCtx, rc: Rect, pad_x: i32, theme: &Theme) {
         let ty = rc.y + (rc.h - (rc.h * 4) / 5) / 2;
-        // 문자 경계 오프셋(문자별 폭 누적 — 커닝 오차는 UI 폭 수준에서 무시)
+        // 문자 경계 오프셋 = **접두사 폭**(전체 문자열 레이아웃과 동일 커닝 — 문자별 합산은
+        // 렌더 위치와 어긋나 캐럿 표시/클릭 매핑이 밀린다: 실기 QA 07-13)
         let mut offs = Vec::with_capacity(self.buf.len() + 1);
         offs.push(0);
-        let mut acc = 0;
-        let mut one = String::new();
+        let mut prefix = String::new();
         for &c in &self.buf {
-            one.clear();
-            one.push(c);
-            acc += ctx.text_width(&one);
-            offs.push(acc);
+            prefix.push(c);
+            offs.push(ctx.text_width(&prefix));
         }
-        let total = acc;
+        let total = *offs.last().unwrap();
         let avail = (rc.w - pad_x * 2 - 1).max(1);
         let caret_px = offs[self.caret.min(offs.len() - 1)];
         // 좌측 잘림량: 기본 끝 정렬, 캐럿이 항상 가시 범위에 들도록 보정
@@ -206,7 +231,11 @@ impl EditState {
         let x0 = rc.x + pad_x - dx;
 
         ctx.fill_rect(rc, theme.field_bg);
-        // 텍스트 런: [0,a)=일반 · [a,b)=선택 하이라이트 · [b,len)=일반
+        // 잘림 시 첫 가시 문자 경계(렌더러가 좌측 클립을 보장하지 않으므로 문자 경계로 자름)
+        let vis_from = offs.iter().position(|&o| o >= dx).unwrap_or(0);
+        // 텍스트 런: [0,a)=일반 · [a,b)=선택 하이라이트 · [b,len)=일반.
+        // text_opaque는 **clip 전체를 bg로 채우므로** 런 자신의 x 구간만 clip으로 넘긴다
+        // (전체 rect를 넘기면 뒤 런이 앞 런을 지움 — 실기 QA 07-13 이름부 소실 원인).
         let (a, b) = self.sel_range().unwrap_or((0, 0));
         let runs = [
             (0usize, a, theme.field_bg),
@@ -214,11 +243,25 @@ impl EditState {
             (b, self.buf.len(), theme.field_bg),
         ];
         for (s, e, bg) in runs {
+            let s = s.max(vis_from);
             if s >= e {
                 continue;
             }
+            let rx = x0 + offs[s];
+            let lo = rx.max(rc.x + 1);
+            let hi = (x0 + offs[e]).min(rc.right() - 1);
+            if hi <= lo {
+                continue;
+            }
             let run: String = self.buf[s..e].iter().collect();
-            ctx.text_opaque(x0 + offs[s], ty, rc, &run, theme.text, bg);
+            ctx.text_opaque(
+                rx,
+                ty,
+                Rect::new(lo, rc.y + 1, hi - lo, rc.h - 2),
+                &run,
+                theme.text,
+                bg,
+            );
         }
         // 세로바 캐럿(사용자 지시 07-13 — `_` 대체)
         let cx = x0 + caret_px;
@@ -300,6 +343,25 @@ mod tests {
         e.click(6 + 17); // 폭 8/문자 — 경계 2(x=16)가 최근접
         assert_eq!(e.caret, 2);
         assert!(e.hit(10, 10) && !e.hit(10, 100));
+    }
+
+    #[test]
+    fn drag_selects_range_click_alone_does_not() {
+        let mut e = EditState::new("abcd", false);
+        e.paint_field(&mut Probe, Rect::new(0, 0, 200, 24), 6, &Theme::dark());
+        e.click(6 + 8); // 경계 1
+        e.drag(6 + 8 * 3); // 경계 3까지 드래그
+        e.release();
+        assert_eq!(e.sel_range(), Some((1, 3)), "드래그 = 범위 선택");
+        e.backspace(); // 선택 삭제
+        assert_eq!(e.text(), "ad");
+
+        // 단순 클릭(이동 없음)은 선택 없음
+        e.paint_field(&mut Probe, Rect::new(0, 0, 200, 24), 6, &Theme::dark());
+        e.click(6 + 8);
+        e.release();
+        assert_eq!(e.sel_range(), None, "클릭만 = 캐럿 배치");
+        assert_eq!(e.caret, 1);
     }
 
     #[test]
