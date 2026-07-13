@@ -53,7 +53,8 @@
 - ✅ M3-2 삭제·이름변경·새로 만들기(`feat/m3-fileops`) — 원본 DeletePaths·B-6·BG-N1/N2 이식: Del=휴지통(SHFileOperationW FOF_ALLOWUNDO — α)·Shift+Del=완전(MessageBoxW 확인창·기본 취소·개별 격리)·F2=**인라인 이름변경**(VirtualRows 오버레이 편집기: 문자/Backspace·Enter/Esc·키 차단·클릭 취소)·Ctrl+Shift+N/파일 메뉴=새 폴더·새 파일(생성→즉시 리네임 = RevealAndRename). nexa-ops delete_permanent/rename/create_new. 실기 4종 통과.
 - ✅ M3-3 Undo/Redo(`feat/m3-undo`) — 원본 OperationHistory.cs·RecycleBin.cs 이식(B-13u·docs/33): **nexa-ops `history` 모듈**(플랫폼 중립) = `ReversibleOp` trait + `OperationHistory`(스택 2개·새 push 시 redo 무효화·상한 100·실패 연산 소실=무결성 우선) + 연산 4종(Move 역이동·Copy 사본 삭제 주입·Rename·Create 재생성 주입), 오류 `OpError` 구조화(i18n=앱). 배선: `State.history`+push 3곳(전송 완료=수행 쌍만·이름변경·새로 만들기)·**Ctrl+Z / Ctrl+Y·Ctrl+Shift+Z**·편집 메뉴·양쪽 재로드·타이틀 노트. **휴지통 복원**(`recycle.rs`): 셸 폴더 열거→원위치 매칭→**undelete 동사**(STRRET 직접 파싱=shlwapi 회피)·`DeleteBatchOp`(undo=복원/redo=재삭제). **완전 삭제는 undo 불가**(설계). 실 휴지통 왕복 통합 테스트 통과·exe 0.58MB·RSS 25.51MB·**B3 통과**(ole32 신규=OS 인박스). α: 메뉴 활성 표시 없음·다중 버전 최초 일치 1건.
 - ✅ M3-4 셸 컨텍스트 메뉴(`feat/m3-shellmenu`, [ADR-0003](08-adr-0003-shell-context-menu.md) — 원본 ADR-0005 계승) — 행 우클릭=클래식 IContextMenu 셸 메뉴(HMENU 호스팅·동적 서브메뉴는 자기 wndproc 포워딩 = comctl32 불요·B3 무변)·빈 영역=배경 메뉴(CreateViewObject·새로 만들기 서브메뉴)·고유 병합 0x8000+(완전 삭제·붙여넣기·Undo/Redo)·delete/rename/paste 동사 가로채기(undo·인라인·전송 합류)·Apps/Shift+F10·우클릭 선택 규약(rows). 앱 모듈(shellmenu.rs — 크레이트 분리 회피). 테스트 127 green·셸 메뉴 상호작용 실기 QA 대기. 후속(M5): 레지스트리 §7·Checksum·VerbReplacement·교차 부모.
-- ☐ M3-5 클립보드 상호운용(CF_HDROP)·DnD · ☐ M3-6 watcher.
+- ✅ M3-5 클립보드 상호운용·OLE DnD(`feat/m3-clipboard-dnd`) — 원본 OS 클립보드 읽기측·OleDropTarget.cs·B-14dnd 이식(Win32 원시 포맷+OLE COM 재구현): **OS 클립보드 단일 출처**(CF_HDROP·Preferred DropEffect — 내부 클립보드 제거·탐색기↔앱 Ctrl+C/X/V·잘라내기 1회성·실 왕복 테스트)·**DnD 수신**(IDropTarget — Ctrl 복사/Shift 이동/기본 볼륨별·자기/하위 금지·최적화 이동 NONE)·**발신**(SHCreateDataObject+IDropSource+DoDragDrop — 임계 이동 시작·원본 미삭제 안전 방향·내부 패널 간 동일 왕복). B3 무변·실기 QA 대기. α: spring-load·드롭 하이라이트.
+- ☐ M3-6 watcher(무간섭 갱신).
 
 ## M1+ (요약)
 
