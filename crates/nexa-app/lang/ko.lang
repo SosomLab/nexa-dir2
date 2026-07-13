@@ -44,6 +44,8 @@ ops.done = 전송 {0}
 ops.skipped = 건너뜀 {0}
 ops.errors = 실패 {0}
 ops.canceled = 취소됨
+ops.overwriteTitle = 덮어쓰기 확인
+ops.overwrite = '{0}'이(가) 대상 폴더에 이미 있습니다. 덮어쓸까요?\n(아니오=이 항목 건너뜀 · 취소=전체 중단)
 del.title = 삭제
 del.confirm = {0}개 항목을 영구 삭제할까요?
 del.kindRecycle = 휴지통

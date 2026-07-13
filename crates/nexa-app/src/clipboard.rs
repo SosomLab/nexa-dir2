@@ -64,14 +64,13 @@ unsafe fn alloc_dword(value: u32) -> Option<HGLOBAL> {
     Some(hmem)
 }
 
-/// 파일 목록을 OS 클립보드에 게시(Ctrl+C/X — S2 쓰기측). `op`=Move면 잘라내기(탐색기 반투명 표시
-/// 는 대상 앱 몫). 성공 시 HGLOBAL 소유권은 시스템으로 이전.
-pub unsafe fn write_file_list(hwnd: HWND, paths: &[PathBuf], op: nexa_ops::Op) -> bool {
+/// 파일 목록 → CF_HDROP HGLOBAL(DROPFILES 헤더+wide 이중 NUL) — 클립보드·DnD 발신 공용.
+/// 성공 시 소유권은 호출자(SetClipboardData/STGMEDIUM으로 이전 또는 GlobalFree).
+pub unsafe fn hglobal_file_list(paths: &[PathBuf]) -> Option<HGLOBAL> {
     use std::os::windows::ffi::OsStrExt;
     if paths.is_empty() {
-        return false;
+        return None;
     }
-    // DROPFILES 헤더 + wide 경로 목록(각 NUL·끝 이중 NUL)
     let mut list: Vec<u16> = Vec::new();
     for p in paths {
         list.extend(p.as_os_str().encode_wide());
@@ -80,20 +79,11 @@ pub unsafe fn write_file_list(hwnd: HWND, paths: &[PathBuf], op: nexa_ops::Op) -
     list.push(0);
     let header = std::mem::size_of::<DROPFILES>();
     let total = header + list.len() * 2;
-
-    let Some(_open) = Open::new(Some(hwnd)) else {
-        return false;
-    };
-    if EmptyClipboard().is_err() {
-        return false;
-    }
-    let Ok(hmem) = GlobalAlloc(GMEM_MOVEABLE, total) else {
-        return false;
-    };
+    let hmem = GlobalAlloc(GMEM_MOVEABLE, total).ok()?;
     let base = GlobalLock(hmem) as *mut u8;
     if base.is_null() {
         let _ = GlobalFree(Some(hmem));
-        return false;
+        return None;
     }
     let df = DROPFILES {
         pFiles: header as u32,
@@ -104,6 +94,21 @@ pub unsafe fn write_file_list(hwnd: HWND, paths: &[PathBuf], op: nexa_ops::Op) -
     std::ptr::write_unaligned(base as *mut DROPFILES, df);
     std::ptr::copy_nonoverlapping(list.as_ptr() as *const u8, base.add(header), list.len() * 2);
     let _ = GlobalUnlock(hmem);
+    Some(hmem)
+}
+
+/// 파일 목록을 OS 클립보드에 게시(Ctrl+C/X — S2 쓰기측). `op`=Move면 잘라내기(탐색기 반투명 표시
+/// 는 대상 앱 몫). 성공 시 HGLOBAL 소유권은 시스템으로 이전.
+pub unsafe fn write_file_list(hwnd: HWND, paths: &[PathBuf], op: nexa_ops::Op) -> bool {
+    let Some(_open) = Open::new(Some(hwnd)) else {
+        return false;
+    };
+    if EmptyClipboard().is_err() {
+        return false;
+    }
+    let Some(hmem) = hglobal_file_list(paths) else {
+        return false;
+    };
     if SetClipboardData(CF_HDROP.0 as u32, Some(HANDLE(hmem.0))).is_err() {
         let _ = GlobalFree(Some(hmem)); // 실패 시에만 소유권 잔존 — 해제
         return false;
