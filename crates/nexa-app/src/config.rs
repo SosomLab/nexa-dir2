@@ -18,6 +18,8 @@ pub struct Settings {
     pub show_dotfiles: bool,
     /// 좌 패널 폭 비율.
     pub split: f32,
+    /// 하단 도크 표시(M4-1 — 원본 세션 저장 계승).
+    pub dock: bool,
 }
 
 impl Default for Settings {
@@ -28,6 +30,7 @@ impl Default for Settings {
             show_hidden: true,
             show_dotfiles: true,
             split: 0.5,
+            dock: false,
         }
     }
 }
@@ -70,12 +73,13 @@ fn kv_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
 impl Settings {
     pub fn serialize(&self) -> String {
         format!(
-            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\n",
+            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\n",
             self.theme,
             self.lang,
             u8::from(self.show_hidden),
             u8::from(self.show_dotfiles),
             self.split,
+            u8::from(self.dock),
         )
     }
 
@@ -89,6 +93,7 @@ impl Settings {
                 "lang" if !v.is_empty() && v.len() <= 16 => s.lang = v.into(),
                 "show_hidden" => s.show_hidden = v != "0",
                 "show_dotfiles" => s.show_dotfiles = v != "0",
+                "dock" => s.dock = v != "0",
                 "split" => {
                     if let Ok(f) = v.parse::<f32>() {
                         if f.is_finite() {
@@ -177,11 +182,13 @@ mod tests {
             show_hidden: false,
             show_dotfiles: true,
             split: 0.62,
+            dock: true,
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");
         assert_eq!(parsed.lang, "ko");
         assert!(!parsed.show_hidden && parsed.show_dotfiles);
+        assert!(parsed.dock, "도크 표시 왕복(M4-1)");
         assert!((parsed.split - 0.62).abs() < 0.001);
         // 손상·미지 키·잘못된 값 → 기본값 유지
         let junk = Settings::parse("theme=neon\nsplit=abc\nnope=1\n# c\n\nshow_hidden=0");

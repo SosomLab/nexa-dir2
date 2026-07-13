@@ -23,8 +23,8 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END,
-    VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD,
-    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_3,
+    VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -85,6 +85,7 @@ const CMD_NEW_FOLDER: u32 = 4;
 const CMD_NEW_FILE: u32 = 5;
 const CMD_UNDO: u32 = 6;
 const CMD_REDO: u32 = 7;
+const CMD_TOGGLE_DOCK: u32 = 8;
 const CMD_TOGGLE_HIDDEN: u32 = 10;
 const CMD_TOGGLE_DOTFILES: u32 = 11;
 const CMD_REFRESH: u32 = 12;
@@ -184,6 +185,7 @@ impl ThemeMode {
 fn build_menus(
     show_hidden: bool,
     show_dotfiles: bool,
+    dock: bool,
     mode: ThemeMode,
     lang_setting: &str,
     langs: &[(String, String)],
@@ -191,6 +193,7 @@ fn build_menus(
     let mut view_items = vec![
         MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
         MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
+        MenuItem::new(CMD_TOGGLE_DOCK, tr("menu.view.dock"), "Ctrl+`").checked(dock),
         MenuItem::separator(),
         MenuItem::new(CMD_REFRESH, tr("menu.view.refresh"), "F5"),
         MenuItem::separator(),
@@ -469,11 +472,19 @@ pub fn run() -> Result<()> {
             session.active_panel,
         )
     };
+    let (mut left, mut right) = (left, right);
+    if settings.dock {
+        // 하단 도크 복원(M4-1 — 원본 세션 저장 계승)
+        let mut inv = Invalidations::default();
+        left.set_dock_visible(true, &mut inv);
+        right.set_dock_visible(true, &mut inv);
+    }
     let state = Box::new(State {
         menubar: MenuBar::new(
             build_menus(
                 settings.show_hidden,
                 settings.show_dotfiles,
+                settings.dock,
                 theme_mode,
                 &settings.lang,
                 &langs,
@@ -760,6 +771,57 @@ fn clip_from_selection(st: &mut State, op: nexa_ops::Op) -> Option<(Vec<PathBuf>
         .map(|p| p.to_path_buf())
         .collect();
     (!paths.is_empty()).then_some((paths, op))
+}
+
+/// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식) — 다중 선택=개수·단일=속성·없음=현재 폴더.
+fn dock_info(p: &Panel) -> Vec<String> {
+    use nexa_gui::widgets::RowSource;
+    let rows = p.rows();
+    let tree = rows.source().tree();
+    let sel = tree.selection_count();
+    if sel >= 2 {
+        return vec![trf("info.selected", &[&sel.to_string()])];
+    }
+    if sel == 1 {
+        if let Some(i) = tree
+            .selected_ids()
+            .first()
+            .and_then(|&id| tree.index_of(id))
+        {
+            if let Some(r) = tree.row(i) {
+                let mut lines = vec![
+                    r.name.clone(),
+                    trf("info.kind", &[&rows.source().cell(i, COL_KIND)]),
+                ];
+                if r.kind != nexa_core::FileKind::Dir {
+                    lines.push(trf("info.size", &[&r.size.to_string()])); // 원시 바이트(원본)
+                }
+                let modified = rows.source().cell(i, COL_MODIFIED);
+                if !modified.is_empty() {
+                    lines.push(trf("info.modified", &[&modified]));
+                }
+                if let Some(path) = tree.node_path(r.id) {
+                    lines.push(trf("info.path", &[&path.to_string_lossy()]));
+                }
+                return lines;
+            }
+        }
+    }
+    vec![trf(
+        "info.currentFolder",
+        &[&p.root_path().to_string_lossy()],
+    )]
+}
+
+/// 양 패널 도크 정보 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
+fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
+    for i in 0..2 {
+        if st.panels[i].dock_visible() {
+            let lines = dock_info(&st.panels[i]);
+            st.panels[i].dock.set_title(tr("dock.info"), inv);
+            st.panels[i].dock.set_lines(lines, inv);
+        }
+    }
 }
 
 /// 키보드 조작 대상(M3-2, 원본 KeyboardTargets) — 선택(있으면) 아니면 캐럿 행.
@@ -1551,6 +1613,7 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     );
     let mut inv = Invalidations::default();
     st.statusbar.set_text(left, right, &mut inv);
+    update_dock_info(st, &mut inv); // 선택 변경 → 도크 정보(M4-1 — 변경 시에만 무효화)
     uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
     sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
     flush_invalidations(hwnd, &mut inv);
@@ -1583,6 +1646,14 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         }
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
+        }
+        CMD_TOGGLE_DOCK => {
+            // 하단 도크 토글(M4-1, Ctrl+` — 원본 대원칙: 듀얼=좌↔좌·우↔우 동시)
+            let on = !st.panels[0].dock_visible();
+            st.panels[0].set_dock_visible(on, &mut inv);
+            st.panels[1].set_dock_visible(on, &mut inv);
+            st.menubar.set_checked(CMD_TOGGLE_DOCK, on, &mut inv);
+            update_dock_info(st, &mut inv);
         }
         CMD_UNDO | CMD_REDO => {
             do_undo_redo(hwnd, st, id == CMD_REDO);
@@ -1640,6 +1711,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         build_menus(
             st.show_hidden,
             st.show_dotfiles,
+            st.panels[0].dock_visible(),
             st.theme_mode,
             &st.lang_setting,
             &st.langs,
@@ -2174,6 +2246,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == VK_OEM_PERIOD.0 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_DOTFILES);
                     return LRESULT(0);
+                } else if vk == VK_OEM_3.0 && ctrl {
+                    run_command(hwnd, st, CMD_TOGGLE_DOCK); // Ctrl+` = 하단 도크(M4-1, 원본)
+                    return LRESULT(0);
                 } else if let Some(key) = vk_to_key(vk) {
                     st.active_panel()
                         .on_event(&InputEvent::Key { key, shift, ctrl }, &mut inv);
@@ -2391,6 +2466,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     show_hidden: st.show_hidden,
                     show_dotfiles: st.show_dotfiles,
                     split: st.split,
+                    dock: st.panels[0].dock_visible(),
                 };
                 let (t0, a0) = st.panels[0].session();
                 let (t1, a1) = st.panels[1].session();
