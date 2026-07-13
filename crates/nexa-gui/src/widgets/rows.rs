@@ -409,6 +409,27 @@ impl<S: RowSource> VirtualRows<S> {
         inv.push(self.bounds); // 매치 없어도 HUD(버퍼) 갱신
     }
 
+    /// 소스 가변 접근 — 재로드 상태 복원(펼침·선택) 등 호스트 주도 변형용(M3-6 선행).
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.src
+    }
+
+    /// 재로드 후 뷰 상태 복원(M3-6 무간섭 갱신 선행) — 캐럿·스크롤(범위 밖은 clamp).
+    /// 선택·펼침은 소스([`Self::source_mut`])가 복원한다.
+    pub fn restore_view(
+        &mut self,
+        caret: Option<usize>,
+        scroll_row: usize,
+        scroll_x: i32,
+        inv: &mut Invalidations,
+    ) {
+        self.caret = caret.filter(|&c| c < self.src.len());
+        self.scroll_row = scroll_row;
+        self.scroll_x = scroll_x;
+        self.clamp_scroll();
+        inv.push(self.bounds);
+    }
+
     /// 데이터 공급자 교체(네비게이션 — M1-8). 스크롤·캐럿·타입어헤드는 리셋,
     /// 컬럼·정렬 상태는 유지하고 새 소스에 재적용(원본 PanelView.SortKeys 지속 규약).
     pub fn replace_source(&mut self, src: S, inv: &mut Invalidations) {
