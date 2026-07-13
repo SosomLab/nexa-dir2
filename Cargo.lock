@@ -27,6 +27,10 @@ name = "nexa-ops"
 version = "0.1.0"
 
 [[package]]
+name = "nexa-term"
+version = "0.1.0"
+
+[[package]]
 name = "nexa-tree"
 version = "0.1.0"
 dependencies = [
