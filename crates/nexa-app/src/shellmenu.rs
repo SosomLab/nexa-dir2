@@ -25,14 +25,23 @@ use windows::Win32::UI::Shell::{
     CMF_EXTENDEDVERBS, CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW, SetForegroundWindow,
-    TrackPopupMenuEx, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_DRAWITEM, WM_INITMENUPOPUP,
-    WM_MEASUREITEM, WM_MENUCHAR, WM_NULL,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW, SetForegroundWindow,
+    TrackPopupMenuEx, MF_GRAYED, MF_SEPARATOR, MF_STRING, SW_SHOWNORMAL, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_NULL,
 };
 
-/// 셸 명령 ID 대역(1~0x7FFF) — 고유 항목은 0x8000+(S2, ADR-0005 대역 분리).
+/// 셸 명령 ID 대역(1~0x7FFF) — 고유 항목은 [`ID_CUSTOM_FIRST`]+(ADR-0005 대역 분리).
 const ID_SHELL_FIRST: u32 = 1;
 const ID_SHELL_LAST: u32 = 0x7FFF;
+/// 고유(호스트) 항목 ID 시작 — 셸 대역과 겹치지 않는다.
+pub const ID_CUSTOM_FIRST: u32 = 0x8000;
+
+/// 병합할 고유 메뉴 항목(원본 CustomItem — 서브메뉴는 후속). `id`는 [`ID_CUSTOM_FIRST`] 이상.
+pub struct CustomItem {
+    pub id: u32,
+    pub label: String,
+    pub enabled: bool,
+}
 /// CMINVOKECOMMANDINFOEX.fMask — windows-rs 미노출 상수(shellapi.h).
 const CMIC_MASK_UNICODE: u32 = 0x4000;
 const CMIC_MASK_PTINVOKE: u32 = 0x2000_0000;
@@ -46,6 +55,8 @@ pub enum Outcome {
     /// 앱 통합이 필요한 동사를 가로챔(delete·rename 등) — 호출자가 자체 경로로 실행
     /// (undo 기록·인라인 리네임 합류. 원본 verbInterceptor 계승 — 콜백 대신 반환값).
     Verb(String),
+    /// 고유 병합 항목 선택(0x8000+) — 호출자가 id로 분기(원본 CustomItem.Invoke 대응).
+    Custom(u32),
 }
 
 // 메뉴 표시 구간의 활성 IContextMenu2/3 — wndproc 포워딩용(UI 스레드 전용).
@@ -87,9 +98,11 @@ pub fn forward_menu_msg(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRES
     })
 }
 
-/// 셸 메뉴를 커서 위치에 표시. `paths`는 **같은 부모 폴더**의 파일/폴더들.
+/// 셸 메뉴 표시. `paths`는 **같은 부모 폴더**의 파일/폴더들.
 /// `extended_verbs`=Shift(확장 동사). `intercept`: 이 canonical verb들은 셸 실행 대신
 /// [`Outcome::Verb`]로 반환(앱 통합 — delete=휴지통 undo·rename=인라인).
+/// `custom`: 고유 병합 항목(구분자 아래 0x8000+, ADR-0005) — 선택 시 [`Outcome::Custom`].
+/// `at`: 표시 화면 좌표 — `None`=커서 위치(우클릭)·`Some`=지정 위치(Apps/Shift+F10).
 ///
 /// # Safety
 /// UI 스레드에서 호출. `hwnd`는 유효한 자기 창(모달 메뉴 펌프 동안 wndproc 재진입 —
@@ -99,12 +112,14 @@ pub unsafe fn show(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
+    custom: &[CustomItem],
+    at: Option<POINT>,
 ) -> Outcome {
     if paths.is_empty() {
         return Outcome::Cancelled;
     }
     let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    let out = show_inner(hwnd, paths, extended_verbs, intercept);
+    let out = show_inner(hwnd, paths, extended_verbs, intercept, custom, at);
     if hr.is_ok() {
         CoUninitialize();
     }
@@ -116,6 +131,8 @@ unsafe fn show_inner(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
+    custom: &[CustomItem],
+    at: Option<POINT>,
 ) -> Outcome {
     use std::os::windows::ffi::OsStrExt;
 
@@ -170,10 +187,25 @@ unsafe fn show_inner(
             {
                 return Outcome::Cancelled;
             }
+            // 2-1) 고유 항목 병합(0x8000+) — 구분자로 섹션 분리(ADR-0005. 셸 제공 동사는 중복 금지).
+            if !custom.is_empty() {
+                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+                for c in custom {
+                    let mut flags = MF_STRING;
+                    if !c.enabled {
+                        flags |= MF_GRAYED;
+                    }
+                    let label = windows::core::HSTRING::from(&*c.label);
+                    let _ = AppendMenuW(hmenu, flags, c.id as usize, PCWSTR(label.as_ptr()));
+                }
+            }
 
             // 3) 표시 — 모달 메뉴 펌프(메뉴 메시지는 wndproc → forward_menu_msg).
-            let mut pt = POINT::default();
-            let _ = GetCursorPos(&mut pt);
+            let pt = at.unwrap_or_else(|| {
+                let mut p = POINT::default();
+                let _ = GetCursorPos(&mut p);
+                p
+            });
             let _ = SetForegroundWindow(hwnd); // 메뉴 밖 클릭 시 정상 닫힘(표준 관례)
             let sel = TrackPopupMenuEx(
                 hmenu,
@@ -185,8 +217,11 @@ unsafe fn show_inner(
             )
             .0 as u32;
             let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+            if sel >= ID_CUSTOM_FIRST {
+                return Outcome::Custom(sel); // 고유 병합 항목 — 호출자 분기
+            }
             if !(ID_SHELL_FIRST..=ID_SHELL_LAST).contains(&sel) {
-                return Outcome::Cancelled; // 취소(0) — 고유 대역(0x8000+)은 S2
+                return Outcome::Cancelled; // 취소(0)
             }
 
             // 4) 앱 통합 동사 가로채기(원본 verbInterceptor) — undo 기록 등 자체 경로로.

@@ -71,6 +71,10 @@ rename.done = 이름 변경: {0} → {1}
 new.folderOp = 새 폴더
 new.fileOp = 새 파일
 
+# ── 셸 컨텍스트 메뉴(M3-4) ──
+ctx.deletePermanent = 완전 삭제
+ctx.pasteInto = 폴더에 붙여넣기
+
 # ── 상태바 · 타이틀 ──
 status.itemCount = {0}개 항목
 status.selectedCount = 선택 {0}

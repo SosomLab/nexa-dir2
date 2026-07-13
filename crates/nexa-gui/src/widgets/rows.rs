@@ -433,6 +433,18 @@ impl<S: RowSource> VirtualRows<S> {
         (row < self.src.len()).then_some(row)
     }
 
+    /// 행의 클라이언트 앵커 좌표(가시 범위 내일 때만) — 키보드 컨텍스트 메뉴 위치(M3-4 Apps 키).
+    pub fn row_anchor(&self, row: usize) -> Option<Point> {
+        if row < self.scroll_row || row >= self.src.len() {
+            return None;
+        }
+        let y = self.body_top() + ((row - self.scroll_row) as i32) * self.row_h;
+        (y + self.row_h <= self.bounds.bottom()).then_some(Point {
+            x: self.bounds.x + self.pad_x,
+            y: y + self.row_h / 2,
+        })
+    }
+
     /// 좌표가 펼침 마커 위인가 — 호스트가 더블클릭 진입과 마커 토글을 구분할 때 사용.
     pub fn marker_hit(&self, x: i32, y: i32) -> bool {
         self.row_at(x, y)

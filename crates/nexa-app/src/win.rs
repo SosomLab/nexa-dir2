@@ -22,9 +22,9 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE,
-    VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN,
-    VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END,
+    VK_ESCAPE, VK_F2, VK_F3, VK_F5, VK_F6, VK_F10, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD,
+    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -774,6 +774,104 @@ fn context_targets(st: &mut State) -> Vec<PathBuf> {
         .into_iter()
         .filter(|p| p.parent() == Some(parent))
         .collect()
+}
+
+/// 고유 병합 항목 ID(0x8000+, ADR-0005 대역 분리) — 원본 §7 레지스트리는 후속(M5).
+const CTX_DELETE_PERMANENT: u32 = crate::shellmenu::ID_CUSTOM_FIRST;
+const CTX_PASTE_INTO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 1;
+
+/// 캐럿/선택 기준 셸 컨텍스트 메뉴 표시(M3-4 — 우클릭·Apps/Shift+F10 공용).
+/// `at_caret`=true면 캐럿 행 앵커 위치(키보드), false면 커서 위치(마우스).
+unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
+    use crate::shellmenu::{self, CustomItem};
+    // 1단계: State에서 요청 데이터 추출 — 모달 메뉴 펌프 전 참조 종료(ADR-0003 재진입 안전)
+    struct Req {
+        targets: Vec<PathBuf>,
+        shift: bool,
+        custom: Vec<CustomItem>,
+        paste_dir: Option<PathBuf>,
+        at: Option<windows::Win32::Foundation::POINT>,
+    }
+    let req = state_of(hwnd).and_then(|st| {
+        let targets = context_targets(st);
+        if targets.is_empty() {
+            return None;
+        }
+        let caret_path = {
+            let rows = st.active_panel().rows();
+            let tree = rows.source().tree();
+            rows.caret()
+                .and_then(|c| tree.visible_id(c))
+                .and_then(|id| tree.node_path(id))
+                .map(|p| p.to_path_buf())
+        };
+        let at = if at_caret {
+            let anchor = st
+                .active_panel()
+                .rows()
+                .caret()
+                .and_then(|c| st.active_panel().rows().row_anchor(c))?;
+            let mut pt = windows::Win32::Foundation::POINT {
+                x: anchor.x,
+                y: anchor.y,
+            };
+            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut pt);
+            Some(pt)
+        } else {
+            None
+        };
+        // 고유 병합 항목(원본 S1: 셸이 제공하는 동사는 중복 금지) — 완전 삭제·폴더에 붙여넣기
+        let paste_dir = caret_path.filter(|p| targets.len() == 1 && p.is_dir());
+        let mut custom = vec![CustomItem {
+            id: CTX_DELETE_PERMANENT,
+            label: tr("ctx.deletePermanent"),
+            enabled: true,
+        }];
+        if paste_dir.is_some() && st.clipboard.is_some() {
+            custom.push(CustomItem {
+                id: CTX_PASTE_INTO,
+                label: tr("ctx.pasteInto"),
+                enabled: true,
+            });
+        }
+        Some(Req {
+            targets,
+            shift: GetKeyState(VK_SHIFT.0 as i32) < 0,
+            custom,
+            paste_dir,
+            at,
+        })
+    });
+    let Some(req) = req else { return };
+    let outcome = shellmenu::show(
+        hwnd,
+        &req.targets,
+        req.shift,
+        &["delete", "rename"],
+        &req.custom,
+        req.at,
+    );
+    let Some(st) = state_of(hwnd) else { return };
+    match outcome {
+        shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 셸이 FS 변경했을 수 있음
+        shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("delete") => {
+            // 앱 경로 합류 — undo 기록(M3-3). Shift 열림 = 완전 삭제(확인창 방어)
+            do_delete(hwnd, st, req.shift);
+        }
+        shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("rename") => {
+            begin_rename_caret(hwnd, st); // 인라인 리네임 합류(M3-2)
+        }
+        shellmenu::Outcome::Custom(CTX_DELETE_PERMANENT) => do_delete(hwnd, st, true),
+        shellmenu::Outcome::Custom(CTX_PASTE_INTO) => {
+            if let (Some(dir), Some((paths, op))) = (req.paste_dir, st.clipboard.clone()) {
+                if op == nexa_ops::Op::Move {
+                    st.clipboard = None; // 잘라내기는 1회성(원본 관례)
+                }
+                start_transfer(hwnd, st, paths, dir, op);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// 휴지통 삭제 — `SHFileOperationW`(FO_DELETE+FOF_ALLOWUNDO, 배치). α 채택 근거:
@@ -1579,37 +1677,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            // 행 우클릭 = 셸 컨텍스트 메뉴(M3-4 S1, ADR-0003). 선택 규약은 RBUTTONDOWN에서 반영됨.
+            // 행 우클릭 = 셸 컨텍스트 메뉴(M3-4, ADR-0003). 선택 규약은 RBUTTONDOWN에서 반영됨.
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            let mut req: Option<(Vec<PathBuf>, bool)> = None;
-            if let Some(st) = state_of(hwnd) {
-                if st.panel_at(x) == Some(st.active)
-                    && st.active_panel().rows().row_at(x, y).is_some()
-                {
-                    let targets = context_targets(st);
-                    if !targets.is_empty() {
-                        let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
-                        req = Some((targets, shift));
-                    }
-                }
-            }
-            if let Some((targets, shift)) = req {
-                // 모달 메뉴 펌프 동안 wndproc 재진입 — State 참조를 끊고 표시(ADR-0003)
-                let outcome = crate::shellmenu::show(hwnd, &targets, shift, &["delete", "rename"]);
-                if let Some(st) = state_of(hwnd) {
-                    match outcome {
-                        crate::shellmenu::Outcome::Shell => reload_both(hwnd, st, ""),
-                        crate::shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("delete") => {
-                            // 앱 경로 합류 — undo 기록(M3-3). Shift 열림 = 완전 삭제(확인창 방어)
-                            do_delete(hwnd, st, shift);
-                        }
-                        crate::shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("rename") => {
-                            begin_rename_caret(hwnd, st); // 인라인 리네임 합류(M3-2)
-                        }
-                        _ => {}
-                    }
-                }
+            let on_row = state_of(hwnd).is_some_and(|st| {
+                st.panel_at(x) == Some(st.active) && st.active_panel().rows().row_at(x, y).is_some()
+            });
+            if on_row {
+                show_row_context_menu(hwnd, false);
             }
             LRESULT(0)
         }
@@ -1803,6 +1878,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == VK_DELETE.0 {
                     do_delete(hwnd, st, shift); // Del=휴지통·Shift+Del=완전(M3-2)
                     return LRESULT(0);
+                } else if vk == VK_APPS.0 {
+                    show_row_context_menu(hwnd, true); // Apps 키 = 캐럿 행 셸 메뉴(M3-4)
+                    return LRESULT(0);
                 } else if vk == b'N' as u16 && ctrl && shift {
                     run_command(hwnd, st, CMD_NEW_FOLDER); // Ctrl+Shift+N = 새 폴더(탐색기 관례)
                     return LRESULT(0);
@@ -1827,7 +1905,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let ctx = st.nav_ctx();
                 let mut inv = Invalidations::default();
-                let handled = if vk == VK_LEFT.0 {
+                let handled = if vk == VK_F10.0 && GetKeyState(VK_SHIFT.0 as i32) < 0 {
+                    show_row_context_menu(hwnd, true); // Shift+F10 = 캐럿 행 셸 메뉴(M3-4)
+                    true
+                } else if vk == VK_LEFT.0 {
                     st.active_panel().nav_back(ctx, &mut inv);
                     true
                 } else if vk == VK_RIGHT.0 {
