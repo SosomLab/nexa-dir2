@@ -8,6 +8,7 @@
 
 ## 2026-07-14
 
+- **M4-3 ConPTY 터미널(`feat/m4-terminal`) → M4 전 항목 구현 완료**: 원본 VtScreen.cs·ConPtySession.cs(docs/37) 이식 — **nexa-term rlib**(VT 파서+셀 그리드: SGR 3계열·CSI 커서/지우기/삽입삭제·DECSTBM·스크롤백·전각, 테스트 9)·**ConPTY**(pwsh→cmd 폴백·UTF-8 경계 읽기 스레드·EXIT 통지·세대 가드)·**도크 [터미널]**(Consolas 모노 셀 그리드 — DrawCtx::term_text 신설·런 병합·reverse/faint·캐럿·클릭 포커스·VT 키 시퀀스·아무 키 재시작·리사이즈 동기). 테스트 148 green·B2 0.69MB·B3 무변. α: 스크롤백 스크롤·선택 복사 후속. 상세 [journal/2026-07-14.md](journal/2026-07-14.md).
 - **ADR-0004 — 미리보기 플러그인(Starlark)·DR-7 개정(사용자 결정)**: "EXIF 미리보기를 Python처럼 개발" 요구 → **Starlark 임베드** 채택(문법 호환·샌드박스·정적 링크=단일 exe·Apache-2.0. CPython/WASM/.NET 기각·보류). 계약=`data\plugins\*.star`(ID/NAME/**EXTS 선언**+preview — lines/image/kv 반환·호스트 API file.read/exif) · **설정 preview_map 오버라이드**(확장자↔플러그인 직접 연결) · **다중 매치 시 도크 우상단 공급자 콤보**(선택 영속) · 내장은 폴백 존치. starlark crate=승인 대기(B2 실측 후 원장 확정). 백로그 TODO §7 X-2(S1 시임→S4 exif.star). 상세 [journal/2026-07-14.md](journal/2026-07-14.md).
 
 ## 2026-07-13
