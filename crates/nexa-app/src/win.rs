@@ -325,6 +325,8 @@ struct State {
     /// 패널별 폴더 watcher(M3-6) — 활성 탭 현재 폴더 감시(비재귀). 경로 변경 시 재구독.
     watchers: [Option<crate::watcher::DirWatcher>; 2],
     watch_gen: u64,
+    /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
+    dock_drag: Option<usize>,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -473,11 +475,15 @@ pub fn run() -> Result<()> {
         )
     };
     let (mut left, mut right) = (left, right);
-    if settings.dock {
-        // 하단 도크 복원(M4-1 — 원본 세션 저장 계승)
+    {
+        // 하단 도크 복원(M4-1 — 원본 세션 저장 계승: 표시·비율)
         let mut inv = Invalidations::default();
-        left.set_dock_visible(true, &mut inv);
-        right.set_dock_visible(true, &mut inv);
+        left.set_dock_ratio(settings.dock_ratio, &mut inv);
+        right.set_dock_ratio(settings.dock_ratio, &mut inv);
+        if settings.dock {
+            left.set_dock_visible(true, &mut inv);
+            right.set_dock_visible(true, &mut inv);
+        }
     }
     let state = Box::new(State {
         menubar: MenuBar::new(
@@ -519,6 +525,7 @@ pub fn run() -> Result<()> {
         rename_on_up: false,
         watchers: [None, None],
         watch_gen: 0,
+        dock_drag: None,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -1918,6 +1925,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if (x - sx).abs() <= half.max(1) {
                     st.split_drag = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
+                } else if let Some(idx) = st.panel_at(x).filter(|&i| {
+                    // 도크 상단 경계 ±3px = 높이 드래그 시작(M4-1 S2)
+                    st.panels[i].dock_visible()
+                        && (y - st.panels[i].dock.bounds().y).abs() <= SPLIT_HALF
+                }) {
+                    st.dock_drag = Some(idx);
                 } else if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
                     // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
@@ -2046,7 +2059,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let mut inv = Invalidations::default();
-                if st.split_drag {
+                if let Some(idx) = st.dock_drag {
+                    // 도크 높이 드래그(M4-1 S2) — 리스트+도크 영역 대비 비율, 양 패널 동기
+                    let list_top = st.panels[idx].rows().bounds().y;
+                    let bottom = st.panels[idx].bounds().bottom();
+                    if bottom > list_top {
+                        let ratio = (bottom - y) as f32 / (bottom - list_top) as f32;
+                        st.panels[0].set_dock_ratio(ratio, &mut inv);
+                        st.panels[1].set_dock_ratio(ratio, &mut inv);
+                        update_dock_info(st, &mut inv);
+                    }
+                } else if st.split_drag {
                     let rc = client_rect(hwnd);
                     if rc.w > 0 {
                         st.split = (x as f32 / rc.w as f32).clamp(0.1, 0.9);
@@ -2072,6 +2095,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
+                st.dock_drag = None; // 도크 높이 드래그 종료(M4-1 S2)
                 if st.split_drag {
                     st.split_drag = false;
                     let _ = InvalidateRect(Some(hwnd), None, false);
@@ -2467,6 +2491,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     show_dotfiles: st.show_dotfiles,
                     split: st.split,
                     dock: st.panels[0].dock_visible(),
+                    dock_ratio: st.panels[0].dock_ratio(),
                 };
                 let (t0, a0) = st.panels[0].session();
                 let (t1, a1) = st.panels[1].session();

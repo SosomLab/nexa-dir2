@@ -20,6 +20,8 @@ pub struct Settings {
     pub split: f32,
     /// 하단 도크 표시(M4-1 — 원본 세션 저장 계승).
     pub dock: bool,
+    /// 도크 높이 비율(S2 — 원본 분할 위치 저장 계승).
+    pub dock_ratio: f32,
 }
 
 impl Default for Settings {
@@ -31,6 +33,7 @@ impl Default for Settings {
             show_dotfiles: true,
             split: 0.5,
             dock: false,
+            dock_ratio: 0.3,
         }
     }
 }
@@ -73,13 +76,14 @@ fn kv_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
 impl Settings {
     pub fn serialize(&self) -> String {
         format!(
-            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\n",
+            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\ndock_ratio={:.3}\n",
             self.theme,
             self.lang,
             u8::from(self.show_hidden),
             u8::from(self.show_dotfiles),
             self.split,
             u8::from(self.dock),
+            self.dock_ratio,
         )
     }
 
@@ -94,6 +98,13 @@ impl Settings {
                 "show_hidden" => s.show_hidden = v != "0",
                 "show_dotfiles" => s.show_dotfiles = v != "0",
                 "dock" => s.dock = v != "0",
+                "dock_ratio" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        if f.is_finite() {
+                            s.dock_ratio = f.clamp(0.15, 0.5);
+                        }
+                    }
+                }
                 "split" => {
                     if let Ok(f) = v.parse::<f32>() {
                         if f.is_finite() {
@@ -183,12 +194,14 @@ mod tests {
             show_dotfiles: true,
             split: 0.62,
             dock: true,
+            dock_ratio: 0.42,
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");
         assert_eq!(parsed.lang, "ko");
         assert!(!parsed.show_hidden && parsed.show_dotfiles);
         assert!(parsed.dock, "도크 표시 왕복(M4-1)");
+        assert!((parsed.dock_ratio - 0.42).abs() < 0.001, "도크 비율 왕복");
         assert!((parsed.split - 0.62).abs() < 0.001);
         // 손상·미지 키·잘못된 값 → 기본값 유지
         let junk = Settings::parse("theme=neon\nsplit=abc\nnope=1\n# c\n\nshow_hidden=0");
