@@ -11,7 +11,7 @@
 | **M0** | 기반 — 코어 3크레이트 이식·Win32 창 스파이크·CI | 빈 창 RSS·exe 크기·임포트 실측 | ✅ `0.1.0` |
 | **M1** | 뷰어 코어 — ★ 플래그십(인라인 트리+교차선택)·가상 리스트·정렬·타입어헤드 | 100k <150ms·60fps | ✅ `0.2.0` |
 | **M2** | 셸 골격 — 경로바·탭/듀얼·메뉴·테마·설정/세션·IME/UIA 1차 | 상주 RSS ≤30MB | ✅ `0.3.0` |
-| **M3** | 파일 조작 — nexa-ops(Undo/Redo)·셸 메뉴·클립보드·DnD·watcher | — | 🚧 착수 |
+| **M3** | 파일 조작 — nexa-ops(Undo/Redo)·셸 메뉴·클립보드·DnD·watcher | 유휴 RSS ≤30MB(10k 유휴 300s 6.29MB) | ✅ `0.4.0` |
 | **M4** | 하단 패널 — 정보·미리보기·ConPTY 터미널 | — | ☐ |
 | **M5** | 마감 — 잔여 패리티·릴리스 파이프라인·서명 결정 | 예산 최종 | ☐ |
 
@@ -47,7 +47,10 @@
 - ✅ M2-7 IME(한글)·UIA 1차(`feat/m2-ime-uia`) — 원본 NFR-A1: **IME** = WM_IME_*에서 조합 창을 경로바 편집 캐럿에 배치(결과 문자열은 기존 WM_CHAR 경로). **UIA** = WM_GETOBJECT 서버측 프로바이더(`uia.rs`, 불변 스냅샷 — 임의 스레드 콜백 안전): List(Name=경로)+ListItem(파일명·캐럿 포커스·SelectionItem)·FocusChanged 이벤트(리스닝 가드). .NET UIA 클라이언트로 실기 검증. 마감(조합 인라인·패턴 완성·구조 이벤트)=M5-3.
 - **게이트 통과**: 상주 시나리오(듀얼·탭 4) RSS 26.9MB ≤30 + 트림 0.21~2.9MB → **M2 완료 `0.3.0`**.
 
-## M3 — 파일 조작 🚧 착수
+## M3 — 파일 조작 ✅ (`0.4.0`, 2026-07-13)
+
+> **마감 게이트 통과**(07-13): B1 = 10k 폴더 로드(활성 32.57MB) → 유휴 트림 직후 **0.21MB** ·
+> 180s 0.25MB · **300s 6.29MB ≤ 30MB**(M3-5 OLE 상주분 회수 확인) · B2 0.60MB · B3 인박스만.
 
 - ✅ M3-1 `nexa-ops` 전송 엔진(`feat/m3-ops-transfer`) — 원본 docs/33 TRANSFER-ENGINE·FileOps.cs 이식: **rlib 신설**(플랫폼 중립·crate 0), `transfer()` 단일 경로 — 같은 폴더 규칙(이동 무동작/복사 " (2)" 순번 복제)·충돌 항목만 순차 Overwrite/Skip·4MB 청크 진행률·취소(부분 파일 정리 — 안전 개선)·개별 격리·동일 볼륨 fast path·순환 금지. 배선: 내부 클립보드 Ctrl+C/X/V·워커+세대 가드(A-1)·Esc 취소·양쪽 재로드. 실기 순번 복제/무동작 검증·테스트 8.
 - ✅ M3-2 삭제·이름변경·새로 만들기(`feat/m3-fileops`) — 원본 DeletePaths·B-6·BG-N1/N2 이식: Del=휴지통(SHFileOperationW FOF_ALLOWUNDO — α)·Shift+Del=완전(MessageBoxW 확인창·기본 취소·개별 격리)·F2=**인라인 이름변경**(VirtualRows 오버레이 편집기: 문자/Backspace·Enter/Esc·키 차단·클릭 취소)·Ctrl+Shift+N/파일 메뉴=새 폴더·새 파일(생성→즉시 리네임 = RevealAndRename). nexa-ops delete_permanent/rename/create_new. 실기 4종 통과.
