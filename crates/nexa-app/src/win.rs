@@ -23,7 +23,7 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END,
-    VK_ESCAPE, VK_F2, VK_F3, VK_F5, VK_F6, VK_F10, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD,
+    VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD,
     VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -31,9 +31,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
     SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW,
     CS_DBLCLKS, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
-    WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETOBJECT, WM_IME_COMPOSITION,
-    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+    WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_GETOBJECT,
+    WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
     WS_OVERLAPPEDWINDOW, WS_VISIBLE,
@@ -779,6 +779,60 @@ fn context_targets(st: &mut State) -> Vec<PathBuf> {
 /// 고유 병합 항목 ID(0x8000+, ADR-0005 대역 분리) — 원본 §7 레지스트리는 후속(M5).
 const CTX_DELETE_PERMANENT: u32 = crate::shellmenu::ID_CUSTOM_FIRST;
 const CTX_PASTE_INTO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 1;
+const CTX_UNDO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 2;
+const CTX_REDO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 3;
+
+/// 빈 본문 우클릭 = 폴더 **배경** 셸 메뉴(M3-4 S3, 원본 ADR-0005 S2) — 새로 만들기 서브메뉴·
+/// 속성 등 + 고유 Undo/Redo 병합(원본 빈영역 메뉴 항목 계승). paste 동사는 내부 클립보드로
+/// 가로챔(OS 클립보드 상호운용은 M3-5).
+unsafe fn show_background_context_menu(hwnd: HWND) {
+    use crate::shellmenu::{self, CustomItem};
+    // 1단계: State에서 요청 데이터 추출 — 모달 메뉴 펌프 전 참조 종료(ADR-0003 재진입 안전)
+    let req = state_of(hwnd).map(|st| {
+        let dir = st.active_panel().root_path().to_path_buf();
+        let undo_label = match st.history.undo_description() {
+            Some(d) => trf("ctx.undoOf", &[d]),
+            None => tr("menu.edit.undo"),
+        };
+        let redo_label = match st.history.redo_description() {
+            Some(d) => trf("ctx.redoOf", &[d]),
+            None => tr("menu.edit.redo"),
+        };
+        let custom = vec![
+            CustomItem {
+                id: CTX_UNDO,
+                label: undo_label,
+                enabled: st.history.can_undo(),
+            },
+            CustomItem {
+                id: CTX_REDO,
+                label: redo_label,
+                enabled: st.history.can_redo(),
+            },
+        ];
+        (dir, GetKeyState(VK_SHIFT.0 as i32) < 0, custom)
+    });
+    let Some((dir, shift, custom)) = req else {
+        return;
+    };
+    let outcome = shellmenu::show_background(hwnd, &dir, shift, &["paste"], &custom, None);
+    let Some(st) = state_of(hwnd) else { return };
+    match outcome {
+        shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 새로 만들기 등 FS 변경 가능
+        shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("paste") => {
+            // 내부 클립보드 붙여넣기 합류(M3-1 전송 엔진 — undo 기록 포함)
+            if let Some((paths, op)) = st.clipboard.clone() {
+                if op == nexa_ops::Op::Move {
+                    st.clipboard = None;
+                }
+                start_transfer(hwnd, st, paths, dir, op);
+            }
+        }
+        shellmenu::Outcome::Custom(CTX_UNDO) => do_undo_redo(hwnd, st, false),
+        shellmenu::Outcome::Custom(CTX_REDO) => do_undo_redo(hwnd, st, true),
+        _ => {}
+    }
+}
 
 /// 캐럿/선택 기준 셸 컨텍스트 메뉴 표시(M3-4 — 우클릭·Apps/Shift+F10 공용).
 /// `at_caret`=true면 캐럿 행 앵커 위치(키보드), false면 커서 위치(마우스).
@@ -1677,20 +1731,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            // 행 우클릭 = 셸 컨텍스트 메뉴(M3-4, ADR-0003). 선택 규약은 RBUTTONDOWN에서 반영됨.
+            // 행 우클릭 = 셸 컨텍스트 메뉴 · 빈 본문 = 폴더 배경 메뉴(M3-4, ADR-0003).
+            // 선택 규약(단독 선택/유지/해제)은 RBUTTONDOWN에서 반영됨.
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            let on_row = state_of(hwnd).is_some_and(|st| {
-                st.panel_at(x) == Some(st.active) && st.active_panel().rows().row_at(x, y).is_some()
+            let hit = state_of(hwnd).map(|st| {
+                let active = st.panel_at(x) == Some(st.active);
+                let rows = st.active_panel().rows();
+                let on_row = active && rows.row_at(x, y).is_some();
+                (on_row, !on_row && active && rows.in_body(x, y))
             });
-            if on_row {
-                show_row_context_menu(hwnd, false);
+            match hit {
+                Some((true, _)) => show_row_context_menu(hwnd, false),
+                Some((_, true)) => show_background_context_menu(hwnd),
+                _ => {}
             }
             LRESULT(0)
         }
         // 셸 메뉴 표시 구간 — IContextMenu2/3 메시지 포워딩(동적 서브메뉴·아이콘, ADR-0003:
         // 자기 wndproc 보유 → 원본의 comctl32 서브클래스 불요)
-        m if matches!(m, WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR) => {
+        m if matches!(
+            m,
+            WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR
+        ) =>
+        {
             match crate::shellmenu::forward_menu_msg(m, wparam, lparam) {
                 Some(r) => r,
                 None => DefWindowProcW(hwnd, msg, wparam, lparam),

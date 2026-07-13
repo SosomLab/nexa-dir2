@@ -74,6 +74,8 @@ new.fileOp = 새 파일
 # ── 셸 컨텍스트 메뉴(M3-4) ──
 ctx.deletePermanent = 완전 삭제
 ctx.pasteInto = 폴더에 붙여넣기
+ctx.undoOf = 실행 취소: {0}
+ctx.redoOf = 다시 실행: {0}
 
 # ── 상태바 · 타이틀 ──
 status.itemCount = {0}개 항목

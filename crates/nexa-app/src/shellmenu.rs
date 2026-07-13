@@ -16,13 +16,13 @@ use std::path::PathBuf;
 use windows::core::{Interface, PCWSTR, PSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::Com::{
-    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
-    COINIT_DISABLE_OLE1DDE,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
 };
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    IContextMenu, IContextMenu2, IContextMenu3, IShellFolder, SHBindToParent, SHParseDisplayName,
-    CMF_EXTENDEDVERBS, CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW,
+    IContextMenu, IContextMenu2, IContextMenu3, IShellFolder, SHBindToParent, SHGetDesktopFolder,
+    SHParseDisplayName, CMF_EXTENDEDVERBS, CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX,
+    GCS_VERBW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW, SetForegroundWindow,
@@ -167,95 +167,162 @@ unsafe fn show_inner(
             return Outcome::Cancelled;
         }
 
-        // 2) IContextMenu 취득 + HMENU 채움(셸 대역 1~0x7FFF).
+        // 2) IContextMenu 취득 → 공용 메뉴 흐름.
         let Ok(icm) = folder.GetUIObjectOf::<IContextMenu>(hwnd, &children, None) else {
             return Outcome::Cancelled;
         };
-        let Ok(hmenu) = CreatePopupMenu() else {
-            return Outcome::Cancelled;
-        };
-        ACTIVE.set(Some((icm.cast().ok(), icm.cast().ok())));
-        let flags = if extended_verbs {
-            CMF_EXTENDEDVERBS
-        } else {
-            CMF_NORMAL
-        };
-        let out = (|| {
-            if icm
-                .QueryContextMenu(hmenu, 0, ID_SHELL_FIRST, ID_SHELL_LAST, flags)
-                .is_err()
-            {
-                return Outcome::Cancelled;
-            }
-            // 2-1) 고유 항목 병합(0x8000+) — 구분자로 섹션 분리(ADR-0005. 셸 제공 동사는 중복 금지).
-            if !custom.is_empty() {
-                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
-                for c in custom {
-                    let mut flags = MF_STRING;
-                    if !c.enabled {
-                        flags |= MF_GRAYED;
-                    }
-                    let label = windows::core::HSTRING::from(&*c.label);
-                    let _ = AppendMenuW(hmenu, flags, c.id as usize, PCWSTR(label.as_ptr()));
-                }
-            }
-
-            // 3) 표시 — 모달 메뉴 펌프(메뉴 메시지는 wndproc → forward_menu_msg).
-            let pt = at.unwrap_or_else(|| {
-                let mut p = POINT::default();
-                let _ = GetCursorPos(&mut p);
-                p
-            });
-            let _ = SetForegroundWindow(hwnd); // 메뉴 밖 클릭 시 정상 닫힘(표준 관례)
-            let sel = TrackPopupMenuEx(
-                hmenu,
-                (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
-                pt.x,
-                pt.y,
-                hwnd,
-                None,
-            )
-            .0 as u32;
-            let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
-            if sel >= ID_CUSTOM_FIRST {
-                return Outcome::Custom(sel); // 고유 병합 항목 — 호출자 분기
-            }
-            if !(ID_SHELL_FIRST..=ID_SHELL_LAST).contains(&sel) {
-                return Outcome::Cancelled; // 취소(0)
-            }
-
-            // 4) 앱 통합 동사 가로채기(원본 verbInterceptor) — undo 기록 등 자체 경로로.
-            let offset = sel - ID_SHELL_FIRST;
-            if let Some(verb) = get_verb(&icm, offset) {
-                if intercept.iter().any(|v| verb.eq_ignore_ascii_case(v)) {
-                    return Outcome::Verb(verb);
-                }
-            }
-
-            // 5) 셸 실행 — lpVerb = MAKEINTRESOURCE(선택 오프셋).
-            let inv = CMINVOKECOMMANDINFOEX {
-                cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
-                fMask: CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE,
-                hwnd,
-                lpVerb: windows::core::PCSTR(offset as usize as *const u8),
-                lpVerbW: PCWSTR(offset as usize as *const u16),
-                nShow: SW_SHOWNORMAL.0,
-                ptInvoke: pt,
-                ..Default::default()
-            };
-            match icm.InvokeCommand(&inv as *const _ as *const CMINVOKECOMMANDINFO) {
-                Ok(()) => Outcome::Shell,
-                Err(_) => Outcome::Cancelled, // 확장 실패 격리(ADR-0005 위험 1)
-            }
-        })();
-        ACTIVE.set(None);
-        let _ = DestroyMenu(hmenu);
-        out
+        run_menu(hwnd, &icm, extended_verbs, intercept, custom, at)
     })();
     for pidl in full_pidls {
         CoTaskMemFree(Some(pidl as *const core::ffi::c_void)); // ILFree 동등
     }
     outcome
+}
+
+/// 폴더 **배경** 셸 메뉴 표시(원본 ADR-0005 S2) — `CreateViewObject(IID_IContextMenu)`.
+/// 새로 만들기 서브메뉴·붙여넣기·속성 등 탐색기 빈 영역 메뉴와 동일. 파라미터 규약은 [`show`].
+///
+/// # Safety
+/// [`show`]와 동일.
+pub unsafe fn show_background(
+    hwnd: HWND,
+    dir: &std::path::Path,
+    extended_verbs: bool,
+    intercept: &[&str],
+    custom: &[CustomItem],
+    at: Option<POINT>,
+) -> Outcome {
+    let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    let out = show_background_inner(hwnd, dir, extended_verbs, intercept, custom, at);
+    if hr.is_ok() {
+        CoUninitialize();
+    }
+    out
+}
+
+unsafe fn show_background_inner(
+    hwnd: HWND,
+    dir: &std::path::Path,
+    extended_verbs: bool,
+    intercept: &[&str],
+    custom: &[CustomItem],
+    at: Option<POINT>,
+) -> Outcome {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
+    if SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut pidl, 0, None).is_err() {
+        return Outcome::Cancelled;
+    }
+    let outcome = (|| {
+        let Ok(desktop) = SHGetDesktopFolder() else {
+            return Outcome::Cancelled;
+        };
+        let Ok(folder) = desktop.BindToObject::<_, IShellFolder>(pidl, None) else {
+            return Outcome::Cancelled;
+        };
+        let Ok(icm) = folder.CreateViewObject::<IContextMenu>(hwnd) else {
+            return Outcome::Cancelled;
+        };
+        run_menu(hwnd, &icm, extended_verbs, intercept, custom, at)
+    })();
+    CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+    outcome
+}
+
+/// 공용 메뉴 흐름 — HMENU 구성(셸 대역+고유 병합)·표시·선택 분기(항목/배경 메뉴 공용).
+unsafe fn run_menu(
+    hwnd: HWND,
+    icm: &IContextMenu,
+    extended_verbs: bool,
+    intercept: &[&str],
+    custom: &[CustomItem],
+    at: Option<POINT>,
+) -> Outcome {
+    let Ok(hmenu) = CreatePopupMenu() else {
+        return Outcome::Cancelled;
+    };
+    ACTIVE.set(Some((icm.cast().ok(), icm.cast().ok())));
+    let flags = if extended_verbs {
+        CMF_EXTENDEDVERBS
+    } else {
+        CMF_NORMAL
+    };
+    let out = (|| {
+        if icm
+            .QueryContextMenu(hmenu, 0, ID_SHELL_FIRST, ID_SHELL_LAST, flags)
+            .is_err()
+        {
+            return Outcome::Cancelled;
+        }
+        // 2-1) 고유 항목 병합(0x8000+) — 구분자로 섹션 분리(ADR-0005. 셸 제공 동사는 중복 금지).
+        if !custom.is_empty() {
+            let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+            for c in custom {
+                let mut flags = MF_STRING;
+                if !c.enabled {
+                    flags |= MF_GRAYED;
+                }
+                let label = windows::core::HSTRING::from(&*c.label);
+                let _ = AppendMenuW(hmenu, flags, c.id as usize, PCWSTR(label.as_ptr()));
+            }
+        }
+
+        // 3) 표시 — 모달 메뉴 펌프(메뉴 메시지는 wndproc → forward_menu_msg).
+        let pt = at.unwrap_or_else(|| {
+            let mut p = POINT::default();
+            let _ = GetCursorPos(&mut p);
+            p
+        });
+        let _ = SetForegroundWindow(hwnd); // 메뉴 밖 클릭 시 정상 닫힘(표준 관례)
+        let sel = TrackPopupMenuEx(
+            hmenu,
+            (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
+            pt.x,
+            pt.y,
+            hwnd,
+            None,
+        )
+        .0 as u32;
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        if sel >= ID_CUSTOM_FIRST {
+            return Outcome::Custom(sel); // 고유 병합 항목 — 호출자 분기
+        }
+        if !(ID_SHELL_FIRST..=ID_SHELL_LAST).contains(&sel) {
+            return Outcome::Cancelled; // 취소(0)
+        }
+
+        // 4) 앱 통합 동사 가로채기(원본 verbInterceptor) — undo 기록 등 자체 경로로.
+        let offset = sel - ID_SHELL_FIRST;
+        if let Some(verb) = get_verb(icm, offset) {
+            if intercept.iter().any(|v| verb.eq_ignore_ascii_case(v)) {
+                return Outcome::Verb(verb);
+            }
+        }
+
+        // 5) 셸 실행 — lpVerb = MAKEINTRESOURCE(선택 오프셋).
+        let inv = CMINVOKECOMMANDINFOEX {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
+            fMask: CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE,
+            hwnd,
+            lpVerb: windows::core::PCSTR(offset as usize as *const u8),
+            lpVerbW: PCWSTR(offset as usize as *const u16),
+            nShow: SW_SHOWNORMAL.0,
+            ptInvoke: pt,
+            ..Default::default()
+        };
+        match icm.InvokeCommand(&inv as *const _ as *const CMINVOKECOMMANDINFO) {
+            Ok(()) => Outcome::Shell,
+            Err(_) => Outcome::Cancelled, // 확장 실패 격리(ADR-0005 위험 1)
+        }
+    })();
+    ACTIVE.set(None);
+    let _ = DestroyMenu(hmenu);
+    out
 }
 
 /// 선택된 셸 명령의 canonical verb(언어 무관 식별자, 예: "delete"/"copy").

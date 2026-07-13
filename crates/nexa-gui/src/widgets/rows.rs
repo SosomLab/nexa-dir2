@@ -445,6 +445,11 @@ impl<S: RowSource> VirtualRows<S> {
         })
     }
 
+    /// 좌표가 본문(헤더 아래) 영역인가 — 호스트의 빈 영역 판정(M3-4 배경 셸 메뉴).
+    pub fn in_body(&self, x: i32, y: i32) -> bool {
+        self.bounds.contains(Point { x, y }) && y >= self.body_top()
+    }
+
     /// 좌표가 펼침 마커 위인가 — 호스트가 더블클릭 진입과 마커 토글을 구분할 때 사용.
     pub fn marker_hit(&self, x: i32, y: i32) -> bool {
         self.row_at(x, y)
