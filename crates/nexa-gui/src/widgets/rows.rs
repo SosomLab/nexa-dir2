@@ -1044,9 +1044,12 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 if self.src.icon(*row).is_some() {
                     fx += self.indent_w + self.pad_x / 2;
                 }
+                // 필드를 텍스트 왼쪽으로 확장(테두리+여백이 필드 안쪽) — 편집 진입 시
+                // 이름 x가 일반 표시와 동일(밀림 없음, QA 07-13 4차)
+                const FIELD_PAD: i32 = 3;
                 let fw = (tc_x + tc_w - fx).max(self.indent_w * 3);
-                let rc = Rect::new(fx, y, fw, self.row_h);
-                es.paint_field(ctx, rc, 2, theme);
+                let rc = Rect::new(fx - FIELD_PAD, y, fw + FIELD_PAD, self.row_h);
+                es.paint_field(ctx, rc, FIELD_PAD, theme);
             }
         }
 
