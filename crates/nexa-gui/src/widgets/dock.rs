@@ -8,15 +8,21 @@ use crate::geom::Rect;
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 
-/// 하단 도크(정보 뷰) — 호스트가 [`set_lines`](InfoDock::set_lines)로 내용을 공급한다
-/// (원본 InfoText 대응 — 선택 항목 속성·현재 폴더).
+/// 하단 도크 — 호스트가 [`set_lines`](InfoDock::set_lines)로 내용을 공급한다
+/// (원본 InfoText/PreviewPath 대응). 종류 스트립(정보|미리보기 — M4-2)은 클릭 전환,
+/// 내용 해석은 호스트 몫(위젯은 종류 인덱스만 보유 — 원본 Kind 스왑).
 pub struct InfoDock {
     bounds: Rect,
     row_h: i32,
     pad_x: i32,
-    /// 종류 라벨(α = "정보" 고정 — M4-2에서 토글 스트립로 확장).
-    title: String,
+    /// 종류 라벨들(예: ["정보", "미리보기"]) — 스트립에 나열, 클릭으로 전환.
+    kinds: Vec<String>,
+    active: usize,
+    /// 스트립 라벨 x 범위 캐시(히트 테스트 — 텍스트 측정은 paint에서만).
+    ranges: std::cell::RefCell<Vec<(i32, i32)>>,
     lines: Vec<String>,
+    /// 이미지 미리보기 경로(Some = 라인 대신 이미지 — M4-2).
+    image: Option<String>,
 }
 
 impl InfoDock {
@@ -25,9 +31,26 @@ impl InfoDock {
             bounds: Rect::default(),
             row_h: row_h.max(1),
             pad_x,
-            title: title.into(),
+            kinds: vec![title.into()],
+            active: 0,
+            ranges: std::cell::RefCell::new(Vec::new()),
             lines: Vec::new(),
+            image: None,
         }
+    }
+
+    /// 종류 라벨 목록 교체(i18n 전환 포함) — 활성 인덱스는 범위로 클램프.
+    pub fn set_kinds(&mut self, kinds: Vec<String>, inv: &mut Invalidations) {
+        if self.kinds != kinds {
+            self.kinds = kinds;
+            self.active = self.active.min(self.kinds.len().saturating_sub(1));
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 활성 종류 인덱스(호스트가 내용 공급 분기 — 0=정보·1=미리보기).
+    pub fn active_kind(&self) -> usize {
+        self.active
     }
 
     pub fn set_metrics(&mut self, row_h: i32, pad_x: i32, inv: &mut Invalidations) {
@@ -44,11 +67,10 @@ impl InfoDock {
         }
     }
 
-    /// i18n 전환 등 — 종류 라벨 갱신(변경 시에만 무효화).
-    pub fn set_title(&mut self, title: impl Into<String>, inv: &mut Invalidations) {
-        let title = title.into();
-        if self.title != title {
-            self.title = title;
+    /// 이미지 미리보기 대상(M4-2 — Some이면 라인 대신 이미지 표시. 렌더는 draw_image 백엔드).
+    pub fn set_image(&mut self, image: Option<String>, inv: &mut Invalidations) {
+        if self.image != image {
+            self.image = image;
             inv.push(self.bounds);
         }
     }
@@ -67,8 +89,24 @@ impl Widget for InfoDock {
         }
     }
 
-    fn on_event(&mut self, _ev: &InputEvent, _inv: &mut Invalidations) {
-        // α: 표시 전용(종류 토글·리사이즈 드래그는 M4-2/S2)
+    fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 종류 스트립 클릭 = 전환(M4-2 — 원본 SyncToggles 대응). 내용 갱신은 호스트.
+        if let InputEvent::MouseDown { x, y, .. } = *ev {
+            let strip_bottom = self.bounds.y + 1 + self.row_h;
+            if y >= self.bounds.y && y < strip_bottom {
+                let hit = self
+                    .ranges
+                    .borrow()
+                    .iter()
+                    .position(|&(lo, hi)| x >= lo && x < hi);
+                if let Some(i) = hit {
+                    if self.active != i {
+                        self.active = i;
+                        inv.push(self.bounds);
+                    }
+                }
+            }
+        }
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
@@ -79,17 +117,38 @@ impl Widget for InfoDock {
         ctx.fill_rect(b, theme.panel_bg);
         // 상단 경계선(리스트와 구분 — docs/39 §2 경계선+명도 차)
         ctx.fill_rect(Rect::new(b.x, b.y, b.w, 1), theme.border);
-        // 종류 라벨 스트립(헤더 톤)
+        // 종류 스트립(정보|미리보기 — 활성 강조·클릭 전환. 범위 캐시)
         let strip = Rect::new(b.x, b.y + 1, b.w, self.row_h.min(b.h - 1));
         let ty = |cell: Rect| cell.y + (cell.h - (cell.h * 4) / 5) / 2;
-        ctx.text_opaque(
-            strip.x + self.pad_x,
-            ty(strip),
-            strip,
-            &self.title,
-            theme.text_dim,
-            theme.header_bg,
-        );
+        ctx.fill_rect(strip, theme.header_bg);
+        let mut ranges = Vec::with_capacity(self.kinds.len());
+        let mut x = strip.x + self.pad_x;
+        for (i, label) in self.kinds.iter().enumerate() {
+            let w = ctx.text_width(label) + self.pad_x * 2;
+            let cell = Rect::new(x, strip.y, w.min((strip.right() - x).max(0)), strip.h);
+            let (fg, bg) = if i == self.active {
+                (theme.text, theme.sel_bg)
+            } else {
+                (theme.text_dim, theme.header_bg)
+            };
+            if cell.w > 0 {
+                ctx.text_opaque(cell.x + self.pad_x, ty(cell), cell, label, fg, bg);
+            }
+            ranges.push((cell.x, cell.x + w));
+            x += w + self.pad_x;
+        }
+        *self.ranges.borrow_mut() = ranges;
+        // 이미지 미리보기(M4-2) — 내용 영역 전체에 비율 유지 가운데 표시
+        if let Some(img) = &self.image {
+            let area = Rect::new(
+                b.x + self.pad_x,
+                strip.bottom() + 2,
+                b.w - self.pad_x * 2,
+                (b.bottom() - strip.bottom() - 4).max(0),
+            );
+            ctx.draw_image(area, img);
+            return;
+        }
         // 내용 라인들
         let mut y = strip.bottom();
         for line in &self.lines {

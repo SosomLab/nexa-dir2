@@ -119,6 +119,11 @@ impl IDWriteTextRenderer_Impl for BrtRenderer_Impl {
     }
 }
 
+/// 미리보기 이미지 캐시 키 — (경로, 맞춤 폭, 높이).
+type ImageKey = (String, i32, i32);
+/// 디코드 결과 — (실제 w, h, 32bpp BGRA top-down).
+type DecodedImage = (i32, i32, Vec<u8>);
+
 /// DirectWrite interop 백엔드 — 창 1개 기준 수명(창 크기 변경 시 Resize).
 pub struct DwBackend {
     factory: IDWriteFactory,
@@ -132,6 +137,10 @@ pub struct DwBackend {
     ellipsis: IDWriteInlineObject,
     /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
     layouts: RefCell<HashMap<(String, i32), IDWriteTextLayout>>,
+    /// 미리보기 이미지 캐시(M4-2) — (경로, 맞춤 폭, 높이) → 디코드 결과. 상한 초과 시 비움.
+    /// 백엔드는 상주 트림에서 통째로 해제되므로 캐시도 함께 소멸(M2-8 규율 부합).
+    images: RefCell<HashMap<ImageKey, DecodedImage>>,
+    wic: RefCell<Option<windows::Win32::Graphics::Imaging::IWICImagingFactory>>,
     w: i32,
     h: i32,
 }
@@ -190,6 +199,8 @@ impl DwBackend {
             icon_format,
             ellipsis,
             layouts: RefCell::new(HashMap::new()),
+            images: RefCell::new(HashMap::new()),
+            wic: RefCell::new(None),
             w,
             h,
         })
@@ -250,6 +261,84 @@ impl DwBackend {
     fn pixels_per_dip(&self) -> f32 {
         unsafe { self.brt.GetPixelsPerDip() }
     }
+
+    /// 미리보기 이미지 디코드(M4-2) — WIC로 `(max_w, max_h)` 안에 비율 유지 스케일한
+    /// 32bpp BGRA를 반환(캐시). 확대는 안 함(원본 크기 이하 표시). 실패 = None(표시 생략).
+    fn image_scaled(&self, path: &str, max_w: i32, max_h: i32) -> Option<DecodedImage> {
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::GENERIC_READ;
+        use windows::Win32::Graphics::Imaging::{
+            CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA, IWICImagingFactory,
+            WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom,
+            WICDecodeMetadataCacheOnDemand,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+        if max_w <= 0 || max_h <= 0 {
+            return None;
+        }
+        let key = (path.to_owned(), max_w, max_h);
+        if let Some(v) = self.images.borrow().get(&key) {
+            return Some(v.clone());
+        }
+        unsafe {
+            if self.wic.borrow().is_none() {
+                // UI 스레드는 기동 시 OleInitialize(STA — M3-5) 완료 상태
+                *self.wic.borrow_mut() = CoCreateInstance::<_, IWICImagingFactory>(
+                    &CLSID_WICImagingFactory,
+                    None,
+                    CLSCTX_INPROC_SERVER,
+                )
+                .ok();
+            }
+            let wic_ref = self.wic.borrow();
+            let wic = wic_ref.as_ref()?;
+            let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+            let dec = wic
+                .CreateDecoderFromFilename(
+                    PCWSTR(wide.as_ptr()),
+                    None,
+                    GENERIC_READ,
+                    WICDecodeMetadataCacheOnDemand,
+                )
+                .ok()?;
+            let frame = dec.GetFrame(0).ok()?;
+            let (mut iw, mut ih) = (0u32, 0u32);
+            frame.GetSize(&mut iw, &mut ih).ok()?;
+            if iw == 0 || ih == 0 {
+                return None;
+            }
+            let scale = (max_w as f32 / iw as f32)
+                .min(max_h as f32 / ih as f32)
+                .min(1.0);
+            let tw = ((iw as f32 * scale) as u32).max(1);
+            let th = ((ih as f32 * scale) as u32).max(1);
+            let scaler = wic.CreateBitmapScaler().ok()?;
+            scaler
+                .Initialize(&frame, tw, th, WICBitmapInterpolationModeFant)
+                .ok()?;
+            let conv = wic.CreateFormatConverter().ok()?;
+            conv.Initialize(
+                &scaler,
+                &GUID_WICPixelFormat32bppBGRA,
+                WICBitmapDitherTypeNone,
+                None,
+                0.0,
+                WICBitmapPaletteTypeCustom,
+            )
+            .ok()?;
+            let stride = tw * 4;
+            let mut buf = vec![0u8; (stride * th) as usize];
+            conv.CopyPixels(std::ptr::null(), stride, &mut buf).ok()?;
+            drop(wic_ref);
+            let val = (tw as i32, th as i32, buf);
+            let mut cache = self.images.borrow_mut();
+            if cache.len() >= 8 {
+                cache.clear(); // 소형 상한 — 초과 시 전체 비움(상주 규율)
+            }
+            cache.insert(key, val.clone());
+            Some(val)
+        }
+    }
 }
 
 /// 프레임 단위 드로잉 컨텍스트 — DrawCtx의 DirectWrite interop 구현.
@@ -292,6 +381,50 @@ impl DrawCtx for DwCtx<'_> {
                 &self.back.renderer,
                 x as f32 / ppd,
                 clip.y as f32 / ppd,
+            );
+        }
+    }
+
+    fn draw_image(&mut self, rect: Rect, hint: &str) {
+        // WIC 디코드(캐시) → 백버퍼 메모리 DC에 StretchDIBits(가운데·비율 유지, M4-2)
+        if rect.w <= 2 || rect.h <= 2 {
+            return;
+        }
+        let Some((w, h, bits)) = self.back.image_scaled(hint, rect.w - 2, rect.h - 2) else {
+            return;
+        };
+        unsafe {
+            use windows::Win32::Graphics::Gdi::{
+                StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+            };
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w,
+                    biHeight: -h, // top-down
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let dx = rect.x + (rect.w - w) / 2;
+            let dy = rect.y + (rect.h - h) / 2;
+            StretchDIBits(
+                self.back.memory_dc(),
+                dx,
+                dy,
+                w,
+                h,
+                0,
+                0,
+                w,
+                h,
+                Some(bits.as_ptr() as *const core::ffi::c_void),
+                &bmi,
+                DIB_RGB_COLORS,
+                SRCCOPY,
             );
         }
     }

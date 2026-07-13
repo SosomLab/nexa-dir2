@@ -62,7 +62,8 @@
 ## M4 — 하단 패널 🚧 착수
 
 - ✅ M4-1 하단 도크(`feat/m4-dock`) — 원본 BottomDockView(Info)·DockInfo·도크 대원칙(듀얼=좌↔좌·우↔우) 이식: **InfoDock 위젯**(라벨 스트립+텍스트 라인·변경 시에만 무효화)·**정보 뷰**(다중=개수/단일=이름·종류·크기[원시 B]·수정·경로/없음=현재 폴더 — 선택 변경 자동 갱신)·Ctrl+`/보기 메뉴 토글(체크 동기)·**높이 드래그**(경계 ±3px·비율 0.15~0.5·양 패널 동기)·settings 영속(dock·dock_ratio·왕복 테스트). 테스트 140 green. Preview(M4-2)·Terminal(M4-3)은 종류 스왑 확장.
-- ☐ M4-2 내장 미리보기(텍스트·이미지 — WIC) · ☐ M4-3 ConPTY 터미널.
+- ✅ M4-2 내장 미리보기(`feat/m4-preview`) — **내장 방식**(DR-7: 원본 .NET Nexa.Plugins SDK 비이관 — 플러그인 아님): 도크 종류 스트립(정보|미리보기 — 클릭 전환·활성 강조)·**텍스트**(첫 16KB·UTF-8 lossy·탭→4칸·200줄 상한·1KB NUL=이진 판정)·**이미지**(WIC: 디코더→Fant 스케일러[확대 없음]→32bppBGRA→StretchDIBits — png/jpg/jpeg/bmp/gif/ico/tif·(경로,크기) 캐시 8건·상주 트림 시 소멸). `DrawCtx::draw_image` 프리미티브 신설. WIC은 CoCreateInstance 지연 활성화 — **임포트 테이블 무변(B3 통과)**. 독립 검증 예제 `examples/preview_image.rs`(동일 파이프라인 — `cargo run --example preview_image -- <경로>`).
+- ☐ M4-3 ConPTY 터미널.
 
 ## M1+ (요약)
 

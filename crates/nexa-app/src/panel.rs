@@ -478,6 +478,8 @@ impl Panel {
                     } else {
                         self.pathbar.on_event(ev, inv);
                     }
+                } else if self.dock_visible && y >= self.dock.bounds().y {
+                    self.dock.on_event(ev, inv); // 종류 스트립 전환(M4-2)
                 } else {
                     self.tabs[self.active].rows.on_event(ev, inv);
                 }

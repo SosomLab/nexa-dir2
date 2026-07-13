@@ -820,13 +820,65 @@ fn dock_info(p: &Panel) -> Vec<String> {
     )]
 }
 
-/// 양 패널 도크 정보 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
+/// WIC가 인박스로 디코드하는 이미지 확장자(원본 docs/35 이미지 공급자 대응).
+const IMAGE_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "bmp", "gif", "ico", "tif", "tiff"];
+
+/// 단일 선택 파일의 미리보기(M4-2 — 원본 docs/35 텍스트·이미지 공급자 대응).
+/// 반환 (텍스트 라인들, 이미지 경로) — 이미지 확장자면 WIC 렌더(draw_image), 그 외 텍스트
+/// 첫 16KB(대용량 안전·첫 1KB NUL=이진 판정).
+fn preview_content(p: &Panel) -> (Vec<String>, Option<String>) {
+    use std::io::Read;
+    let tree = p.rows().source().tree();
+    if tree.selection_count() != 1 {
+        return (vec![tr("preview.none")], None);
+    }
+    let Some(path) = tree.selected_path(0).map(std::path::Path::to_path_buf) else {
+        return (vec![tr("preview.none")], None);
+    };
+    if path.is_dir() {
+        return (vec![tr("preview.none")], None);
+    }
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if IMAGE_EXTS.contains(&ext.as_str()) {
+        return (Vec::new(), Some(path.to_string_lossy().into_owned()));
+    }
+    let Ok(mut f) = std::fs::File::open(&path) else {
+        return (vec![tr("preview.fail")], None);
+    };
+    let mut buf = vec![0u8; 16 * 1024];
+    let n = f.read(&mut buf).unwrap_or(0);
+    buf.truncate(n);
+    if n == 0 {
+        return (vec![tr("preview.empty")], None);
+    }
+    if buf[..n.min(1024)].contains(&0) {
+        return (vec![tr("preview.binary")], None);
+    }
+    let lines = String::from_utf8_lossy(&buf)
+        .lines()
+        .take(200) // 도크 높이 초과분은 그리지 않음 — 여유 상한
+        .map(|l| l.replace('\t', "    "))
+        .collect();
+    (lines, None)
+}
+
+/// 양 패널 도크 내용 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
+/// 활성 종류: 0=정보(원본 DockInfo) · 1=미리보기(M4-2).
 fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
     for i in 0..2 {
         if st.panels[i].dock_visible() {
-            let lines = dock_info(&st.panels[i]);
-            st.panels[i].dock.set_title(tr("dock.info"), inv);
+            st.panels[i]
+                .dock
+                .set_kinds(vec![tr("dock.info"), tr("dock.preview")], inv);
+            let (lines, image) = match st.panels[i].dock.active_kind() {
+                1 => preview_content(&st.panels[i]),
+                _ => (dock_info(&st.panels[i]), None),
+            };
             st.panels[i].dock.set_lines(lines, inv);
+            st.panels[i].dock.set_image(image, inv);
         }
     }
 }
