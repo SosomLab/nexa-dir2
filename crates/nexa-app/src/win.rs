@@ -228,20 +228,13 @@ fn build_menus(
     ]
 }
 
-/// 도구 모음 버튼(네비 ←→↑⟳ — docs/20 §2).
+/// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
+/// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
 fn build_toolbar() -> Vec<ToolButton> {
-    [
-        (CMD_NAV_BACK, "←"),
-        (CMD_NAV_FORWARD, "→"),
-        (CMD_NAV_UP, "↑"),
-        (CMD_REFRESH, "⟳"),
-    ]
-    .into_iter()
-    .map(|(id, g)| ToolButton {
-        id,
-        glyph: g.into(),
-    })
-    .collect()
+    vec![ToolButton {
+        id: CMD_REFRESH,
+        glyph: "⟳".into(),
+    }]
 }
 
 /// 단조 시각(ms) — 타입어헤드 버퍼 타임아웃 판정용(프로세스 기동 기준).
