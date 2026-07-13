@@ -301,8 +301,6 @@ struct State {
     trimmed: bool,
     /// UIA 포커스 이벤트 중복 억제(M2-7): 마지막 통지한 (활성 패널, 캐럿).
     uia_caret: Option<(usize, Option<usize>)>,
-    /// 내부 클립보드(원본 FileClipboard — 경로+모드). OS 클립보드 상호운용은 M3-5.
-    clipboard: Option<(Vec<PathBuf>, nexa_ops::Op)>,
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
     transfer_gen: u64,
@@ -485,7 +483,6 @@ pub fn run() -> Result<()> {
         last_activity_ms: 0,
         trimmed: false,
         uia_caret: None,
-        clipboard: None,
         transfer: None,
         transfer_gen: 0,
         history: nexa_ops::history::OperationHistory::default(),
@@ -813,10 +810,10 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
     match outcome {
         shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 새로 만들기 등 FS 변경 가능
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("paste") => {
-            // 내부 클립보드 붙여넣기 합류(M3-1 전송 엔진 — undo 기록 포함)
-            if let Some((paths, op)) = st.clipboard.clone() {
+            // OS 클립보드 붙여넣기 합류(M3-5 — 전송 엔진 경유 = undo 기록 포함)
+            if let Some((paths, op)) = crate::clipboard::read_file_list() {
                 if op == nexa_ops::Op::Move {
-                    st.clipboard = None;
+                    crate::clipboard::clear(hwnd);
                 }
                 start_transfer(hwnd, st, paths, dir, op);
             }
@@ -874,7 +871,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
             label: tr("ctx.deletePermanent"),
             enabled: true,
         }];
-        if paste_dir.is_some() && st.clipboard.is_some() {
+        if paste_dir.is_some() && crate::clipboard::has_files() {
             custom.push(CustomItem {
                 id: CTX_PASTE_INTO,
                 label: tr("ctx.pasteInto"),
@@ -910,9 +907,11 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         }
         shellmenu::Outcome::Custom(CTX_DELETE_PERMANENT) => do_delete(hwnd, st, true),
         shellmenu::Outcome::Custom(CTX_PASTE_INTO) => {
-            if let (Some(dir), Some((paths, op))) = (req.paste_dir, st.clipboard.clone()) {
+            if let (Some(dir), Some((paths, op))) =
+                (req.paste_dir, crate::clipboard::read_file_list())
+            {
                 if op == nexa_ops::Op::Move {
-                    st.clipboard = None; // 잘라내기는 1회성(원본 관례)
+                    crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
                 }
                 start_transfer(hwnd, st, paths, dir, op);
             }
@@ -1902,18 +1901,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == b'A' as u16 && ctrl {
                     st.active_panel().on_event(&InputEvent::SelectAll, &mut inv);
                 } else if vk == b'C' as u16 && ctrl {
-                    // 내부 클립보드 복사/잘라내기(M3-1) — 선택 없으면 클립보드 유지
-                    if let Some(c) = clip_from_selection(st, nexa_ops::Op::Copy) {
-                        st.clipboard = Some(c);
+                    // OS 클립보드 복사/잘라내기(M3-5 — CF_HDROP 단일 출처) — 선택 없으면 유지
+                    if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Copy) {
+                        crate::clipboard::write_file_list(hwnd, &paths, op);
                     }
                 } else if vk == b'X' as u16 && ctrl {
-                    if let Some(c) = clip_from_selection(st, nexa_ops::Op::Move) {
-                        st.clipboard = Some(c);
+                    if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Move) {
+                        crate::clipboard::write_file_list(hwnd, &paths, op);
                     }
                 } else if vk == b'V' as u16 && ctrl {
-                    if let Some((paths, op)) = st.clipboard.clone() {
+                    if let Some((paths, op)) = crate::clipboard::read_file_list() {
                         if op == nexa_ops::Op::Move {
-                            st.clipboard = None; // 잘라내기는 1회성(원본 관례)
+                            crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
                         }
                         let dest = st.active_panel().root_path().to_path_buf();
                         start_transfer(hwnd, st, paths, dest, op);
