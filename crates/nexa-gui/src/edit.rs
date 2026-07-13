@@ -233,34 +233,23 @@ impl EditState {
         ctx.fill_rect(rc, theme.field_bg);
         // 잘림 시 첫 가시 문자 경계(렌더러가 좌측 클립을 보장하지 않으므로 문자 경계로 자름)
         let vis_from = offs.iter().position(|&o| o >= dx).unwrap_or(0);
-        // 텍스트 런: [0,a)=일반 · [a,b)=선택 하이라이트 · [b,len)=일반.
-        // text_opaque는 **clip 전체를 bg로 채우므로** 런 자신의 x 구간만 clip으로 넘긴다
-        // (전체 rect를 넘기면 뒤 런이 앞 런을 지움 — 실기 QA 07-13 이름부 소실 원인).
-        let (a, b) = self.sel_range().unwrap_or((0, 0));
-        let runs = [
-            (0usize, a, theme.field_bg),
-            (a, b, theme.sel_bg),
-            (b, self.buf.len(), theme.field_bg),
-        ];
-        for (s, e, bg) in runs {
-            let s = s.max(vis_from);
-            if s >= e {
-                continue;
+        // 선택 하이라이트 = fill_rect(가시 구간 클램프) → 그 위에 텍스트를 **1회에** 그린다
+        // (런 분할은 백엔드 말줄임 트리밍과 이음새로 경계가 잘림 — QA 07-13 2·3차).
+        if let Some((a, b)) = self.sel_range() {
+            let lo = (x0 + offs[a]).max(rc.x + 1);
+            let hi = (x0 + offs[b]).min(rc.right() - 1);
+            if hi > lo {
+                ctx.fill_rect(Rect::new(lo, rc.y + 1, hi - lo, rc.h - 2), theme.sel_bg);
             }
-            let rx = x0 + offs[s];
-            let lo = rx.max(rc.x + 1);
-            let hi = (x0 + offs[e]).min(rc.right() - 1);
-            if hi <= lo {
-                continue;
-            }
-            let run: String = self.buf[s..e].iter().collect();
-            ctx.text_opaque(
-                rx,
+        }
+        if vis_from < self.buf.len() {
+            let visible: String = self.buf[vis_from..].iter().collect();
+            ctx.text(
+                x0 + offs[vis_from],
                 ty,
-                Rect::new(lo, rc.y + 1, hi - lo, rc.h - 2),
-                &run,
+                Rect::new(rc.x + 1, rc.y + 1, rc.w - 2, rc.h - 2),
+                &visible,
                 theme.text,
-                bg,
             );
         }
         // 세로바 캐럿(사용자 지시 07-13 — `_` 대체)

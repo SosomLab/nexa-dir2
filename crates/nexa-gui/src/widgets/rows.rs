@@ -353,6 +353,16 @@ impl<S: RowSource> VirtualRows<S> {
         self.bounds.x - self.scroll_x + before
     }
 
+    /// 컬럼 총폭의 오른쪽 경계 — 이 오른쪽은 **빈 본문**으로 판정(행 아님. 원본 B-4
+    /// "행 히트영역=컬럼 총폭" — 클릭=해제·드래그=러버밴드, QA 07-13).
+    fn columns_right(&self) -> i32 {
+        if self.columns.is_empty() {
+            self.bounds.right()
+        } else {
+            self.col_x(self.columns.len() - 1) + self.columns.last().map_or(0, |c| c.width)
+        }
+    }
+
     /// 현재 높이에서 그릴 행 수(부분 행 포함).
     fn visible_rows(&self) -> usize {
         ((self.body_h() + self.row_h - 1) / self.row_h).max(0) as usize
@@ -467,8 +477,10 @@ impl<S: RowSource> VirtualRows<S> {
     }
 
     /// 클라이언트 좌표 → 본문 행 인덱스(범위 밖이면 `None`). 호스트의 더블클릭 진입 판정에도 사용.
+    /// 마지막 컬럼 오른쪽 공간은 행이 아니라 **빈 본문**(원본 B-4 — QA 07-13).
     pub fn row_at(&self, x: i32, y: i32) -> Option<usize> {
-        if !self.bounds.contains(Point { x, y }) || y < self.body_top() {
+        if !self.bounds.contains(Point { x, y }) || y < self.body_top() || x >= self.columns_right()
+        {
             return None;
         }
         let row = self.scroll_row + ((y - self.body_top()) / self.row_h) as usize;
@@ -788,6 +800,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             inv.push(self.bounds);
                         }
                     } else {
+                        let was_selected = self.src.is_selected(row);
                         let op = if shift {
                             SelectOp::RangeTo
                         } else if ctrl {
@@ -797,6 +810,16 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         };
                         self.src.select(row, op);
                         self.caret = Some(row);
+                        // **미선택 행** 프레스(수정키 없음) = 러버밴드 시작(원본 B-4 —
+                        // 드래그=다중 선택·클릭만=단일 선택. 기선택 행은 호스트 파일 DnD 후보)
+                        if !was_selected && !shift && !ctrl {
+                            self.band = Some(BandDrag {
+                                ox: x,
+                                oy: y,
+                                cx: x,
+                                cy: y,
+                            });
+                        }
                         inv.push(self.bounds); // 하이라이트·캐럿 갱신
                     }
                 } else if y >= self.body_top() && self.bounds.contains(Point { x, y }) {
@@ -921,23 +944,29 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         ctx.text_opaque(tx, ty, cell, &text, theme.text, bg);
                     }
                 }
-                // 마지막 컬럼 오른쪽 잔여
-                let cols_right =
-                    self.col_x(self.columns.len() - 1) + self.columns.last().map_or(0, |c| c.width);
+                // 마지막 컬럼 오른쪽 잔여 = 빈 본문(선택 하이라이트 제외 — 원본 B-4·QA 07-13)
+                let cols_right = self.columns_right();
                 if cols_right < b.right() {
+                    let empty_bg = if row.is_multiple_of(2) {
+                        theme.panel_bg
+                    } else {
+                        theme.panel_bg_alt
+                    };
                     ctx.fill_rect(
                         Rect::new(cols_right, y, b.right() - cols_right, self.row_h),
-                        bg,
+                        empty_bg,
                     );
                 }
             }
 
-            // 캐럿 행 테두리(1px accent) — 선택과 독립(키보드 기준점 표시)
+            // 캐럿 행 테두리(1px accent) — 선택과 독립(키보드 기준점 표시). 폭 = 컬럼 총폭
             if self.caret == Some(row) {
-                ctx.fill_rect(Rect::new(b.x, y, b.w, 1), theme.accent);
-                ctx.fill_rect(Rect::new(b.x, y + self.row_h - 1, b.w, 1), theme.accent);
+                let cr = self.columns_right().min(b.right());
+                let cw = (cr - b.x).max(1);
+                ctx.fill_rect(Rect::new(b.x, y, cw, 1), theme.accent);
+                ctx.fill_rect(Rect::new(b.x, y + self.row_h - 1, cw, 1), theme.accent);
                 ctx.fill_rect(Rect::new(b.x, y, 1, self.row_h), theme.accent);
-                ctx.fill_rect(Rect::new(b.right() - 1, y, 1, self.row_h), theme.accent);
+                ctx.fill_rect(Rect::new(cr - 1, y, 1, self.row_h), theme.accent);
             }
         }
 

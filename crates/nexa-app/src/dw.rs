@@ -296,6 +296,27 @@ impl DrawCtx for DwCtx<'_> {
         }
     }
 
+    fn text(&mut self, x: i32, _y: i32, clip: Rect, text: &str, fg: Color) {
+        // 배경 없이 글리프만(편집 필드 — 선택 하이라이트 위 1회 겹쳐 그리기, QA 07-13)
+        if text.is_empty() || x >= clip.right() {
+            return;
+        }
+        unsafe {
+            let ppd = self.back.pixels_per_dip();
+            let max_w = clip.right() - x;
+            let Some(layout) = self.back.layout_for(text, max_w, clip.h as f32 / ppd) else {
+                return;
+            };
+            self.back.color.set(colorref(fg));
+            let _ = layout.Draw(
+                None,
+                &self.back.renderer,
+                x as f32 / ppd,
+                clip.y as f32 / ppd,
+            );
+        }
+    }
+
     fn text_width(&mut self, text: &str) -> i32 {
         if text.is_empty() {
             return 0;

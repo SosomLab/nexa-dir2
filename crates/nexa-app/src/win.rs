@@ -1796,13 +1796,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 } else if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
+                    // 프레스 시점(선택 반영 전) 기선택 행 판정 — **기선택 행만 OLE DnD 후보**.
+                    // 미선택 행 드래그=러버밴드(원본 B-4)·리네임 중=텍스트 드래그(QA 07-13 3차)
+                    let was_selected = {
+                        let rows = st.panels[idx].rows();
+                        (!rows.is_renaming())
+                            .then(|| rows.row_at(x, y))
+                            .flatten()
+                            .filter(|_| !rows.marker_hit(x, y))
+                            .and_then(|r| {
+                                let tree = rows.source().tree();
+                                tree.visible_id(r).map(|id| tree.is_selected(id))
+                            })
+                            .unwrap_or(false)
+                    };
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
-                    // 행 본문 누름 = OLE 드래그 발신 후보(M3-5 S4) — 임계 이동 시 시작
-                    let rows = st.panels[idx].rows();
-                    if rows.row_at(x, y).is_some() && !rows.marker_hit(x, y) {
-                        st.drag_press = Some((x, y));
+                    if was_selected {
+                        st.drag_press = Some((x, y)); // 임계 이동 시 OLE 드래그 발신(M3-5 S4)
                     }
                 }
                 flush_invalidations(hwnd, &mut inv);
