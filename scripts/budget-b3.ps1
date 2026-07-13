@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $whitelist = @(
   "kernel32.dll", "user32.dll", "gdi32.dll", "ntdll.dll", "oleaut32.dll",
   "dwrite.dll", "combase.dll",     # ADR-0002 DirectWrite interop
+  "ole32.dll",                     # M3-3 휴지통 복원(CoInitializeEx·CoTaskMemFree — COM 초기화/PIDL 해제)
   "bcryptprimitives.dll",          # rust std HashMap RandomState(BCryptGenRandom)
   "shell32.dll",                   # M1-7 셸 아이콘(SHGetFileInfoW)
   "dwmapi.dll",                    # M2-4 다크 타이틀바(DwmSetWindowAttribute)

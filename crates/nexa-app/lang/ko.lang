@@ -13,6 +13,9 @@ menu.file.closeTab = 탭 닫기
 menu.file.newFolder = 새 폴더 만들기
 menu.file.newFile = 새 파일 만들기
 menu.file.exit = 종료
+menu.edit = 편집
+menu.edit.undo = 실행 취소
+menu.edit.redo = 다시 실행
 menu.view = 보기
 menu.view.hidden = 숨김 파일 표시
 menu.view.dot = 점 파일 표시
@@ -46,10 +49,27 @@ del.confirm = {0}개 항목을 영구 삭제할까요?
 del.kindRecycle = 휴지통
 del.kindPermanent = 완전 삭제
 del.done = {0}: {1}개 삭제
+del.recycleOp = 휴지통 삭제 {0}개
 rename.fail = 이름변경 실패: {0}
 new.folderBase = 새 폴더
 new.fileBase = 새 파일
 new.fail = 만들기 실패: {0}
+
+# ── Undo/Redo(M3-3) ──
+undo.none = 실행 취소할 작업 없음
+redo.none = 다시 실행할 작업 없음
+undo.done = 실행 취소: {0}
+redo.done = 다시 실행: {0}
+undo.fail = 실행 취소 실패({0}): {1}
+redo.fail = 다시 실행 실패({0}): {1}
+history.failedItems = {0}개 항목 실패
+history.missingSource = 원본 없음: {0}
+history.nameExists = 같은 이름이 이미 있음: {0}
+op.moveCount = 이동 {0}개
+op.copyCount = 복사 {0}개
+rename.done = 이름 변경: {0} → {1}
+new.folderOp = 새 폴더
+new.fileOp = 새 파일
 
 # ── 상태바 · 타이틀 ──
 status.itemCount = {0}개 항목

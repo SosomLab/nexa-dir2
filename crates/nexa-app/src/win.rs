@@ -73,6 +73,8 @@ const CMD_CLOSE_TAB: u32 = 2;
 const CMD_EXIT: u32 = 3;
 const CMD_NEW_FOLDER: u32 = 4;
 const CMD_NEW_FILE: u32 = 5;
+const CMD_UNDO: u32 = 6;
+const CMD_REDO: u32 = 7;
 const CMD_TOGGLE_HIDDEN: u32 = 10;
 const CMD_TOGGLE_DOTFILES: u32 = 11;
 const CMD_REFRESH: u32 = 12;
@@ -211,6 +213,14 @@ fn build_menus(
             ],
         },
         Menu {
+            title: tr("menu.edit"),
+            items: vec![
+                // 활성/비활성 표시는 후속(메뉴 위젯 enabled 미지원) — 없으면 상태바로 알림(M3-3)
+                MenuItem::new(CMD_UNDO, tr("menu.edit.undo"), "Ctrl+Z"),
+                MenuItem::new(CMD_REDO, tr("menu.edit.redo"), "Ctrl+Y"),
+            ],
+        },
+        Menu {
             title: tr("menu.view"),
             items: view_items,
         },
@@ -302,6 +312,8 @@ struct State {
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
     transfer_gen: u64,
+    /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
+    history: nexa_ops::history::OperationHistory,
 }
 
 /// 전송 워커와 UI 스레드가 공유하는 상태(원자/뮤텍스 — 워커는 State 접근 금지).
@@ -315,6 +327,8 @@ struct TransferShared {
 struct TransferJob {
     shared: Arc<TransferShared>,
     gen: u64,
+    /// 완료 시 히스토리 기록용(M3-3) — Move/Copy에 따라 역연산이 다르다.
+    op: nexa_ops::Op,
 }
 
 impl State {
@@ -480,6 +494,7 @@ pub fn run() -> Result<()> {
         clipboard: None,
         transfer: None,
         transfer_gen: 0,
+        history: nexa_ops::history::OperationHistory::default(),
     });
 
     unsafe {
@@ -758,6 +773,97 @@ unsafe fn delete_to_recycle_bin(paths: &[PathBuf]) -> bool {
     SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool()
 }
 
+/// 휴지통 삭제 배치(원본 DeleteBatchOp — RecycleBin.cs와 동일 배치) — undo: 셸 undelete로
+/// 원래 위치 복원 / redo: 다시 휴지통 삭제. 셸 COM 의존이라 앱 계층(연산 계약은 nexa-ops).
+struct DeleteBatchOp {
+    paths: Vec<PathBuf>,
+    description: String,
+}
+
+impl nexa_ops::history::ReversibleOp for DeleteBatchOp {
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn undo(&mut self) -> std::result::Result<(), nexa_ops::history::OpError> {
+        let restored = crate::recycle::restore_by_original_paths(&self.paths);
+        if restored < self.paths.len() {
+            return Err(nexa_ops::history::OpError::Failed(
+                self.paths.len() - restored,
+            ));
+        }
+        Ok(())
+    }
+
+    fn redo(&mut self) -> std::result::Result<(), nexa_ops::history::OpError> {
+        let existing: Vec<PathBuf> = self
+            .paths
+            .iter()
+            .filter(|p| nexa_ops::exists(p))
+            .cloned()
+            .collect();
+        if existing.is_empty() {
+            return Ok(());
+        }
+        if unsafe { delete_to_recycle_bin(&existing) } {
+            Ok(())
+        } else {
+            Err(nexa_ops::history::OpError::Failed(existing.len()))
+        }
+    }
+}
+
+/// 단일 경로 휴지통 삭제 — undo용 사본/생성물 제거 주입(원본 FileOps.DeleteToRecycleBin 대응).
+fn recycle_delete_one(p: &std::path::Path) -> std::io::Result<()> {
+    if unsafe { delete_to_recycle_bin(&[p.to_path_buf()]) } {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("휴지통 삭제 실패"))
+    }
+}
+
+/// [`nexa_ops::history::OpError`] → i18n 문구(코어는 구조화 사유만 반환 — 문구는 앱 책임).
+fn op_error_text(e: &nexa_ops::history::OpError) -> String {
+    use nexa_ops::history::OpError;
+    match e {
+        OpError::Failed(n) => trf("history.failedItems", &[&n.to_string()]),
+        OpError::MissingSource(name) => trf("history.missingSource", &[name]),
+        OpError::NameExists(name) => trf("history.nameExists", &[name]),
+    }
+}
+
+/// Ctrl+Z/Y·편집 메뉴(M3-3, 원본 UndoLastOperation/RedoLastOperation) — 실행 후 양쪽 재로드.
+/// 실패한 연산은 스택에서 소실(무결성 우선 — docs/33)·상태는 타이틀 노트로 알림.
+unsafe fn do_undo_redo(hwnd: HWND, st: &mut State, redo: bool) {
+    let desc = if redo {
+        st.history.redo_description()
+    } else {
+        st.history.undo_description()
+    }
+    .map(str::to_owned);
+    let result = if redo {
+        st.history.redo()
+    } else {
+        st.history.undo()
+    };
+    let Some(result) = result else {
+        // 되돌릴/재실행할 작업 없음 — FS 무변경이라 재로드 생략
+        let note = tr(if redo { "redo.none" } else { "undo.none" });
+        update_title(hwnd, st, &format!(" · {note}"));
+        return;
+    };
+    let desc = desc.unwrap_or_default();
+    let note = match result {
+        Ok(()) => trf(if redo { "redo.done" } else { "undo.done" }, &[&desc]),
+        Err(e) => trf(
+            if redo { "redo.fail" } else { "undo.fail" },
+            &[&desc, &op_error_text(&e)],
+        ),
+    };
+    // 실패여도 일부 항목은 수행됐을 수 있다 — 항상 재로드
+    reload_both(hwnd, st, &format!(" · {note}"));
+}
+
 /// 양쪽 패널 재로드(원본 ReloadBothPanels — watcher(M3-6) 전 임시) + 타이틀/상태 갱신.
 unsafe fn reload_both(hwnd: HWND, st: &mut State, note: &str) {
     let ctx = st.nav_ctx();
@@ -802,6 +908,11 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
         }
     } else if delete_to_recycle_bin(&targets) {
         ok = targets.len();
+        // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
+        st.history.push(Box::new(DeleteBatchOp {
+            description: trf("del.recycleOp", &[&ok.to_string()]),
+            paths: targets.clone(),
+        }));
     } else {
         fail = targets.len();
     }
@@ -841,7 +952,18 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
     };
     let Some(path) = path else { return };
     let note = match nexa_ops::rename(&path, new_name) {
-        Ok(_) => String::new(),
+        Ok(new_path) => {
+            if new_path != path {
+                // undo 기록(B-13u) — 동일 이름 무동작은 제외
+                let desc = trf("rename.done", &[&nexa_ops::leaf_name(&path), new_name]);
+                st.history.push(Box::new(nexa_ops::history::RenameOp::new(
+                    path.clone(),
+                    new_path,
+                    desc,
+                )));
+            }
+            String::new()
+        }
         Err(e) => format!(" · {}", trf("rename.fail", &[&e.to_string()])),
     };
     reload_both(hwnd, st, &note);
@@ -864,6 +986,28 @@ unsafe fn create_new(hwnd: HWND, st: &mut State, folder: bool) {
             );
         }
         Ok(path) => {
+            // undo 기록(B-13u) — undo=휴지통 삭제·redo=재생성(원본 CreateOp 주입 동일)
+            let desc = tr(if folder { "new.folderOp" } else { "new.fileOp" });
+            let recreate: nexa_ops::history::RecreateFn = {
+                let p = path.clone();
+                if folder {
+                    Box::new(move || std::fs::create_dir(&p))
+                } else {
+                    Box::new(move || {
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&p)
+                            .map(|_| ())
+                    })
+                }
+            };
+            st.history.push(Box::new(nexa_ops::history::CreateOp::new(
+                path.clone(),
+                desc,
+                Box::new(recycle_delete_one),
+                recreate,
+            )));
             reload_both(hwnd, st, "");
             let row = st
                 .active_panel()
@@ -928,7 +1072,7 @@ unsafe fn start_transfer(
             let _ = PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(1));
         }
     });
-    st.transfer = Some(TransferJob { shared, gen });
+    st.transfer = Some(TransferJob { shared, gen, op });
     update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &["0"])));
 }
 
@@ -959,6 +1103,22 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         .unwrap()
         .take()
         .unwrap_or_default();
+    // undo 기록(M3-3, 원본 B-13u) — 수행된 (원본, 최종 대상) 쌍만. 취소돼도 수행분은 기록.
+    if !out.transferred.is_empty() {
+        let n = out.transferred.len().to_string();
+        let op: Box<dyn nexa_ops::history::ReversibleOp> = match job.op {
+            nexa_ops::Op::Move => Box::new(nexa_ops::history::MoveBatchOp::new(
+                out.transferred.clone(),
+                trf("op.moveCount", &[&n]),
+            )),
+            nexa_ops::Op::Copy => Box::new(nexa_ops::history::CopyBatchOp::new(
+                out.transferred.clone(),
+                trf("op.copyCount", &[&n]),
+                Box::new(recycle_delete_one),
+            )),
+        };
+        st.history.push(op);
+    }
     // 완료 후 양쪽 재로드(원본 TRANSFER-ENGINE 규약 — watcher는 M3-6)
     let ctx = st.nav_ctx();
     let mut inv = Invalidations::default();
@@ -1129,6 +1289,10 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         }
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
+        }
+        CMD_UNDO | CMD_REDO => {
+            do_undo_redo(hwnd, st, id == CMD_REDO);
+            return; // 결과 노트 보존(말미 update_title("")이 지우지 않도록)
         }
         CMD_REFRESH => st.active_panel().reopen_filtered(ctx, &mut inv),
         CMD_NAV_BACK => st.active_panel().nav_back(ctx, &mut inv),
@@ -1555,6 +1719,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         start_transfer(hwnd, st, paths, dest, op);
                         return LRESULT(0);
                     }
+                } else if vk == b'Z' as u16 && ctrl {
+                    do_undo_redo(hwnd, st, shift); // Ctrl+Z=실행 취소·Ctrl+Shift+Z=다시 실행(M3-3)
+                    return LRESULT(0);
+                } else if vk == b'Y' as u16 && ctrl {
+                    do_undo_redo(hwnd, st, true); // Ctrl+Y=다시 실행(탐색기 관례)
+                    return LRESULT(0);
                 } else if vk == VK_RETURN.0 {
                     if let Some(c) = st.active_panel().rows().caret() {
                         st.active_panel().activate_row(c, ctx, &mut inv);

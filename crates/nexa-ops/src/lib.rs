@@ -6,6 +6,8 @@
 //! 플랫폼 중립(std 전용) — 전 플랫폼 테스트. 워커 스레드·PostMessage UI 배선은 nexa-app 책임.
 //! 원본과의 차이: 취소·오류 시 **부분 복사 파일을 정리**한다(원본은 잔존 — 안전 개선, journal 기록).
 
+pub mod history;
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
