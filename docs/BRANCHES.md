@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `fix/toolbar-refresh-only` | 2026-07-13 | 2026-07-13 (`4d4281b`) | — | 1 | 사용자 지시 — 전역 도구 모음 이전/다음 오동작 보고 → 네비 버튼 제거(패널별 네비 바 전담)·⟳만 유지 | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-shellmenu` | 2026-07-13 | 2026-07-13 (`e28fed3`) | — | 5 | M3-4 — 셸 컨텍스트 메뉴(ADR-0003, 원본 ADR-0005·ShellContextMenu.cs 계승): 행 우클릭=IContextMenu 셸 메뉴·빈 영역=배경 메뉴(CreateViewObject)·고유 병합 0x8000+(완전 삭제·붙여넣기·Undo/Redo)·delete/rename/paste 가로채기·Apps/Shift+F10·자기 wndproc 포워딩(comctl32 불요). 테스트 127 green·exe 0.60MB·B3 무변·셸 메뉴 상호작용 실기 QA 대기 | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-undo` | 2026-07-13 | 2026-07-13 (`8bf3da3`) | — | 4 | M3-3 — Undo/Redo(원본 OperationHistory.cs·RecycleBin.cs): nexa-ops `history` 모듈(ReversibleOp·스택 2개·실패 소실=무결성·연산 4종)·`OpError` 구조화·앱 배선(push 3곳·Ctrl+Z/Y·Ctrl+Shift+Z·편집 메뉴)·휴지통 복원(셸 undelete·STRRET 직접 파싱). 실 휴지통 왕복 통합 테스트 통과·exe 0.58MB·RSS 25.51MB·B3(ole32) | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m3-fileops` | 2026-07-13 | 2026-07-13 (`f86c021`) | — | 3 | M3-2 — 삭제(Del=휴지통 FOF_ALLOWUNDO·Shift+Del=완전+확인창)·F2 인라인 이름변경(rows 오버레이 편집기)·새 폴더/파일(생성→즉시 리네임). nexa-ops delete/rename/create_new. 실기 4종·테스트 116 green | [2026-07-13](journal/2026-07-13.md) |
