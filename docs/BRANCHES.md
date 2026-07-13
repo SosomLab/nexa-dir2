@@ -41,7 +41,7 @@
 ## feat/m3-shellmenu
 
 - **생성**: 2026-07-13 (분기: main `77c3265`). **커밋**: `895a660`(S1 — shellmenu.rs·IContextMenu 호스팅·wndproc 포워딩·delete/rename 가로채기·rows 우클릭 선택 규약+테스트·ADR-0003) → `11f7732`(S2 — 고유 병합 0x8000+[완전 삭제·붙여넣기]·Apps/Shift+F10·row_anchor) → `3bc4ebe`(S3 — 빈 영역 배경 메뉴 CreateViewObject·run_menu 통합·Undo/Redo 병합·paste 가로채기·in_body) → `a4241e4`(docs 현행화). 병합(`e28fed3`): 2026-07-13. 삭제: CI green 확인 후.
-- **검증**: Windows 실기 — `cargo test` 워크스페이스 **127 green**(gui 52 — 우클릭 선택 신규) · clippy 0 · fmt · B2 0.60MB · **B3 통과(임포트 무변 — comctl32 서브클래스 회피 확인)** · 릴리스 기동 스모크(RSS 26MB·정상 종료). **셸 메뉴 상호작용(우클릭 표시·확장 항목·보내기·병합 항목 동작)은 실기 QA 대기**(모달 메뉴 루프 — 자동화 불가).
+- **검증**: Windows 실기 — `cargo test` 워크스페이스 **127 green**(gui 52 — 우클릭 선택 신규) · clippy 0 · fmt · B2 0.60MB · **B3 통과(임포트 무변 — comctl32 서브클래스 회피 확인)** · 릴리스 기동 스모크(RSS 26MB·정상 종료) · **실기 QA(사용자) 5/6 통과**(파일/폴더 우클릭·보내기 서브메뉴·휴지통 복원·빈영역 Undo/Redo·새 폴더 — 잔여: Apps/Shift+F10 = TODO §7 X-1).
 - **α 한계**: 커스텀 레지스트리/설정 사용자화(원본 §7)·Checksum·VerbReplacement·교차 부모 선택 = M5 후속 · 마커 존 우클릭 시 캐럿 불이동 · nexa-shell 크레이트 분리 대신 앱 모듈 채택(규모 도달 시 재검토).
 
 ## feat/m3-undo
