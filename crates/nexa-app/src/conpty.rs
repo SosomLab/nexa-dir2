@@ -167,12 +167,8 @@ impl ConPty {
                         pending.drain(..valid);
                         out.lock().unwrap().push_str(&text);
                         unsafe {
-                            let _ = PostMessageW(
-                                Some(hwnd),
-                                msg,
-                                WPARAM(panel),
-                                LPARAM(gen as isize),
-                            );
+                            let _ =
+                                PostMessageW(Some(hwnd), msg, WPARAM(panel), LPARAM(gen as isize));
                         }
                     }
                 }
@@ -232,10 +228,7 @@ impl ConPty {
             return;
         }
         unsafe {
-            let _ = ResizePseudoConsole(
-                HPCON(self.hpc),
-                COORD { X: cols, Y: rows },
-            );
+            let _ = ResizePseudoConsole(HPCON(self.hpc), COORD { X: cols, Y: rows });
         }
     }
 }

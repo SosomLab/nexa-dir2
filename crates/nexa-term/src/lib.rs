@@ -132,7 +132,13 @@ impl VtScreen {
 
     /// 절대 라인 범위의 텍스트 추출(양끝 포함) — 마우스 선택 복사용.
     /// 전각 연속 셀('\0')은 건너뛰고 각 줄 우측 공백 트림, 줄 구분 CRLF.
-    pub fn get_text(&self, start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> String {
+    pub fn get_text(
+        &self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) -> String {
         let count = self.line_count();
         if count == 0 {
             return String::new();
@@ -224,7 +230,7 @@ impl VtScreen {
             ']' => self.state = S::Osc,
             '(' | ')' | '*' | '+' => {} // charset 지정 — 다음 1글자 무시(간이·원본 동일)
             'M' => self.reverse_index(),
-            'D' => self.line_feed(),         // IND
+            'D' => self.line_feed(), // IND
             'E' => {
                 self.cx = 0;
                 self.line_feed(); // NEL
@@ -575,9 +581,22 @@ pub fn is_wide(ch: char) -> bool {
 
 // Campbell(Windows Terminal 기본) 16색 팔레트
 const PALETTE16: [u32; 16] = [
-    0xFF0C_0C0C, 0xFFC5_0F1F, 0xFF13_A10E, 0xFFC1_9C00, 0xFF00_37DA, 0xFF88_1798, 0xFF3A_96DD,
-    0xFFCC_CCCC, 0xFF76_7676, 0xFFE7_4856, 0xFF16_C60C, 0xFFF9_F1A5, 0xFF3B_78FF, 0xFFB4_009E,
-    0xFF61_D6D6, 0xFFF2_F2F2,
+    0xFF0C_0C0C,
+    0xFFC5_0F1F,
+    0xFF13_A10E,
+    0xFFC1_9C00,
+    0xFF00_37DA,
+    0xFF88_1798,
+    0xFF3A_96DD,
+    0xFFCC_CCCC,
+    0xFF76_7676,
+    0xFFE7_4856,
+    0xFF16_C60C,
+    0xFFF9_F1A5,
+    0xFF3B_78FF,
+    0xFFB4_009E,
+    0xFF61_D6D6,
+    0xFFF2_F2F2,
 ];
 
 fn ansi16(i: usize) -> u32 {

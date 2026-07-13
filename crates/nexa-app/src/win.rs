@@ -73,6 +73,8 @@ const IDLE_TRIM_MS: u64 = 60_000;
 const WM_APP_FSCHANGE: u32 = 0x8002; // WM_APP + 2
 const TIMER_WATCH_BASE: usize = 10;
 const WATCH_DEBOUNCE_MS: u32 = 300;
+/// 터미널 출력/종료 통지(M4-3) — wparam=패널(|EXIT_FLAG), lparam=세대.
+const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -327,8 +329,20 @@ struct State {
     watch_gen: u64,
     /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
     dock_drag: Option<usize>,
+    /// 패널별 ConPTY 터미널(M4-3) — 도크 종류 '터미널' 최초 전환 시 지연 시작.
+    terms: [Option<TermState>; 2],
+    term_gen: u64,
+    /// 터미널 키 입력 포커스(도크 터미널 클릭 시) — 리스트 단축키 차단.
+    term_focus: Option<usize>,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
+}
+
+/// 도크 터미널 1개(M4-3) — ConPTY 세션 + VT 화면 버퍼.
+struct TermState {
+    pty: crate::conpty::ConPty,
+    screen: nexa_term::VtScreen,
+    exited: bool,
 }
 
 /// 전송 워커와 UI 스레드가 공유하는 상태(원자/뮤텍스 — 워커는 State 접근 금지).
@@ -526,6 +540,9 @@ pub fn run() -> Result<()> {
         watchers: [None, None],
         watch_gen: 0,
         dock_drag: None,
+        terms: [None, None],
+        term_gen: 0,
+        term_focus: None,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -870,15 +887,151 @@ fn preview_content(p: &Panel) -> (Vec<String>, Option<String>) {
 fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
     for i in 0..2 {
         if st.panels[i].dock_visible() {
-            st.panels[i]
-                .dock
-                .set_kinds(vec![tr("dock.info"), tr("dock.preview")], inv);
+            st.panels[i].dock.set_kinds(
+                vec![tr("dock.info"), tr("dock.preview"), tr("dock.terminal")],
+                inv,
+            );
             let (lines, image) = match st.panels[i].dock.active_kind() {
                 1 => preview_content(&st.panels[i]),
+                2 => (Vec::new(), None), // 터미널은 paint에서 직접 그림(M4-3)
                 _ => (dock_info(&st.panels[i]), None),
             };
             st.panels[i].dock.set_lines(lines, inv);
             st.panels[i].dock.set_image(image, inv);
+        }
+    }
+}
+
+/// 도크 터미널 렌더(M4-3, paint 경유) — 지연 시작·크기 동기·셀 그리드·캐럿·종료 안내.
+/// 스크롤백 표시는 α 생략(가시 화면만 — 원본 β 기능).
+#[allow(clippy::too_many_arguments)] // paint의 State 필드 분해 전달(차용 분리)
+unsafe fn term_paint(
+    ctx: &mut DwCtx,
+    hwnd: HWND,
+    panel: usize,
+    term: &mut Option<TermState>,
+    term_gen: &mut u64,
+    rc: nexa_gui::Rect,
+    cwd: &std::path::Path,
+    dpi: u32,
+    theme: &nexa_gui::Theme,
+) {
+    use nexa_gui::{Color, DrawCtx, Rect};
+    let cell_w = ctx.term_cell_w();
+    let cell_h = ((16 * dpi as i32) / 96).max(12);
+    let cols = ((rc.w - 4) / cell_w.max(1)) as usize;
+    let rows = ((rc.h - 2) / cell_h) as usize;
+    if cols < 2 || rows < 2 {
+        return;
+    }
+    if term.is_none() {
+        *term_gen += 1;
+        match crate::conpty::ConPty::start(
+            hwnd,
+            WM_APP_TERM,
+            panel,
+            *term_gen,
+            cwd,
+            cols as i16,
+            rows as i16,
+        ) {
+            Some(pty) => {
+                *term = Some(TermState {
+                    pty,
+                    screen: nexa_term::VtScreen::new(cols, rows),
+                    exited: false,
+                });
+            }
+            None => {
+                ctx.term_text(
+                    rc.x + 2,
+                    rc.y,
+                    Rect::new(rc.x, rc.y, rc.w, cell_h),
+                    &tr("term.fail"),
+                    theme.text_dim,
+                    theme.panel_bg,
+                );
+                return;
+            }
+        }
+    }
+    let t = term.as_mut().unwrap();
+    if t.screen.cols() != cols || t.screen.rows() != rows {
+        t.screen.resize(cols, rows);
+        t.pty.resize(cols as i16, rows as i16);
+    }
+    let argb = |c: u32| Color {
+        r: (c >> 16) as u8,
+        g: (c >> 8) as u8,
+        b: c as u8,
+    };
+    let sb = t.screen.scrollback_count();
+    for r in 0..rows {
+        let y = rc.y + 1 + r as i32 * cell_h;
+        let line = t.screen.line_at(sb + r);
+        // 동일 (fg,bg) 런으로 묶어 그리기 — 전각 연속 셀('\0')은 열만 차지
+        let mut c = 0usize;
+        while c < cols.min(line.len()) {
+            let cell = line[c];
+            let (mut fg, mut bg) = (cell.fg, cell.bg);
+            if cell.reverse {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            let mut run = String::new();
+            let start = c;
+            while c < cols.min(line.len()) {
+                let cur = line[c];
+                let (mut cf, mut cb) = (cur.fg, cur.bg);
+                if cur.reverse {
+                    std::mem::swap(&mut cf, &mut cb);
+                }
+                if cf != fg || cb != bg {
+                    break;
+                }
+                if cur.ch != '\0' {
+                    run.push(cur.ch);
+                }
+                c += 1;
+            }
+            let mut fgc = argb(fg);
+            if cell.faint {
+                // faint = 배경 쪽으로 절반 블렌드(원본 PSReadLine 예측 표시 대응)
+                let bgc = argb(bg);
+                fgc = Color {
+                    r: ((fgc.r as u16 + bgc.r as u16) / 2) as u8,
+                    g: ((fgc.g as u16 + bgc.g as u16) / 2) as u8,
+                    b: ((fgc.b as u16 + bgc.b as u16) / 2) as u8,
+                };
+            }
+            let x = rc.x + 2 + start as i32 * cell_w;
+            let clip = Rect::new(
+                x,
+                y,
+                (c - start) as i32 * cell_w,
+                cell_h.min(rc.bottom() - y),
+            );
+            if clip.h > 0 && clip.w > 0 {
+                ctx.term_text(x, y, clip, &run, fgc, argb(bg));
+            }
+        }
+    }
+    // 캐럿(하단 2px 바) — 종료 시엔 안내
+    if t.exited {
+        let msg = tr("term.exited");
+        let y = rc.bottom() - cell_h - 1;
+        ctx.term_text(
+            rc.x + 2,
+            y,
+            Rect::new(rc.x + 2, y, rc.w - 4, cell_h),
+            &msg,
+            theme.accent,
+            theme.panel_bg,
+        );
+    } else {
+        let cx = rc.x + 2 + t.screen.cursor_col() as i32 * cell_w;
+        let cy = rc.y + 1 + t.screen.cursor_row() as i32 * cell_h;
+        if cy + cell_h <= rc.bottom() {
+            ctx.fill_rect(Rect::new(cx, cy + cell_h - 2, cell_w, 2), theme.accent);
         }
     }
 }
@@ -1605,6 +1758,24 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
         };
         st.panels[0].paint(&mut ctx, &st.theme);
         st.panels[1].paint(&mut ctx, &st.theme);
+        // 도크 터미널(M4-3) — 종류=터미널인 패널의 내용 영역에 셀 그리드 직접 렌더
+        for i in 0..2 {
+            if st.panels[i].dock_visible() && st.panels[i].dock.active_kind() == 2 {
+                let trc = st.panels[i].dock.content_rect();
+                let cwd = st.panels[i].root_path();
+                term_paint(
+                    &mut ctx,
+                    hwnd,
+                    i,
+                    &mut st.terms[i],
+                    &mut st.term_gen,
+                    trc,
+                    &cwd,
+                    st.dpi,
+                    &st.theme,
+                );
+            }
+        }
         // 스플리터(패널 영역 한정·드래그 중 accent)
         use nexa_gui::DrawCtx;
         let lx = st.panels[0].bounds().right();
@@ -1822,6 +1993,22 @@ unsafe fn bench(hwnd: HWND, st: &mut State) {
     }
 }
 
+/// 터미널 비문자 키 → VT 시퀀스(M4-3 — 문자·Enter·Backspace·Ctrl+문자는 WM_CHAR 경로).
+fn term_key_seq(vk: u16) -> Option<&'static str> {
+    match vk {
+        k if k == VK_UP.0 => Some("\x1b[A"),
+        k if k == VK_DOWN.0 => Some("\x1b[B"),
+        k if k == VK_RIGHT.0 => Some("\x1b[C"),
+        k if k == VK_LEFT.0 => Some("\x1b[D"),
+        k if k == VK_HOME.0 => Some("\x1b[H"),
+        k if k == VK_END.0 => Some("\x1b[F"),
+        k if k == VK_DELETE.0 => Some("\x1b[3~"),
+        k if k == VK_PRIOR.0 => Some("\x1b[5~"),
+        k if k == VK_NEXT.0 => Some("\x1b[6~"),
+        _ => None,
+    }
+}
+
 /// 편집 모드 키 매핑(경로바 편집·인라인 리네임 공용 — edit.rs EditKey).
 fn edit_key_of(vk: u16, ctrl: bool) -> Option<nexa_gui::EditKey> {
     use nexa_gui::EditKey;
@@ -1984,6 +2171,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }) {
                     st.dock_drag = Some(idx);
                 } else if let Some(idx) = st.panel_at(x) {
+                    st.term_focus = None; // 기본 해제 — 아래에서 터미널 클릭이면 재설정(M4-3)
                     set_active(hwnd, st, idx);
                     // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
                     // 미선택 행 드래그=러버밴드(원본 B-4)·리네임 중=텍스트 드래그(QA 07-13 3차)
@@ -2004,6 +2192,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
+                    // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3)
+                    if st.panels[idx].dock_visible()
+                        && y >= st.panels[idx].dock.bounds().y
+                        && st.panels[idx].dock.active_kind() == 2
+                    {
+                        st.term_focus = Some(idx);
+                        update_dock_info(st, &mut inv); // 종류 전환 직후 내용 동기
+                    } else if st.panels[idx].dock_visible() && y >= st.panels[idx].dock.bounds().y {
+                        update_dock_info(st, &mut inv);
+                    }
                     // 기선택 항목 재클릭(1s 이상 간격) = 이름 바꾸기 **예약**(진입은 MouseUp —
                     // 드래그가 시작되면 취소 = DnD 우선. 짧은 간격은 더블클릭 시도로 무시)
                     let now = now_ms();
@@ -2222,6 +2420,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     update_title(hwnd, st, "");
                     return LRESULT(0);
                 }
+                // 도크 터미널 포커스(M4-3) — 비문자 키를 VT 시퀀스로 전달, 그 외는 WM_CHAR로
+                // (리스트 단축키 차단). 종료 상태에서 아무 키 = 재시작.
+                if let Some(ti) = st.term_focus {
+                    if st.panels[ti].dock_visible() && st.panels[ti].dock.active_kind() == 2 {
+                        if let Some(t) = &mut st.terms[ti] {
+                            if t.exited {
+                                st.terms[ti] = None; // 다음 페인트에서 재시작(원본 exit 재시작)
+                                let _ = InvalidateRect(Some(hwnd), None, false);
+                                return LRESULT(0);
+                            }
+                            if let Some(seq) = term_key_seq(vk) {
+                                t.pty.write(seq);
+                            }
+                            return LRESULT(0); // 문자 입력은 WM_CHAR 경로로 수신
+                        }
+                    } else {
+                        st.term_focus = None;
+                    }
+                }
                 if st.active_panel().rows().is_renaming() {
                     // 인라인 이름변경 중 — Enter=확정·Esc=취소·편집 키 라우팅(M3-2·QA 07-13)
                     if vk == VK_RETURN.0 {
@@ -2379,6 +2596,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        // 터미널 출력/종료 통지(M4-3) — 세대 가드 후 feed·도크 무효화
+        m if m == WM_APP_TERM => {
+            if let Some(st) = state_of(hwnd) {
+                let exit = wparam.0 & crate::conpty::EXIT_FLAG != 0;
+                let panel = (wparam.0 & !crate::conpty::EXIT_FLAG).min(1);
+                let gen = lparam.0 as u64;
+                if let Some(t) = &mut st.terms[panel] {
+                    if t.pty.gen == gen {
+                        if exit {
+                            t.exited = true;
+                        } else {
+                            let data = std::mem::take(&mut *t.pty.output.lock().unwrap());
+                            t.screen.feed(&data);
+                        }
+                        let r = st.panels[panel].dock.bounds();
+                        let rc = RECT {
+                            left: r.x,
+                            top: r.y,
+                            right: r.right(),
+                            bottom: r.bottom(),
+                        };
+                        let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
+                    }
+                }
+            }
+            LRESULT(0)
+        }
         // 전송 워커 통지(M3-1) — 진행률·완료(양쪽 재로드)
         m if m == WM_APP_TRANSFER => {
             if let Some(st) = state_of(hwnd) {
@@ -2407,6 +2651,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_CHAR => {
             if let Some(st) = state_of(hwnd) {
                 if let Some(c) = char::from_u32(wparam.0 as u32) {
+                    // 도크 터미널 포커스(M4-3) — 문자·제어문자(\r·\x08·Ctrl+C=\x03 등) 전부
+                    // 셸 stdin으로(ConPTY가 해석). Enter/Backspace도 WM_CHAR로 도착.
+                    if let Some(ti) = st.term_focus {
+                        if st.panels[ti].dock_visible() && st.panels[ti].dock.active_kind() == 2 {
+                            if let Some(t) = &st.terms[ti] {
+                                if !t.exited {
+                                    let mut buf = [0u8; 4];
+                                    t.pty.write(c.encode_utf8(&mut buf));
+                                    return LRESULT(0);
+                                }
+                            }
+                        }
+                    }
                     let mut inv = Invalidations::default();
                     if st.active_panel().pathbar.is_editing() {
                         if c == '\u{8}' || !c.is_control() {
