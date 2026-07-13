@@ -21,6 +21,8 @@ pub struct InfoDock {
     /// 스트립 라벨 x 범위 캐시(히트 테스트 — 텍스트 측정은 paint에서만).
     ranges: std::cell::RefCell<Vec<(i32, i32)>>,
     lines: Vec<String>,
+    /// 이미지 미리보기 경로(Some = 라인 대신 이미지 — M4-2).
+    image: Option<String>,
 }
 
 impl InfoDock {
@@ -33,6 +35,7 @@ impl InfoDock {
             active: 0,
             ranges: std::cell::RefCell::new(Vec::new()),
             lines: Vec::new(),
+            image: None,
         }
     }
 
@@ -60,6 +63,14 @@ impl InfoDock {
     pub fn set_lines(&mut self, lines: Vec<String>, inv: &mut Invalidations) {
         if self.lines != lines {
             self.lines = lines;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 이미지 미리보기 대상(M4-2 — Some이면 라인 대신 이미지 표시. 렌더는 draw_image 백엔드).
+    pub fn set_image(&mut self, image: Option<String>, inv: &mut Invalidations) {
+        if self.image != image {
+            self.image = image;
             inv.push(self.bounds);
         }
     }
@@ -127,6 +138,17 @@ impl Widget for InfoDock {
             x += w + self.pad_x;
         }
         *self.ranges.borrow_mut() = ranges;
+        // 이미지 미리보기(M4-2) — 내용 영역 전체에 비율 유지 가운데 표시
+        if let Some(img) = &self.image {
+            let area = Rect::new(
+                b.x + self.pad_x,
+                strip.bottom() + 2,
+                b.w - self.pad_x * 2,
+                (b.bottom() - strip.bottom() - 4).max(0),
+            );
+            ctx.draw_image(area, img);
+            return;
+        }
         // 내용 라인들
         let mut y = strip.bottom();
         for line in &self.lines {

@@ -24,6 +24,13 @@ pub trait DrawCtx {
         let _ = (x, y, clip, text, fg);
     }
 
+    /// 이미지 그리기(M4-2 미리보기) — `hint`(파일 경로)의 이미지를 `rect` 안에 **비율 유지**로
+    /// 가운데 표시. 디코드·스케일·캐시는 백엔드(WIC) 소관. 실패 시 아무것도 그리지 않는다
+    /// (호출자가 배경을 먼저 칠한다). 기본 = no-op.
+    fn draw_image(&mut self, rect: Rect, hint: &str) {
+        let _ = (rect, hint);
+    }
+
     /// 아이콘 그리기 — `key`는 백엔드가 해석하는 불투명 식별자, `hint`는 로드 힌트(경로 등).
     /// 미로드 시 아무것도 그리지 않아도 된다(백엔드가 큐잉 후 재그리기). 기본 = no-op.
     fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) {
