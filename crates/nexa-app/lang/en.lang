@@ -20,6 +20,7 @@ menu.edit.redo = Redo
 menu.view = View
 menu.view.hidden = Show Hidden Files
 menu.view.dot = Show Dot Files
+menu.view.dock = Bottom Panel
 menu.view.refresh = Refresh
 menu.view.theme.system = Theme: System
 menu.view.theme.light = Theme: Light
@@ -78,6 +79,15 @@ new.fileOp = new file
 ctx.deletePermanent = Delete Permanently
 ctx.pasteInto = Paste into Folder
 ctx.paste = Paste
+
+# ── Bottom dock (M4-1) ──
+dock.info = Info
+info.selected = {0} selected
+info.kind = Kind: {0}
+info.size = Size: {0} B
+info.modified = Modified: {0}
+info.path = Path: {0}
+info.currentFolder = Current folder: {0}
 ctx.undoOf = Undo: {0}
 ctx.redoOf = Redo: {0}
 

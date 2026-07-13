@@ -19,6 +19,7 @@ menu.edit.redo = 다시 실행
 menu.view = 보기
 menu.view.hidden = 숨김 파일 표시
 menu.view.dot = 점 파일 표시
+menu.view.dock = 하단 패널
 menu.view.refresh = 새로 고침
 menu.view.theme.system = 테마: 시스템
 menu.view.theme.light = 테마: 라이트
@@ -77,6 +78,15 @@ new.fileOp = 새 파일
 ctx.deletePermanent = 완전 삭제
 ctx.pasteInto = 폴더에 붙여넣기
 ctx.paste = 붙여넣기
+
+# ── 하단 도크(M4-1) ──
+dock.info = 정보
+info.selected = {0}개 선택
+info.kind = 종류: {0}
+info.size = 크기: {0} B
+info.modified = 수정: {0}
+info.path = 경로: {0}
+info.currentFolder = 현재 폴더: {0}
 ctx.undoOf = 실행 취소: {0}
 ctx.redoOf = 다시 실행: {0}
 

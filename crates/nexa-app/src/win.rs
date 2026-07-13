@@ -23,8 +23,8 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END,
-    VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_PERIOD,
-    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_3,
+    VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -85,6 +85,7 @@ const CMD_NEW_FOLDER: u32 = 4;
 const CMD_NEW_FILE: u32 = 5;
 const CMD_UNDO: u32 = 6;
 const CMD_REDO: u32 = 7;
+const CMD_TOGGLE_DOCK: u32 = 8;
 const CMD_TOGGLE_HIDDEN: u32 = 10;
 const CMD_TOGGLE_DOTFILES: u32 = 11;
 const CMD_REFRESH: u32 = 12;
@@ -184,6 +185,7 @@ impl ThemeMode {
 fn build_menus(
     show_hidden: bool,
     show_dotfiles: bool,
+    dock: bool,
     mode: ThemeMode,
     lang_setting: &str,
     langs: &[(String, String)],
@@ -191,6 +193,7 @@ fn build_menus(
     let mut view_items = vec![
         MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
         MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
+        MenuItem::new(CMD_TOGGLE_DOCK, tr("menu.view.dock"), "Ctrl+`").checked(dock),
         MenuItem::separator(),
         MenuItem::new(CMD_REFRESH, tr("menu.view.refresh"), "F5"),
         MenuItem::separator(),
@@ -322,6 +325,8 @@ struct State {
     /// 패널별 폴더 watcher(M3-6) — 활성 탭 현재 폴더 감시(비재귀). 경로 변경 시 재구독.
     watchers: [Option<crate::watcher::DirWatcher>; 2],
     watch_gen: u64,
+    /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
+    dock_drag: Option<usize>,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -469,11 +474,23 @@ pub fn run() -> Result<()> {
             session.active_panel,
         )
     };
+    let (mut left, mut right) = (left, right);
+    {
+        // 하단 도크 복원(M4-1 — 원본 세션 저장 계승: 표시·비율)
+        let mut inv = Invalidations::default();
+        left.set_dock_ratio(settings.dock_ratio, &mut inv);
+        right.set_dock_ratio(settings.dock_ratio, &mut inv);
+        if settings.dock {
+            left.set_dock_visible(true, &mut inv);
+            right.set_dock_visible(true, &mut inv);
+        }
+    }
     let state = Box::new(State {
         menubar: MenuBar::new(
             build_menus(
                 settings.show_hidden,
                 settings.show_dotfiles,
+                settings.dock,
                 theme_mode,
                 &settings.lang,
                 &langs,
@@ -508,6 +525,7 @@ pub fn run() -> Result<()> {
         rename_on_up: false,
         watchers: [None, None],
         watch_gen: 0,
+        dock_drag: None,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -760,6 +778,57 @@ fn clip_from_selection(st: &mut State, op: nexa_ops::Op) -> Option<(Vec<PathBuf>
         .map(|p| p.to_path_buf())
         .collect();
     (!paths.is_empty()).then_some((paths, op))
+}
+
+/// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식) — 다중 선택=개수·단일=속성·없음=현재 폴더.
+fn dock_info(p: &Panel) -> Vec<String> {
+    use nexa_gui::widgets::RowSource;
+    let rows = p.rows();
+    let tree = rows.source().tree();
+    let sel = tree.selection_count();
+    if sel >= 2 {
+        return vec![trf("info.selected", &[&sel.to_string()])];
+    }
+    if sel == 1 {
+        if let Some(i) = tree
+            .selected_ids()
+            .first()
+            .and_then(|&id| tree.index_of(id))
+        {
+            if let Some(r) = tree.row(i) {
+                let mut lines = vec![
+                    r.name.clone(),
+                    trf("info.kind", &[&rows.source().cell(i, COL_KIND)]),
+                ];
+                if r.kind != nexa_core::FileKind::Dir {
+                    lines.push(trf("info.size", &[&r.size.to_string()])); // 원시 바이트(원본)
+                }
+                let modified = rows.source().cell(i, COL_MODIFIED);
+                if !modified.is_empty() {
+                    lines.push(trf("info.modified", &[&modified]));
+                }
+                if let Some(path) = tree.node_path(r.id) {
+                    lines.push(trf("info.path", &[&path.to_string_lossy()]));
+                }
+                return lines;
+            }
+        }
+    }
+    vec![trf(
+        "info.currentFolder",
+        &[&p.root_path().to_string_lossy()],
+    )]
+}
+
+/// 양 패널 도크 정보 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
+fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
+    for i in 0..2 {
+        if st.panels[i].dock_visible() {
+            let lines = dock_info(&st.panels[i]);
+            st.panels[i].dock.set_title(tr("dock.info"), inv);
+            st.panels[i].dock.set_lines(lines, inv);
+        }
+    }
 }
 
 /// 키보드 조작 대상(M3-2, 원본 KeyboardTargets) — 선택(있으면) 아니면 캐럿 행.
@@ -1551,6 +1620,7 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     );
     let mut inv = Invalidations::default();
     st.statusbar.set_text(left, right, &mut inv);
+    update_dock_info(st, &mut inv); // 선택 변경 → 도크 정보(M4-1 — 변경 시에만 무효화)
     uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
     sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
     flush_invalidations(hwnd, &mut inv);
@@ -1583,6 +1653,14 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         }
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
+        }
+        CMD_TOGGLE_DOCK => {
+            // 하단 도크 토글(M4-1, Ctrl+` — 원본 대원칙: 듀얼=좌↔좌·우↔우 동시)
+            let on = !st.panels[0].dock_visible();
+            st.panels[0].set_dock_visible(on, &mut inv);
+            st.panels[1].set_dock_visible(on, &mut inv);
+            st.menubar.set_checked(CMD_TOGGLE_DOCK, on, &mut inv);
+            update_dock_info(st, &mut inv);
         }
         CMD_UNDO | CMD_REDO => {
             do_undo_redo(hwnd, st, id == CMD_REDO);
@@ -1640,6 +1718,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         build_menus(
             st.show_hidden,
             st.show_dotfiles,
+            st.panels[0].dock_visible(),
             st.theme_mode,
             &st.lang_setting,
             &st.langs,
@@ -1846,6 +1925,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if (x - sx).abs() <= half.max(1) {
                     st.split_drag = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
+                } else if let Some(idx) = st.panel_at(x).filter(|&i| {
+                    // 도크 상단 경계 ±3px = 높이 드래그 시작(M4-1 S2)
+                    st.panels[i].dock_visible()
+                        && (y - st.panels[i].dock.bounds().y).abs() <= SPLIT_HALF
+                }) {
+                    st.dock_drag = Some(idx);
                 } else if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
                     // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
@@ -1974,7 +2059,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let mut inv = Invalidations::default();
-                if st.split_drag {
+                if let Some(idx) = st.dock_drag {
+                    // 도크 높이 드래그(M4-1 S2) — 리스트+도크 영역 대비 비율, 양 패널 동기
+                    let list_top = st.panels[idx].rows().bounds().y;
+                    let bottom = st.panels[idx].bounds().bottom();
+                    if bottom > list_top {
+                        let ratio = (bottom - y) as f32 / (bottom - list_top) as f32;
+                        st.panels[0].set_dock_ratio(ratio, &mut inv);
+                        st.panels[1].set_dock_ratio(ratio, &mut inv);
+                        update_dock_info(st, &mut inv);
+                    }
+                } else if st.split_drag {
                     let rc = client_rect(hwnd);
                     if rc.w > 0 {
                         st.split = (x as f32 / rc.w as f32).clamp(0.1, 0.9);
@@ -2000,6 +2095,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
+                st.dock_drag = None; // 도크 높이 드래그 종료(M4-1 S2)
                 if st.split_drag {
                     st.split_drag = false;
                     let _ = InvalidateRect(Some(hwnd), None, false);
@@ -2173,6 +2269,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0);
                 } else if vk == VK_OEM_PERIOD.0 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_DOTFILES);
+                    return LRESULT(0);
+                } else if vk == VK_OEM_3.0 && ctrl {
+                    run_command(hwnd, st, CMD_TOGGLE_DOCK); // Ctrl+` = 하단 도크(M4-1, 원본)
                     return LRESULT(0);
                 } else if let Some(key) = vk_to_key(vk) {
                     st.active_panel()
@@ -2391,6 +2490,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     show_hidden: st.show_hidden,
                     show_dotfiles: st.show_dotfiles,
                     split: st.split,
+                    dock: st.panels[0].dock_visible(),
+                    dock_ratio: st.panels[0].dock_ratio(),
                 };
                 let (t0, a0) = st.panels[0].session();
                 let (t1, a1) = st.panels[1].session();

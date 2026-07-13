@@ -12,7 +12,7 @@
 | **M1** | 뷰어 코어 — ★ 플래그십(인라인 트리+교차선택)·가상 리스트·정렬·타입어헤드 | 100k <150ms·60fps | ✅ `0.2.0` |
 | **M2** | 셸 골격 — 경로바·탭/듀얼·메뉴·테마·설정/세션·IME/UIA 1차 | 상주 RSS ≤30MB | ✅ `0.3.0` |
 | **M3** | 파일 조작 — nexa-ops(Undo/Redo)·셸 메뉴·클립보드·DnD·watcher | 유휴 RSS ≤30MB(10k 유휴 300s 6.29MB) | ✅ `0.4.0` |
-| **M4** | 하단 패널 — 정보·미리보기·ConPTY 터미널 | — | ☐ |
+| **M4** | 하단 패널 — 정보·미리보기·ConPTY 터미널 | — | 🚧 착수 |
 | **M5** | 마감 — 잔여 패리티·릴리스 파이프라인·서명 결정 | 예산 최종 | ☐ |
 
 ---
@@ -58,6 +58,11 @@
 - ✅ M3-4 셸 컨텍스트 메뉴(`feat/m3-shellmenu`, [ADR-0003](08-adr-0003-shell-context-menu.md) — 원본 ADR-0005 계승) — 행 우클릭=클래식 IContextMenu 셸 메뉴(HMENU 호스팅·동적 서브메뉴는 자기 wndproc 포워딩 = comctl32 불요·B3 무변)·빈 영역=배경 메뉴(CreateViewObject·새로 만들기 서브메뉴)·고유 병합 0x8000+(완전 삭제·붙여넣기·Undo/Redo)·delete/rename/paste 동사 가로채기(undo·인라인·전송 합류)·Apps/Shift+F10·우클릭 선택 규약(rows). 앱 모듈(shellmenu.rs — 크레이트 분리 회피). 테스트 127 green·셸 메뉴 상호작용 실기 QA 대기. 후속(M5): 레지스트리 §7·Checksum·VerbReplacement·교차 부모.
 - ✅ M3-5 클립보드 상호운용·OLE DnD(`feat/m3-clipboard-dnd`) — 원본 OS 클립보드 읽기측·OleDropTarget.cs·B-14dnd 이식(Win32 원시 포맷+OLE COM 재구현): **OS 클립보드 단일 출처**(CF_HDROP·Preferred DropEffect — 내부 클립보드 제거·탐색기↔앱 Ctrl+C/X/V·잘라내기 1회성·실 왕복 테스트)·**DnD 수신**(IDropTarget — Ctrl 복사/Shift 이동/기본 볼륨별·자기/하위 금지·최적화 이동 NONE)·**발신**(SHCreateDataObject+IDropSource+DoDragDrop — 임계 이동 시작·원본 미삭제 안전 방향·내부 패널 간 동일 왕복). B3 무변·실기 QA 대기. α: spring-load·드롭 하이라이트.
 - ✅ M3-6 watcher(`feat/m3-watcher`) — 원본 FolderWatcher.cs(B-12w) 이식: ReadDirectoryChangesW **비재귀**(패널 현재 폴더만)·300ms 디바운스 코얼레싱·**무간섭 재로드**(펼침·선택·캐럿·스크롤 보존)·편집/전송 중 지연 재무장·세대 가드(A-1)·중지=핸들 닫기(Drop)·실패=F5 폴백. 실기: 외부 생성(0→2)·삭제(2→1) 자동 반영. α: 펼친 하위 폴더 비감시. **→ M3 전 항목 구현 완료 — 마감 게이트(B1 유휴 재실측·`0.4.0` 태그) 잔여.**
+
+## M4 — 하단 패널 🚧 착수
+
+- ✅ M4-1 하단 도크(`feat/m4-dock`) — 원본 BottomDockView(Info)·DockInfo·도크 대원칙(듀얼=좌↔좌·우↔우) 이식: **InfoDock 위젯**(라벨 스트립+텍스트 라인·변경 시에만 무효화)·**정보 뷰**(다중=개수/단일=이름·종류·크기[원시 B]·수정·경로/없음=현재 폴더 — 선택 변경 자동 갱신)·Ctrl+`/보기 메뉴 토글(체크 동기)·**높이 드래그**(경계 ±3px·비율 0.15~0.5·양 패널 동기)·settings 영속(dock·dock_ratio·왕복 테스트). 테스트 140 green. Preview(M4-2)·Terminal(M4-3)은 종류 스왑 확장.
+- ☐ M4-2 내장 미리보기(텍스트·이미지 — WIC) · ☐ M4-3 ConPTY 터미널.
 
 ## M1+ (요약)
 

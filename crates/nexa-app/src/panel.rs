@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use nexa_core::FileKind;
-use nexa_gui::widgets::{PathBar, TabAction, TabBar, ToolButton, Toolbar, VirtualRows};
+use nexa_gui::widgets::{InfoDock, PathBar, TabAction, TabBar, ToolButton, Toolbar, VirtualRows};
 use nexa_gui::{Column, DrawCtx, InputEvent, Invalidations, Rect, Theme, Widget};
 use nexa_tree::Tree;
 
@@ -57,6 +57,11 @@ pub struct Panel {
     /// 경로바 왼쪽의 [←][→][↑] — **이 패널의 활성 탭** 히스토리에 동작(사용자 지시 2026-07-12).
     navbtns: Toolbar,
     pub pathbar: PathBar,
+    /// 하단 도크(M4-1, 원본 대원칙: 듀얼=좌↔좌·우↔우 — 패널별 1개). 표시 여부는 호스트 전역.
+    pub dock: InfoDock,
+    dock_visible: bool,
+    /// 도크 높이 비율(리스트+도크 영역 대비 — S2 드래그·영속. 전역 공유 값이 양 패널에 적용).
+    dock_ratio: f32,
     tabs: Vec<Tab>,
     active: usize,
     bounds: Rect,
@@ -75,6 +80,9 @@ impl Panel {
             tabbar: TabBar::new(m.row_h, m.pad_x),
             navbtns: Toolbar::new(nav_buttons(), m.row_h, m.pad_x).with_button_width(nav_btn_w(&m)),
             pathbar: PathBar::new(root.to_string_lossy(), m.row_h, m.pad_x),
+            dock: InfoDock::new("", m.row_h, m.pad_x),
+            dock_visible: false,
+            dock_ratio: 0.3,
             tabs: vec![Tab {
                 rows,
                 nav: History::new(root),
@@ -185,17 +193,48 @@ impl Panel {
             inv,
         );
         let list_y = bounds.y + tab_h + bar_h;
+        // 하단 도크(M4-1) — 표시 시 리스트 하단을 비율 분할(S2 드래그·영속. 최소 3줄~최대 절반)
+        let avail = (bounds.bottom() - list_y).max(0);
+        let dock_h = if self.dock_visible {
+            ((avail as f32 * self.dock_ratio) as i32)
+                .clamp((self.m.row_h * 3).min(avail / 2), avail / 2)
+        } else {
+            0
+        };
+        let list_h = (bounds.bottom() - list_y - dock_h).max(0);
         for tab in &mut self.tabs {
-            tab.rows.set_bounds(
-                Rect::new(
-                    bounds.x,
-                    list_y,
-                    bounds.w,
-                    (bounds.bottom() - list_y).max(0),
-                ),
-                inv,
-            );
+            tab.rows
+                .set_bounds(Rect::new(bounds.x, list_y, bounds.w, list_h), inv);
         }
+        self.dock
+            .set_bounds(Rect::new(bounds.x, list_y + list_h, bounds.w, dock_h), inv);
+    }
+
+    /// 하단 도크 표시 토글(호스트 전역 Ctrl+` — 원본 대원칙: 듀얼=패널별 아래).
+    pub fn set_dock_visible(&mut self, on: bool, inv: &mut Invalidations) {
+        if self.dock_visible != on {
+            self.dock_visible = on;
+            self.set_bounds(self.bounds, inv);
+            inv.push(self.bounds);
+        }
+    }
+
+    pub fn dock_visible(&self) -> bool {
+        self.dock_visible
+    }
+
+    /// 도크 높이 비율 적용(드래그·설정 복원 — 0.15~0.5 클램프) 후 재배치.
+    pub fn set_dock_ratio(&mut self, ratio: f32, inv: &mut Invalidations) {
+        let r = ratio.clamp(0.15, 0.5);
+        if (self.dock_ratio - r).abs() > f32::EPSILON {
+            self.dock_ratio = r;
+            self.set_bounds(self.bounds, inv);
+            inv.push(self.bounds);
+        }
+    }
+
+    pub fn dock_ratio(&self) -> f32 {
+        self.dock_ratio
     }
 
     pub fn set_metrics(&mut self, m: PanelMetrics, columns: Vec<Column>, inv: &mut Invalidations) {
@@ -204,6 +243,7 @@ impl Panel {
         self.navbtns.set_metrics(m.row_h, m.pad_x, inv);
         self.navbtns.set_button_width(Some(nav_btn_w(&m)), inv);
         self.pathbar.set_metrics(m.row_h, m.pad_x, inv);
+        self.dock.set_metrics(m.row_h, m.pad_x, inv);
         for tab in &mut self.tabs {
             tab.rows.set_metrics(m.row_h, m.pad_x, m.indent_w, inv);
             tab.rows.set_columns(columns.clone(), inv);
@@ -217,6 +257,9 @@ impl Panel {
 
     pub fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         self.rows().paint(ctx, theme);
+        if self.dock_visible {
+            self.dock.paint(ctx, theme);
+        }
         self.navbtns.paint(ctx, theme);
         self.pathbar.paint(ctx, theme);
         self.tabbar.paint(ctx, theme);
