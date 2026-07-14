@@ -3236,8 +3236,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
-                st.dock_drag = None; // 도크 높이 드래그 종료(M4-1 S2)
-                st.dock_split_drag = false; // 도크 좌/우 스플리터 종료(X-6)
+                if st.dock_drag.take().is_some() {
+                    // 도크 높이 드래그 종료(M4-1 S2) — 강조색 해제 재도장 필수
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                if st.dock_split_drag {
+                    // 도크 좌/우 스플리터 종료(X-6) — 강조색 해제 재도장 필수
+                    st.dock_split_drag = false;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
                 if let Some((ti, b)) = st.term_mouse_btn.take() {
                     // TUI 마우스 릴리스 전달(X-5)
                     if b == 0 {
