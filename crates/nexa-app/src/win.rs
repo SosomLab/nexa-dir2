@@ -1711,19 +1711,26 @@ unsafe fn start_transfer(
                                     // 충돌 확인 문구는 UI 스레드에서 선확정(i18n 전역을 워커에서 조회하지 않음)
     let ow_title = tr("ops.overwriteTitle");
     let ow_text = tr("ops.overwrite");
+    let ow_all = tr("ops.applyAll");
     std::thread::spawn(move || {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+        // 일괄 적용(편의 UX ③ — 원본 "모두 예/건너뛰기"): 첫 응답 후 "남은 충돌에도 동일
+        // 적용?"을 한 번 물어 확정. Some(choice)=이후 무확인.
+        let mut apply_all: Option<nexa_ops::Conflict> = None;
         let out = nexa_ops::transfer(
             &sources,
             &dest,
             op,
-            // 충돌 항목만 순차 확인(원본 TRANSFER-ENGINE 규약 — 실기 QA로 α '무조건 건너뜀' 해소):
-            // 예=덮어쓰기 · 아니오=건너뜀 · 취소=전체 중단. 워커 스레드 모달(자체 메시지 루프) —
-            // UI 스레드는 계속 펌프(진행 표시 유지).
+            // 충돌 항목만 순차 확인(원본 TRANSFER-ENGINE 규약):
+            // 예=덮어쓰기 · 아니오=건너뜀 · 취소=전체 중단. 워커 스레드 모달(자체 메시지
+            // 루프) — UI 스레드는 계속 펌프(진행 표시 유지).
             &mut |conflict| {
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL,
+                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO, MB_YESNOCANCEL,
                 };
+                if let Some(choice) = apply_all {
+                    return choice;
+                }
                 let text = HSTRING::from(ow_text.replace("{0}", &nexa_ops::leaf_name(conflict)));
                 let title = HSTRING::from(ow_title.as_str());
                 let r = unsafe {
@@ -1734,14 +1741,29 @@ unsafe fn start_transfer(
                         MB_YESNOCANCEL | MB_ICONQUESTION,
                     )
                 };
-                if r == IDYES {
+                let choice = if r == IDYES {
                     nexa_ops::Conflict::Overwrite
                 } else {
                     if r != windows::Win32::UI::WindowsAndMessaging::IDNO {
                         sh.cancel.store(true, Ordering::Relaxed); // 취소 = 전체 중단
+                        return nexa_ops::Conflict::Skip;
                     }
                     nexa_ops::Conflict::Skip
+                };
+                // 남은 충돌 일괄 적용 여부(1회) — 예=이후 무확인(같은 선택 반복)
+                let all_text = HSTRING::from(ow_all.as_str());
+                let all = unsafe {
+                    MessageBoxW(
+                        Some(hwnd),
+                        PCWSTR(all_text.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        MB_YESNO | MB_ICONQUESTION,
+                    )
+                };
+                if all == IDYES {
+                    apply_all = Some(choice);
                 }
+                choice
             },
             &mut |p, _| {
                 sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
