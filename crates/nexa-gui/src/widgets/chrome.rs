@@ -14,6 +14,36 @@ use crate::widget::{Invalidations, Widget};
 pub struct ToolButton {
     pub id: u32,
     pub glyph: String,
+    /// 그룹 구분선(QA 07-14 — 원본 도구 모음 그룹화 PR#10). 클릭 불가.
+    pub separator: bool,
+    /// 토글 상태 표시(하단 accent 줄 — 숨김/닷파일 보기 등).
+    pub checked: bool,
+}
+
+impl ToolButton {
+    pub fn new(id: u32, glyph: impl Into<String>) -> Self {
+        ToolButton {
+            id,
+            glyph: glyph.into(),
+            separator: false,
+            checked: false,
+        }
+    }
+
+    /// 그룹 구분선.
+    pub fn sep() -> Self {
+        ToolButton {
+            id: 0,
+            glyph: String::new(),
+            separator: true,
+            checked: false,
+        }
+    }
+
+    pub fn toggled(mut self, on: bool) -> Self {
+        self.checked = on;
+        self
+    }
 }
 
 pub struct Toolbar {
@@ -58,6 +88,16 @@ impl Toolbar {
         self.pending.take()
     }
 
+    /// 토글 버튼 상태 동기(QA 07-14 — 메뉴 체크와 동일 흐름).
+    pub fn set_checked(&mut self, id: u32, on: bool, inv: &mut Invalidations) {
+        for b in &mut self.buttons {
+            if !b.separator && b.id == id && b.checked != on {
+                b.checked = on;
+                inv.push(self.bounds);
+            }
+        }
+    }
+
     pub fn set_metrics(&mut self, row_h: i32, pad_x: i32, inv: &mut Invalidations) {
         self.row_h = row_h.max(1);
         self.pad_x = pad_x;
@@ -92,8 +132,10 @@ impl Widget for Toolbar {
         match *ev {
             InputEvent::MouseDown { x, y, .. } => {
                 if let Some(i) = self.button_at(x, y) {
-                    self.pending = Some(self.buttons[i].id);
-                    inv.push(self.bounds);
+                    if !self.buttons[i].separator {
+                        self.pending = Some(self.buttons[i].id);
+                        inv.push(self.bounds);
+                    }
                 }
             }
             InputEvent::MouseMove { x, y } => {
@@ -119,6 +161,15 @@ impl Widget for Toolbar {
             b.x + self.pad_x
         };
         for (i, btn) in self.buttons.iter().enumerate() {
+            if btn.separator {
+                // 그룹 구분선(QA 07-14) — 세로 1px + 양측 여백
+                let w = self.pad_x.max(4);
+                let lx = x + w / 2;
+                ctx.fill_rect(Rect::new(lx, b.y + 3, 1, (b.h - 6).max(0)), theme.border);
+                ranges.push((x, x)); // 히트 없음(빈 범위)
+                x += w;
+                continue;
+            }
             let w = self
                 .button_w
                 .unwrap_or_else(|| ctx.text_width(&btn.glyph) + self.pad_x * 2);
@@ -134,6 +185,10 @@ impl Widget for Toolbar {
                     ctx.glyph_opaque(cell, &btn.glyph, theme.text, bg);
                 } else {
                     ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, theme.text, bg);
+                }
+                if btn.checked {
+                    // 토글 켜짐 = 하단 accent 줄(메뉴 체크 대응 시각화)
+                    ctx.fill_rect(Rect::new(cell.x, b.bottom() - 2, cell.w, 2), theme.accent);
                 }
             }
             ranges.push((cell.x, cell.x + w));
@@ -246,16 +301,7 @@ mod tests {
     fn toolbar_click_emits_button_id() {
         let mut inv = Invalidations::default();
         let mut t = Toolbar::new(
-            vec![
-                ToolButton {
-                    id: 100,
-                    glyph: "←".into(),
-                },
-                ToolButton {
-                    id: 101,
-                    glyph: "→".into(),
-                },
-            ],
+            vec![ToolButton::new(100, "←"), ToolButton::new(101, "→")],
             20,
             6,
         );
