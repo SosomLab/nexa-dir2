@@ -51,6 +51,8 @@ pub struct Theme {
     pub text_dim: Color,
     /// 선택 행 배경 (신설 — 원본은 알파 브러시, 커스텀 드로잉은 사전 블렌드 값)
     pub sel_bg: Color,
+    /// 비활성 패널의 선택 행 배경 (신설 — 탐색기 관례: 포커스 없는 쪽은 무채색 하이라이트)
+    pub sel_bg_inactive: Color,
 }
 
 impl Theme {
@@ -71,6 +73,7 @@ impl Theme {
             text: Color::from_hex(0xD6DAE0),
             text_dim: Color::from_hex(0x8A919C),
             sel_bg: Color::from_hex(0x24405F), // accent 30% over panel_bg
+            sel_bg_inactive: Color::from_hex(0x2C313A), // gray 20% over panel_bg
         }
     }
 
@@ -91,6 +94,7 @@ impl Theme {
             text: Color::from_hex(0x1B1F26),
             text_dim: Color::from_hex(0x6B7280),
             sel_bg: Color::from_hex(0xD8E8FF), // accent 20% over panel_bg
+            sel_bg_inactive: Color::from_hex(0xE6E9EE), // gray 10% over panel_bg
         }
     }
 }

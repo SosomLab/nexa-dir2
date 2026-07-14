@@ -167,6 +167,8 @@ pub struct VirtualRows<S> {
     /// 기선택 행 프레스(무수정키) — 클릭 확정(MouseUp·무드래그) 시 단일 선택으로 붕괴
     /// (프레스 시점 유지 = 다중 선택 드래그 DnD, 탐색기 규약 — QA 07-13).
     press_pending: Option<usize>,
+    /// 호스트 패널 포커스 — 비활성 패널의 선택 하이라이트는 무채색(`sel_bg_inactive`)으로 구분.
+    focused: bool,
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -189,6 +191,15 @@ impl<S: RowSource> VirtualRows<S> {
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
             rename: None,
             press_pending: None,
+            focused: true,
+        }
+    }
+
+    /// 호스트 패널 포커스 상태 반영 — 선택 하이라이트 색만 바뀐다(선택 자체는 유지).
+    pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
+        if self.focused != focused {
+            self.focused = focused;
+            inv.push(self.bounds);
         }
     }
 
@@ -951,7 +962,11 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             let y = body_top + i as i32 * self.row_h;
             // 선택 하이라이트 > 교대 음영(docs/07 §7 다중·비연속·교차폴더 하이라이트)
             let bg = if self.src.is_selected(row) {
-                theme.sel_bg
+                if self.focused {
+                    theme.sel_bg
+                } else {
+                    theme.sel_bg_inactive
+                }
             } else if row.is_multiple_of(2) {
                 theme.panel_bg
             } else {

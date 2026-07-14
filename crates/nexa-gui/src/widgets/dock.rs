@@ -27,6 +27,8 @@ pub struct InfoDock {
     pending_goto: bool,
     /// → 버튼 x 범위 캐시(paint가 채움 — 마지막 종류[터미널] 옆에 부착).
     goto_range: std::cell::Cell<(i32, i32)>,
+    /// 호스트 패널 포커스 — 비활성 패널은 강조색(accent·sel_bg)을 무채색으로 낮춘다.
+    focused: bool,
 }
 
 impl InfoDock {
@@ -42,6 +44,15 @@ impl InfoDock {
             image: None,
             pending_goto: false,
             goto_range: std::cell::Cell::new((0, 0)),
+            focused: true,
+        }
+    }
+
+    /// 호스트 패널 포커스 상태 반영 — 활성 종류·→ 버튼 강조색만 바뀐다.
+    pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
+        if self.focused != focused {
+            self.focused = focused;
+            inv.push(self.bounds);
         }
     }
 
@@ -161,8 +172,11 @@ impl Widget for InfoDock {
             let w = ctx.text_width(label) + self.pad_x * 2;
             let cell = Rect::new(x, strip.y, w.min((strip.right() - x).max(0)), strip.h);
             let active = i == self.active;
-            let (fg, bg) = if active {
+            let (fg, bg) = if active && self.focused {
                 (theme.text, theme.sel_bg)
+            } else if active {
+                // 비활성 패널 — 활성 종류는 무채색으로만 표시(활성 패널과 구분)
+                (theme.text, theme.sel_bg_inactive)
             } else {
                 (theme.text_dim, theme.header_bg)
             };
@@ -173,11 +187,13 @@ impl Widget for InfoDock {
             x += w;
             if i == last && self.kinds.len() > 1 {
                 // 터미널 옆 "폴더로 이동"(→) — 한 몸 버튼(QA 07-14, 원본 '터미널에서 열기').
-                // 활성=accent 배경, 비활성=무색(라벨과 동일 톤)
+                // 활성=accent 배경(단, 패널 비활성이면 무채색 — 활성 영역과 구분), 비활성=무색
                 let gw = ctx.text_width("→") + self.pad_x * 2;
                 let gcell = Rect::new(x, strip.y, gw.min((strip.right() - x).max(0)), strip.h);
-                let (gfg, gbg) = if active {
+                let (gfg, gbg) = if active && self.focused {
                     (theme.text, theme.accent)
+                } else if active {
+                    (theme.text, theme.sel_bg_inactive)
                 } else {
                     (theme.text_dim, theme.header_bg)
                 };

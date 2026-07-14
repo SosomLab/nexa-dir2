@@ -80,6 +80,8 @@ pub struct Panel {
     m: PanelMetrics,
     /// 탭 우클릭 메뉴 요청(편의 UX ② — 표시는 호스트 몫, 1회성 수거).
     pending_tab_menu: Option<usize>,
+    /// 패널 포커스(활성/비활성) — 새 탭 생성 시 리스트에 물려준다.
+    focused: bool,
 }
 
 impl Panel {
@@ -107,6 +109,7 @@ impl Panel {
             bounds: Rect::default(),
             m,
             pending_tab_menu: None,
+            focused: true,
         };
         p.sync_chrome(&mut inv);
         p
@@ -300,7 +303,12 @@ impl Panel {
     }
 
     pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
+        self.focused = focused;
         self.tabbar.set_focused(focused, inv);
+        self.dock.set_focused(focused, inv);
+        for tab in &mut self.tabs {
+            tab.rows.set_focused(focused, inv);
+        }
     }
 
     pub fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
@@ -335,6 +343,7 @@ impl Panel {
         };
         let mut rows = VirtualRows::new(src, self.m.row_h, self.m.pad_x, self.m.indent_w);
         rows.set_columns(self.rows().columns().to_vec(), inv);
+        rows.set_focused(self.focused, inv);
         self.tabs.push(Tab {
             rows,
             nav: History::new(path),
@@ -378,6 +387,7 @@ impl Panel {
         };
         let mut rows = VirtualRows::new(src, self.m.row_h, self.m.pad_x, self.m.indent_w);
         rows.set_columns(self.rows().columns().to_vec(), inv);
+        rows.set_focused(self.focused, inv);
         let mut tab = Tab {
             rows,
             nav: History::new(path),

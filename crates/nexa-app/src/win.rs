@@ -2748,7 +2748,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let cols = columns(st.dpi);
                 st.panels[0].set_metrics(m, cols.clone(), &mut inv);
                 st.panels[1].set_metrics(m, cols, &mut inv);
-                st.panels[1].set_focused(false, &mut inv);
+                st.panels[0].set_focused(st.active == 0, &mut inv);
+                st.panels[1].set_focused(st.active == 1, &mut inv);
                 st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.statusbar.set_metrics(m.row_h, m.pad_x, &mut inv);
