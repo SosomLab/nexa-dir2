@@ -135,8 +135,11 @@ pub struct DwBackend {
     icon_format: IDWriteTextFormat,
     /// 컬럼 트리밍(말줄임표) 기호 — 레이아웃마다 SetTrimming으로 부착.
     ellipsis: IDWriteInlineObject,
-    /// 터미널 모노스페이스 포맷(M4-3 — Consolas 12 DIP, 셀 그리드 정렬).
+    /// 터미널 모노스페이스 포맷(M4-3 — 기본 Consolas 12 DIP, 셀 그리드 정렬.
+    /// 설정 `term_font`로 교체 — 미설치 글리프는 DWrite 시스템 폴백이 해석).
     mono_format: IDWriteTextFormat,
+    /// 터미널 단일 글리프 레이아웃 캐시(QA 07-14 — 셀 단위 렌더의 프레임당 생성 비용 제거).
+    mono_glyphs: RefCell<HashMap<char, IDWriteTextLayout>>,
     /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
     layouts: RefCell<HashMap<(String, i32), IDWriteTextLayout>>,
     /// 미리보기 이미지 캐시(M4-2) — (경로, 맞춤 폭, 높이) → 디코드 결과. 상한 초과 시 비움.
@@ -149,7 +152,7 @@ pub struct DwBackend {
 
 impl DwBackend {
     /// `hdc`와 호환되는 비트맵 렌더 타깃을 만든다(9pt = 12 DIP, DPI는 PixelsPerDip로 반영).
-    pub unsafe fn new(hdc: HDC, w: i32, h: i32, dpi: u32) -> Result<Self> {
+    pub unsafe fn new(hdc: HDC, w: i32, h: i32, dpi: u32, mono_font: &str) -> Result<Self> {
         let factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let interop: IDWriteGdiInterop = factory.GetGdiInterop()?;
         let brt = interop.CreateBitmapRenderTarget(Some(hdc), w.max(1) as u32, h.max(1) as u32)?;
@@ -183,16 +186,35 @@ impl DwBackend {
         icon_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         icon_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
 
-        // 터미널 모노스페이스(M4-3) — Consolas(비스타+ 인박스)·랩 없음·세로 중앙
-        let mono_format = factory.CreateTextFormat(
-            w!("Consolas"),
-            None,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-            12.0,
-            w!("ko-kr"),
-        )?;
+        // 터미널 모노스페이스(M4-3) — 기본 Consolas(비스타+ 인박스)·랩 없음·세로 중앙.
+        // 설정 `term_font`(QA 07-14): 사용자 설치 글꼴(D2Coding 등)은 시스템 컬렉션에서
+        // 해석, 생성 실패 시 Consolas 폴백. 지정 글꼴에 없는 글리프는 DWrite 폴백.
+        let mono_name: Vec<u16> = mono_font
+            .trim()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mono_format = factory
+            .CreateTextFormat(
+                windows::core::PCWSTR(mono_name.as_ptr()),
+                None,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
+                12.0,
+                w!("ko-kr"),
+            )
+            .or_else(|_| {
+                factory.CreateTextFormat(
+                    w!("Consolas"),
+                    None,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
+                    12.0,
+                    w!("ko-kr"),
+                )
+            })?;
         mono_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         mono_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
@@ -214,6 +236,7 @@ impl DwBackend {
             icon_format,
             ellipsis,
             mono_format,
+            mono_glyphs: RefCell::new(HashMap::new()),
             layouts: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
             wic: RefCell::new(None),
@@ -266,6 +289,7 @@ impl DwBackend {
     pub unsafe fn set_dpi(&mut self, dpi: u32) -> Result<()> {
         // 행 높이(px)가 바뀌므로 캐시된 maxheight가 무효 — 비움
         self.layouts.borrow_mut().clear();
+        self.mono_glyphs.borrow_mut().clear();
         self.brt.SetPixelsPerDip(dpi as f32 / 96.0)
     }
 
@@ -422,22 +446,45 @@ impl DrawCtx for DwCtx<'_> {
     }
 
     fn term_text(&mut self, x: i32, _y: i32, clip: Rect, text: &str, fg: Color, bg: Color) {
-        // 모노스페이스 런(M4-3) — 배경 채움 + Consolas 레이아웃(캐시 없음: 터미널 출력은
-        // 프레임마다 변함·가시 행 수십 개 수준)
+        // 모노스페이스(M4-3) — 배경 채움 + 글리프. 단일 문자(셀 단위 렌더, QA 07-14)는
+        // 레이아웃 캐시로 프레임당 생성 비용 제거, 여러 글자(안내문 등)는 즉석 생성.
         self.fill_rect(clip, bg);
         if text.is_empty() || x >= clip.right() {
             return;
         }
         unsafe {
             let ppd = self.back.pixels_per_dip();
-            let wtext: Vec<u16> = text.encode_utf16().collect();
-            let Ok(layout) = self.back.factory.CreateTextLayout(
-                &wtext,
-                &self.back.mono_format,
-                (clip.right() - x) as f32 / ppd,
-                clip.h as f32 / ppd,
-            ) else {
-                return;
+            let mut chars = text.chars();
+            let (first, rest) = (chars.next(), chars.next());
+            let layout = if let (Some(c), None) = (first, rest) {
+                let mut cache = self.back.mono_glyphs.borrow_mut();
+                if !cache.contains_key(&c) {
+                    let wtext: Vec<u16> = text.encode_utf16().collect();
+                    let Ok(l) = self.back.factory.CreateTextLayout(
+                        &wtext,
+                        &self.back.mono_format,
+                        100.0,
+                        clip.h as f32 / ppd,
+                    ) else {
+                        return;
+                    };
+                    if cache.len() > 2048 {
+                        cache.clear(); // 폭주 방지(비정상 출력) — 정상 사용은 수백 자
+                    }
+                    cache.insert(c, l);
+                }
+                cache.get(&c).unwrap().clone()
+            } else {
+                let wtext: Vec<u16> = text.encode_utf16().collect();
+                let Ok(l) = self.back.factory.CreateTextLayout(
+                    &wtext,
+                    &self.back.mono_format,
+                    (clip.right() - x) as f32 / ppd,
+                    clip.h as f32 / ppd,
+                ) else {
+                    return;
+                };
+                l
             };
             self.back.color.set(colorref(fg));
             let _ = layout.Draw(
