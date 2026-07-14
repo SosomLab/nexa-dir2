@@ -67,7 +67,7 @@
 
 | ID | 항목 | 우선 | 규모 | 상태 |
 |---|---|---|---|---|
-| M5-1 | 퀵 런처·일괄 이름변경 등 원본 잔여 패리티(원본 docs/25·44) | P2 | 대 | ☐ |
+| M5-1 | 퀵 런처·일괄 이름변경 등 원본 잔여 패리티(원본 docs/25·44) | P2 | 대 | ✅ (07-15 — ① 퀵 런처 바: 외부 프로그램 버튼·%path% 치환·settings.cfg 영속(`launcherN=`)·VS Code 시드·보기 메뉴 토글 ② 일괄 이름변경 α: nexa-ops::batch_rename(치환→대소문자→삽입→연번·충돌 4종)+다이얼로그(실시간 미리보기·충돌 차단)+MoveBatchOp 트랜잭션 undo·Ctrl+Shift+R. 실기 QA 대기. 후속: 런처 UI CRUD·exe 아이콘 / 정규식·날짜·프리셋(β)) |
 | M5-2 | 릴리스 파이프라인(태그→단일 exe 자동 첨부·예산 CI 게이트) | P0 | 중 | ✅ (07-15 — release.yml: 태그 push→test+B2/B3 게이트→NexaDir2-\<버전\>-win-x64.exe를 GitHub Release 자동 첨부. 첫 태그 실행 검증 대기) |
 | M5-3 | 접근성·IME 마감 · 서명 결정(원본 PKG-4 공동) | P1 | 중 | ✅ (07-15 — UIA SelectionItem 실동작(WM_APP_UIA_SELECT)·구조 변경 이벤트(ChildrenInvalidated)·리네임 인라인 IME 조합 창 배치·서명=무서명 유지 확정(DR-3 갱신 — 원본 인증서 확보 시 release.yml 서명 단계). 실기 QA 대기. α: 동수 개명 구조 이벤트 미포착·IME 조합 인라인 렌더는 조합 창 방식 유지) |
 

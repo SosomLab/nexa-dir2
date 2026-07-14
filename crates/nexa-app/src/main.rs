@@ -15,6 +15,8 @@ mod clipboard;
 #[cfg(windows)]
 mod conpty;
 #[cfg(windows)]
+mod bulkrename;
+#[cfg(windows)]
 mod dialog;
 #[cfg(windows)]
 mod dnd;

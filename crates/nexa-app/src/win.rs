@@ -92,6 +92,9 @@ const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
 const WM_APP_ICON: u32 = 0x8004; // WM_APP + 4
 /// 설정 창 열기 지연 실행(QA 07-14 — run_command의 State 차용과 모달 재진입 분리).
 const WM_APP_PREFS: u32 = 0x8005; // WM_APP + 5
+/// 일괄 이름변경 창 열기 지연 실행(M5-1 — WM_APP_PREFS와 동일 재진입 규약).
+/// 0x8006=prefs 적용·0x8007=UIA 선택(uia.rs) 다음.
+const WM_APP_BULK: u32 = 0x8008; // WM_APP + 8
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -121,6 +124,8 @@ const CMD_LANG_SYSTEM: u32 = 40;
 const CMD_LANG_BASE: u32 = 41;
 /// 설정 창(S6 — Ctrl+, / 메뉴·도구모음, QA 07-14).
 const CMD_PREFS: u32 = 60;
+/// 일괄 이름변경(M5-1 — 원본 docs/25, Ctrl+Shift+R).
+const CMD_BULK_RENAME: u32 = 61;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 
@@ -260,6 +265,8 @@ fn build_menus(
                 // 활성/비활성 표시는 후속(메뉴 위젯 enabled 미지원) — 없으면 상태바로 알림(M3-3)
                 MenuItem::new(CMD_UNDO, tr("menu.edit.undo"), "Ctrl+Z"),
                 MenuItem::new(CMD_REDO, tr("menu.edit.redo"), "Ctrl+Y"),
+                MenuItem::separator(),
+                MenuItem::new(CMD_BULK_RENAME, tr("menu.edit.bulkRename"), "Ctrl+Shift+R"),
             ],
         },
         Menu {
@@ -2346,6 +2353,10 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             // 모달 설정 창은 State 차용과 분리해 지연 실행(재진입 규약 — WM_APP_PREFS)
             let _ = PostMessageW(Some(hwnd), WM_APP_PREFS, WPARAM(0), LPARAM(0));
         }
+        CMD_BULK_RENAME => {
+            // 모달 창 — 설정 창과 동일 재진입 규약(M5-1)
+            let _ = PostMessageW(Some(hwnd), WM_APP_BULK, WPARAM(0), LPARAM(0));
+        }
         CMD_UNDO | CMD_REDO => {
             do_undo_redo(hwnd, st, id == CMD_REDO);
             return; // 결과 노트 보존(말미 update_title("")이 지우지 않도록)
@@ -2612,6 +2623,57 @@ unsafe fn open_prefs(hwnd: HWND) {
         return;
     };
     apply_prefs(hwnd, &v);
+}
+
+/// 일괄 이름변경(M5-1 — 원본 docs/25 §7): 선택 항목 → 모달 다이얼로그(미리보기·충돌) →
+/// 확정 시 순차 rename + **MoveBatchOp 트랜잭션 1건**(B-13u — Ctrl+Z로 배치 전체 되돌림).
+/// 실패 항목은 개별 격리(성공분만 undo 기록 — 무결성 우선, MoveBatchOp 규약과 동일).
+unsafe fn open_bulk_rename(hwnd: HWND) {
+    let req = state_of(hwnd).map(|st| {
+        let targets: Vec<(PathBuf, bool)> = keyboard_targets(st)
+            .into_iter()
+            .map(|p| {
+                let is_dir = p.is_dir();
+                (p, is_dir)
+            })
+            .collect();
+        (targets, st.dlg_font.clone())
+    });
+    let Some((targets, dfont)) = req else { return };
+    if targets.is_empty() {
+        if let Some(st) = state_of(hwnd) {
+            update_title(hwnd, st, &format!(" · {}", tr("bulk.noSelection")));
+        }
+        return;
+    }
+    // 모달(State 차용 없음 — prefs와 동일 재진입 규약)
+    let Some(pairs) = crate::bulkrename::show(hwnd, &targets, &dfont) else {
+        return;
+    };
+    let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut errors = 0usize;
+    for (old_path, new_name) in &pairs {
+        match nexa_ops::rename(old_path, new_name) {
+            Ok(new_path) => done.push((old_path.clone(), new_path)),
+            Err(_) => errors += 1,
+        }
+    }
+    let Some(st) = state_of(hwnd) else { return };
+    if !done.is_empty() {
+        for (old, new) in &done {
+            st.active_panel().rename_expanded(old, new); // F18 접두사 치환
+        }
+        let desc = trf("bulk.done", &[&done.len().to_string()]);
+        st.history.push(Box::new(nexa_ops::history::MoveBatchOp::new(
+            done.clone(),
+            desc,
+        )));
+    }
+    let mut note = format!(" · {}", trf("bulk.done", &[&done.len().to_string()]));
+    if errors > 0 {
+        note.push_str(&format!(" · {}", trf("bulk.fail", &[&errors.to_string()])));
+    }
+    reload_both(hwnd, st, &note);
 }
 
 /// 설정 값 적용 + 즉시 영속(X-8 — 설정 창 실시간 통지·닫기 공용, 멱등).
@@ -3662,6 +3724,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == b'N' as u16 && ctrl && shift {
                     run_command(hwnd, st, CMD_NEW_FOLDER); // Ctrl+Shift+N = 새 폴더(탐색기 관례)
                     return LRESULT(0);
+                } else if vk == b'R' as u16 && ctrl && shift {
+                    run_command(hwnd, st, CMD_BULK_RENAME); // Ctrl+Shift+R = 일괄 이름변경(M5-1)
+                    return LRESULT(0);
                 } else if vk == b'H' as u16 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_HIDDEN); // 메뉴 체크와 동기
                     return LRESULT(0);
@@ -3771,6 +3836,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         m if m == WM_APP_PREFS => {
             open_prefs(hwnd); // 설정 창(S6) — State 차용 없는 시점에서 모달
+            LRESULT(0)
+        }
+        m if m == WM_APP_BULK => {
+            open_bulk_rename(hwnd); // 일괄 이름변경(M5-1) — 동일 재진입 규약
             LRESULT(0)
         }
         // 설정 창 즉시 적용 통지(X-8 — VS Code식): lparam 포인터는 SendMessage 동안만
