@@ -22,6 +22,8 @@ pub struct Settings {
     pub dock: bool,
     /// 도크 높이 비율(S2 — 원본 분할 위치 저장 계승).
     pub dock_ratio: f32,
+    /// 도크 밴드 좌/우 분할 비율(X-6 — 파일 좌/우와 독립, 원본 BottomSplitter 대응).
+    pub dock_split: f32,
     /// 터미널 글꼴(QA 07-14 — 원본 Fonts.ConsoleFamily 대응). **쉼표 목록 = 폴백 체인**
     /// (WT식 `D2Coding, JetBrainsMono Nerd Font` — 1순위에 없는 글리프는 다음 폰트).
     pub term_font: String,
@@ -42,6 +44,7 @@ impl Default for Settings {
             split: 0.5,
             dock: false,
             dock_ratio: 0.3,
+            dock_split: 0.5,
             term_font: "Consolas".into(),
             term_font_size: 12,
             dlg_font: "Segoe UI".into(),
@@ -92,7 +95,7 @@ fn kv_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
 impl Settings {
     pub fn serialize(&self) -> String {
         format!(
-            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\ndock_ratio={:.3}\nterm_font={}\nterm_font_size={}\ndlg_font={}\ndlg_font_size={}\n",
+            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\ndock_ratio={:.3}\ndock_split={:.3}\nterm_font={}\nterm_font_size={}\ndlg_font={}\ndlg_font_size={}\n",
             self.theme,
             self.lang,
             u8::from(self.show_hidden),
@@ -100,6 +103,7 @@ impl Settings {
             self.split,
             u8::from(self.dock),
             self.dock_ratio,
+            self.dock_split,
             self.term_font,
             self.term_font_size,
             self.dlg_font,
@@ -138,6 +142,13 @@ impl Settings {
                     if let Ok(f) = v.parse::<f32>() {
                         if f.is_finite() {
                             s.dock_ratio = f.clamp(0.15, 0.5);
+                        }
+                    }
+                }
+                "dock_split" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        if f.is_finite() {
+                            s.dock_split = f.clamp(0.15, 0.85);
                         }
                     }
                 }
@@ -290,6 +301,7 @@ mod tests {
             split: 0.62,
             dock: true,
             dock_ratio: 0.42,
+            dock_split: 0.61,
             term_font: "D2Coding, JetBrainsMono Nerd Font".into(),
             term_font_size: 14,
             dlg_font: "맑은 고딕".into(),
@@ -301,6 +313,7 @@ mod tests {
         assert!(!parsed.show_hidden && parsed.show_dotfiles);
         assert!(parsed.dock, "도크 표시 왕복(M4-1)");
         assert!((parsed.dock_ratio - 0.42).abs() < 0.001, "도크 비율 왕복");
+        assert!((parsed.dock_split - 0.61).abs() < 0.001, "도크 분할 왕복(X-6)");
         assert_eq!(
             parsed.term_font, "D2Coding, JetBrainsMono Nerd Font",
             "터미널 글꼴 체인 왕복(QA 07-14)"

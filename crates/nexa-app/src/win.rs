@@ -343,6 +343,10 @@ struct State {
     watch_gen: u64,
     /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
     dock_drag: Option<usize>,
+    /// 도크 밴드 좌/우 스플리터 드래그 중(X-6 — 파일 스플리터와 독립).
+    dock_split_drag: bool,
+    /// 도크 밴드 좌/우 분할 비율(X-6 — 영속).
+    dock_split: f32,
     /// 패널별 ConPTY 터미널(M4-3) — 도크 종류 '터미널' 최초 전환 시 지연 시작.
     terms: [Option<TermState>; 2],
     term_gen: u64,
@@ -447,6 +451,24 @@ impl State {
     fn active_panel(&mut self) -> &mut Panel {
         &mut self.panels[self.active]
     }
+    /// 좌표가 속한 패널(도크 밴드 인지 — X-6: 밴드 안은 dock_split 기준). 스플리터 존=None.
+    fn panel_at_pt(&self, x: i32, y: i32) -> Option<usize> {
+        if self.panels[0].dock_visible() {
+            let band = self.panels[0].dock.bounds();
+            if band.h > 0 && y >= band.y {
+                let right = self.panels[1].dock.bounds();
+                return if x < band.right() {
+                    Some(0)
+                } else if x >= right.x {
+                    Some(1)
+                } else {
+                    None // 도크 스플리터 존
+                };
+            }
+        }
+        self.panel_at(x)
+    }
+
     /// 좌표가 속한 패널 인덱스(스플리터 존이면 `None`).
     fn panel_at(&self, x: i32) -> Option<usize> {
         if x < self.panels[0].bounds().right() {
@@ -630,6 +652,8 @@ pub fn run() -> Result<()> {
         watchers: [None, None],
         watch_gen: 0,
         dock_drag: None,
+        dock_split_drag: false,
+        dock_split: settings.dock_split,
         terms: [None, None],
         term_gen: 0,
         term_focus: None,
@@ -741,12 +765,36 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
 
     let sx = splitter_x(hwnd, st);
     let half = s(SPLIT_HALF).max(1);
-    let ph = (bottom - top).max(0);
+    let area_h = (bottom - top).max(0);
+    // 하단 도크 = **전폭 밴드**(X-6, 원본 BottomLeftCol/Splitter/RightCol) — 파일 영역과
+    // 가로 분리·도크 좌/우는 파일 좌/우와 **독립 스플리터**(dock_split, 영속).
+    let m = panel_metrics(st.dpi);
+    let band_h = if st.panels[0].dock_visible() {
+        ((area_h as f32 * st.panels[0].dock_ratio()) as i32)
+            .clamp((m.row_h * 3).min(area_h / 2), area_h / 2)
+    } else {
+        0
+    };
+    let ph = (area_h - band_h).max(0);
     st.panels[0].set_bounds(GRect::new(0, top, (sx - half).max(0), ph), inv);
     st.panels[1].set_bounds(
         GRect::new(sx + half, top, (rc.w - sx - half).max(0), ph),
         inv,
     );
+    if band_h > 0 {
+        let band_y = top + ph;
+        let dsx = ((rc.w as f32 * st.dock_split) as i32).clamp(rc.w / 8, rc.w * 7 / 8);
+        st.panels[0]
+            .dock
+            .set_bounds(GRect::new(0, band_y, (dsx - half).max(0), band_h), inv);
+        st.panels[1].dock.set_bounds(
+            GRect::new(dsx + half, band_y, (rc.w - dsx - half).max(0), band_h),
+            inv,
+        );
+    } else {
+        st.panels[0].dock.set_bounds(GRect::default(), inv);
+        st.panels[1].dock.set_bounds(GRect::default(), inv);
+    }
 }
 
 /// 타이틀바 — 활성 패널 기준 경로·행/선택 수·페인트 시간.
@@ -2013,6 +2061,21 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             st.theme.border
         };
         ctx.fill_rect(GRect::new(lx, pb.y, w, pb.h), color);
+        // 도크 밴드 스플리터 + 상단 경계선(X-6 — 파일 스플리터와 독립)
+        if st.panels[0].dock_visible() {
+            let db = st.panels[0].dock.bounds();
+            if db.h > 0 {
+                let dx = db.right();
+                let dw = st.panels[1].dock.bounds().x - dx;
+                let dcolor = if st.dock_split_drag {
+                    st.theme.accent
+                } else {
+                    st.theme.border
+                };
+                ctx.fill_rect(GRect::new(dx, db.y, dw, db.h), dcolor);
+                ctx.fill_rect(GRect::new(0, db.y, rc.w, 1), st.theme.border);
+            }
+        }
         st.toolbar.paint(&mut ctx, &st.theme);
         st.statusbar.paint(&mut ctx, &st.theme);
         st.menubar.paint(&mut ctx, &st.theme); // 마지막 — 드롭다운 오버레이가 위에
@@ -2109,6 +2172,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.panels[0].set_dock_visible(on, &mut inv);
             st.panels[1].set_dock_visible(on, &mut inv);
             st.menubar.set_checked(CMD_TOGGLE_DOCK, on, &mut inv);
+            layout(hwnd, st, &mut inv); // 도크는 전폭 밴드 — 호스트 재배치(X-6)
             update_dock_info(st, &mut inv);
         }
         CMD_UNDO | CMD_REDO => {
@@ -2243,7 +2307,7 @@ unsafe fn wheel_target(hwnd: HWND, st: &State, lparam: LPARAM) -> (usize, i32, i
         y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
     };
     let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
-    (st.panel_at(pt.x).unwrap_or(st.active), pt.x, pt.y)
+    (st.panel_at_pt(pt.x, pt.y).unwrap_or(st.active), pt.x, pt.y)
 }
 
 /// 시스템 캐럿 깜빡임 주기(ms) — 0/비활성 값은 표준 530ms로 보정.
@@ -2572,16 +2636,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 포커스아웃 = 편집 취소(docs/27 §2)
                         st.active_panel().pathbar.cancel_edit(&mut inv);
                     }
-                } else if (x - sx).abs() <= half.max(1) {
+                } else if st.panels[0].dock_visible()
+                    && st.panels[0].dock.bounds().h > 0
+                    && (y - st.panels[0].dock.bounds().y).abs() <= SPLIT_HALF
+                {
+                    // 도크 밴드 상단 경계 = 높이 드래그(전폭 — X-6)
+                    st.dock_drag = Some(0);
+                } else if st.panels[0].dock_visible()
+                    && y >= st.panels[0].dock.bounds().y
+                    && (x - st.panels[0].dock.bounds().right() - half).abs() <= half.max(1)
+                {
+                    // 도크 밴드 좌/우 스플리터(X-6 — 파일 스플리터와 독립)
+                    st.dock_split_drag = true;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                } else if y < st.panels[0].bounds().bottom() && (x - sx).abs() <= half.max(1) {
+                    // 파일 영역 좌/우 스플리터(도크 밴드와 독립 — X-6)
                     st.split_drag = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
-                } else if let Some(idx) = st.panel_at(x).filter(|&i| {
-                    // 도크 상단 경계 ±3px = 높이 드래그 시작(M4-1 S2)
-                    st.panels[i].dock_visible()
-                        && (y - st.panels[i].dock.bounds().y).abs() <= SPLIT_HALF
-                }) {
-                    st.dock_drag = Some(idx);
-                } else if let Some(idx) = st.panel_at(x) {
+                } else if let Some(idx) = st.panel_at_pt(x, y) {
                     st.term_focus = None; // 기본 해제 — 아래에서 터미널 클릭이면 재설정(M4-3)
                     set_active(hwnd, st, idx);
                     // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
@@ -2764,15 +2836,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let mut inv = Invalidations::default();
-                if let Some(idx) = st.dock_drag {
-                    // 도크 높이 드래그(M4-1 S2) — 리스트+도크 영역 대비 비율, 양 패널 동기
-                    let list_top = st.panels[idx].rows().bounds().y;
-                    let bottom = st.panels[idx].bounds().bottom();
-                    if bottom > list_top {
-                        let ratio = (bottom - y) as f32 / (bottom - list_top) as f32;
+                if st.dock_drag.is_some() {
+                    // 도크 밴드 높이 드래그(X-6 — 패널 상단~상태바 영역 대비 비율)
+                    let top = st.panels[0].bounds().y;
+                    let bottom = st.panels[0].dock.bounds().bottom();
+                    if bottom > top {
+                        let ratio = (bottom - y) as f32 / (bottom - top) as f32;
                         st.panels[0].set_dock_ratio(ratio, &mut inv);
                         st.panels[1].set_dock_ratio(ratio, &mut inv);
+                        layout(hwnd, st, &mut inv);
                         update_dock_info(st, &mut inv);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                } else if st.dock_split_drag {
+                    // 도크 밴드 좌/우 스플리터 드래그(X-6 — 파일 스플리터와 독립·영속)
+                    let rc = client_rect(hwnd);
+                    if rc.w > 0 {
+                        st.dock_split = (x as f32 / rc.w as f32).clamp(0.15, 0.85);
+                        layout(hwnd, st, &mut inv);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 } else if st.split_drag {
                     let rc = client_rect(hwnd);
@@ -2805,6 +2887,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
                 st.dock_drag = None; // 도크 높이 드래그 종료(M4-1 S2)
+                st.dock_split_drag = false; // 도크 좌/우 스플리터 종료(X-6)
                 if st.term_drag.take().is_some() {
                     // 터미널 선택 확정(QA 07-14) — 선택은 유지(Ctrl+C 복사), 타이머 종료
                     let _ = KillTimer(Some(hwnd), TIMER_TERM_SEL);
@@ -3429,6 +3512,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     split: st.split,
                     dock: st.panels[0].dock_visible(),
                     dock_ratio: st.panels[0].dock_ratio(),
+                    dock_split: st.dock_split,
                     term_font: st.term_font.clone(),
                     term_font_size: st.term_font_size,
                     dlg_font: st.dlg_font.family.clone(),

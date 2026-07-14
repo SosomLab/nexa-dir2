@@ -247,21 +247,13 @@ impl Panel {
             inv,
         );
         let list_y = bounds.y + tab_h + bar_h;
-        // 하단 도크(M4-1) — 표시 시 리스트 하단을 비율 분할(S2 드래그·영속. 최소 3줄~최대 절반)
-        let avail = (bounds.bottom() - list_y).max(0);
-        let dock_h = if self.dock_visible {
-            ((avail as f32 * self.dock_ratio) as i32)
-                .clamp((self.m.row_h * 3).min(avail / 2), avail / 2)
-        } else {
-            0
-        };
-        let list_h = (bounds.bottom() - list_y - dock_h).max(0);
+        // 도크는 패널 밖 **전폭 밴드**(X-6 — 호스트 layout이 dock.set_bounds 직접 지정.
+        // 파일 좌/우와 도크 좌/우의 폭이 독립) — 리스트가 패널 전체 높이를 쓴다.
+        let list_h = (bounds.bottom() - list_y).max(0);
         for tab in &mut self.tabs {
             tab.rows
                 .set_bounds(Rect::new(bounds.x, list_y, bounds.w, list_h), inv);
         }
-        self.dock
-            .set_bounds(Rect::new(bounds.x, list_y + list_h, bounds.w, dock_h), inv);
         // 자동완성 팝업 하한 = 리스트 바닥(도크/터미널 침범 금지 — PATH-SUG)
         self.pathbar.set_overlay_bottom(list_y + list_h);
     }
