@@ -184,11 +184,7 @@ fn conflict_label(c: Conflict) -> String {
 /// 미리보기·충돌 재계산 → 리스트 갱신 + [적용] 활성 판정.
 unsafe fn refresh(st: &mut BrState) {
     let spec = spec_of(st.hwnd);
-    let names: Vec<(String, bool)> = st
-        .items
-        .iter()
-        .map(|(_, n, d)| (n.clone(), *d))
-        .collect();
+    let names: Vec<(String, bool)> = st.items.iter().map(|(_, n, d)| (n.clone(), *d)).collect();
     let new_names = preview(&names, &spec);
     let triples: Vec<(String, String, String)> = st
         .items
@@ -196,7 +192,9 @@ unsafe fn refresh(st: &mut BrState) {
         .zip(&new_names)
         .map(|((p, o, _), n)| (p.clone(), o.clone(), n.clone()))
         .collect();
-    let confs = conflicts(&triples, &|parent, name| Path::new(parent).join(name).exists());
+    let confs = conflicts(&triples, &|parent, name| {
+        Path::new(parent).join(name).exists()
+    });
     SendMessageW(st.list, LB_RESETCONTENT, None, None);
     let mut changed = 0usize;
     for (i, (_, old, new)) in triples.iter().enumerate() {
@@ -357,13 +355,46 @@ pub unsafe fn show(
     let half = (FORM_W - 6) / 2;
     lbl(dlg, &tr("bulk.find"), y);
     y += 20;
-    mk(dlg, font, w!("EDIT"), "", (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32, x, y, FORM_W, 22, ID_FIND);
+    mk(
+        dlg,
+        font,
+        w!("EDIT"),
+        "",
+        (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
+        x,
+        y,
+        FORM_W,
+        22,
+        ID_FIND,
+    );
     y += ROW;
     lbl(dlg, &tr("bulk.with"), y);
     y += 20;
-    mk(dlg, font, w!("EDIT"), "", (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32, x, y, FORM_W, 22, ID_WITH);
+    mk(
+        dlg,
+        font,
+        w!("EDIT"),
+        "",
+        (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
+        x,
+        y,
+        FORM_W,
+        22,
+        ID_WITH,
+    );
     y += ROW;
-    mk(dlg, font, w!("BUTTON"), &tr("bulk.matchCase"), WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32, x, y, FORM_W, 20, ID_MATCHCASE);
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.matchCase"),
+        WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
+        x,
+        y,
+        FORM_W,
+        20,
+        ID_MATCHCASE,
+    );
     y += ROW + 4;
 
     lbl(dlg, &tr("bulk.case"), y);
@@ -376,25 +407,78 @@ pub unsafe fn show(
         "bulk.case.sentence",
     ];
     for (i, key) in case_keys.iter().enumerate() {
-        let style = WS_TABSTOP.0
-            | BS_AUTORADIOBUTTON as u32
-            | if i == 0 { WS_GROUP.0 } else { 0 };
+        let style = WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32 | if i == 0 { WS_GROUP.0 } else { 0 };
         let (cx2, cy2) = (x + (i as i32 % 3) * (FORM_W / 3), y + (i as i32 / 3) * 22);
-        mk(dlg, font, w!("BUTTON"), &tr(key), style, cx2, cy2, FORM_W / 3, 20, ID_CASE_BASE + i as u32);
+        mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr(key),
+            style,
+            cx2,
+            cy2,
+            FORM_W / 3,
+            20,
+            ID_CASE_BASE + i as u32,
+        );
     }
     set_check(dlg, ID_CASE_BASE, true); // 기본 = 변경 없음
     y += 22 * 2 + 8;
 
     lbl(dlg, &tr("bulk.insert"), y);
     y += 20;
-    mk(dlg, font, w!("EDIT"), "", (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32, x, y, FORM_W, 22, ID_INSERT);
+    mk(
+        dlg,
+        font,
+        w!("EDIT"),
+        "",
+        (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
+        x,
+        y,
+        FORM_W,
+        22,
+        ID_INSERT,
+    );
     y += ROW;
-    mk(dlg, font, w!("BUTTON"), &tr("bulk.posPrefix"), WS_TABSTOP.0 | WS_GROUP.0 | BS_AUTORADIOBUTTON as u32, x, y, half, 20, ID_INS_PRE);
-    mk(dlg, font, w!("BUTTON"), &tr("bulk.posSuffix"), WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32, x + half + 6, y, half, 20, ID_INS_SUF);
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.posPrefix"),
+        WS_TABSTOP.0 | WS_GROUP.0 | BS_AUTORADIOBUTTON as u32,
+        x,
+        y,
+        half,
+        20,
+        ID_INS_PRE,
+    );
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.posSuffix"),
+        WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32,
+        x + half + 6,
+        y,
+        half,
+        20,
+        ID_INS_SUF,
+    );
     set_check(dlg, ID_INS_SUF, true);
     y += ROW + 4;
 
-    mk(dlg, font, w!("BUTTON"), &tr("bulk.number"), WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32, x, y, FORM_W, 20, ID_NUM);
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.number"),
+        WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
+        x,
+        y,
+        FORM_W,
+        20,
+        ID_NUM,
+    );
     y += 24;
     let third = (FORM_W - 12) / 3;
     for (i, (key, id, init)) in [
@@ -407,17 +491,72 @@ pub unsafe fn show(
     {
         let cx2 = x + i as i32 * (third + 6);
         mk(dlg, font, w!("STATIC"), &tr(key), 0, cx2, y, third, 16, 0);
-        mk(dlg, font, w!("EDIT"), init, (WS_BORDER | WS_TABSTOP).0 | (ES_NUMBER | ES_AUTOHSCROLL) as u32, cx2, y + 18, third, 22, *id);
+        mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            init,
+            (WS_BORDER | WS_TABSTOP).0 | (ES_NUMBER | ES_AUTOHSCROLL) as u32,
+            cx2,
+            y + 18,
+            third,
+            22,
+            *id,
+        );
     }
     y += 18 + ROW;
-    mk(dlg, font, w!("BUTTON"), &tr("bulk.posPrefix"), WS_TABSTOP.0 | WS_GROUP.0 | BS_AUTORADIOBUTTON as u32, x, y, half, 20, ID_NUM_PRE);
-    mk(dlg, font, w!("BUTTON"), &tr("bulk.posSuffix"), WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32, x + half + 6, y, half, 20, ID_NUM_SUF);
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.posPrefix"),
+        WS_TABSTOP.0 | WS_GROUP.0 | BS_AUTORADIOBUTTON as u32,
+        x,
+        y,
+        half,
+        20,
+        ID_NUM_PRE,
+    );
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.posSuffix"),
+        WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32,
+        x + half + 6,
+        y,
+        half,
+        20,
+        ID_NUM_SUF,
+    );
     set_check(dlg, ID_NUM_SUF, true);
 
     // 하단 버튼
     let by = CLIENT_H - PAD - 26;
-    let apply = mk(dlg, font, w!("BUTTON"), &tr("bulk.apply"), WS_TABSTOP.0, x, by, half, 26, ID_APPLY);
-    mk(dlg, font, w!("BUTTON"), &tr("bulk.cancel"), WS_TABSTOP.0, x + half + 6, by, half, 26, ID_CANCEL);
+    let apply = mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.apply"),
+        WS_TABSTOP.0,
+        x,
+        by,
+        half,
+        26,
+        ID_APPLY,
+    );
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.cancel"),
+        WS_TABSTOP.0,
+        x + half + 6,
+        by,
+        half,
+        26,
+        ID_CANCEL,
+    );
 
     // ── 우측 미리보기(원본 → 새 이름·충돌 하이라이트) ──
     let lx = PAD + FORM_W + PAD;
@@ -426,7 +565,7 @@ pub unsafe fn show(
         font,
         w!("LISTBOX"),
         "",
-        (WS_BORDER | WS_VSCROLL).0 | 0x1000 /* LBS_NOSEL */ | 0x0040 /* LBS_NOINTEGRALHEIGHT */,
+        (WS_BORDER | WS_VSCROLL).0 | 0x1000 /* LBS_NOSEL */ | 0x0040, /* LBS_NOINTEGRALHEIGHT */
         lx,
         PAD,
         CLIENT_W - lx - PAD,

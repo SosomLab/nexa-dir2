@@ -11,21 +11,21 @@ mod dw;
 mod i18n;
 // 비-Windows에선 창이 없어 미사용이지만 순수 로직이라 테스트는 전 플랫폼 실행
 #[cfg(windows)]
+mod bulkrename;
+#[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
 mod conpty;
-#[cfg(windows)]
-mod bulkrename;
 #[cfg(windows)]
 mod dialog;
 #[cfg(windows)]
 mod dnd;
 #[cfg(windows)]
 mod icon;
-#[cfg(windows)]
-mod launcher;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod icons;
+#[cfg(windows)]
+mod launcher;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod nav;
 #[cfg_attr(not(windows), allow(dead_code))]

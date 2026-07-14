@@ -13,7 +13,7 @@
 | **M2** | 셸 골격 — 경로바·탭/듀얼·메뉴·테마·설정/세션·IME/UIA 1차 | 상주 RSS ≤30MB | ✅ `0.3.0` |
 | **M3** | 파일 조작 — nexa-ops(Undo/Redo)·셸 메뉴·클립보드·DnD·watcher | 유휴 RSS ≤30MB(10k 유휴 300s 6.29MB) | ✅ `0.4.0` |
 | **M4** | 하단 패널 — 정보·미리보기·ConPTY 터미널 | 유휴 RSS ≤30MB(10k+터미널 상주 300s 5.07MB) | ✅ `0.5.0` |
-| **M5** | 마감 — 잔여 패리티·릴리스 파이프라인·서명 결정 | 예산 최종 | 🚧 (M5-2 릴리스 파이프라인 ✅ · M5-1/M5-3 잔여) |
+| **M5** | 마감 — 잔여 패리티·릴리스 파이프라인·서명 결정 | 예산 최종 | ✅ (M5-1~3 완료 — 첫 태그 실행 검증·실기 QA 잔여) |
 
 ---
 
@@ -68,10 +68,12 @@
 - ✅ M4-3 ConPTY 터미널(`feat/m4-terminal`) — 원본 VtScreen.cs·ConPtySession.cs(docs/37) 이식: **nexa-term rlib**(VT 파서+셀 그리드 — SGR 16/256/트루컬러·CSI 커서/지우기/삽입삭제·DECSTBM 마진·스크롤백 800·전각 연속 셀·테스트 9)·**ConPTY 세션**(pwsh→powershell→cmd 폴백·UTF-8 경계 보존 읽기 스레드·EXIT_FLAG 통지·세대 가드·Drop 정리)·**도크 [터미널] 종류**(Consolas 12 모노 셀 그리드[DrawCtx::term_text/term_cell_w 신설]·동일 색 런 병합·reverse/faint·캐럿·클릭 키 포커스·화살표 등 VT 시퀀스·셸 종료 시 아무 키 재시작·리사이즈 동기). 테스트 148 green·B2 0.69MB·B3 무변. **→ M4 전 항목 구현 완료 — 마감 게이트(B1) 잔여.**
 - ✅ M4-3 후속 — 실기 QA 시리즈(07-14, `fix/m4-term-qa`·`fix/term-caret-color`·`fix/m4-qa-batch2`·`feat/m4-term-select`·`fix/nav-freeze-watcher`): **터미널 상호작용 완성** — 셀 단위 렌더(폴백 글꼴 열 밀림 해소)·마우스 드래그 선택(엣지 자동 스크롤)·스크롤백 휠·Ctrl+C/V·세로바 캐럿(깜빡임·밝은 회색)·Backspace=DEL 교차 매핑·settings term_font. **프리즈 2건 근본 해소** — 파일별 아이콘 워커화(Defender/OneDrive)·watcher drop CloseHandle 직렬화(OVERLAPPED 재구현 — 자동 재현 12,009ms→4ms 실측). + 편집 필드 클립보드·리네임 더블클릭 지연·휠 hover 라우팅·.lnk 숨김. 테스트 151 green·B2 0.73MB·B3 무변.
 
-## M5 — 마감·릴리스 🚧
+## M5 — 마감·릴리스 ✅
 
-- ✅ M5-2 릴리스 파이프라인(`feat/m5-release-pipeline`, 07-15) — `.github/workflows/release.yml` 신설: 버전 태그 push(`0.5.0` 형식·`v` 접두사 허용) → windows-latest `cargo test`+release 빌드 → **예산 게이트(B2 exe ≤10MB·B3 임포트 화이트리스트 — CI와 동일 스크립트 `scripts/budget-b3.ps1`)** 통과 필수 → `NexaDir2-<버전>-win-x64.exe`(포터블 단일 exe — DR-3) 개명 → **GitHub Release 자동 생성·첨부**(자동 노트). `workflow_dispatch` 수동 실행=게이트+아티팩트까지(Release는 태그에서만). 릴리스 절차 SSOT = [18](18-build-and-test.md) §5(`git tag X.Y.Z && git push origin X.Y.Z`). 첫 태그 실행 검증 대기.
-- ☐ M5-1 퀵 런처·일괄 이름변경 등 원본 잔여 패리티(원본 docs/25·44) · ☐ M5-3 접근성·IME 마감·서명 결정(원본 PKG-4 공동).
+- ✅ M5-1 퀵 런처(`feat/m5-launcher`, 07-15 — 원본 docs/44 이식) — 도구 모음 아래 **상시 표시 런처 바**(사용자 정의 외부 프로그램 버튼·Toolbar 위젯 재사용): `%path%`→활성 패널 폴더 치환 ShellExecuteW(작업 디렉터리 동반)·실패 상태바 격리(원본 오류 격리 규약)·보기 메뉴 토글·settings.cfg 영속(`launcher`·`launcher_count`·`launcherN=라벨|exe|인자` — count로 첫 실행/비움 구분)·VS Code 시드(ResolveVsCode 3경로). α: 항목 CRUD=settings.cfg 직접 편집·exe 아이콘/항목 단축키 후속.
+- ✅ M5-1 일괄 이름변경 α(`feat/m5-bulk-rename`, 07-15 — 원본 docs/25 스펙 **최초 구현**·원본도 설계만) — **nexa-ops::batch_rename**(순수·맥 테스트): 치환(대소문자 무시 문자 단위)→대소문자(UPPER/lower/Title/Sentence)→삽입(접두/접미)→연번(시작·증가·0패딩·위치) 고정 파이프라인·이름부만 적용·충돌 4종(빈·금지 문자·배치 내 중복·기존 존재). **다이얼로그**(user32·comctl32 비의존): 동작 폼+실시간 미리보기(`원본 → 새 이름`·충돌 ⚠)·[적용]=충돌 0·변경 ≥1일 때만. 적용 = **MoveBatchOp 트랜잭션 1건**(B-13u — Ctrl+Z 배치 되돌림)+F18 접두사 치환. 진입 = 편집 메뉴·Ctrl+Shift+R. β 이후: 정규식·날짜·토큰 언어·프리셋·블록 재배열.
+- ✅ M5-2 릴리스 파이프라인(`feat/m5-release-pipeline`, 07-15) — `.github/workflows/release.yml` 신설: 버전 태그 push(`0.5.0` 형식·`v` 접두사 허용) → windows-latest `cargo test`+release 빌드 → **예산 게이트(B2 exe ≤10MB·B3 임포트 화이트리스트 — CI와 동일 스크립트 `scripts/budget-b3.ps1`)** 통과 필수 → `NexaDir2-<버전>-win-x64.exe`(포터블 단일 exe — DR-3) 개명 → **GitHub Release 자동 생성·첨부**(자동 노트). `workflow_dispatch` 수동 실행=게이트+아티팩트까지(Release는 태그에서만). 릴리스 절차 SSOT = [18](18-build-and-test.md) §5(`git tag X.Y.Z && git push origin X.Y.Z`).
+- ✅ M5-3 접근성·IME 마감·서명 결정(`feat/m5-a11y`, 07-15) — **UIA SelectionItem 실동작**(Select/Add/Remove → WM_APP_UIA_SELECT UI 스레드 전달·select_program 범위 방어)·**구조 변경 이벤트**(uia_notify (패널·경로·행 수) 서명 → ChildrenInvalidated — M2-7 1차 한계 2건 해소)·**리네임 인라인 IME 조합 창 배치**(rename_edit_info — M3-2 α 해소)·**서명 = 무서명 유지 확정**(DR-3 갱신 — 원본 PKG-4 공동 보류[Store $19 vs OV 연 $100~400 비용 결정 대기]·SmartScreen 감수·인증서 확보 시 release.yml 서명 단계 추가).
 
 ## M1+ (요약)
 

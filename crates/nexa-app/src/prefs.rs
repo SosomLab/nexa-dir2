@@ -24,12 +24,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow, MoveWindow,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW,
-    TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW,
-    ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
-    WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION,
-    WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE,
+    TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW, ES_AUTOHSCROLL, ES_NUMBER,
+    GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
+    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT,
+    WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 use crate::dialog::DlgFont;
@@ -318,7 +317,18 @@ impl PrefState {
         } else {
             format!("\u{201C}{}\u{201D}", self.query)
         };
-        let th = mk(self.hwnd, self.title_font, w!("STATIC"), &title, 0, x0, PAD, pane_w, 28, 0);
+        let th = mk(
+            self.hwnd,
+            self.title_font,
+            w!("STATIC"),
+            &title,
+            0,
+            x0,
+            PAD,
+            pane_w,
+            28,
+            0,
+        );
         self.rows.push(th);
         let mut y = PAD + 40;
         let mut opt_seq = 0u32;
@@ -360,22 +370,27 @@ impl PrefState {
                 }
                 Kind::Radio(_) | Kind::LangRadio => {
                     // 캡션 + 세로 라디오 그룹(원본 스크린샷 "Where to show ..." 형식)
-                    let cap = mk(self.hwnd, self.font, w!("STATIC"), &label, 0, x0, y, pane_w, 20, 0);
+                    let cap = mk(
+                        self.hwnd,
+                        self.font,
+                        w!("STATIC"),
+                        &label,
+                        0,
+                        x0,
+                        y,
+                        pane_w,
+                        20,
+                        0,
+                    );
                     self.rows.push(cap);
                     y += 26;
                     let opts: Vec<(String, String)> = match e.kind {
-                        Kind::Radio(list) => list
-                            .iter()
-                            .map(|(v, lk)| (v.to_string(), tr(lk)))
-                            .collect(),
+                        Kind::Radio(list) => {
+                            list.iter().map(|(v, lk)| (v.to_string(), tr(lk))).collect()
+                        }
                         _ => {
                             let mut o = vec![("system".to_string(), lang_label("system"))];
-                            o.extend(
-                                self.values
-                                    .langs
-                                    .iter()
-                                    .map(|c| (c.clone(), lang_label(c))),
-                            );
+                            o.extend(self.values.langs.iter().map(|c| (c.clone(), lang_label(c))));
                             o
                         }
                     };
@@ -392,8 +407,16 @@ impl PrefState {
                             style |= WS_GROUP.0; // 라디오 그룹 경계
                         }
                         let r = mk(
-                            self.hwnd, self.font, w!("BUTTON"), &olabel, style, x0 + 8, y,
-                            pane_w - 8, 24, id,
+                            self.hwnd,
+                            self.font,
+                            w!("BUTTON"),
+                            &olabel,
+                            style,
+                            x0 + 8,
+                            y,
+                            pane_w - 8,
+                            24,
+                            id,
                         );
                         if val == cur {
                             SendMessageW(r, 0x00F1, Some(WPARAM(1)), Some(LPARAM(0)));
@@ -585,7 +608,10 @@ unsafe extern "system" fn prefs_proc(
         m if m == WM_CTLCOLOREDIT => DefWindowProcW(hwnd, msg, wparam, lparam),
         WM_SIZE => {
             // 리사이즈 추종(X-8) — 구분선 높이·본문 컨트롤 폭 재배치(최소화는 무시).
-            let (w, h) = ((lparam.0 & 0xFFFF) as i32, ((lparam.0 >> 16) & 0xFFFF) as i32);
+            let (w, h) = (
+                (lparam.0 & 0xFFFF) as i32,
+                ((lparam.0 >> 16) & 0xFFFF) as i32,
+            );
             if w > 0 && h > 0 {
                 (*st).cw = w;
                 (*st).ch = h;
@@ -627,9 +653,8 @@ unsafe extern "system" fn prefs_proc(
 }
 
 /// 설정 창 스타일 — 리사이즈 가능(VS Code식 — X-8). 기본 크기가 최소 크기.
-const PREFS_STYLE: WINDOW_STYLE = WINDOW_STYLE(
-    WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0,
-);
+const PREFS_STYLE: WINDOW_STYLE =
+    WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0);
 
 /// 섹션 제목용 글꼴(X-9) — 대화상자 글꼴 +5pt·세미볼드.
 unsafe fn make_title_font(hwnd: HWND, spec: &DlgFont) -> HFONT {

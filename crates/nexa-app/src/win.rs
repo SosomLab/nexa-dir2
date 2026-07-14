@@ -34,9 +34,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
     WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND,
     WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION, WM_INITMENUPOPUP, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEHWHEEL,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
     WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
@@ -2346,7 +2345,11 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let item = st.launcher_items[(id - CMD_LAUNCHER_BASE) as usize].clone();
             let folder = st.active_panel().root_path();
             let ok = crate::launcher::launch(hwnd, &item, &folder);
-            let key = if ok { "launcher.ran" } else { "launcher.failed" };
+            let key = if ok {
+                "launcher.ran"
+            } else {
+                "launcher.failed"
+            };
             update_title(hwnd, st, &format!(" · {}", trf(key, &[&item.label])));
         }
         CMD_PREFS => {
@@ -2664,10 +2667,11 @@ unsafe fn open_bulk_rename(hwnd: HWND) {
             st.active_panel().rename_expanded(old, new); // F18 접두사 치환
         }
         let desc = trf("bulk.done", &[&done.len().to_string()]);
-        st.history.push(Box::new(nexa_ops::history::MoveBatchOp::new(
-            done.clone(),
-            desc,
-        )));
+        st.history
+            .push(Box::new(nexa_ops::history::MoveBatchOp::new(
+                done.clone(),
+                desc,
+            )));
     }
     let mut note = format!(" · {}", trf("bulk.done", &[&done.len().to_string()]));
     if errors > 0 {

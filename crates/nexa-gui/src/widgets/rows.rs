@@ -941,8 +941,8 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             InputEvent::MouseMove { x, y } => {
                 if let Some(drag) = self.resize {
                     // 이동량을 양쪽 min_width로 제한 — 한 쌍 조절이면 이웃도 함께(QA 07-15)
-                    let mut dx = (x - drag.start_x)
-                        .max(self.columns[drag.col].min_width - drag.start_w);
+                    let mut dx =
+                        (x - drag.start_x).max(self.columns[drag.col].min_width - drag.start_w);
                     if let Some(w2) = drag.start_w2 {
                         dx = dx.min(w2 - self.columns[drag.col + 1].min_width);
                         let (nw1, nw2) = (drag.start_w + dx, w2 - dx);

@@ -95,7 +95,10 @@ fn apply_case(s: &str, mode: CaseMode) -> String {
         CaseMode::Sentence => {
             let mut ch = s.chars();
             match ch.next() {
-                Some(f) => f.to_uppercase().chain(ch.flat_map(char::to_lowercase)).collect(),
+                Some(f) => f
+                    .to_uppercase()
+                    .chain(ch.flat_map(char::to_lowercase))
+                    .collect(),
                 None => String::new(),
             }
         }

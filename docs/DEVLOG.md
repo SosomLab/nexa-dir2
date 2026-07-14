@@ -8,6 +8,7 @@
 
 ## 2026-07-15
 
+- **M5 마감 게이트 → `0.6.0`**: B1 유휴 RSS(10k·정보 뷰 도크·런처 바·300s·3회) **중앙값 16.86MB ≤ 30 통과**(18/16.86/4.12 — 재상승 편차 관찰은 β arena 회수와 공동 과제) · B2 **0.90MB** · B3 인박스 15종 무변. 테스트 163 green·fmt. **M5 마감 마일스톤 완료** — `0.6.0` 태그 push = 릴리스 파이프라인 첫 실행 검증(M5-2). 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5-1 일괄 이름변경 α(`feat/m5-bulk-rename` — 원본 docs/25 스펙 최초 구현·원본도 설계만)**: **nexa-ops::batch_rename**(순수 — 치환→대소문자→삽입→연번 고정 파이프라인·이름부만·충돌 4종 검출) + **bulkrename.rs 다이얼로그**(동작 폼+실시간 미리보기 LISTBOX·충돌 ⚠ 표시·[적용]=충돌 0일 때만) + 적용=**MoveBatchOp 트랜잭션 1건**(Ctrl+Z 배치 되돌림·F18 접두사 치환). 진입 = 편집 메뉴·Ctrl+Shift+R. 테스트 163 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5-1 퀵 런처 바(`feat/m5-launcher` — 원본 docs/44 이식)**: 도구 모음 아래 **상시 표시 런처 바**(Toolbar 재사용·라벨 버튼) — `%path%`→활성 패널 폴더 치환 ShellExecuteW·실패 상태바 격리·보기 메뉴 토글·settings.cfg 영속(`launcherN=라벨|exe|인자`·count로 부재/비움 구분)·첫 실행 VS Code 시드(후보 3경로). `current_settings` 헬퍼 추출. 실기 QA 대기. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5-3 접근성·IME 마감+서명 결정(`feat/m5-a11y`)**: **UIA SelectionItem 실동작**(Select/Add/Remove → `WM_APP_UIA_SELECT`로 UI 스레드 전달·`select_program` 범위 방어) · **구조 변경 이벤트**(uia_notify가 (패널·경로·행 수) 서명 추적 → ChildrenInvalidated 발행 — M2-7 1차 한계 2건 해소) · **리네임 인라인 IME 조합 창 배치**(`rename_edit_info` 신설·필드 기하 paint와 단일 원천 — M3-2 α 한계 해소) · **서명 = 무서명 유지 확정**(DR-3 갱신 — 원본 PKG-4 공동 보류·Store/OV 비용 결정 대기·SmartScreen 감수·인증서 확보 시 release.yml 서명 단계). 테스트 160 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).

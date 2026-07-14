@@ -193,7 +193,9 @@ impl Settings {
                         s.launcher_items = Some(Vec::new());
                     }
                 }
-                k if k.starts_with("launcher") && k["launcher".len()..].parse::<usize>().is_ok() => {
+                k if k.starts_with("launcher")
+                    && k["launcher".len()..].parse::<usize>().is_ok() =>
+                {
                     let mut parts = v.splitn(3, '|');
                     let (label, exe) = (
                         parts.next().unwrap_or("").trim(),
