@@ -18,7 +18,7 @@ use windows::Win32::System::DataExchange::{
     RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-use windows::Win32::System::Ole::CF_HDROP;
+use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::UI::Shell::{DragQueryFileW, DROPFILES, HDROP};
 
 const DROPEFFECT_COPY: u32 = 1;
@@ -169,6 +169,52 @@ pub unsafe fn read_file_list() -> Option<(Vec<PathBuf>, nexa_ops::Op)> {
         }
     }
     Some((paths, op))
+}
+
+/// 텍스트를 OS 클립보드에 게시(CF_UNICODETEXT) — 편집 필드 Ctrl+C/X(QA 07-14).
+pub unsafe fn write_text(hwnd: HWND, text: &str) -> bool {
+    let Some(_open) = Open::new(Some(hwnd)) else {
+        return false;
+    };
+    if EmptyClipboard().is_err() {
+        return false;
+    }
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = wide.len() * 2;
+    let Ok(hmem) = GlobalAlloc(GMEM_MOVEABLE, bytes) else {
+        return false;
+    };
+    let p = GlobalLock(hmem) as *mut u8;
+    if p.is_null() {
+        let _ = GlobalFree(Some(hmem));
+        return false;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, p, bytes);
+    let _ = GlobalUnlock(hmem);
+    if SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))).is_err() {
+        let _ = GlobalFree(Some(hmem));
+        return false;
+    }
+    true
+}
+
+/// OS 클립보드 텍스트 읽기(CF_UNICODETEXT — 시스템이 CF_TEXT를 자동 변환 제공) —
+/// 편집 필드·터미널 Ctrl+V(QA 07-14).
+pub unsafe fn read_text() -> Option<String> {
+    let _open = Open::new(None)?;
+    let h = GetClipboardData(CF_UNICODETEXT.0 as u32).ok()?;
+    let hg = HGLOBAL(h.0);
+    let p = GlobalLock(hg) as *const u16;
+    if p.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    while std::ptr::read_unaligned(p.add(len)) != 0 {
+        len += 1;
+    }
+    let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+    let _ = GlobalUnlock(hg);
+    Some(s)
 }
 
 /// 클립보드 비우기 — 잘라내기 1회성(이동 붙여넣기 후, 탐색기 관례).
