@@ -251,6 +251,26 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
+    /// 편집 선택 텍스트(Ctrl+C — QA 07-14). 선택 없으면 `None`.
+    pub fn rename_selected_text(&self) -> Option<String> {
+        self.rename.as_ref()?.1.selected_text()
+    }
+
+    /// 편집 선택 잘라내기(Ctrl+X) — 선택 텍스트 반환 후 삭제.
+    pub fn rename_cut(&mut self, inv: &mut Invalidations) -> Option<String> {
+        let t = self.rename.as_mut()?.1.cut_selection()?;
+        inv.push(self.bounds);
+        Some(t)
+    }
+
+    /// 편집 붙여넣기(Ctrl+V) — 선택 대체 삽입. 제어 문자는 호출자가 필터.
+    pub fn rename_paste(&mut self, s: &str, inv: &mut Invalidations) {
+        if let Some((_, es)) = &mut self.rename {
+            es.insert_str(s);
+            inv.push(self.bounds);
+        }
+    }
+
     /// 편집 취소(Esc·외부 클릭) — 입력 무시.
     pub fn cancel_rename(&mut self, inv: &mut Invalidations) {
         if self.rename.take().is_some() {

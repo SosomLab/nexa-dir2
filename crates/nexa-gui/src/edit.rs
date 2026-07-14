@@ -104,6 +104,28 @@ impl EditState {
         }
     }
 
+    /// 선택 텍스트(클립보드 복사용) — 선택 없으면 `None`.
+    pub fn selected_text(&self) -> Option<String> {
+        let (a, b) = self.sel_range()?;
+        Some(self.buf[a..b].iter().collect())
+    }
+
+    /// 선택 잘라내기 — 선택 텍스트를 반환하고 삭제. 선택 없으면 `None`.
+    pub fn cut_selection(&mut self) -> Option<String> {
+        let t = self.selected_text()?;
+        self.delete_selection();
+        Some(t)
+    }
+
+    /// 문자열 삽입(붙여넣기) — 선택이 있으면 대체. 제어 문자 필터링은 호출자 몫.
+    pub fn insert_str(&mut self, s: &str) {
+        self.delete_selection();
+        for c in s.chars() {
+            self.buf.insert(self.caret, c);
+            self.caret += 1;
+        }
+    }
+
     /// 키 처리. 비Shift 이동 중 선택이 있으면 선택 가장자리로 접기(표준 관례).
     pub fn key(&mut self, k: EditKey, shift: bool) {
         match k {

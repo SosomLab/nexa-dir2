@@ -22,9 +22,9 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END,
-    VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT, VK_OEM_3,
-    VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE,
+    VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT,
+    VK_OEM_3, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -66,6 +66,9 @@ const WM_APP_TRANSFER: u32 = 0x8001; // WM_APP + 1
 /// 상주 자니터 타이머 id·점검 주기·유휴 트림 임계(M2-8 — 원본 01 §5-1·NFR-M3).
 /// 활성 중에만 저빈도로 돌고, 트림 후엔 스스로 꺼진다(유휴 백그라운드 0%).
 const TIMER_JANITOR: usize = 3;
+/// 느린 재클릭 리네임 지연 타이머(QA 07-14) — 더블클릭 시간 내 두 번째 클릭이 오면 취소
+/// (더블클릭=열기 우선, 탐색기 관례). 주기 = GetDoubleClickTime().
+const TIMER_RENAME: usize = 4;
 const JANITOR_TICK_MS: u32 = 10_000;
 const IDLE_TRIM_MS: u64 = 60_000;
 /// 폴더 watcher 통지(M3-6) — wparam=패널, lparam=세대(낡은 스레드 무시). 디바운스 타이머는
@@ -75,6 +78,8 @@ const TIMER_WATCH_BASE: usize = 10;
 const WATCH_DEBOUNCE_MS: u32 = 300;
 /// 터미널 출력/종료 통지(M4-3) — wparam=패널(|EXIT_FLAG), lparam=세대.
 const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
+/// 파일별 아이콘 워커 결과(M4 QA 07-14 — WPARAM=Box<icons::shell::LoadResult>).
+const WM_APP_ICON: u32 = 0x8004; // WM_APP + 4
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -1493,6 +1498,17 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
             .map(|p| p.to_path_buf())
     };
     let Some(path) = path else { return };
+    // 바로가기 확장자 숨김(QA 07-14 — 탐색기 NeverShowExt): 표시/편집은 이름만,
+    // 실제 리네임에는 원래 .lnk를 복원
+    let mut new_name = new_name.to_string();
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("lnk"))
+        && !new_name.to_ascii_lowercase().ends_with(".lnk")
+    {
+        new_name.push_str(".lnk");
+    }
+    let new_name = new_name.as_str();
     let note = match nexa_ops::rename(&path, new_name) {
         Ok(new_path) => {
             if new_path != path {
@@ -2011,6 +2027,30 @@ fn term_key_seq(vk: u16) -> Option<&'static str> {
     }
 }
 
+/// 휠 대상 패널(QA 07-14) — WM_MOUSEWHEEL lparam은 **화면 좌표**. 마우스 아래 패널로
+/// 라우팅(스플리터 존/패널 밖이면 활성 패널 폴백) — 포커스 이동 없이 스크롤(탐색기 관례).
+unsafe fn wheel_target(hwnd: HWND, st: &State, lparam: LPARAM) -> usize {
+    let mut pt = windows::Win32::Foundation::POINT {
+        x: (lparam.0 & 0xFFFF) as i16 as i32,
+        y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+    };
+    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+    st.panel_at(pt.x).unwrap_or(st.active)
+}
+
+/// 붙여넣기용 클립보드 텍스트 정제(편집 필드는 한 줄) — 첫 줄만·제어 문자 제거.
+unsafe fn paste_line() -> Option<String> {
+    let raw = crate::clipboard::read_text()?;
+    let line: String = raw
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    (!line.is_empty()).then_some(line)
+}
+
 /// 편집 모드 키 매핑(경로바 편집·인라인 리네임 공용 — edit.rs EditKey).
 fn edit_key_of(vk: u16, ctrl: bool) -> Option<nexa_gui::EditKey> {
     use nexa_gui::EditKey;
@@ -2102,8 +2142,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else {
                     InputEvent::Wheel { delta }
                 };
+                // 마우스 아래 패널로 라우팅(QA 07-14 — 활성 패널이 아닌 hover 기준)
+                let target = wheel_target(hwnd, st, lparam);
                 let mut inv = Invalidations::default();
-                st.active_panel().on_event(&ev, &mut inv);
+                st.panels[target].on_event(&ev, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
@@ -2111,9 +2153,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEHWHEEL => {
             if let Some(st) = state_of(hwnd) {
                 let delta = (wparam.0 >> 16) as i16 as i32;
+                let target = wheel_target(hwnd, st, lparam);
                 let mut inv = Invalidations::default();
-                st.active_panel()
-                    .on_event(&InputEvent::HWheel { delta }, &mut inv);
+                st.panels[target].on_event(&InputEvent::HWheel { delta }, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
             }
             LRESULT(0)
@@ -2208,6 +2250,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // 드래그가 시작되면 취소 = DnD 우선. 짧은 간격은 더블클릭 시도로 무시)
                     let now = now_ms();
                     st.rename_on_up = false;
+                    let _ = KillTimer(Some(hwnd), TIMER_RENAME); // 새 클릭 = 예약 리네임 무효
                     if let Some((_, path)) = &hit {
                         if was_selected && !shift && !ctrl {
                             if let Some((p_idx, p_path, t)) = &st.slow_click {
@@ -2357,10 +2400,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 st.panels[0].on_event(&ev, &mut inv);
                 st.panels[1].on_event(&ev, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
-                // 느린 재클릭 리네임 — 클릭 확정(무드래그) 시점에 진입(드래그였다면 이미 취소)
+                // 느린 재클릭 리네임 — 클릭 확정(무드래그) 시 **더블클릭 시간만큼 지연** 후
+                // 진입(그 안에 두 번째 클릭 = 더블클릭 열기 → WM_LBUTTONDBLCLK가 취소, QA 07-14)
                 if st.rename_on_up {
                     st.rename_on_up = false;
-                    begin_rename_caret(hwnd, st);
+                    SetTimer(Some(hwnd), TIMER_RENAME, GetDoubleClickTime(), None);
                 }
             }
             let _ = ReleaseCapture();
@@ -2381,6 +2425,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_LBUTTONDBLCLK => {
+            // 더블클릭 = 열기 — 지연 중인 느린 재클릭 리네임 취소(QA 07-14)
+            let _ = KillTimer(Some(hwnd), TIMER_RENAME);
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
@@ -2414,6 +2460,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.active_panel().drain_actions(ctx, &mut inv);
                     } else if vk == VK_ESCAPE.0 {
                         st.active_panel().pathbar.cancel_edit(&mut inv);
+                    } else if ctrl && vk == b'C' as u16 {
+                        // 표준 편집 클립보드(QA 07-14) — 선택 복사/잘라내기/붙여넣기
+                        if let Some(t) = st.active_panel().pathbar.edit_selected_text() {
+                            crate::clipboard::write_text(hwnd, &t);
+                        }
+                    } else if ctrl && vk == b'X' as u16 {
+                        if let Some(t) = st.active_panel().pathbar.edit_cut(&mut inv) {
+                            crate::clipboard::write_text(hwnd, &t);
+                        }
+                    } else if ctrl && vk == b'V' as u16 {
+                        if let Some(t) = paste_line() {
+                            st.active_panel().pathbar.edit_paste(&t, &mut inv);
+                        }
                     } else if let Some(k) = edit_key_of(vk, ctrl) {
                         // 캐럿 이동·선택·삭제(QA 07-13 — edit.rs 공용 모델)
                         st.active_panel().pathbar.edit_key(k, shift, &mut inv);
@@ -2453,6 +2512,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     } else if vk == VK_ESCAPE.0 {
                         st.active_panel().rows_mut().cancel_rename(&mut inv);
+                    } else if ctrl && vk == b'C' as u16 {
+                        // 표준 편집 클립보드(QA 07-14 — 경로바와 동일 규약)
+                        if let Some(t) = st.active_panel().rows().rename_selected_text() {
+                            crate::clipboard::write_text(hwnd, &t);
+                        }
+                    } else if ctrl && vk == b'X' as u16 {
+                        if let Some(t) = st.active_panel().rows_mut().rename_cut(&mut inv) {
+                            crate::clipboard::write_text(hwnd, &t);
+                        }
+                    } else if ctrl && vk == b'V' as u16 {
+                        if let Some(t) = paste_line() {
+                            st.active_panel().rows_mut().rename_paste(&t, &mut inv);
+                        }
                     } else if let Some(k) = edit_key_of(vk, ctrl) {
                         st.active_panel().rows_mut().rename_key(k, shift, &mut inv);
                     }
@@ -2625,6 +2697,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        // 파일별 아이콘 워커 결과(QA 07-14) — WPARAM=Box<LoadResult> 소유권 인수(항상 해제)
+        m if m == WM_APP_ICON => {
+            let (key, raw) =
+                *unsafe { Box::from_raw(wparam.0 as *mut crate::icons::shell::LoadResult) };
+            if let Some(st) = state_of(hwnd) {
+                if st.icons.borrow_mut().on_result(key, raw) {
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+            } else if raw != 0 {
+                unsafe {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(
+                        windows::Win32::UI::WindowsAndMessaging::HICON(
+                            raw as *mut core::ffi::c_void,
+                        ),
+                    );
+                }
+            }
+            LRESULT(0)
+        }
         // 전송 워커 통지(M3-1) — 진행률·완료(양쪽 재로드)
         m if m == WM_APP_TRANSFER => {
             if let Some(st) = state_of(hwnd) {
@@ -2738,12 +2829,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             } else if wparam.0 == TIMER_ICONS {
                 if let Some(st) = state_of(hwnd) {
-                    if st.icons.borrow_mut().tick() {
+                    if st.icons.borrow_mut().tick(hwnd, WM_APP_ICON) {
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                     if !st.icons.borrow().has_pending() {
                         let _ = KillTimer(Some(hwnd), TIMER_ICONS);
                     }
+                }
+            } else if wparam.0 == TIMER_RENAME {
+                // 더블클릭 시간 경과 — 느린 재클릭 확정 = 리네임 진입(QA 07-14)
+                let _ = KillTimer(Some(hwnd), TIMER_RENAME);
+                if let Some(st) = state_of(hwnd) {
+                    begin_rename_caret(hwnd, st);
                 }
             } else if wparam.0 == TIMER_JANITOR {
                 if let Some(st) = state_of(hwnd) {

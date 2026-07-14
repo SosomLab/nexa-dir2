@@ -165,6 +165,26 @@ impl PathBar {
         }
     }
 
+    /// 편집 선택 텍스트(Ctrl+C — QA 07-14). 선택 없으면 `None`.
+    pub fn edit_selected_text(&self) -> Option<String> {
+        self.edit.as_ref()?.selected_text()
+    }
+
+    /// 편집 선택 잘라내기(Ctrl+X) — 선택 텍스트 반환 후 삭제.
+    pub fn edit_cut(&mut self, inv: &mut Invalidations) -> Option<String> {
+        let t = self.edit.as_mut()?.cut_selection()?;
+        inv.push(self.bounds);
+        Some(t)
+    }
+
+    /// 편집 붙여넣기(Ctrl+V) — 선택 대체 삽입. 제어 문자는 호출자가 필터.
+    pub fn edit_paste(&mut self, s: &str, inv: &mut Invalidations) {
+        if let Some(es) = &mut self.edit {
+            es.insert_str(s);
+            inv.push(self.bounds);
+        }
+    }
+
     /// 좌표의 세그먼트 인덱스(페인트가 캐시한 범위 기준).
     fn segment_at(&self, x: i32, y: i32) -> Option<usize> {
         if !self.bounds.contains(Point { x, y }) {

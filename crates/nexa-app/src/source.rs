@@ -47,7 +47,7 @@ impl RowSource for TreeSource {
     fn row(&self, index: usize) -> RowItem {
         match self.tree.row(index) {
             Some(r) => RowItem {
-                text: r.name,
+                text: display_name(r.name),
                 depth: r.depth,
                 marker: if r.has_children {
                     if r.expanded {
@@ -201,6 +201,17 @@ impl RowSource for TreeSource {
     }
 }
 
+/// 표시 이름 — 바로가기(.lnk)는 확장자를 숨긴다(탐색기 NeverShowExt 관례, QA 07-14).
+/// 확장자 컬럼(COL_EXT)에는 lnk가 그대로 남는다(정보 유지).
+fn display_name(name: String) -> String {
+    let n = name.len();
+    if n > 4 && name.is_char_boundary(n - 4) && name[n - 4..].eq_ignore_ascii_case(".lnk") {
+        name[..n - 4].to_string()
+    } else {
+        name
+    }
+}
+
 /// 파일명의 확장자(마지막 `.` 뒤). 선행 `.`만 있는 dotfile은 확장자 없음("").
 fn ext_of(name: &str) -> &str {
     match name.rfind('.') {
@@ -263,6 +274,15 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn display_name_hides_lnk_only() {
+        assert_eq!(display_name("앱 바로가기.lnk".into()), "앱 바로가기");
+        assert_eq!(display_name("UPPER.LNK".into()), "UPPER");
+        assert_eq!(display_name("a.txt".into()), "a.txt");
+        assert_eq!(display_name(".lnk".into()), ".lnk"); // 이름 전체가 확장자 — 유지
+        assert_eq!(display_name("한글이름".into()), "한글이름");
+    }
 
     /// base/{dirA/{x.txt,y.txt}, empty/, file1.txt}
     fn fixture(tag: &str) -> PathBuf {

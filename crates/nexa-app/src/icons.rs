@@ -88,23 +88,30 @@ impl<T> IconStore<T> {
         !self.pending.is_empty()
     }
 
-    /// 틱 처리분 꺼내기(최대 `n`개 — 속도 제한). 꺼낸 키는 큐에서 제거.
+    /// 틱 처리분 꺼내기(최대 `n`개 — 속도 제한). 꺼낸 키는 **로드 완료([`finish`])까지
+    /// 큐 표시(in-flight) 유지** — 비동기 로드 중 재요청(재페인트)이 중복 로드를 만들지 않게.
     pub fn take_batch(&mut self, n: usize) -> Vec<(String, String)> {
         let mut out = Vec::new();
         while out.len() < n {
             let Some((key, hint)) = self.pending.pop_front() else {
                 break;
             };
-            self.queued.remove(&key);
             out.push((key, hint));
         }
         out
     }
 
-    /// 캐시에 넣고, 상한 초과 시 최소 사용 엔트리를 축출해 반환(호출자가 핸들 해제).
+    /// 로드 완료 표시(성공·실패 공통) — 이후 미스는 다시 요청 가능.
+    pub fn finish(&mut self, key: &str) {
+        self.queued.remove(key);
+    }
+
+    /// 캐시에 넣고, 대체된 기존 값 또는 상한 초과 축출 값을 반환(호출자가 핸들 해제).
     pub fn insert(&mut self, key: String, value: T) -> Option<T> {
         self.clock += 1;
-        self.entries.insert(key, (value, self.clock));
+        if let Some((old, _)) = self.entries.insert(key, (value, self.clock)) {
+            return Some(old); // 같은 키 재로드(트림 경합 등) — 이전 핸들 반환
+        }
         if self.entries.len() > self.cap {
             let oldest = self
                 .entries
@@ -125,33 +132,47 @@ impl<T> IconStore<T> {
 }
 
 /// Windows 셸 로더 — `SHGetFileInfoW` 16px 타입 아이콘.
-/// 확장자/폴더 키는 `SHGFI_USEFILEATTRIBUTES`(파일 접근 없이 레지스트리 타입 아이콘 — 빠름),
-/// 파일별 키(exe 등)만 실제 경로 조회.
+/// 확장자/폴더 키는 `SHGFI_USEFILEATTRIBUTES`(파일 접근 없이 레지스트리 타입 아이콘 — 빠름)로
+/// **동기** 로드, 파일별 키(exe·lnk 등)는 실제 파일을 여는 조회라 **워커 스레드**에서 로드 후
+/// `PostMessage`로 회수(QA 07-14 — Downloads의 대형 다운로드 exe가 Defender 실시간 검사로
+/// 수십 초 블로킹 → UI "응답 없음". 원본은 WinRT GetThumbnailAsync라 비동기였음).
 #[cfg(windows)]
 pub mod shell {
+    use std::sync::mpsc;
+
     use super::IconStore;
     use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
     };
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::{
         SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_SMALLICON, SHGFI_USEFILEATTRIBUTES,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, PostMessageW, HICON};
 
     /// LRU 상한(원본 Capacity=256) · 틱당 로드 상한(원본 MaxConcurrent=4) · 틱 주기(원본 80ms).
     pub const CAPACITY: usize = 256;
     pub const BATCH: usize = 4;
     pub const TICK_MS: u32 = 80;
 
+    /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
+    type Req = (String, String, isize, u32);
+    /// 워커 결과(PostMessage WPARAM으로 전달되는 Box): (키, HICON raw — 0=실패).
+    pub type LoadResult = (String, isize);
+
     pub struct ShellIcons {
         store: IconStore<HICON>,
+        /// 파일별 아이콘 로더 스레드 채널(지연 생성 — 아이콘 없는 세션은 스레드 0).
+        tx: Option<mpsc::Sender<Req>>,
     }
 
     impl ShellIcons {
         pub fn new() -> Self {
             ShellIcons {
                 store: IconStore::new(CAPACITY),
+                tx: None,
             }
         }
 
@@ -168,21 +189,77 @@ pub mod shell {
             self.store.has_pending()
         }
 
-        /// 틱 — 큐에서 최대 [`BATCH`]개 로드. 하나라도 로드했으면 `true`(다시 그리기 필요).
-        pub fn tick(&mut self) -> bool {
+        /// 틱 — 큐에서 최대 [`BATCH`]개 처리. 타입 아이콘(레지스트리)은 즉시 로드,
+        /// 파일별 아이콘은 워커로 넘기고 결과는 `msg`(WPARAM=Box<[`Result`]>)로 돌아온다
+        /// → [`on_result`]. 동기 로드가 있었으면 `true`(다시 그리기 필요).
+        pub fn tick(&mut self, hwnd: HWND, msg: u32) -> bool {
             let batch = self.store.take_batch(BATCH);
             let mut loaded = false;
             for (key, hint) in batch {
-                if let Some(icon) = unsafe { load_icon(&key, &hint) } {
-                    if let Some(evicted) = self.store.insert(key, icon) {
-                        unsafe {
-                            let _ = DestroyIcon(evicted);
+                let per_file = key != "dir" && key != "file" && !key.starts_with('.');
+                if per_file {
+                    let _ = self.worker().send((key, hint, hwnd.0 as isize, msg));
+                } else {
+                    if let Some(icon) = unsafe { load_icon(&key, &hint) } {
+                        if let Some(old) = self.store.insert(key.clone(), icon) {
+                            unsafe {
+                                let _ = DestroyIcon(old);
+                            }
                         }
+                        loaded = true;
                     }
-                    loaded = true;
+                    self.store.finish(&key);
                 }
             }
             loaded
+        }
+
+        /// 워커 결과 반영(UI 스레드 — `msg` 핸들러에서). 캐시에 들어갔으면 `true`.
+        pub fn on_result(&mut self, key: String, raw: isize) -> bool {
+            self.store.finish(&key);
+            if raw == 0 {
+                return false; // 실패 — 다음 미스에서 재시도
+            }
+            let icon = HICON(raw as *mut core::ffi::c_void);
+            if let Some(old) = self.store.insert(key, icon) {
+                unsafe {
+                    let _ = DestroyIcon(old);
+                }
+            }
+            true
+        }
+
+        /// 로더 스레드(1개) 지연 생성 — SHGetFileInfoW 규약대로 COM(STA) 초기화 후 순차 처리.
+        /// 채널이 닫히면(ShellIcons drop) 자연 종료.
+        fn worker(&mut self) -> &mpsc::Sender<Req> {
+            if self.tx.is_none() {
+                let (tx, rx) = mpsc::channel::<Req>();
+                std::thread::spawn(move || {
+                    unsafe {
+                        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                    }
+                    while let Ok((key, hint, hwnd_raw, msg)) = rx.recv() {
+                        let raw = unsafe { load_icon(&key, &hint) }
+                            .map(|h| h.0 as isize)
+                            .unwrap_or(0);
+                        let boxed = Box::into_raw(Box::new((key, raw)));
+                        unsafe {
+                            let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+                            if PostMessageW(Some(hwnd), msg, WPARAM(boxed as usize), LPARAM(0))
+                                .is_err()
+                            {
+                                // 창 소멸 등 — 결과 회수 불가, 여기서 정리
+                                let (_, raw) = *Box::from_raw(boxed);
+                                if raw != 0 {
+                                    let _ = DestroyIcon(HICON(raw as *mut core::ffi::c_void));
+                                }
+                            }
+                        }
+                    }
+                });
+                self.tx = Some(tx);
+            }
+            self.tx.as_ref().unwrap()
         }
     }
 
@@ -284,6 +361,30 @@ mod tests {
         assert_eq!(s.get("a"), Some(&1));
         assert_eq!(s.get("b"), None);
         assert_eq!(s.get("c"), Some(&3));
+    }
+
+    #[test]
+    fn take_batch_keeps_inflight_until_finish() {
+        let mut s: IconStore<u32> = IconStore::new(8);
+        s.request("c:\\a.exe", "C:\\a.exe");
+        assert_eq!(s.take_batch(4).len(), 1);
+        s.request("c:\\a.exe", "C:\\a.exe"); // 비동기 로드 중 재요청 — 무시
+        assert!(!s.has_pending());
+        s.finish("c:\\a.exe"); // 실패 통지 후에는 재시도 가능
+        s.request("c:\\a.exe", "C:\\a.exe");
+        assert!(s.has_pending());
+    }
+
+    #[test]
+    fn insert_same_key_returns_replaced() {
+        let mut s: IconStore<u32> = IconStore::new(8);
+        assert_eq!(s.insert("k".into(), 1), None);
+        assert_eq!(
+            s.insert("k".into(), 2),
+            Some(1),
+            "대체된 이전 값 반환(핸들 해제용)"
+        );
+        assert_eq!(s.get("k"), Some(&2));
     }
 
     #[test]
