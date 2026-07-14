@@ -2513,15 +2513,25 @@ unsafe fn open_prefs(hwnd: HWND) {
         )
     });
     let Some((vals, dfont)) = req else { return };
+    // VS Code식 즉시 적용(X-8): 변경은 WM_APP_PREFS_APPLY 통지로 실시간 반영되고,
+    // 닫기 시 최종 값으로 한 번 더 적용·영속(포커스 이탈 전 편집 값 수거분 — 멱등).
     let Some(v) = crate::prefs::show(hwnd, vals, &dfont) else {
         return;
     };
+    apply_prefs(hwnd, &v);
+}
+
+/// 설정 값 적용 + 즉시 영속(X-8 — 설정 창 실시간 통지·닫기 공용, 멱등).
+unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     let Some(st) = state_of(hwnd) else { return };
-    // 테마/언어 — 기존 명령 경로 재사용(라디오 동기·동적 전환 포함)
-    match v.theme.as_str() {
-        "light" => run_command(hwnd, st, CMD_THEME_LIGHT),
-        "dark" => run_command(hwnd, st, CMD_THEME_DARK),
-        _ => run_command(hwnd, st, CMD_THEME_SYSTEM),
+    // 테마/언어 — 기존 명령 경로 재사용(라디오 동기·동적 전환 포함). 무변경 시 생략(즉시
+    // 적용이 잦아 불필요한 전체 재도장 방지).
+    if v.theme != st.theme_mode.as_str() {
+        match v.theme.as_str() {
+            "light" => run_command(hwnd, st, CMD_THEME_LIGHT),
+            "dark" => run_command(hwnd, st, CMD_THEME_DARK),
+            _ => run_command(hwnd, st, CMD_THEME_SYSTEM),
+        }
     }
     let Some(st) = state_of(hwnd) else { return };
     if v.lang != st.lang_setting {
@@ -3620,6 +3630,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         m if m == WM_APP_PREFS => {
             open_prefs(hwnd); // 설정 창(S6) — State 차용 없는 시점에서 모달
+            LRESULT(0)
+        }
+        // 설정 창 즉시 적용 통지(X-8 — VS Code식): lparam 포인터는 SendMessage 동안만
+        // 유효(같은 스레드 동기 호출)이므로 즉시 복사 후 적용.
+        m if m == crate::prefs::WM_APP_PREFS_APPLY => {
+            if let Some(v) = (lparam.0 as *const crate::prefs::PrefValues).as_ref() {
+                let v = v.clone();
+                apply_prefs(hwnd, &v);
+            }
             LRESULT(0)
         }
         // 파일별 아이콘 워커 결과(QA 07-14) — WPARAM=Box<LoadResult> 소유권 인수(항상 해제)

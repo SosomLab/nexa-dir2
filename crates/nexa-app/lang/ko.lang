@@ -136,8 +136,6 @@ pref.termFont = 터미널 글꼴(쉼표=폴백 체인)
 pref.termFontSize = 터미널 글꼴 크기(8~32)
 pref.dlgFont = 대화상자 글꼴
 pref.dlgFontSize = 대화상자 글꼴 크기(7~24)
-pref.save = 저장
-pref.cancel = 취소
 menu.file.prefs = 설정...
 ctx.copyName = 이름 복사
 pref.cat.appearance = 모양

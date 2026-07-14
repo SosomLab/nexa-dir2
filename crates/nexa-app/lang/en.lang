@@ -137,8 +137,6 @@ pref.termFont = Terminal font (comma = fallback chain)
 pref.termFontSize = Terminal font size (8-32)
 pref.dlgFont = Dialog font
 pref.dlgFontSize = Dialog font size (7-24)
-pref.save = Save
-pref.cancel = Cancel
 menu.file.prefs = Preferences...
 ctx.copyName = Copy as name
 pref.cat.appearance = Appearance
