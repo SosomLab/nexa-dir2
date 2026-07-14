@@ -543,6 +543,7 @@ pub fn run() -> Result<()> {
             Panel::restore(
                 &session.panels[0].tabs,
                 session.panels[0].active,
+                &session.panels[0].expanded,
                 &fallback,
                 ctx,
                 m,
@@ -551,6 +552,7 @@ pub fn run() -> Result<()> {
             Panel::restore(
                 &session.panels[1].tabs,
                 session.panels[1].active,
+                &session.panels[1].expanded,
                 &fallback,
                 ctx,
                 m,
@@ -1603,6 +1605,8 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
     let note = match nexa_ops::rename(&path, new_name) {
         Ok(new_path) => {
             if new_path != path {
+                // 펼침 집합 접두사 치환(F18 — 원본 UpdateExpandedPaths)
+                st.active_panel().rename_expanded(&path, &new_path);
                 // undo 기록(B-13u) — 동일 이름 무동작은 제외
                 let desc = trf("rename.done", &[&nexa_ops::leaf_name(&path), new_name]);
                 st.history.push(Box::new(nexa_ops::history::RenameOp::new(
@@ -3168,16 +3172,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 };
                 let (t0, a0) = st.panels[0].session();
                 let (t1, a1) = st.panels[1].session();
+                let (e0, e1) = (
+                    st.panels[0].session_expanded(),
+                    st.panels[1].session_expanded(),
+                );
                 let session = Session {
                     active_panel: st.active,
                     panels: [
                         PanelSession {
                             tabs: t0,
                             active: a0,
+                            expanded: e0,
                         },
                         PanelSession {
                             tabs: t1,
                             active: a1,
+                            expanded: e1,
                         },
                     ],
                 };

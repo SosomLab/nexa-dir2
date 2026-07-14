@@ -42,11 +42,13 @@ impl Default for Settings {
     }
 }
 
-/// 패널 1개의 세션(탭 경로들·활성 탭).
+/// 패널 1개의 세션(탭 경로들·활성 탭·탭별 펼침 집합[F18 — X-4, 원본 TabSession.Expanded]).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct PanelSession {
     pub tabs: Vec<PathBuf>,
     pub active: usize,
+    /// 탭 인덱스 정렬(부족분 허용) — 각 탭의 펼침 경로 목록.
+    pub expanded: Vec<Vec<PathBuf>>,
 }
 
 /// 세션(원본 session.json 대응) — `data\session.txt`.
@@ -140,6 +142,16 @@ impl Session {
                 .collect();
             out.push_str(&format!("panel{i}.tabs={}\n", tabs.join("|")));
             out.push_str(&format!("panel{i}.active={}\n", p.active));
+            // 탭별 펼침 집합(F18) — 빈 목록은 생략(하위 호환·파일 간결)
+            for (j, exp) in p.expanded.iter().enumerate() {
+                if !exp.is_empty() {
+                    let list: Vec<String> = exp
+                        .iter()
+                        .map(|t| t.to_string_lossy().into_owned())
+                        .collect();
+                    out.push_str(&format!("panel{i}.exp{j}={}\n", list.join("|")));
+                }
+            }
         }
         out
     }
@@ -160,6 +172,24 @@ impl Session {
                 "panel0.active" | "panel1.active" => {
                     let idx = usize::from(k.starts_with("panel1"));
                     s.panels[idx].active = v.parse().unwrap_or(0);
+                }
+                k if k.starts_with("panel0.exp") || k.starts_with("panel1.exp") => {
+                    let idx = usize::from(k.starts_with("panel1"));
+                    let Ok(j) = k["panelN.exp".len()..].parse::<usize>() else {
+                        continue;
+                    };
+                    if j > 64 {
+                        continue; // 손상 방어
+                    }
+                    let exp = &mut s.panels[idx].expanded;
+                    if exp.len() <= j {
+                        exp.resize(j + 1, Vec::new());
+                    }
+                    exp[j] = v
+                        .split('|')
+                        .filter(|p| !p.is_empty())
+                        .map(PathBuf::from)
+                        .collect();
                 }
                 _ => {}
             }
@@ -230,15 +260,30 @@ mod tests {
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\a"), PathBuf::from("D:\\b c\\d")],
                     active: 1,
+                    // 탭0=펼침 없음(생략 직렬화)·탭1=2개 — F18 왕복(X-4)
+                    expanded: vec![
+                        vec![],
+                        vec![
+                            PathBuf::from("D:\\b c\\d\\sub"),
+                            PathBuf::from("D:\\b c\\d\\한글"),
+                        ],
+                    ],
                 },
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\")],
                     active: 0,
+                    expanded: vec![],
                 },
             ],
         };
         let parsed = Session::parse(&s.serialize());
-        assert_eq!(parsed, s);
+        assert_eq!(parsed.active_panel, s.active_panel);
+        assert_eq!(parsed.panels[0].tabs, s.panels[0].tabs);
+        assert_eq!(parsed.panels[1], s.panels[1]);
+        // 빈 목록 생략 직렬화 → 파싱은 인덱스 정렬 유지(탭0 빈 자리)
+        assert_eq!(parsed.panels[0].expanded.len(), 2);
+        assert!(parsed.panels[0].expanded[0].is_empty());
+        assert_eq!(parsed.panels[0].expanded[1], s.panels[0].expanded[1]);
         // 빈/손상 → 기본
         let empty = Session::parse("");
         assert_eq!(empty.active_panel, 0);

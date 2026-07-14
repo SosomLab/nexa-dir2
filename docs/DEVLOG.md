@@ -8,6 +8,7 @@
 
 ## 2026-07-14
 
+- **X-4 펼침 상태 유지(`feat/f18-expanded`) — 원본 F18 이식**: "B000 진입 후 복귀 시 A000 펼침 소실"(가시 트리 스냅샷 한계) → **탭별 영속 Expanded 집합**(BTreeMap 부모 우선·원본 PanelTab.Expanded) — 경계 동기(펼침=등재·접힘=말소·비가시 보존=재펼침 시 하위 복원)·리네임 접두사 치환(UpdateExpandedPaths)·**세션 영속**(panelN.expM — 원본 TabSession.Expanded, 상한 200/탭). 테스트 153 green(신규 4). 상세 [journal/2026-07-14.md](journal/2026-07-14.md).
 - **M4 마감 게이트 통과 → `0.5.0` 태그**: B1 유휴 RSS 재실측(10k 픽스처 + **도크 터미널 상주·캐럿 깜빡임** 최악 케이스) — 활성 32.75 → 트림 직후 **0.22** → 180s 2.00 → **300s 5.07MB ≤ 30 통과**(ConPTY 자식은 별도 프로세스·M3 마감 6.29MB와 동급). **M4 하단 패널 마일스톤 완료** — 도크·정보·미리보기·ConPTY 터미널+상호작용 QA. 다음 M5 마감 · 백로그 X-2/X-3/X-4.
 - **이동 프리즈 근본 해소(`fix/nav-freeze-watcher`) + 캐럿 깜빡임**: 실기 QA "Documents/Downloads 이동 시 5-10초 응답 없음"의 **진범 = watcher drop의 CloseHandle** — 비 OVERLAPPED 핸들은 파일 객체 잠금이 직렬화되어 대기 중인 동기 ReadDirectoryChangesW 완료(=이전 폴더에 변경 발생)까지 UI 블로킹. **OVERLAPPED+중지 이벤트 재구현**(drop=SetEvent 논블로킹·복제 핸들·정리는 스레드 몫). 자동 재현 하네스(PostMessage 키 주입+SendMessageTimeout 실측)로 **12,009ms→4~6ms** 검증·자동 갱신 정상. + 터미널 캐럿 깜빡임(GetCaretBlinkTime 주기·입력 위상 리셋·비포커스 상시). 상세 [journal/2026-07-14.md](journal/2026-07-14.md).
 - **터미널 상호작용(`feat/m4-term-select`)**: 실기 QA/요청 5건 — **셀 단위 렌더**(런 레이아웃의 폴백 글꼴 전진폭이 셀 그리드와 어긋나 ls 한글 이름 컬럼 밀림 → 문자를 셀 x에 개별 배치+단일 글리프 캐시)·**마우스 드래그 선택**(반전 하이라이트·엣지 자동 스크롤 60ms 반복)·**스크롤백 보기**(휠 3줄/노치·보던 위치 고정·입력 시 스냅)·**Ctrl+C/V**(선택 복사/인터럽트·붙여넣기 — WT 규약)·**settings `term_font`**(DWrite 시스템 컬렉션 해석·Consolas 폴백 — 명시 폴백 체인은 X-3 잔여). 상세 [journal/2026-07-14.md](journal/2026-07-14.md).

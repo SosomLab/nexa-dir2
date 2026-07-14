@@ -20,10 +20,20 @@ pub struct NavCtx {
     pub tz: i32,
 }
 
-/// 탭 = 리스트 뷰 상태 + 독립 back/forward 히스토리.
+/// 탭 = 리스트 뷰 상태 + 독립 back/forward 히스토리 + **영속 펼침 집합**(원본 F18 — X-4).
 pub struct Tab {
     pub rows: VirtualRows<TreeSource>,
     pub nav: History,
+    /// 펼침 경로 집합(키=소문자 정규화·값=원 표기, BTreeMap=사전순 → **부모 우선** 재적용).
+    /// 현재 트리와 별개로 유지 — 다른 폴더로 이동해도 펼침 상태가 소실되지 않는다.
+    expanded: std::collections::BTreeMap<String, PathBuf>,
+}
+
+/// F18 펼침 키 — 대소문자 무시·후행 구분자 제거(원본 OrdinalIgnoreCase HashSet 대응).
+fn expand_key(p: &Path) -> String {
+    p.to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .to_lowercase()
 }
 
 impl Tab {
@@ -86,6 +96,7 @@ impl Panel {
             tabs: vec![Tab {
                 rows,
                 nav: History::new(root),
+                expanded: Default::default(),
             }],
             active: 0,
             bounds: Rect::default(),
@@ -96,41 +107,64 @@ impl Panel {
     }
 
     /// 세션 복원 — 경로 목록으로 탭들을 연다(열기 실패 탭은 건너뜀·전부 실패면 `fallback`).
+    /// `expanded` = 탭별 펼침 경로 목록(F18 — X-4, `paths`와 인덱스 정렬·부족분 허용).
     pub fn restore(
         paths: &[PathBuf],
         active: usize,
+        expanded: &[Vec<PathBuf>],
         fallback: &Path,
         ctx: NavCtx,
         m: PanelMetrics,
         columns: Vec<Column>,
     ) -> Panel {
-        let mut valid: Vec<Tree> = paths
+        let mut valid: Vec<(Tree, Vec<PathBuf>)> = paths
             .iter()
-            .filter_map(|p| Tree::open_filtered(p, ctx.show_hidden, ctx.show_dotfiles).ok())
+            .enumerate()
+            .filter_map(|(i, p)| {
+                let tree = Tree::open_filtered(p, ctx.show_hidden, ctx.show_dotfiles).ok()?;
+                Some((tree, expanded.get(i).cloned().unwrap_or_default()))
+            })
             .collect();
         if valid.is_empty() {
-            valid.push(
+            valid.push((
                 Tree::open_filtered(fallback, ctx.show_hidden, ctx.show_dotfiles)
                     .or_else(|_| Tree::open("C:\\"))
                     .expect("C:\\ 열기 실패"),
-            );
+                Vec::new(),
+            ));
         }
-        let first = valid.remove(0);
+        let (first, first_exp) = valid.remove(0);
         let mut p = Panel::new(first, ctx, m, columns.clone());
         let mut inv = Invalidations::default();
-        for tree in valid {
+        Self::seed_expanded(&mut p.tabs[0], &first_exp);
+        for (tree, exp) in valid {
             let root = tree.root_path().to_path_buf();
             let mut rows =
                 VirtualRows::new(TreeSource::new(tree, ctx.tz), m.row_h, m.pad_x, m.indent_w);
             rows.set_columns(columns.clone(), &mut inv);
-            p.tabs.push(Tab {
+            let mut tab = Tab {
                 rows,
                 nav: History::new(root),
-            });
+                expanded: Default::default(),
+            };
+            Self::seed_expanded(&mut tab, &exp);
+            p.tabs.push(tab);
         }
         p.active = active.min(p.tabs.len() - 1);
         p.sync_chrome(&mut inv);
         p
+    }
+
+    /// 세션 펼침 목록을 탭 집합에 시드하고 트리에 적용(부모 우선 — BTreeMap 키 사전순).
+    fn seed_expanded(tab: &mut Tab, exp: &[PathBuf]) {
+        for p in exp {
+            tab.expanded.insert(expand_key(p), p.clone());
+        }
+        let entries: Vec<PathBuf> = tab.expanded.values().cloned().collect();
+        let tree = tab.rows.source_mut().tree_mut();
+        for p in &entries {
+            let _ = tree.expand_path(&p.to_string_lossy()); // 소실 폴더 무시
+        }
     }
 
     /// 세션 스냅샷 — (탭 경로들, 활성 탭 인덱스).
@@ -141,6 +175,19 @@ impl Panel {
             .map(|t| t.rows.source().tree().root_path().to_path_buf())
             .collect();
         (tabs, self.active)
+    }
+
+    /// 세션 펼침 스냅샷(F18 — X-4) — 탭별 펼침 경로(현재 트리와 동기 후·상한 200/탭).
+    pub fn session_expanded(&mut self) -> Vec<Vec<PathBuf>> {
+        let saved = self.active;
+        let mut out = Vec::with_capacity(self.tabs.len());
+        for i in 0..self.tabs.len() {
+            self.active = i;
+            self.sync_expanded(); // 각 탭의 집합을 그 탭 트리와 동기
+            out.push(self.tabs[i].expanded.values().take(200).cloned().collect());
+        }
+        self.active = saved;
+        out
     }
 
     // ── 접근 ───────────────────────────────────────────────────
@@ -286,6 +333,7 @@ impl Panel {
         self.tabs.push(Tab {
             rows,
             nav: History::new(path),
+            expanded: Default::default(),
         });
         self.active = self.tabs.len() - 1;
         self.set_bounds(self.bounds, inv); // 새 탭 리스트 bounds 반영
@@ -323,29 +371,81 @@ impl Panel {
 
     // ── 네비게이션(활성 탭 — docs/20 §3 탭별 독립) ──────────────
 
-    fn apply_source(&mut self, src: TreeSource, inv: &mut Invalidations) {
-        // 펼침 상태 이월(사용자 지시 07-13): 하위 진입 = 새 루트 아래의 기존 펼침 유지 ·
-        // 상위 이동 = 직전 루트(와 그 하위 펼침)를 펼친 채 표시. 새 루트 밖 경로는
-        // expand_path가 무시하므로 방향 구분 불요.
-        let mut expanded: Vec<String> = vec![self.root_path().to_string_lossy().into_owned()];
+    /// 활성 탭 펼침 집합을 현재 트리와 동기화(F18 — X-4): 가시 폴더 행 기준
+    /// **펼침=등재·접힘=말소**. 비가시(부모 접힘) 엔트리는 보존 — 부모를 다시 펼치면
+    /// 하위 펼침까지 복원된다(expand_path가 가시 경로만 처리하므로 부활 부작용 없음).
+    fn sync_expanded(&mut self) {
+        let mut add: Vec<PathBuf> = Vec::new();
+        let mut del: Vec<String> = Vec::new();
         {
             let tree = self.rows().source().tree();
             for i in 0..tree.visible_len() {
                 if let Some(r) = tree.row(i) {
-                    if r.expanded {
-                        if let Some(p) = tree.node_path(r.id) {
-                            expanded.push(p.to_string_lossy().into_owned()); // 부모 우선 순
+                    if !r.has_children {
+                        continue; // 폴더(펼침 가능) 행만
+                    }
+                    if let Some(p) = tree.node_path(r.id) {
+                        if r.expanded {
+                            add.push(p.to_path_buf());
+                        } else {
+                            del.push(expand_key(p));
                         }
                     }
                 }
             }
         }
+        let set = &mut self.tabs[self.active].expanded;
+        for k in del {
+            set.remove(&k);
+        }
+        for p in add {
+            set.insert(expand_key(&p), p);
+        }
+    }
+
+    fn apply_source(&mut self, src: TreeSource, inv: &mut Invalidations) {
+        // 펼침 상태 유지(원본 F18 — X-4): 경계에서 집합 동기 후 새 루트 아래 엔트리 재적용.
+        // 직전 루트도 등재 — 상위 이동 시 왔던 폴더가 펼쳐져 보임(사용자 지시 07-13).
+        // 새 루트 밖·부모 접힘 경로는 expand_path가 무시하므로 방향 구분 불요.
+        self.sync_expanded();
+        let cur = self.root_path();
+        self.tabs[self.active]
+            .expanded
+            .insert(expand_key(&cur), cur);
         self.tabs[self.active].rows.replace_source(src, inv);
+        let entries: Vec<PathBuf> = self.tabs[self.active].expanded.values().cloned().collect();
         let tree = self.rows_mut().source_mut().tree_mut();
-        for p in &expanded {
-            let _ = tree.expand_path(p);
+        for p in &entries {
+            let _ = tree.expand_path(&p.to_string_lossy()); // 키 사전순 = 부모 우선
         }
         self.sync_chrome(inv);
+    }
+
+    /// 이름변경을 펼침 집합에 반영(원본 UpdateExpandedPaths) — 폴더 자신+하위 접두사 치환.
+    pub fn rename_expanded(&mut self, old: &Path, new: &Path) {
+        let ok = expand_key(old);
+        let new_str = new
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_string();
+        let old_len = old.to_string_lossy().trim_end_matches(['\\', '/']).len();
+        let set = &mut self.tabs[self.active].expanded;
+        let affected: Vec<String> = set
+            .keys()
+            .filter(|k| {
+                k.as_str() == ok
+                    || k.starts_with(&format!("{ok}\\"))
+                    || k.starts_with(&format!("{ok}/"))
+            })
+            .cloned()
+            .collect();
+        for k in affected {
+            let Some(v) = set.remove(&k) else { continue };
+            let vs = v.to_string_lossy().into_owned();
+            let tail = vs.get(old_len..).unwrap_or("");
+            let nv = PathBuf::from(format!("{new_str}{tail}"));
+            set.insert(expand_key(&nv), nv);
+        }
     }
 
     /// 새 경로 진입(히스토리 push — 앞으로 절단). 열기 실패 시 현 위치 유지.
@@ -411,20 +511,11 @@ impl Panel {
         let Some(src) = open_source(&path, ctx) else {
             return;
         };
-        // 1) 스냅샷(경로 기준 — 재열기 후 인덱스/ID는 무효)
-        let (expanded, selected, caret_path, scroll_row, scroll_x) = {
+        // 1) 스냅샷(경로 기준 — 재열기 후 인덱스/ID는 무효). 펼침은 탭 영속 집합(F18)이
+        //    apply_source에서 동기·복원하므로 여기선 선택·캐럿·스크롤만.
+        let (selected, caret_path, scroll_row, scroll_x) = {
             let rows = self.rows();
             let tree = rows.source().tree();
-            let mut expanded = Vec::new();
-            for i in 0..tree.visible_len() {
-                if let Some(r) = tree.row(i) {
-                    if r.expanded {
-                        if let Some(p) = tree.node_path(r.id) {
-                            expanded.push(p.to_string_lossy().into_owned()); // 가시 순 = 부모 우선
-                        }
-                    }
-                }
-            }
             let selected: Vec<String> = tree
                 .selected_paths()
                 .iter()
@@ -435,23 +526,14 @@ impl Panel {
                 .and_then(|c| tree.visible_id(c))
                 .and_then(|id| tree.node_path(id))
                 .map(|p| p.to_string_lossy().into_owned());
-            (
-                expanded,
-                selected,
-                caret_path,
-                rows.scroll_row(),
-                rows.scroll_x(),
-            )
+            (selected, caret_path, rows.scroll_row(), rows.scroll_x())
         };
-        // 2) 재열기
+        // 2) 재열기(펼침 복원 포함)
         self.tabs[self.active].nav.replace(path);
         self.apply_source(src, inv);
-        // 3) 복원 — 펼침(부모 우선 순서)·선택·캐럿·스크롤
+        // 3) 복원 — 선택·캐럿·스크롤
         let rows = self.rows_mut();
         let tree = rows.source_mut().tree_mut();
-        for p in &expanded {
-            let _ = tree.expand_path(p); // 소실 폴더 무시
-        }
         for p in &selected {
             if let Some(id) = tree.index_of_path(p).and_then(|i| tree.visible_id(i)) {
                 if !tree.is_selected(id) {
@@ -617,6 +699,87 @@ mod tests {
                 let id = tree.visible_id(i).unwrap();
                 assert_eq!(tree.is_expanded(id), Some(true), "상위 이동 시 펼침 이월");
             }
+        }
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn sibling_expansion_survives_enter_and_return() {
+        // 사용자 QA 07-14: A·B 모두 펼침 → B 진입 → 상위 복귀 시 A 펼침이 소실되던 결함
+        // (가시 트리 스냅샷 한계) — F18 탭별 영속 집합으로 유지(X-4).
+        let base = fixture("sibexp");
+        fs::create_dir_all(base.join("A000").join("a1")).unwrap();
+        fs::create_dir_all(base.join("B000").join("b1")).unwrap();
+        let (mut p, mut inv) = panel(&base);
+        let (a, b) = (base.join("A000"), base.join("B000"));
+        {
+            let tree = p.rows_mut().source_mut().tree_mut();
+            tree.expand_path(&a.to_string_lossy()).unwrap();
+            tree.expand_path(&b.to_string_lossy()).unwrap();
+        }
+        p.navigate_to(b.clone(), ctx(), &mut inv); // B 진입(A는 트리 밖)
+        p.nav_back(ctx(), &mut inv); // 상위 복귀
+        let tree = p.rows().source().tree();
+        for q in [&a, &b] {
+            let i = tree
+                .index_of_path(&q.to_string_lossy())
+                .unwrap_or_else(|| panic!("{} 가시", q.display()));
+            let id = tree.visible_id(i).unwrap();
+            assert_eq!(
+                tree.is_expanded(id),
+                Some(true),
+                "{} 펼침 유지",
+                q.display()
+            );
+        }
+        // 접기 후 이동 왕복 = 접힘 유지(말소 동작 — 부활 없음)
+        {
+            let tree = p.rows_mut().source_mut().tree_mut();
+            let i = tree.index_of_path(&a.to_string_lossy()).unwrap();
+            let id = tree.visible_id(i).unwrap();
+            tree.collapse(id);
+        }
+        p.navigate_to(b.clone(), ctx(), &mut inv);
+        p.nav_back(ctx(), &mut inv);
+        let tree = p.rows().source().tree();
+        let i = tree.index_of_path(&a.to_string_lossy()).unwrap();
+        let id = tree.visible_id(i).unwrap();
+        assert_eq!(
+            tree.is_expanded(id),
+            Some(false),
+            "접은 폴더는 접힌 채 유지"
+        );
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn restore_seeds_expanded_from_session() {
+        // F18 세션 영속 — restore(expanded)가 탭 트리에 재적용(부모 우선)
+        let base = fixture("sessexp");
+        fs::create_dir_all(base.join("A000").join("a1").join("a2")).unwrap();
+        let a = base.join("A000");
+        let a1 = a.join("a1");
+        let p = Panel::restore(
+            std::slice::from_ref(&base),
+            0,
+            &[vec![a.clone(), a1.clone()]],
+            &base,
+            ctx(),
+            metrics(),
+            Vec::new(),
+        );
+        let tree = p.rows().source().tree();
+        for q in [&a, &a1] {
+            let i = tree
+                .index_of_path(&q.to_string_lossy())
+                .unwrap_or_else(|| panic!("{} 가시", q.display()));
+            let id = tree.visible_id(i).unwrap();
+            assert_eq!(
+                tree.is_expanded(id),
+                Some(true),
+                "{} 세션 복원 펼침",
+                q.display()
+            );
         }
         fs::remove_dir_all(&base).unwrap();
     }
