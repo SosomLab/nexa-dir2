@@ -117,6 +117,14 @@ impl EditState {
         Some(t)
     }
 
+    /// 버퍼 전체 교체(자동완성 미리 채움 등) — 캐럿 끝·선택 해제(원본 SetEditorTextSilent).
+    pub fn set_text_end(&mut self, text: &str) {
+        self.buf = text.chars().collect();
+        self.caret = self.buf.len();
+        self.anchor = None;
+        self.dragging = false;
+    }
+
     /// 문자열 삽입(붙여넣기) — 선택이 있으면 대체. 제어 문자 필터링은 호출자 몫.
     pub fn insert_str(&mut self, s: &str) {
         self.delete_selection();

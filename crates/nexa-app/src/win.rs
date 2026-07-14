@@ -2185,6 +2185,17 @@ unsafe fn invalidate_dock(hwnd: HWND, st: &State, panel: usize) {
     let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
 }
 
+/// 경로바 편집 텍스트 **변경 후** 자동완성 갱신(PATH-SUG — 원본 TextChanged 대응).
+/// 환경변수 확장 후 베이스 폴더의 하위 폴더를 제안(최대 20 — 원본 상한).
+fn update_path_suggest(st: &mut State, inv: &mut Invalidations) {
+    let Some(text) = st.active_panel().pathbar.edit_text() else {
+        return;
+    };
+    let expanded = crate::pathinput::expand_env(&text);
+    let items = crate::pathinput::suggest_folders(&expanded, crate::pathinput::fs_dirs, 20);
+    st.active_panel().pathbar.set_suggestions(items, inv);
+}
+
 /// 붙여넣기용 클립보드 텍스트 정제(편집 필드는 한 줄) — 첫 줄만·제어 문자 제거.
 unsafe fn paste_line() -> Option<String> {
     let raw = crate::clipboard::read_text()?;
@@ -2349,6 +2360,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0); // 상태바 — 표시 전용
                 }
                 if st.active_panel().pathbar.is_editing() {
+                    if st.active_panel().pathbar.suggest_click(x, y, &mut inv) {
+                        // 제안 클릭 = 그 폴더로 즉시 이동(PATH-SUG — 탐색기 동일)
+                        let nav = st.nav_ctx();
+                        st.active_panel().drain_actions(nav, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
+                        update_status(hwnd, st);
+                        return LRESULT(0);
+                    }
                     if st
                         .active_panel()
                         .pathbar
@@ -2654,7 +2674,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.active_panel().pathbar.submit_edit(&mut inv);
                         st.active_panel().drain_actions(ctx, &mut inv);
                     } else if vk == VK_ESCAPE.0 {
-                        st.active_panel().pathbar.cancel_edit(&mut inv);
+                        // 팝업 열림 = 팝업만 닫기(원본·탐색기 규약), 아니면 편집 취소
+                        if st.active_panel().pathbar.suggest_open() {
+                            st.active_panel().pathbar.close_suggest(&mut inv);
+                        } else {
+                            st.active_panel().pathbar.cancel_edit(&mut inv);
+                        }
+                    } else if vk == VK_UP.0 || vk == VK_DOWN.0 {
+                        // 자동완성 ↑/↓(PATH-SUG) — 선택 미리 채움·↑ 복원
+                        let d = if vk == VK_UP.0 { -1 } else { 1 };
+                        st.active_panel().pathbar.suggest_move(d, &mut inv);
                     } else if ctrl && vk == b'C' as u16 {
                         // 표준 편집 클립보드(QA 07-14) — 선택 복사/잘라내기/붙여넣기
                         if let Some(t) = st.active_panel().pathbar.edit_selected_text() {
@@ -2664,13 +2693,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if let Some(t) = st.active_panel().pathbar.edit_cut(&mut inv) {
                             crate::clipboard::write_text(hwnd, &t);
                         }
+                        update_path_suggest(st, &mut inv); // 텍스트 변경 — 제안 갱신
                     } else if ctrl && vk == b'V' as u16 {
                         if let Some(t) = paste_line() {
                             st.active_panel().pathbar.edit_paste(&t, &mut inv);
+                            update_path_suggest(st, &mut inv);
                         }
                     } else if let Some(k) = edit_key_of(vk, ctrl) {
                         // 캐럿 이동·선택·삭제(QA 07-13 — edit.rs 공용 모델)
                         st.active_panel().pathbar.edit_key(k, shift, &mut inv);
+                        if k == nexa_gui::EditKey::DeleteForward {
+                            update_path_suggest(st, &mut inv); // 텍스트 변경 시에만
+                        }
                     }
                     flush_invalidations(hwnd, &mut inv);
                     update_title(hwnd, st, "");
@@ -2996,6 +3030,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if st.active_panel().pathbar.is_editing() {
                         if c == '\u{8}' || !c.is_control() {
                             st.active_panel().pathbar.edit_char(c, &mut inv);
+                            update_path_suggest(st, &mut inv); // 자동완성 갱신(PATH-SUG)
                         }
                     } else if GetKeyState(VK_CONTROL.0 as i32) >= 0
                         && (c == '\u{8}'

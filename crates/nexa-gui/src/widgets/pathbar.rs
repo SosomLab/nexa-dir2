@@ -51,6 +51,13 @@ pub fn split_path(path: &str) -> Vec<Segment> {
     out
 }
 
+/// 자동완성 제안 상태(PATH-SUG — 원본 NexaPathBar 계승): 목록·선택·조회 시점 입력(↑ 복원).
+struct Suggest {
+    items: Vec<String>,
+    sel: Option<usize>,
+    base: String,
+}
+
 /// 계층 경로 바 위젯. 높이 1줄 고정(§5 — 경량 measure).
 pub struct PathBar {
     path: String,
@@ -61,6 +68,10 @@ pub struct PathBar {
     hover: Option<usize>,
     /// 편집 모드 상태(Some = 편집 중) — 캐럿·선택·클릭 배치(edit.rs 공용 모델).
     edit: Option<EditState>,
+    /// 편집 자동완성 팝업(PATH-SUG) — 내용은 호스트가 공급([`Self::set_suggestions`]).
+    suggest: Option<Suggest>,
+    /// 팝업 하한 y(리스트 영역 바닥 — 호스트가 지정. 0=제한 없음).
+    overlay_bottom: i32,
     /// 호스트가 수거할 이동 요청(세그먼트 클릭·편집 제출).
     pending_nav: Option<String>,
     /// 페인트 시 계산한 세그먼트 x 범위(히트 테스트용 — 텍스트 측정은 DrawCtx에서만 가능).
@@ -78,6 +89,8 @@ impl PathBar {
             pad_x,
             hover: None,
             edit: None,
+            suggest: None,
+            overlay_bottom: 0,
             pending_nav: None,
             ranges: RefCell::new(Vec::new()),
         }
@@ -108,6 +121,7 @@ impl PathBar {
     pub fn set_path(&mut self, path: impl Into<String>, inv: &mut Invalidations) {
         self.path = path.into();
         self.segments = split_path(&self.path);
+        self.close_suggest(inv);
         self.edit = None;
         self.hover = None;
         inv.push(self.bounds);
@@ -127,6 +141,7 @@ impl PathBar {
 
     /// 편집 취소(Esc·포커스아웃) — 입력 무시·브레드크럼 복귀(§2).
     pub fn cancel_edit(&mut self, inv: &mut Invalidations) {
+        self.close_suggest(inv);
         if self.edit.take().is_some() {
             inv.push(self.bounds);
         }
@@ -134,6 +149,7 @@ impl PathBar {
 
     /// 편집 제출(Enter) — 이동 요청으로 통지(검증·이동은 호스트).
     pub fn submit_edit(&mut self, inv: &mut Invalidations) {
+        self.close_suggest(inv);
         if let Some(es) = self.edit.take() {
             let text = es.text();
             let trimmed = text.trim();
@@ -141,6 +157,164 @@ impl PathBar {
                 self.pending_nav = Some(trimmed.to_string());
             }
             inv.push(self.bounds);
+        }
+    }
+
+    // ── 편집 자동완성(PATH-SUG — 원본 NexaPathBar §제안) ─────────
+
+    /// 현재 편집 버퍼(제안 공급자 입력용). 비편집이면 `None`.
+    pub fn edit_text(&self) -> Option<String> {
+        self.edit.as_ref().map(|e| e.text())
+    }
+
+    /// 팝업 하한 y(리스트 영역 바닥) — 패널 레이아웃이 지정.
+    pub fn set_overlay_bottom(&mut self, y: i32) {
+        self.overlay_bottom = y;
+    }
+
+    pub fn suggest_open(&self) -> bool {
+        self.suggest.is_some()
+    }
+
+    fn suggest_rect_for(&self, n: usize) -> Rect {
+        let mut h = n as i32 * self.row_h;
+        if self.overlay_bottom > 0 {
+            h = h.min((self.overlay_bottom - self.bounds.bottom()).max(0));
+        }
+        Rect::new(self.bounds.x, self.bounds.bottom(), self.bounds.w, h)
+    }
+
+    /// 현재 팝업 영역(없으면 `None`) — 무효화·오버레이 클립용.
+    pub fn suggest_rect(&self) -> Option<Rect> {
+        self.suggest
+            .as_ref()
+            .map(|s| self.suggest_rect_for(s.items.len()))
+    }
+
+    /// 제안 목록 갱신(호스트 — 편집 텍스트 변경 시). 빈 목록=닫기(원본 규약).
+    pub fn set_suggestions(&mut self, items: Vec<String>, inv: &mut Invalidations) {
+        if let Some(r) = self.suggest_rect() {
+            inv.push(r); // 이전 팝업 영역(줄어들 때 잔상 방지 — 드롭다운 교훈 07-13)
+        }
+        if items.is_empty() || self.edit.is_none() {
+            self.suggest = None;
+            return;
+        }
+        let base = self.edit.as_ref().map(|e| e.text()).unwrap_or_default();
+        self.suggest = Some(Suggest {
+            items,
+            sel: None,
+            base,
+        });
+        if let Some(r) = self.suggest_rect() {
+            inv.push(r);
+        }
+    }
+
+    pub fn close_suggest(&mut self, inv: &mut Invalidations) {
+        if let Some(r) = self.suggest_rect() {
+            inv.push(r);
+        }
+        self.suggest = None;
+    }
+
+    /// ↑/↓ 제안 이동(원본 규약): 처음 ↓=1번째 · 첫 항목(또는 미선택)에서 ↑=선택 해제 +
+    /// **조회 시점 입력 복원**. 선택 항목은 편집기에 미리 채움(캐럿 끝) — Enter로 그대로 이동.
+    /// 팝업이 열려 있으면 `true`(호스트가 소비).
+    pub fn suggest_move(&mut self, delta: i32, inv: &mut Invalidations) -> bool {
+        let Some(sg) = &mut self.suggest else {
+            return false;
+        };
+        let n = sg.items.len();
+        if n == 0 {
+            return false;
+        }
+        if delta < 0 && sg.sel.is_none_or(|i| i == 0) {
+            sg.sel = None;
+            let base = sg.base.clone();
+            if let Some(es) = &mut self.edit {
+                es.set_text_end(&base);
+            }
+        } else {
+            let i = match sg.sel {
+                None => 0,
+                Some(i) => (i as i64 + delta as i64).clamp(0, n as i64 - 1) as usize,
+            };
+            sg.sel = Some(i);
+            let t = sg.items[i].clone();
+            if let Some(es) = &mut self.edit {
+                es.set_text_end(&t);
+            }
+        }
+        if let Some(r) = self.suggest_rect() {
+            inv.push(r);
+        }
+        inv.push(self.bounds);
+        true
+    }
+
+    /// 팝업 클릭 — 항목이면 그 경로로 **즉시 이동**(제출, 탐색기 동일). 처리했으면 `true`.
+    pub fn suggest_click(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
+        let Some(sg) = &self.suggest else {
+            return false;
+        };
+        let rect = self.suggest_rect_for(sg.items.len());
+        if !rect.contains(Point { x, y }) {
+            return false;
+        }
+        let idx = ((y - rect.y) / self.row_h.max(1)) as usize;
+        if let Some(item) = sg.items.get(idx).cloned() {
+            if let Some(es) = &mut self.edit {
+                es.set_text_end(&item);
+            }
+            self.submit_edit(inv); // pending_nav 통지 + 팝업 닫기
+        }
+        true
+    }
+
+    /// 팝업 페인트 — 패널 페인트 **마지막**에 호출(리스트 위 오버레이).
+    pub fn paint_suggest(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let Some(sg) = &self.suggest else {
+            return;
+        };
+        let rect = self.suggest_rect_for(sg.items.len());
+        if rect.h <= 0 || rect.w <= 2 {
+            return;
+        }
+        ctx.fill_rect(rect, theme.panel_bg);
+        // 테두리 1px(팝업 경계 가독)
+        ctx.fill_rect(Rect::new(rect.x, rect.y, rect.w, 1), theme.border);
+        ctx.fill_rect(
+            Rect::new(rect.x, rect.bottom() - 1, rect.w, 1),
+            theme.border,
+        );
+        ctx.fill_rect(Rect::new(rect.x, rect.y, 1, rect.h), theme.border);
+        ctx.fill_rect(Rect::new(rect.right() - 1, rect.y, 1, rect.h), theme.border);
+        for (i, item) in sg.items.iter().enumerate() {
+            let y = rect.y + 1 + i as i32 * self.row_h;
+            if y >= rect.bottom() - 1 {
+                break; // 하한 클램프 — 넘치는 항목 생략
+            }
+            let row = Rect::new(
+                rect.x + 1,
+                y,
+                rect.w - 2,
+                self.row_h.min(rect.bottom() - 1 - y),
+            );
+            let bg = if sg.sel == Some(i) {
+                theme.sel_bg
+            } else {
+                theme.panel_bg
+            };
+            ctx.fill_rect(row, bg);
+            let ty = y + (self.row_h - (self.row_h * 4) / 5) / 2;
+            let cell = Rect::new(
+                row.x + self.pad_x,
+                y,
+                (row.w - self.pad_x * 2).max(0),
+                row.h,
+            );
+            ctx.text_opaque(cell.x, ty, cell, item, theme.text, bg);
         }
     }
 
@@ -379,6 +553,48 @@ mod tests {
         // 슬래시·끝 구분자 허용
         assert_eq!(split_path("C:/a/b/")[2].full, "C:\\a\\b");
         assert!(split_path("").is_empty());
+    }
+
+    #[test]
+    fn suggest_cycle_and_restore_and_click() {
+        // 원본 NexaPathBar 규약: ↓=선택+미리 채움 · 첫 항목에서 ↑=해제+조회 시점 입력 복원 ·
+        // 클릭=즉시 이동(제출). 빈 목록=닫기.
+        let mut inv = Invalidations::default();
+        let mut pb = PathBar::new("C:\\U", 20, 6);
+        pb.set_bounds(Rect::new(0, 0, 300, 20), &mut inv);
+        pb.set_overlay_bottom(400);
+        pb.begin_edit(&mut inv);
+        pb.edit_char('\\', &mut inv); // "C:\U\" 유사 — 버퍼 조작만
+        let items = vec!["C:\\U\\Alpha".to_string(), "C:\\U\\Beta".to_string()];
+        pb.set_suggestions(items, &mut inv);
+        assert!(pb.suggest_open());
+        let base = pb.edit_text().unwrap();
+        assert!(pb.suggest_move(1, &mut inv));
+        assert_eq!(pb.edit_text().unwrap(), "C:\\U\\Alpha", "↓=1번째 미리 채움");
+        pb.suggest_move(1, &mut inv);
+        assert_eq!(pb.edit_text().unwrap(), "C:\\U\\Beta");
+        pb.suggest_move(-1, &mut inv);
+        pb.suggest_move(-1, &mut inv);
+        assert_eq!(
+            pb.edit_text().unwrap(),
+            base,
+            "첫 항목에서 ↑=조회 시점 입력 복원"
+        );
+        // 팝업 클릭(1행) = 그 경로 제출
+        assert!(
+            pb.suggest_click(10, 20 + 10, &mut inv),
+            "팝업 영역 클릭 처리"
+        );
+        assert_eq!(pb.take_navigation().as_deref(), Some("C:\\U\\Alpha"));
+        assert!(
+            !pb.suggest_open() && !pb.is_editing(),
+            "제출 = 닫기+편집 종료"
+        );
+        // 빈 목록 = 닫기
+        pb.begin_edit(&mut inv);
+        pb.set_suggestions(vec!["x".into()], &mut inv);
+        pb.set_suggestions(Vec::new(), &mut inv);
+        assert!(!pb.suggest_open());
     }
 
     struct Probe;

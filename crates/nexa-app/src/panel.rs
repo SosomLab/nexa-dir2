@@ -255,6 +255,8 @@ impl Panel {
         }
         self.dock
             .set_bounds(Rect::new(bounds.x, list_y + list_h, bounds.w, dock_h), inv);
+        // 자동완성 팝업 하한 = 리스트 바닥(도크/터미널 침범 금지 — PATH-SUG)
+        self.pathbar.set_overlay_bottom(list_y + list_h);
     }
 
     /// 하단 도크 표시 토글(호스트 전역 Ctrl+` — 원본 대원칙: 듀얼=패널별 아래).
@@ -310,6 +312,8 @@ impl Panel {
         self.navbtns.paint(ctx, theme);
         self.pathbar.paint(ctx, theme);
         self.tabbar.paint(ctx, theme);
+        // 자동완성 팝업(PATH-SUG) — 리스트 위 오버레이라 마지막에
+        self.pathbar.paint_suggest(ctx, theme);
     }
 
     /// 탭 바·경로 바를 활성 탭 상태와 동기화.
@@ -591,6 +595,8 @@ impl Panel {
             }
         }
         if let Some(p) = self.pathbar.take_navigation() {
+            // 환경변수 해석(원본 PathInterpreter — %VAR%·$env:VAR·따옴표, PATH-SUG 동반)
+            let p = crate::pathinput::expand_env(&p);
             self.navigate_to(PathBuf::from(p), ctx, inv);
         }
         if let Some(btn) = self.navbtns.take_command() {

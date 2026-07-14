@@ -22,6 +22,8 @@ mod icons;
 mod nav;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod panel;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod pathinput;
 #[cfg(windows)]
 mod recycle;
 #[cfg(windows)]
