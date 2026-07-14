@@ -354,6 +354,8 @@ struct State {
     term_focus: Option<usize>,
     /// 터미널 마우스 선택 드래그 중(QA 07-14) — 패널 인덱스.
     term_drag: Option<usize>,
+    /// 터미널 마우스 모드 전달 중 눌린 버튼(X-5) — (패널, SGR 버튼 코드).
+    term_mouse_btn: Option<(usize, u8)>,
     /// 터미널 캐럿 깜빡임 위상(QA 07-14) — 포커스 중 타이머가 토글, 입력 시 true 리셋.
     term_caret_on: bool,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
@@ -658,6 +660,7 @@ pub fn run() -> Result<()> {
         term_gen: 0,
         term_focus: None,
         term_drag: None,
+        term_mouse_btn: None,
         term_caret_on: true,
         history: nexa_ops::history::OperationHistory::default(),
     });
@@ -2320,6 +2323,30 @@ fn caret_blink_ms() -> u32 {
     }
 }
 
+/// 터미널 마우스 이벤트 전달(X-5 — Zellij 등 TUI): 마우스 모드(DECSET)가 켜져 있고
+/// SGR(1006) 인코딩일 때 `ESC[<b;col;row M/m`을 stdin으로. 전송했으면 `true`
+/// (호스트는 로컬 선택/스크롤을 억제). 레거시(비SGR) 인코딩은 바이트 >127이라
+/// 미지원 — 현대 TUI는 전부 1006(α).
+fn term_send_mouse(t: &TermState, x: i32, y: i32, btn: u8, press: bool) -> bool {
+    let Some((_, sgr)) = t.screen.mouse_mode() else {
+        return false;
+    };
+    if !sgr {
+        return false;
+    }
+    let (rc, cw, ch) = t.grid;
+    if !rc.contains(nexa_gui::Point { x, y }) {
+        return false;
+    }
+    let col = ((x - rc.x - 2) / cw.max(1)).max(0) as usize + 1;
+    let row = ((y - rc.y - 1) / ch.max(1)).max(0) as usize + 1;
+    t.pty.write(&format!(
+        "\x1b[<{btn};{col};{row}{}",
+        if press { 'M' } else { 'm' }
+    ));
+    true
+}
+
 /// 터미널 선택 끝점 갱신(QA 07-14) — 그리드 위/아래로 벗어나 있으면 1줄 자동 스크롤 후
 /// 클램프한 좌표의 셀로 확장(엣지 자동 스크롤 — MOUSEMOVE·타이머 공용).
 fn term_drag_extend(t: &mut TermState, x: i32, y: i32) {
@@ -2552,9 +2579,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let delta = (wparam.0 >> 16) as i16 as i32;
                 // 마우스 아래 패널로 라우팅(QA 07-14 — 활성 패널이 아닌 hover 기준)
                 let (target, px, py) = wheel_target(hwnd, st, lparam);
-                // 터미널 위 휠 = 스크롤백 보기(3줄/노치, QA 07-14)
+                // 터미널 위 휠: TUI 마우스 모드(X-5)면 휠 버튼(64/65) 전달, 아니면
+                // 스크롤백 보기(3줄/노치, QA 07-14). Shift=항상 로컬.
                 if wparam.0 & MK_SHIFT == 0 && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
+                        if t.screen.mouse_mode().is_some_and(|(_, sgr)| sgr) {
+                            let btn = if delta > 0 { 64 } else { 65 };
+                            for _ in 0..(delta.abs() / 120).max(1) {
+                                term_send_mouse(t, px, py, btn, true);
+                            }
+                            return LRESULT(0);
+                        }
                         if t.scroll_view(3 * delta / 120) {
                             invalidate_dock(hwnd, st, target);
                         }
@@ -2685,13 +2720,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 캐럿 깜빡임(QA 07-14) — 포커스 동안만, 시스템 깜빡임 주기
                         SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                         update_dock_info(st, &mut inv); // 종류 전환 직후 내용 동기
-                                                        // 그리드 안 프레스 = 마우스 선택 시작(QA 07-14 — 드래그로 확장)
+                        // 그리드 안 프레스: TUI 마우스 모드(X-5)면 시퀀스 전달(Shift=
+                        // 로컬 우회 — 터미널 관례), 아니면 로컬 선택 시작(QA 07-14)
                         if let Some(t) = &mut st.terms[idx] {
                             if t.grid.0.contains(nexa_gui::Point { x, y }) {
-                                let cell = t.cell_at(x, y);
-                                t.sel = Some((cell, cell));
-                                st.term_drag = Some(idx);
-                                invalidate_dock(hwnd, st, idx);
+                                if !shift && term_send_mouse(t, x, y, 0, true) {
+                                    st.term_mouse_btn = Some((idx, 0));
+                                } else {
+                                    let cell = t.cell_at(x, y);
+                                    t.sel = Some((cell, cell));
+                                    st.term_drag = Some(idx);
+                                    invalidate_dock(hwnd, st, idx);
+                                }
                             }
                         }
                     } else if st.panels[idx].dock_visible() && y >= st.panels[idx].dock.bounds().y {
@@ -2729,7 +2769,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                if let Some(idx) = st.panel_at(x) {
+                // TUI 마우스 모드(X-5) — 터미널 그리드 우클릭은 앱에 전달(Shift=로컬)
+                if GetKeyState(VK_SHIFT.0 as i32) >= 0 {
+                    if let Some(ti) = st.term_focus {
+                        if term_hit(st, ti, x, y) {
+                            if let Some(t) = &st.terms[ti] {
+                                if term_send_mouse(t, x, y, 2, true) {
+                                    st.term_mouse_btn = Some((ti, 2));
+                                    return LRESULT(0);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(idx) = st.panel_at_pt(x, y) {
                     set_active(hwnd, st, idx);
                     let mut inv = Invalidations::default();
                     st.panels[idx].on_event(&InputEvent::RightDown { x, y }, &mut inv);
@@ -2750,6 +2803,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 선택 규약(단독 선택/유지/해제)은 RBUTTONDOWN에서 반영됨.
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            if let Some(st) = state_of(hwnd) {
+                // TUI 마우스 릴리스(X-5 — 우클릭) — 컨텍스트 메뉴 억제
+                if let Some((ti, 2)) = st.term_mouse_btn {
+                    st.term_mouse_btn = None;
+                    if let Some(t) = &st.terms[ti] {
+                        term_send_mouse(t, x, y, 2, false);
+                    }
+                    return LRESULT(0);
+                }
+            }
             let hit = state_of(hwnd).map(|st| {
                 let active = st.panel_at(x) == Some(st.active);
                 let rows = st.active_panel().rows();
@@ -2781,6 +2844,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                // TUI 마우스 모션 전달(X-5 — 1002/1003·버튼 유지 중)
+                if let Some(st) = state_of(hwnd) {
+                    if let Some((ti, b)) = st.term_mouse_btn {
+                        if wparam.0 & MK_LBUTTON != 0 || b == 2 {
+                            if let Some(t) = &st.terms[ti] {
+                                if matches!(t.screen.mouse_mode(), Some((m, _)) if m >= 1002) {
+                                    term_send_mouse(t, x, y, b | 32, true);
+                                }
+                            }
+                            return LRESULT(0);
+                        }
+                        st.term_mouse_btn = None;
+                    }
+                }
                 // 터미널 마우스 선택 드래그(QA 07-14) — 끝점 확장 + 엣지 자동 스크롤
                 if let Some(st) = state_of(hwnd) {
                     if let Some(ti) = st.term_drag {
@@ -2888,6 +2965,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
                 st.dock_drag = None; // 도크 높이 드래그 종료(M4-1 S2)
                 st.dock_split_drag = false; // 도크 좌/우 스플리터 종료(X-6)
+                if let Some((ti, b)) = st.term_mouse_btn.take() {
+                    // TUI 마우스 릴리스 전달(X-5)
+                    if b == 0 {
+                        if let Some(t) = &st.terms[ti] {
+                            term_send_mouse(t, x, y, b, false);
+                        }
+                    } else {
+                        st.term_mouse_btn = Some((ti, b)); // 우클릭은 RBUTTONUP에서
+                    }
+                }
                 if st.term_drag.take().is_some() {
                     // 터미널 선택 확정(QA 07-14) — 선택은 유지(Ctrl+C 복사), 타이머 종료
                     let _ = KillTimer(Some(hwnd), TIMER_TERM_SEL);
