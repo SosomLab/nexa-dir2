@@ -32,8 +32,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
     SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW,
     CS_DBLCLKS, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
-    WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_GETOBJECT,
-    WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND,
+    WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION, WM_INITMENUPOPUP, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
@@ -2339,10 +2340,20 @@ unsafe fn set_active(hwnd: HWND, st: &mut State, idx: usize) {
     if st.active != idx {
         st.active = idx;
         let mut inv = Invalidations::default();
-        st.panels[0].set_focused(idx == 0, &mut inv);
-        st.panels[1].set_focused(idx == 1, &mut inv);
+        sync_focus_visuals(st, &mut inv);
         flush_invalidations(hwnd, &mut inv);
         update_title(hwnd, st, "");
+    }
+}
+
+/// 포커스 시각 동기(QA 07-15) — **실제 키 포커스가 있는 영역만 강조**:
+/// 탭 바 accent=활성 패널 · 리스트 선택색=활성 패널이면서 터미널 비포커스 ·
+/// 도크 스트립(활성 종류 라벨·[→])=그 패널 터미널이 키 포커스일 때만 accent.
+unsafe fn sync_focus_visuals(st: &mut State, inv: &mut Invalidations) {
+    for i in 0..2 {
+        st.panels[i].set_focused(st.active == i, inv);
+        st.panels[i].set_list_focused(st.active == i && st.term_focus.is_none(), inv);
+        st.panels[i].dock.set_focused(st.term_focus == Some(i), inv);
     }
 }
 
@@ -2765,8 +2776,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let cols = columns(st.dpi);
                 st.panels[0].set_metrics(m, cols.clone(), &mut inv);
                 st.panels[1].set_metrics(m, cols, &mut inv);
-                st.panels[0].set_focused(st.active == 0, &mut inv);
-                st.panels[1].set_focused(st.active == 1, &mut inv);
+                sync_focus_visuals(st, &mut inv);
                 st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.statusbar.set_metrics(m.row_h, m.pad_x, &mut inv);
@@ -3044,6 +3054,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.drag_press = Some((x, y)); // 임계 이동 시 OLE 드래그 발신(M3-5 S4)
                     }
                 }
+                // 클릭으로 확정된 포커스 영역(리스트/터미널) 강조 동기(QA 07-15)
+                sync_focus_visuals(st, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
                 update_title(hwnd, st, "");
                 update_status(hwnd, st);
@@ -3248,6 +3260,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        WM_CAPTURECHANGED => {
+            // 캡처 강탈(팝업·전환 등)로 WM_LBUTTONUP이 안 오는 경로 — 스플리터류 드래그
+            // 플래그가 남아 accent 강조가 잔존하는 것을 방어(QA 07-15).
+            if let Some(st) = state_of(hwnd) {
+                if st.split_drag || st.dock_split_drag || st.dock_drag.is_some() {
+                    st.split_drag = false;
+                    st.dock_split_drag = false;
+                    st.dock_drag = None;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_LBUTTONUP => {
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
@@ -3409,7 +3434,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             return LRESULT(0); // 문자 입력은 WM_CHAR 경로로 수신
                         }
                     } else {
+                        // 낡은 터미널 포커스(도크 숨김/종류 전환) 해제 — 강조 동기(QA 07-15)
                         st.term_focus = None;
+                        let mut inv = Invalidations::default();
+                        sync_focus_visuals(st, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
                     }
                 }
                 if st.active_panel().rows().is_renaming() {

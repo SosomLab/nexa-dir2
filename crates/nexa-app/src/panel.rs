@@ -302,10 +302,16 @@ impl Panel {
         self.set_bounds(self.bounds, inv);
     }
 
+    /// 패널 활성 표시(탭 바 accent) — 듀얼에서 어느 패널이 활성인지.
     pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
-        self.focused = focused;
         self.tabbar.set_focused(focused, inv);
-        self.dock.set_focused(focused, inv);
+    }
+
+    /// 리스트 키 포커스(선택 하이라이트 색 — QA 07-15): 터미널 포커스 중엔 활성 패널의
+    /// 리스트도 비활성 색(실제 포커스 영역만 강조). 도크 스트립 강조는 호스트가
+    /// `dock.set_focused`로 터미널 포커스에 맞춰 직접 동기한다.
+    pub fn set_list_focused(&mut self, focused: bool, inv: &mut Invalidations) {
+        self.focused = focused;
         for tab in &mut self.tabs {
             tab.rows.set_focused(focused, inv);
         }

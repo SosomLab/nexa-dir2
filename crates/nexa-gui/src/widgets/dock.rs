@@ -44,11 +44,12 @@ impl InfoDock {
             image: None,
             pending_goto: false,
             goto_range: std::cell::Cell::new((0, 0)),
-            focused: true,
+            focused: false,
         }
     }
 
-    /// 호스트 패널 포커스 상태 반영 — 활성 종류·→ 버튼 강조색만 바뀐다.
+    /// 도크 키 포커스 상태 반영(호스트=터미널 포커스와 동기 — QA 07-15) —
+    /// 활성 종류·→ 버튼 강조색만 바뀐다.
     pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
         if self.focused != focused {
             self.focused = focused;
