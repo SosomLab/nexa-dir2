@@ -109,3 +109,8 @@ status.show = 표시
 status.hide = 감춤
 panel.left = 좌
 panel.right = 우
+
+tab.lock = 탭 잠금
+tab.unlock = 탭 잠금 해제
+tab.duplicate = 탭 복제
+tab.close = 탭 닫기

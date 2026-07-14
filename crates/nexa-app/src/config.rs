@@ -49,6 +49,8 @@ pub struct PanelSession {
     pub active: usize,
     /// 탭 인덱스 정렬(부족분 허용) — 각 탭의 펼침 경로 목록.
     pub expanded: Vec<Vec<PathBuf>>,
+    /// 탭별 잠금(닫기 제외 — 원본 TabSession.Locked, 편의 UX ②).
+    pub locked: Vec<bool>,
 }
 
 /// 세션(원본 session.json 대응) — `data\session.cfg`(패널·탭·활성·펼침).
@@ -152,6 +154,15 @@ impl Session {
                     out.push_str(&format!("panel{i}.exp{j}={}\n", list.join("|")));
                 }
             }
+            // 탭별 잠금(편의 UX ②) — 하나라도 잠겨 있을 때만 기록
+            if p.locked.iter().any(|l| *l) {
+                let flags: Vec<&str> = p
+                    .locked
+                    .iter()
+                    .map(|l| if *l { "1" } else { "0" })
+                    .collect();
+                out.push_str(&format!("panel{i}.locked={}\n", flags.join("|")));
+            }
         }
         out
     }
@@ -172,6 +183,10 @@ impl Session {
                 "panel0.active" | "panel1.active" => {
                     let idx = usize::from(k.starts_with("panel1"));
                     s.panels[idx].active = v.parse().unwrap_or(0);
+                }
+                "panel0.locked" | "panel1.locked" => {
+                    let idx = usize::from(k.starts_with("panel1"));
+                    s.panels[idx].locked = v.split('|').map(|f| f == "1").collect();
                 }
                 k if k.starts_with("panel0.exp") || k.starts_with("panel1.exp") => {
                     let idx = usize::from(k.starts_with("panel1"));
@@ -286,11 +301,13 @@ mod tests {
                             PathBuf::from("D:\\b c\\d\\한글"),
                         ],
                     ],
+                    locked: vec![false, true], // 탭1 잠금 — 편의 UX ② 왕복
                 },
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\")],
                     active: 0,
                     expanded: vec![],
+                    locked: vec![],
                 },
             ],
         };
@@ -302,6 +319,7 @@ mod tests {
         assert_eq!(parsed.panels[0].expanded.len(), 2);
         assert!(parsed.panels[0].expanded[0].is_empty());
         assert_eq!(parsed.panels[0].expanded[1], s.panels[0].expanded[1]);
+        assert_eq!(parsed.panels[0].locked, vec![false, true], "잠금 왕복");
         // 빈/손상 → 기본
         let empty = Session::parse("");
         assert_eq!(empty.active_panel, 0);

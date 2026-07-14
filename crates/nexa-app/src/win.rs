@@ -562,6 +562,12 @@ pub fn run() -> Result<()> {
         )
     };
     let (mut left, mut right) = (left, right);
+    // 탭 잠금 복원(편의 UX ② — 원본 TabSession.Locked)
+    {
+        let mut inv = Invalidations::default();
+        left.seed_locked(&session.panels[0].locked, &mut inv);
+        right.seed_locked(&session.panels[1].locked, &mut inv);
+    }
     {
         // 하단 도크 복원(M4-1 — 원본 세션 저장 계승: 표시·비율)
         let mut inv = Invalidations::default();
@@ -2185,6 +2191,72 @@ unsafe fn invalidate_dock(hwnd: HWND, st: &State, panel: usize) {
     let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
 }
 
+/// 탭 우클릭 메뉴(편의 UX ② — 원본 TAB-MENU): 잠금 토글·복제·닫기. 네이티브 팝업 —
+/// TrackPopupMenuEx 모달 루프 동안 wndproc 재진입이 있으므로 **State 참조 없이** 표시 후
+/// 결과만 재획득해 반영(shellmenu 동일 규약).
+unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenuEx, MF_GRAYED,
+        MF_STRING, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
+    };
+    const CMD_LOCK: usize = 1;
+    const CMD_DUP: usize = 2;
+    const CMD_CLOSE: usize = 3;
+    let (locked, count) = match state_of(hwnd) {
+        Some(st) if tab < st.panels[panel].tab_count() => (
+            st.panels[panel].tab_locked(tab),
+            st.panels[panel].tab_count(),
+        ),
+        _ => return,
+    };
+    let Ok(menu) = CreatePopupMenu() else { return };
+    let append = |id: usize, label: &str, enabled: bool| {
+        let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+        let flags = if enabled {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+        let _ = AppendMenuW(menu, flags, id, PCWSTR(wide.as_ptr()));
+    };
+    append(
+        CMD_LOCK,
+        &if locked {
+            tr("tab.unlock")
+        } else {
+            tr("tab.lock")
+        },
+        true,
+    );
+    append(CMD_DUP, &tr("tab.duplicate"), true);
+    append(CMD_CLOSE, &tr("tab.close"), !locked && count > 1);
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    let cmd = TrackPopupMenuEx(
+        menu,
+        (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD).0,
+        pt.x,
+        pt.y,
+        hwnd,
+        None,
+    );
+    let _ = DestroyMenu(menu);
+    let Some(st) = state_of(hwnd) else { return };
+    let mut inv = Invalidations::default();
+    match cmd.0 as usize {
+        CMD_LOCK => st.panels[panel].toggle_tab_lock(tab, &mut inv),
+        CMD_DUP => {
+            let ctx = st.nav_ctx();
+            st.panels[panel].duplicate_tab(tab, ctx, &mut inv);
+        }
+        CMD_CLOSE => st.panels[panel].close_tab(tab, &mut inv),
+        _ => {}
+    }
+    flush_invalidations(hwnd, &mut inv);
+    update_title(hwnd, st, "");
+    update_status(hwnd, st);
+}
+
 /// 경로바 편집 텍스트 **변경 후** 자동완성 갱신(PATH-SUG — 원본 TextChanged 대응).
 /// 환경변수 확장 후 베이스 폴더의 하위 폴더를 제안(최대 20 — 원본 상한).
 fn update_path_suggest(st: &mut State, inv: &mut Invalidations) {
@@ -2462,6 +2534,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
+            let mut tab_menu: Option<(usize, usize)> = None;
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
@@ -2469,8 +2542,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     set_active(hwnd, st, idx);
                     let mut inv = Invalidations::default();
                     st.panels[idx].on_event(&InputEvent::RightDown { x, y }, &mut inv);
+                    let ctx = st.nav_ctx();
+                    st.panels[idx].drain_actions(ctx, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
+                    // 탭 우클릭 메뉴(편의 UX ②) — 모달 팝업은 State 참조를 끊고(재진입 규약)
+                    tab_menu = st.panels[idx].take_tab_menu().map(|t| (idx, t));
                 }
+            }
+            if let Some((panel, tab)) = tab_menu {
+                show_tab_menu(hwnd, panel, tab);
             }
             LRESULT(0)
         }
@@ -2590,6 +2670,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 드롭다운 아래 hover 잔상 방지
                         st.panels[0].on_event(&ev, &mut inv);
                         st.panels[1].on_event(&ev, &mut inv);
+                        // 탭 드래그 재정렬(편의 UX ②) — Move 액션 즉시 반영
+                        let ctx = st.nav_ctx();
+                        st.panels[0].drain_actions(ctx, &mut inv);
+                        st.panels[1].drain_actions(ctx, &mut inv);
                     }
                 }
                 flush_invalidations(hwnd, &mut inv);
@@ -3218,11 +3302,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             tabs: t0,
                             active: a0,
                             expanded: e0,
+                            locked: st.panels[0].session_locked(),
                         },
                         PanelSession {
                             tabs: t1,
                             active: a1,
                             expanded: e1,
+                            locked: st.panels[1].session_locked(),
                         },
                     ],
                 };
