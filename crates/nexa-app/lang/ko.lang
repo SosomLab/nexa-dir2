@@ -117,3 +117,10 @@ tab.close = 탭 닫기
 ops.applyAll = (예=모두 덮어쓰기 · 아니오=모두 건너뛰기 · 취소=중단 — 선택은 남은 충돌 전체에 적용됩니다)
 
 ctx.copyPath = 경로 복사
+
+ops.yes = 덮어쓰기
+ops.yesAll = 모두 덮어쓰기
+ops.skip = 건너뛰기
+ops.cancel = 취소
+ops.progressTitle = 파일 전송
+ops.progressLabel = 전송 중...

@@ -170,13 +170,20 @@ impl Widget for TabBar {
                 }
             }
             InputEvent::MouseMove { x, y } => {
-                // 드래그 재정렬(편의 UX ②): 임계(8px) 이동 후, 커서가 위치한 탭으로 이동 통지.
+                // 드래그 재정렬(편의 UX ②): 임계(8px) 이동 후, **이웃 탭의 중간점을 통과한
+                // 순간에만 스냅**(QA 07-14 — 탭 위에 걸치는 즉시가 아니라 탭 사이로 넘어갈 때).
                 // 호스트가 이동을 반영(set_tabs)하면 잡은 인덱스를 목적지로 갱신해 연속 드래그.
                 if let Some((from, press_x, started)) = self.drag {
                     let begun = started || (x - press_x).abs() > 8;
                     if begun {
                         if let Some((to, _)) = self.tab_at(x, y) {
-                            if to != from {
+                            let crossed = to != from && {
+                                let (lo, hi) = self.ranges.borrow().0[to];
+                                let mid = (lo + hi) / 2;
+                                // 오른쪽으로: 대상 탭 중간을 지나야 · 왼쪽도 대칭
+                                (to > from && x >= mid) || (to < from && x <= mid)
+                            };
+                            if crossed {
                                 self.pending = Some(TabAction::Move { from, to });
                                 self.drag = Some((to, x, true));
                                 inv.push(self.bounds);
