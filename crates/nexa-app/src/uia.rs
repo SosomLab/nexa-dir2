@@ -26,15 +26,24 @@ use windows::Win32::UI::Accessibility::{
     ISelectionItemProvider_Impl, NavigateDirection, NavigateDirection_FirstChild,
     NavigateDirection_LastChild, NavigateDirection_NextSibling, NavigateDirection_Parent,
     NavigateDirection_PreviousSibling, ProviderOptions, ProviderOptions_ServerSideProvider,
-    UIA_AutomationFocusChangedEventId, UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId,
-    UIA_IsKeyboardFocusablePropertyId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
-    UIA_NamePropertyId, UIA_SelectionItemPatternId, UiaAppendRuntimeId, UiaClientsAreListening,
-    UiaHostProviderFromHwnd, UiaRaiseAutomationEvent, UiaRect, UiaReturnRawElementProvider,
-    UIA_PATTERN_ID, UIA_PROPERTY_ID,
+    StructureChangeType_ChildrenInvalidated, UIA_AutomationFocusChangedEventId,
+    UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_IsKeyboardFocusablePropertyId,
+    UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_NamePropertyId,
+    UIA_SelectionItemPatternId, UiaAppendRuntimeId, UiaClientsAreListening,
+    UiaHostProviderFromHwnd, UiaRaiseAutomationEvent, UiaRaiseStructureChangedEvent, UiaRect,
+    UiaReturnRawElementProvider, UIA_PATTERN_ID, UIA_PROPERTY_ID,
 };
+use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 /// `WM_GETOBJECT`의 UIA 루트 요청 식별자(uiautomationcoreapi.h `UiaRootObjectId`).
 pub const UIA_ROOT_OBJECT_ID: i32 = -25;
+
+/// SelectionItem 패턴의 선택 요청(M5-3) — UIA 콜백(임의 스레드)은 상태를 만질 수 없으므로
+/// UI 스레드로 전달: wparam = 전역 행 인덱스, lparam = [`SEL_SINGLE`]/[`SEL_ADD`]/[`SEL_REMOVE`].
+pub const WM_APP_UIA_SELECT: u32 = 0x8007; // WM_APP + 7 (win.rs 0x8001~0x8006 다음)
+pub const SEL_SINGLE: isize = 0;
+pub const SEL_ADD: isize = 1;
+pub const SEL_REMOVE: isize = 2;
 
 /// 가시 행 1개의 접근성 스냅샷.
 pub struct RowSnap {
@@ -302,15 +311,31 @@ impl IRawElementProviderFragment_Impl for RowProvider_Impl {
     }
 }
 
+impl RowProvider_Impl {
+    /// 선택 요청을 UI 스레드로 전달(M5-3) — 전역 행 인덱스 기준(스냅샷과 실제 목록이
+    /// 어긋났으면 UI 스레드가 범위 검사로 무시).
+    fn post_select(&self, mode: isize) -> Result<()> {
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.hwnd),
+                WM_APP_UIA_SELECT,
+                WPARAM(self.snap.first_row + self.idx),
+                LPARAM(mode),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl ISelectionItemProvider_Impl for RowProvider_Impl {
     fn Select(&self) -> Result<()> {
-        Ok(()) // 읽기 전용 1차 — 선택 조작은 후속(M5-3)
+        self.post_select(SEL_SINGLE)
     }
     fn AddToSelection(&self) -> Result<()> {
-        Ok(())
+        self.post_select(SEL_ADD)
     }
     fn RemoveFromSelection(&self) -> Result<()> {
-        Ok(())
+        self.post_select(SEL_REMOVE)
     }
     fn IsSelected(&self) -> Result<windows::core::BOOL> {
         Ok(self.row().selected.into())
@@ -351,4 +376,16 @@ pub unsafe fn raise_focus(hwnd: HWND, snap: Arc<Snap>) {
         .into();
         let _ = UiaRaiseAutomationEvent(&row, UIA_AutomationFocusChangedEventId);
     }
+}
+
+/// 구조 변경 통지(M5-3 — M2-7 1차 한계 해소): 재로드·펼침/접힘·이동으로 목록 구성이
+/// 바뀌면 자식 무효화 이벤트를 발행 — 클라이언트가 낡은 스냅샷 트리를 다시 읽는다.
+pub unsafe fn raise_structure_changed(hwnd: HWND, snap: Arc<Snap>) {
+    let list: IRawElementProviderSimple = ListProvider { hwnd, snap }.into();
+    let _ = UiaRaiseStructureChangedEvent(
+        &list,
+        StructureChangeType_ChildrenInvalidated,
+        std::ptr::null_mut(),
+        0,
+    );
 }

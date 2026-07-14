@@ -346,6 +346,8 @@ struct State {
     trimmed: bool,
     /// UIA 포커스 이벤트 중복 억제(M2-7): 마지막 통지한 (활성 패널, 캐럿).
     uia_caret: Option<(usize, Option<usize>)>,
+    /// UIA 구조 이벤트 중복 억제(M5-3): 마지막 통지한 (활성 패널, 경로, 행 수).
+    uia_struct: Option<(usize, String, usize)>,
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
     transfer_gen: u64,
@@ -667,6 +669,7 @@ pub fn run() -> Result<()> {
         last_activity_ms: 0,
         trimmed: false,
         uia_caret: None,
+        uia_struct: None,
         transfer: None,
         transfer_gen: 0,
         drag_press: None,
@@ -956,17 +959,34 @@ unsafe fn uia_snapshot(hwnd: HWND, st: &State) -> std::sync::Arc<crate::uia::Sna
     })
 }
 
-/// 캐럿 변경 시 UIA 포커스 이벤트 발행(M2-7) — 클라이언트가 붙어 있을 때만(가드 비용 0).
+/// 캐럿·구조 변경 시 UIA 이벤트 발행(M2-7 → M5-3) — 클라이언트가 붙어 있을 때만.
+/// 구조 = (활성 패널, 경로, 행 수) 서명 — 재로드·펼침/접힘·이동을 포착해 자식 무효화
+/// 이벤트를 발행(1차 한계였던 "트리 갱신 이벤트 미발행" 해소. 동수 개명은 미포착 — α).
 unsafe fn uia_notify(hwnd: HWND, st: &mut State) {
-    let cur = (st.active, st.panels[st.active].rows().caret());
-    if st.uia_caret == Some(cur) {
+    let p = &st.panels[st.active];
+    let cur = (st.active, p.rows().caret());
+    let sig = (
+        st.active,
+        p.root_path().display().to_string(),
+        p.rows().source().len(),
+    );
+    let caret_changed = st.uia_caret != Some(cur);
+    let struct_changed = st.uia_struct.as_ref() != Some(&sig);
+    if !caret_changed && !struct_changed {
         return;
     }
     st.uia_caret = Some(cur);
-    if cur.1.is_none() || !crate::uia::listening() {
+    st.uia_struct = Some(sig);
+    if !crate::uia::listening() {
         return;
     }
-    crate::uia::raise_focus(hwnd, uia_snapshot(hwnd, st));
+    let snap = uia_snapshot(hwnd, st);
+    if struct_changed {
+        crate::uia::raise_structure_changed(hwnd, snap.clone());
+    }
+    if caret_changed && cur.1.is_some() {
+        crate::uia::raise_focus(hwnd, snap);
+    }
 }
 
 /// 활성 패널 선택 → 클립보드 항목(M3-1). 선택이 없으면 `None`(클립보드 유지).
@@ -2055,7 +2075,8 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
 }
 
 /// IME 조합 창을 편집 캐럿 옆에 배치(M2-7 근접 조합 — 원본 NFR-A1).
-/// 대상 = 편집 중인 경로바(활성 패널 우선). 없으면 IME 기본 위치에 둔다.
+/// 대상 = 편집 중인 경로바(활성 패널 우선) → 인라인 이름변경 필드(M5-3 — M3-2 α 한계
+/// 해소). 없으면 IME 기본 위치에 둔다.
 /// 결과 문자열은 기존 WM_CHAR 경로로 수신(DefWindowProc의 WM_IME_CHAR 변환).
 unsafe fn position_ime(hwnd: HWND, st: &mut State) {
     use windows::Win32::UI::Input::Ime::{
@@ -2065,6 +2086,7 @@ unsafe fn position_ime(hwnd: HWND, st: &mut State) {
     let Some((buf, field, pad)) = [st.active, 1 - st.active]
         .into_iter()
         .find_map(|i| st.panels[i].pathbar.edit_info())
+        .or_else(|| st.panels[st.active].rows().rename_edit_info())
     else {
         return;
     };
@@ -3705,6 +3727,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         m if m == WM_APP_TRANSFER => {
             if let Some(st) = state_of(hwnd) {
                 on_transfer_message(hwnd, st, wparam.0 as u64, lparam.0 == 1);
+            }
+            LRESULT(0)
+        }
+        // UIA SelectionItem 선택 요청(M5-3) — 프로바이더(임의 스레드)가 전역 행 인덱스로
+        // 전달. 스냅샷 이후 목록이 바뀌었을 수 있으므로 범위 검사(select_program)로 방어.
+        m if m == crate::uia::WM_APP_UIA_SELECT => {
+            if let Some(st) = state_of(hwnd) {
+                let row = wparam.0;
+                let mut inv = Invalidations::default();
+                let rows = st.panels[st.active].rows_mut();
+                let selected = rows.source().is_selected(row);
+                use nexa_gui::widgets::rows::SelectOp;
+                match lparam.0 {
+                    crate::uia::SEL_SINGLE => rows.select_program(row, SelectOp::Single, &mut inv),
+                    crate::uia::SEL_ADD if !selected => {
+                        rows.select_program(row, SelectOp::Toggle, &mut inv)
+                    }
+                    crate::uia::SEL_REMOVE if selected => {
+                        rows.select_program(row, SelectOp::Toggle, &mut inv)
+                    }
+                    _ => {}
+                }
+                flush_invalidations(hwnd, &mut inv);
+                update_status(hwnd, st);
             }
             LRESULT(0)
         }
