@@ -8,6 +8,7 @@
 
 ## 2026-07-15
 
+- **포커스 영역 단위 강조 재설계(main 직커밋, 사용자 QA 스크린샷)**: 패널 단위 → **실제 키 포커스 영역 단위** — `sync_focus_visuals`(리스트 선택색=활성 패널+터미널 비포커스·도크 스트립 [Terminal]/[→] accent=그 터미널이 키 포커스일 때만·탭 바=활성 패널 유지), `Panel::set_focused`/`set_list_focused` 분리·클릭/키/기동 경로 동기 + **WM_CAPTURECHANGED 방어**(캡처 강탈 시 스플리터 드래그 플래그 잔존 해제). 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **UX QA 5차(main 직커밋, 사용자 QA/요청 6건)**: ① **비활성 패널 구분** — 테마 토큰 `sel_bg_inactive` 신설(무채색), `Panel::set_focused`가 전 탭 rows·dock에 전파(선택 하이라이트·도크 활성 종류·터미널 [→] 버튼 모두 비활성 색) + 기동 시 복원 활성 패널 반영 ② **스플리터 강조 잔존 수정** — 도크 좌/우·높이 드래그 해제 시 재도장 누락 → InvalidateRect ③ **이름 복사 위치** — `CustomItem.after_id` 앵커 삽입으로 "경로 복사" 바로 아래 ④ **설정 창 X-8** — VS Code식 **즉시 적용**(저장/취소 제거·`WM_APP_PREFS_APPLY` 동기 통지·EDIT=포커스 이탈 시·`apply_prefs` 분리 멱등) + **리사이즈 창**(WS_THICKFRAME·WM_SIZE 재배치·최소=기본 크기). 테스트 158 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 
 ## 2026-07-14
