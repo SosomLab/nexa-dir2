@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `fix/term-caret-color` | 2026-07-14 | 2026-07-14 (`d0e28d2`) | — | 1 | 사용자 지시 — 터미널 캐럿 밝은 회색(0xCCCCCC) 고정: 터미널 배경은 테마 무관 Campbell 다크라 theme.text가 라이트 테마에서 비가시 | [2026-07-14](journal/2026-07-14.md) |
 | `fix/m4-term-qa` | 2026-07-14 | 2026-07-14 (`149394b`) | — | 2 | 터미널 실기 QA 2건 — 세로바 캐럿(1px·DPI — Windows Terminal bar 동일)·Backspace=DEL 교차 매핑(0x08=Ctrl+Backspace 단어 삭제 해석 → 입력 전체 삭제 결함 수정, 원본 TerminalView 규약) + X-3 터미널 설정 백로그 등록 | [2026-07-14](journal/2026-07-14.md) |
 | `feat/m4-terminal` | 2026-07-14 | 2026-07-14 (`acbbdae`) | — | 4 | M4-3 — ConPTY 터미널(원본 VtScreen.cs·ConPtySession.cs 이식): nexa-term rlib(VT 파서·SGR 3계열·CSI·DECSTBM·스크롤백 800·전각·테스트 9)·ConPTY 세션(pwsh→cmd 폴백·UTF-8 경계 읽기 스레드·EXIT 통지·세대 가드)·도크 [터미널] 종류(Consolas 모노 그리드·런 병합·캐럿·클릭 포커스·VT 키·아무 키 재시작·리사이즈 동기). 테스트 148 green → **M4 전 항목 구현 완료** | [2026-07-14](journal/2026-07-14.md) |
 | `feat/m4-preview` | 2026-07-13 | 2026-07-14 (`30bd7b6`) | — | 4 | M4-2 — 내장 미리보기(DR-7 — 플러그인 아님): 도크 [정보\|미리보기] 스트립·텍스트(16KB·이진 판정)·이미지(WIC Fant·비율 유지·캐시 8건·CoCreateInstance 지연=임포트 무변)·draw_image 프리미티브·독립 예제(examples/preview_image.rs — 실기 jpg 확인) | [2026-07-13](journal/2026-07-13.md) |
