@@ -112,7 +112,7 @@ pub unsafe fn show(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[&str],
+    hide: &[(&str, u32)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -132,7 +132,7 @@ unsafe fn show_inner(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[&str],
+    hide: &[(&str, u32)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -191,7 +191,7 @@ pub unsafe fn show_background(
     dir: &std::path::Path,
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[&str],
+    hide: &[(&str, u32)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -208,7 +208,7 @@ unsafe fn show_background_inner(
     dir: &std::path::Path,
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[&str],
+    hide: &[(&str, u32)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -244,7 +244,7 @@ unsafe fn run_menu(
     icm: &IContextMenu,
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[&str],
+    hide: &[(&str, u32)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -264,21 +264,30 @@ unsafe fn run_menu(
         {
             return Outcome::Cancelled;
         }
-        // 2-0) 셸 항목 숨김(원본 VerbReplacement — QA 07-14): 고유 항목으로 **대체**하는
-        // canonical verb는 셸 제공분을 제거(중복 표시·단일 부모 한계 오동작 방지).
+        // 2-0) 셸 항목 **제자리 대체**(원본 VerbReplacement — QA 07-14): 대상 verb의 메뉴
+        // 항목 ID만 고유 ID로 바꿔치기 — 위치·라벨(=윈도우 기본 다국어) 그대로, 선택 시
+        // Outcome::Custom으로 우리 경로 실행(단일 부모 한계 우회).
         if !hide.is_empty() {
             use windows::Win32::UI::WindowsAndMessaging::{
-                DeleteMenu, GetMenuItemCount, GetMenuItemID, MF_BYPOSITION,
+                GetMenuItemCount, GetMenuItemID, SetMenuItemInfoW, MENUITEMINFOW, MIIM_ID,
             };
             let n = GetMenuItemCount(Some(hmenu));
-            for pos in (0..n.max(0)).rev() {
+            for pos in 0..n.max(0) {
                 let id = GetMenuItemID(hmenu, pos);
                 if !(ID_SHELL_FIRST..=ID_SHELL_LAST).contains(&id) {
                     continue;
                 }
                 if let Some(verb) = get_verb(icm, id - ID_SHELL_FIRST) {
-                    if hide.iter().any(|v| verb.eq_ignore_ascii_case(v)) {
-                        let _ = DeleteMenu(hmenu, pos as u32, MF_BYPOSITION);
+                    if let Some((_, custom_id)) =
+                        hide.iter().find(|(v, _)| verb.eq_ignore_ascii_case(v))
+                    {
+                        let mii = MENUITEMINFOW {
+                            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                            fMask: MIIM_ID,
+                            wID: *custom_id,
+                            ..Default::default()
+                        };
+                        let _ = SetMenuItemInfoW(hmenu, pos as u32, true, &mii);
                     }
                 }
             }

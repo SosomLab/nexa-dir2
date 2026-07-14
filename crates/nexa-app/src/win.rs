@@ -1331,19 +1331,12 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         };
         // 고유 병합 항목(원본 S1: 셸이 제공하는 동사는 중복 금지) — 완전 삭제·폴더에 붙여넣기
         let paste_dir = caret_path.filter(|p| targets.len() == 1 && p.is_dir());
-        let mut custom = vec![
-            CustomItem {
-                id: CTX_DELETE_PERMANENT,
-                label: tr("ctx.deletePermanent"),
-                enabled: true,
-            },
-            // 경로 복사(QA 07-14 — 교차 폴더 전체 선택, 셸 단일 부모 한계 우회·원본 §7-5)
-            CustomItem {
-                id: CTX_COPY_PATH,
-                label: tr("ctx.copyPath"),
-                enabled: true,
-            },
-        ];
+        // "경로 복사"는 셸 항목 제자리 대체(hide→CTX_COPY_PATH — 윈도우 기본 라벨·위치·다국어)
+        let mut custom = vec![CustomItem {
+            id: CTX_DELETE_PERMANENT,
+            label: tr("ctx.deletePermanent"),
+            enabled: true,
+        }];
         if paste_dir.is_some() && crate::clipboard::has_files() {
             custom.push(CustomItem {
                 id: CTX_PASTE_INTO,
@@ -1366,7 +1359,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         &req.targets,
         req.shift,
         &["delete", "rename", "copy", "cut"],
-        &["copyaspath"],
+        &[("copyaspath", CTX_COPY_PATH)],
         &req.custom,
         req.at,
     );
