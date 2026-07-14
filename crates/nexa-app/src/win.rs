@@ -105,6 +105,8 @@ const CMD_NEW_FILE: u32 = 5;
 const CMD_UNDO: u32 = 6;
 const CMD_REDO: u32 = 7;
 const CMD_TOGGLE_DOCK: u32 = 8;
+/// 퀵 런처 바 표시 토글(M5-1 — 원본 ShowLauncher).
+const CMD_TOGGLE_LAUNCHER: u32 = 9;
 const CMD_TOGGLE_HIDDEN: u32 = 10;
 const CMD_TOGGLE_DOTFILES: u32 = 11;
 const CMD_REFRESH: u32 = 12;
@@ -119,6 +121,8 @@ const CMD_LANG_SYSTEM: u32 = 40;
 const CMD_LANG_BASE: u32 = 41;
 /// 설정 창(S6 — Ctrl+, / 메뉴·도구모음, QA 07-14).
 const CMD_PREFS: u32 = 60;
+/// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
+const CMD_LAUNCHER_BASE: u32 = 200;
 
 /// 테마 모드(원본 docs/39 §3 — System/Light/Dark). 영속은 M2-5.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -207,6 +211,7 @@ fn build_menus(
     show_hidden: bool,
     show_dotfiles: bool,
     dock: bool,
+    launcher: bool,
     mode: ThemeMode,
     lang_setting: &str,
     langs: &[(String, String)],
@@ -215,6 +220,7 @@ fn build_menus(
         MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
         MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
         MenuItem::new(CMD_TOGGLE_DOCK, tr("menu.view.dock"), "Ctrl+`").checked(dock),
+        MenuItem::new(CMD_TOGGLE_LAUNCHER, tr("menu.view.launcher"), "").checked(launcher),
         MenuItem::separator(),
         MenuItem::new(CMD_REFRESH, tr("menu.view.refresh"), "F5"),
         MenuItem::separator(),
@@ -277,6 +283,15 @@ fn build_toolbar(show_hidden: bool, show_dotfiles: bool) -> Vec<ToolButton> {
     ]
 }
 
+/// 퀵 런처 바 버튼(M5-1) — 항목 라벨 = 버튼 텍스트(exe 아이콘 추출은 후속 α).
+fn build_launcherbar(items: &[crate::config::LauncherItem]) -> Vec<ToolButton> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| ToolButton::new(CMD_LAUNCHER_BASE + i as u32, it.label.clone()))
+        .collect()
+}
+
 /// 단조 시각(ms) — 타입어헤드 버퍼 타임아웃 판정용(프로세스 기동 기준).
 fn now_ms() -> u64 {
     use std::sync::OnceLock;
@@ -315,6 +330,11 @@ impl PaintStats {
 struct State {
     menubar: MenuBar,
     toolbar: Toolbar,
+    /// 퀵 런처 바(M5-1 — 원본 docs/44 Row 2): 사용자 정의 외부 프로그램 버튼.
+    /// 항목 라벨 = 버튼 글리프. 숨김이거나 항목 0이면 레이아웃 높이 0.
+    launcherbar: Toolbar,
+    launcher_visible: bool,
+    launcher_items: Vec<crate::config::LauncherItem>,
     statusbar: StatusBar,
     /// 듀얼 패널(0=좌 주, 1=우 — docs/20 §2). 우 패널 숨김 토글은 후속.
     panels: [Panel; 2],
@@ -626,12 +646,19 @@ pub fn run() -> Result<()> {
             right.set_dock_visible(true, &mut inv);
         }
     }
+    // 퀵 런처 항목(M5-1) — 키 부재(첫 실행)면 VS Code 시드(원본 슬라이스 1 동일).
+    // 다음 저장부터 launcher_count로 확정되어 "비움"이 존중된다.
+    let launcher_items = settings
+        .launcher_items
+        .clone()
+        .unwrap_or_else(crate::launcher::seed);
     let state = Box::new(State {
         menubar: MenuBar::new(
             build_menus(
                 settings.show_hidden,
                 settings.show_dotfiles,
                 settings.dock,
+                settings.launcher,
                 theme_mode,
                 &settings.lang,
                 &langs,
@@ -644,6 +671,9 @@ pub fn run() -> Result<()> {
             m.row_h,
             m.pad_x,
         ),
+        launcherbar: Toolbar::new(build_launcherbar(&launcher_items), m.row_h, m.pad_x),
+        launcher_visible: settings.launcher,
+        launcher_items,
         statusbar: StatusBar::new(m.row_h, m.pad_x),
         panels: [left, right],
         active: active_panel,
@@ -788,7 +818,7 @@ unsafe fn splitter_x(hwnd: HWND, st: &State) -> i32 {
     ((rc.w as f32 * st.split) as i32).clamp(min.min(rc.w / 2), (rc.w - min).max(rc.w / 2))
 }
 
-/// 전체 레이아웃(docs/20 §1): 메뉴 / 도구 모음 / [좌 ║ 우 패널] / 상태바.
+/// 전체 레이아웃(docs/20 §1): 메뉴 / 도구 모음 / 퀵 런처 바(M5-1) / [좌 ║ 우 패널] / 상태바.
 unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     let rc = client_rect(hwnd);
     let s = |v: i32| (v * st.dpi as i32) / 96;
@@ -797,7 +827,15 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         .set_bounds(GRect::new(0, 0, rc.w, menu_h.min(rc.h)), inv);
     st.toolbar
         .set_bounds(GRect::new(0, menu_h, rc.w, tool_h), inv);
-    let top = menu_h + tool_h;
+    // 퀵 런처 바(원본 Row 2) — 숨김·항목 0이면 높이 0(패널이 그만큼 넓어진다)
+    let launch_h = if st.launcher_visible && !st.launcher_items.is_empty() {
+        tool_h
+    } else {
+        0
+    };
+    st.launcherbar
+        .set_bounds(GRect::new(0, menu_h + tool_h, rc.w, launch_h), inv);
+    let top = menu_h + tool_h + launch_h;
     let bottom = (rc.h - status_h).max(top);
     st.statusbar
         .set_bounds(GRect::new(0, bottom, rc.w, rc.h - bottom), inv);
@@ -2183,6 +2221,9 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             }
         }
         st.toolbar.paint(&mut ctx, &st.theme);
+        if st.launcherbar.bounds().h > 0 {
+            st.launcherbar.paint(&mut ctx, &st.theme); // 퀵 런처 바(M5-1)
+        }
         st.statusbar.paint(&mut ctx, &st.theme);
         st.menubar.paint(&mut ctx, &st.theme); // 마지막 — 드롭다운 오버레이가 위에
         let _ = BitBlt(hdc, 0, 0, rc.w, rc.h, Some(back.memory_dc()), 0, 0, SRCCOPY);
@@ -2283,6 +2324,24 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             layout(hwnd, st, &mut inv); // 도크는 전폭 밴드 — 호스트 재배치(X-6)
             update_dock_info(st, &mut inv);
         }
+        CMD_TOGGLE_LAUNCHER => {
+            // 퀵 런처 바 토글(M5-1 — 원본 ShowLauncher, settings 영속)
+            st.launcher_visible = !st.launcher_visible;
+            st.menubar
+                .set_checked(CMD_TOGGLE_LAUNCHER, st.launcher_visible, &mut inv);
+            layout(hwnd, st, &mut inv);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+        }
+        id if (CMD_LAUNCHER_BASE..CMD_LAUNCHER_BASE + st.launcher_items.len() as u32)
+            .contains(&id) =>
+        {
+            // 퀵 런처 항목 실행(M5-1) — %path% = 활성 패널 현재 폴더, 실패는 상태바 격리
+            let item = st.launcher_items[(id - CMD_LAUNCHER_BASE) as usize].clone();
+            let folder = st.active_panel().root_path();
+            let ok = crate::launcher::launch(hwnd, &item, &folder);
+            let key = if ok { "launcher.ran" } else { "launcher.failed" };
+            update_title(hwnd, st, &format!(" · {}", trf(key, &[&item.label])));
+        }
         CMD_PREFS => {
             // 모달 설정 창은 State 차용과 분리해 지연 실행(재진입 규약 — WM_APP_PREFS)
             let _ = PostMessageW(Some(hwnd), WM_APP_PREFS, WPARAM(0), LPARAM(0));
@@ -2344,6 +2403,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             st.show_hidden,
             st.show_dotfiles,
             st.panels[0].dock_visible(),
+            st.launcher_visible,
             st.theme_mode,
             &st.lang_setting,
             &st.langs,
@@ -2626,7 +2686,15 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         flush_invalidations(hwnd, &mut inv);
     }
     // 즉시 영속(원본 PREF 규율 — 종료 저장과 별개로 설정만 저장)
-    let settings = Settings {
+    let settings = current_settings(st);
+    let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+    let _ = InvalidateRect(Some(hwnd), None, false);
+    update_title(hwnd, st, "");
+}
+
+/// 현재 상태 → 설정 스냅샷(즉시 영속·종료 저장 공용 — 단일 원천).
+fn current_settings(st: &State) -> Settings {
+    Settings {
         theme: st.theme_mode.as_str().into(),
         lang: st.lang_setting.clone(),
         show_hidden: st.show_hidden,
@@ -2639,10 +2707,9 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         term_font_size: st.term_font_size,
         dlg_font: st.dlg_font.family.clone(),
         dlg_font_size: st.dlg_font.size_pt,
-    };
-    let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
-    let _ = InvalidateRect(Some(hwnd), None, false);
-    update_title(hwnd, st, "");
+        launcher: st.launcher_visible,
+        launcher_items: Some(st.launcher_items.clone()),
+    }
 }
 
 /// 파일 실행(더블클릭·Enter·Alt+↓ — QA 07-14) — 기본 연결 프로그램(탐색기 동일).
@@ -2801,6 +2868,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 sync_focus_visuals(st, &mut inv);
                 st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
+                st.launcherbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.statusbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 apply_titlebar_theme(hwnd, st.theme == Theme::dark()); // 본문과 타이틀바 일치
                 update_title(hwnd, st, "");
@@ -2938,10 +3006,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0);
                 }
                 if y < st.panels[0].bounds().y {
-                    // 도구 모음 행
-                    st.toolbar.on_event(&ev, &mut inv);
+                    // 도구 모음 / 퀵 런처 바(M5-1) 행 — y로 분기
+                    let lb = st.launcherbar.bounds();
+                    let bar = if lb.h > 0 && y >= lb.y {
+                        &mut st.launcherbar
+                    } else {
+                        &mut st.toolbar
+                    };
+                    bar.on_event(&ev, &mut inv);
+                    let cmd = bar.take_command();
                     flush_invalidations(hwnd, &mut inv);
-                    if let Some(cmd) = st.toolbar.take_command() {
+                    if let Some(cmd) = cmd {
                         run_command(hwnd, st, cmd);
                     }
                     return LRESULT(0);
@@ -3273,6 +3348,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let ev = InputEvent::MouseMove { x, y };
                     st.menubar.on_event(&ev, &mut inv);
                     st.toolbar.on_event(&ev, &mut inv);
+                    if st.launcherbar.bounds().h > 0 {
+                        st.launcherbar.on_event(&ev, &mut inv); // hover(M5-1)
+                    }
                     if !st.menubar.is_open() {
                         // 드롭다운 아래 hover 잔상 방지
                         st.panels[0].on_event(&ev, &mut inv);
@@ -3961,6 +4039,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 st.panels[1].set_metrics(m, cols, &mut inv);
                 st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
+                st.launcherbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.statusbar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 let rc = &*(lparam.0 as *const RECT);
                 let _ = SetWindowPos(
@@ -3991,20 +4070,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_DESTROY => {
             // 종료 저장(M2-5 — data\ 원자적 쓰기). 주기 저장·코얼레싱은 후속(원본 SESS)
             if let Some(st) = state_of(hwnd) {
-                let settings = Settings {
-                    theme: st.theme_mode.as_str().into(),
-                    lang: st.lang_setting.clone(),
-                    show_hidden: st.show_hidden,
-                    show_dotfiles: st.show_dotfiles,
-                    split: st.split,
-                    dock: st.panels[0].dock_visible(),
-                    dock_ratio: st.panels[0].dock_ratio(),
-                    dock_split: st.dock_split,
-                    term_font: st.term_font.clone(),
-                    term_font_size: st.term_font_size,
-                    dlg_font: st.dlg_font.family.clone(),
-                    dlg_font_size: st.dlg_font.size_pt,
-                };
+                let settings = current_settings(st);
                 let (t0, a0) = st.panels[0].session();
                 let (t1, a1) = st.panels[1].session();
                 let (e0, e1) = (

@@ -7,6 +7,15 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// 퀵 런처 항목(M5-1 — 원본 docs/44 `Launcher.Items` 설계: Label/Path/Args).
+/// `args`의 `%path%` = 활성 패널의 현재 폴더로 치환(원본 ToolLauncher 규약).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LauncherItem {
+    pub label: String,
+    pub exe: String,
+    pub args: String,
+}
+
 /// 설정(원본 ViewOptions·ThemeOptions 대응) — `data\settings.cfg`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
@@ -32,6 +41,12 @@ pub struct Settings {
     /// 대화상자(확인창·진행 창) 글꼴/크기(pt — QA 07-14 "대화창용 폰트 설정").
     pub dlg_font: String,
     pub dlg_font_size: i32,
+    /// 퀵 런처 바 표시(M5-1 — 원본 LayoutState.ShowLauncher 대응, 기본 표시).
+    pub launcher: bool,
+    /// 퀵 런처 항목(M5-1). `None` = 키 부재(첫 실행 — 호스트가 시드 주입) ·
+    /// `Some(빈 목록)` = 사용자가 비움(시드 재주입 금지). settings.cfg에서 직접 편집(α —
+    /// `launcherN=라벨|exe|인자`). UI CRUD는 후속.
+    pub launcher_items: Option<Vec<LauncherItem>>,
 }
 
 impl Default for Settings {
@@ -49,6 +64,8 @@ impl Default for Settings {
             term_font_size: 12,
             dlg_font: "Segoe UI".into(),
             dlg_font_size: 9,
+            launcher: true,
+            launcher_items: None,
         }
     }
 }
@@ -94,8 +111,8 @@ fn kv_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
 
 impl Settings {
     pub fn serialize(&self) -> String {
-        format!(
-            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\ndock_ratio={:.3}\ndock_split={:.3}\nterm_font={}\nterm_font_size={}\ndlg_font={}\ndlg_font_size={}\n",
+        let mut out = format!(
+            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\ndock_ratio={:.3}\ndock_split={:.3}\nterm_font={}\nterm_font_size={}\ndlg_font={}\ndlg_font_size={}\nlauncher={}\n",
             self.theme,
             self.lang,
             u8::from(self.show_hidden),
@@ -108,7 +125,19 @@ impl Settings {
             self.term_font_size,
             self.dlg_font,
             self.dlg_font_size,
-        )
+            u8::from(self.launcher),
+        );
+        // 항목은 시드 주입 후 항상 Some — count를 명시해 "부재(첫 실행)"와 "비움"을 구분
+        if let Some(items) = &self.launcher_items {
+            out.push_str(&format!("launcher_count={}\n", items.len()));
+            for (i, it) in items.iter().enumerate() {
+                out.push_str(&format!(
+                    "launcher{i}={}|{}|{}\n",
+                    it.label, it.exe, it.args
+                ));
+            }
+        }
+        out
     }
 
     /// 손상·미지 키는 무시하고 기본값 위에 덮어쓴다(관용 파싱).
@@ -155,6 +184,29 @@ impl Settings {
                         if f.is_finite() {
                             s.split = f.clamp(0.1, 0.9);
                         }
+                    }
+                }
+                "launcher" => s.launcher = v != "0",
+                // count 키 존재 = 항목 목록 확정(비움 포함) — launcherN은 아래에서 채움
+                "launcher_count" => {
+                    if s.launcher_items.is_none() {
+                        s.launcher_items = Some(Vec::new());
+                    }
+                }
+                k if k.starts_with("launcher") && k["launcher".len()..].parse::<usize>().is_ok() => {
+                    let mut parts = v.splitn(3, '|');
+                    let (label, exe) = (
+                        parts.next().unwrap_or("").trim(),
+                        parts.next().unwrap_or("").trim(),
+                    );
+                    let args = parts.next().unwrap_or("").to_string();
+                    let items = s.launcher_items.get_or_insert_with(Vec::new);
+                    if !label.is_empty() && !exe.is_empty() && items.len() < 32 {
+                        items.push(LauncherItem {
+                            label: label.into(),
+                            exe: exe.into(),
+                            args,
+                        });
                     }
                 }
                 _ => {}
@@ -304,6 +356,20 @@ mod tests {
             term_font_size: 14,
             dlg_font: "맑은 고딕".into(),
             dlg_font_size: 10,
+            launcher: false,
+            launcher_items: Some(vec![
+                LauncherItem {
+                    label: "VS Code".into(),
+                    exe: "C:\\Apps\\Code.exe".into(),
+                    args: "\"%path%\"".into(),
+                },
+                LauncherItem {
+                    label: "pwsh".into(),
+                    exe: "pwsh.exe".into(),
+                    // 인자 안 `|`는 마지막 필드라 보존(splitn 3)
+                    args: "-NoExit -Command \"echo a|b\"".into(),
+                },
+            ]),
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");
@@ -323,6 +389,16 @@ mod tests {
         assert_eq!(parsed.dlg_font, "맑은 고딕", "대화상자 글꼴 왕복");
         assert_eq!(parsed.dlg_font_size, 10);
         assert!((parsed.split - 0.62).abs() < 0.001);
+        // 퀵 런처 왕복(M5-1) — 표시 플래그·항목(인자 안 | 보존)
+        assert!(!parsed.launcher, "런처 바 표시 왕복");
+        assert_eq!(parsed.launcher_items, s.launcher_items, "런처 항목 왕복");
+        // 키 부재 = None(첫 실행 시드 대상) · count만 있고 항목 0 = 비움 확정
+        assert_eq!(Settings::parse("").launcher_items, None);
+        assert_eq!(
+            Settings::parse("launcher_count=0").launcher_items,
+            Some(vec![]),
+            "비움은 시드 재주입 금지"
+        );
         // 손상·미지 키·잘못된 값 → 기본값 유지
         let junk = Settings::parse("theme=neon\nsplit=abc\nnope=1\n# c\n\nshow_hidden=0");
         assert_eq!(junk.theme, "dark");
