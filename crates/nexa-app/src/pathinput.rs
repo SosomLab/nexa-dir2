@@ -178,31 +178,32 @@ mod tests {
         assert_eq!(expand_env("  C:\\t  "), "C:\\t");
     }
 
+    fn dirs(base: &str) -> Vec<String> {
+        if base == "C:\\U\\" {
+            vec![
+                "C:\\U\\Alpha".to_string(),
+                "C:\\U\\alBum".to_string(),
+                "C:\\U\\Beta".to_string(),
+            ]
+        } else {
+            vec![]
+        }
+    }
+
     #[test]
     fn suggest_splits_base_and_prefix_ci() {
-        let dirs = |base: &str| {
-            if base == "C:\\U\\" {
-                vec![
-                    "C:\\U\\Alpha".to_string(),
-                    "C:\\U\\alBum".to_string(),
-                    "C:\\U\\Beta".to_string(),
-                ]
-            } else {
-                vec![]
-            }
-        };
         // 구분자 직후 = 전체 목록
-        assert_eq!(suggest_folders("C:\\U\\", &dirs, 20).len(), 3);
+        assert_eq!(suggest_folders("C:\\U\\", dirs, 20).len(), 3);
         // 접두사 필터(대소문자 무시)
         assert_eq!(
-            suggest_folders("C:\\U\\al", &dirs, 20),
+            suggest_folders("C:\\U\\al", dirs, 20),
             vec!["C:\\U\\Alpha".to_string(), "C:\\U\\alBum".to_string()]
         );
         // 상한
-        assert_eq!(suggest_folders("C:\\U\\", &dirs, 1).len(), 1);
+        assert_eq!(suggest_folders("C:\\U\\", dirs, 1).len(), 1);
         // 구분자 없음·빈 입력·실패 베이스 = 빈 목록
-        assert!(suggest_folders("C:", &dirs, 20).is_empty());
-        assert!(suggest_folders("  ", &dirs, 20).is_empty());
-        assert!(suggest_folders("D:\\none\\x", &dirs, 20).is_empty());
+        assert!(suggest_folders("C:", dirs, 20).is_empty());
+        assert!(suggest_folders("  ", dirs, 20).is_empty());
+        assert!(suggest_folders("D:\\none\\x", dirs, 20).is_empty());
     }
 }
