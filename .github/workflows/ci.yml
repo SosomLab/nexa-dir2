@@ -28,14 +28,14 @@ jobs:
       - run: rustup show
       - run: cargo test --workspace
       - run: cargo build --release -p nexa-app
-      - name: 예산 B2 — 단일 exe ≤ 10MB (docs/18 §5)
+      - name: 예산 B2 — 단일 exe ≤ 10MB (docs/18 §6)
         shell: pwsh
         run: |
           $exe = "target/release/nexa-app.exe"
           $mb = [math]::Round((Get-Item $exe).Length / 1MB, 2)
           Write-Output "nexa-app.exe = $mb MB"
           if ((Get-Item $exe).Length -gt 10MB) { throw "예산 B2 초과: $mb MB > 10 MB" }
-      - name: 예산 B3 — 임포트 DLL 화이트리스트 게이트 (docs/18 §5)
+      - name: 예산 B3 — 임포트 DLL 화이트리스트 게이트 (docs/18 §6)
         shell: pwsh
         run: pwsh scripts/budget-b3.ps1 # 화이트리스트 단일 출처 — 로컬 push 전에도 동일 스크립트
       - uses: actions/upload-artifact@v4
