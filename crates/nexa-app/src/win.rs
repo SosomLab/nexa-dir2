@@ -2498,6 +2498,9 @@ unsafe fn open_prefs(hwnd: HWND) {
                 term_font_size: st.term_font_size,
                 dlg_font: st.dlg_font.family.clone(),
                 dlg_font_size: st.dlg_font.size_pt,
+                show_hidden: st.show_hidden,
+                show_dotfiles: st.show_dotfiles,
+                dock: st.panels[0].dock_visible(),
             },
             st.dlg_font.clone(),
         )
@@ -2532,6 +2535,46 @@ unsafe fn open_prefs(hwnd: HWND) {
         family: v.dlg_font.clone(),
         size_pt: v.dlg_font_size,
     };
+    // 파일 목록 필터(숨김·닷파일) — 변경 시 양쪽 재열기(X-7 설정 창 경유)
+    if v.show_hidden != st.show_hidden || v.show_dotfiles != st.show_dotfiles {
+        st.show_hidden = v.show_hidden;
+        st.show_dotfiles = v.show_dotfiles;
+        st.menubar.set_checked(
+            CMD_TOGGLE_HIDDEN,
+            st.show_hidden,
+            &mut Invalidations::default(),
+        );
+        st.menubar.set_checked(
+            CMD_TOGGLE_DOTFILES,
+            st.show_dotfiles,
+            &mut Invalidations::default(),
+        );
+        st.toolbar.set_checked(
+            CMD_TOGGLE_HIDDEN,
+            st.show_hidden,
+            &mut Invalidations::default(),
+        );
+        st.toolbar.set_checked(
+            CMD_TOGGLE_DOTFILES,
+            st.show_dotfiles,
+            &mut Invalidations::default(),
+        );
+        let ctx = st.nav_ctx();
+        let mut inv = Invalidations::default();
+        st.panels[0].reopen_filtered(ctx, &mut inv);
+        st.panels[1].reopen_filtered(ctx, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+    }
+    // 하단 도크 표시 토글(설정 창 경유)
+    if v.dock != st.panels[0].dock_visible() {
+        let mut inv = Invalidations::default();
+        st.panels[0].set_dock_visible(v.dock, &mut inv);
+        st.panels[1].set_dock_visible(v.dock, &mut inv);
+        st.menubar.set_checked(CMD_TOGGLE_DOCK, v.dock, &mut inv);
+        layout(hwnd, st, &mut inv);
+        update_dock_info(st, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+    }
     // 즉시 영속(원본 PREF 규율 — 종료 저장과 별개로 설정만 저장)
     let settings = Settings {
         theme: st.theme_mode.as_str().into(),
