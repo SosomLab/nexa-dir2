@@ -1015,7 +1015,7 @@ unsafe fn term_paint(
             }
         }
     }
-    // 캐럿(하단 2px 바) — 종료 시엔 안내
+    // 캐럿(세로바 — Windows Terminal 기본 bar 동일, QA 07-14) — 종료 시엔 안내
     if t.exited {
         let msg = tr("term.exited");
         let y = rc.bottom() - cell_h - 1;
@@ -1031,7 +1031,8 @@ unsafe fn term_paint(
         let cx = rc.x + 2 + t.screen.cursor_col() as i32 * cell_w;
         let cy = rc.y + 1 + t.screen.cursor_row() as i32 * cell_h;
         if cy + cell_h <= rc.bottom() {
-            ctx.fill_rect(Rect::new(cx, cy + cell_h - 2, cell_w, 2), theme.accent);
+            let w = (dpi as i32 / 96).max(1);
+            ctx.fill_rect(Rect::new(cx, cy + 1, w, cell_h - 2), theme.text);
         }
     }
 }
@@ -2651,14 +2652,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_CHAR => {
             if let Some(st) = state_of(hwnd) {
                 if let Some(c) = char::from_u32(wparam.0 as u32) {
-                    // 도크 터미널 포커스(M4-3) — 문자·제어문자(\r·\x08·Ctrl+C=\x03 등) 전부
+                    // 도크 터미널 포커스(M4-3) — 문자·제어문자(\r·Ctrl+C=\x03 등) 전부
                     // 셸 stdin으로(ConPTY가 해석). Enter/Backspace도 WM_CHAR로 도착.
+                    // Backspace=DEL(0x7F, 1글자). 0x08은 ConPTY가 Ctrl+Backspace(단어
+                    // 삭제)로 해석하므로 교차 매핑(원본 TerminalView.OnKeyDown 규약).
                     if let Some(ti) = st.term_focus {
                         if st.panels[ti].dock_visible() && st.panels[ti].dock.active_kind() == 2 {
                             if let Some(t) = &st.terms[ti] {
                                 if !t.exited {
                                     let mut buf = [0u8; 4];
-                                    t.pty.write(c.encode_utf8(&mut buf));
+                                    t.pty.write(match c {
+                                        '\u{8}' => "\x7f",  // Backspace → 1글자 삭제
+                                        '\u{7f}' => "\x08", // Ctrl+Backspace → 단어 삭제
+                                        c => c.encode_utf8(&mut buf),
+                                    });
                                     return LRESULT(0);
                                 }
                             }
