@@ -1345,16 +1345,19 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
                 id: CTX_PASTE_BG,
                 label: tr("ctx.paste"),
                 enabled: crate::clipboard::has_files(),
+                after_id: None,
             },
             CustomItem {
                 id: CTX_UNDO,
                 label: undo_label,
                 enabled: st.history.can_undo(),
+                after_id: None,
             },
             CustomItem {
                 id: CTX_REDO,
                 label: redo_label,
                 enabled: st.history.can_redo(),
+                after_id: None,
             },
         ];
         (dir, GetKeyState(VK_SHIFT.0 as i32) < 0, custom)
@@ -1441,12 +1444,15 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
                 id: CTX_DELETE_PERMANENT,
                 label: tr("ctx.deletePermanent"),
                 enabled: true,
+                after_id: None,
             },
-            // 이름 복사(QA 07-14 — 원본 Copy as name): 경로 제외 파일 이름만
+            // 이름 복사(QA 07-14 — 원본 Copy as name): 경로 제외 파일 이름만.
+            // 위치 = "경로 복사"(제자리 대체) 바로 아래(사용자 지시 2026-07-15).
             CustomItem {
                 id: CTX_COPY_NAME,
                 label: tr("ctx.copyName"),
                 enabled: true,
+                after_id: Some(CTX_COPY_PATH),
             },
         ];
         if paste_dir.is_some() && crate::clipboard::has_files() {
@@ -1454,6 +1460,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
                 id: CTX_PASTE_INTO,
                 label: tr("ctx.pasteInto"),
                 enabled: true,
+                after_id: None,
             });
         }
         Some(Req {

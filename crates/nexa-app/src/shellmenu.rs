@@ -41,6 +41,9 @@ pub struct CustomItem {
     pub id: u32,
     pub label: String,
     pub enabled: bool,
+    /// 이 ID를 가진 기존 항목 **바로 아래**에 삽입(제자리 대체된 항목 포함 — 예: 경로 복사
+    /// 아래 이름 복사). 대상 부재 시 하단 고유 섹션으로 폴백.
+    pub after_id: Option<u32>,
 }
 /// CMINVOKECOMMANDINFOEX.fMask — windows-rs 미노출 상수(shellapi.h).
 const CMIC_MASK_UNICODE: u32 = 0x4000;
@@ -297,16 +300,45 @@ unsafe fn run_menu(
                 }
             }
         }
-        // 2-1) 고유 항목 병합(0x8000+) — 구분자로 섹션 분리(ADR-0005. 셸 제공 동사는 중복 금지).
+        // 2-1) 고유 항목 병합(0x8000+) — 앵커(`after_id`) 지정은 그 항목 바로 아래 삽입,
+        // 나머지는 구분자로 섹션 분리 후 하단(ADR-0005. 셸 제공 동사는 중복 금지).
         if !custom.is_empty() {
-            let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+            use windows::Win32::UI::WindowsAndMessaging::{
+                GetMenuItemCount, GetMenuItemID, InsertMenuW, MF_BYPOSITION,
+            };
+            let mut bottom: Vec<&CustomItem> = Vec::new();
             for c in custom {
                 let mut flags = MF_STRING;
                 if !c.enabled {
                     flags |= MF_GRAYED;
                 }
                 let label = windows::core::HSTRING::from(&*c.label);
-                let _ = AppendMenuW(hmenu, flags, c.id as usize, PCWSTR(label.as_ptr()));
+                let anchor = c.after_id.and_then(|aid| {
+                    let n = GetMenuItemCount(Some(hmenu));
+                    (0..n.max(0)).find(|&pos| GetMenuItemID(hmenu, pos) == aid)
+                });
+                if let Some(pos) = anchor {
+                    let _ = InsertMenuW(
+                        hmenu,
+                        (pos + 1) as u32,
+                        flags | MF_BYPOSITION,
+                        c.id as usize,
+                        PCWSTR(label.as_ptr()),
+                    );
+                } else {
+                    bottom.push(c);
+                }
+            }
+            if !bottom.is_empty() {
+                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+                for c in bottom {
+                    let mut flags = MF_STRING;
+                    if !c.enabled {
+                        flags |= MF_GRAYED;
+                    }
+                    let label = windows::core::HSTRING::from(&*c.label);
+                    let _ = AppendMenuW(hmenu, flags, c.id as usize, PCWSTR(label.as_ptr()));
+                }
             }
         }
 
