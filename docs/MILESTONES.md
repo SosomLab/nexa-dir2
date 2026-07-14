@@ -13,7 +13,7 @@
 | **M2** | 셸 골격 — 경로바·탭/듀얼·메뉴·테마·설정/세션·IME/UIA 1차 | 상주 RSS ≤30MB | ✅ `0.3.0` |
 | **M3** | 파일 조작 — nexa-ops(Undo/Redo)·셸 메뉴·클립보드·DnD·watcher | 유휴 RSS ≤30MB(10k 유휴 300s 6.29MB) | ✅ `0.4.0` |
 | **M4** | 하단 패널 — 정보·미리보기·ConPTY 터미널 | 유휴 RSS ≤30MB(10k+터미널 상주 300s 5.07MB) | ✅ `0.5.0` |
-| **M5** | 마감 — 잔여 패리티·릴리스 파이프라인·서명 결정 | 예산 최종 | 🚧 (UX QA·설정 창 X-7~9 등 폴리시 선행) |
+| **M5** | 마감 — 잔여 패리티·릴리스 파이프라인·서명 결정 | 예산 최종 | 🚧 (M5-2 릴리스 파이프라인 ✅ · M5-1/M5-3 잔여) |
 
 ---
 
@@ -67,6 +67,11 @@
 - ✅ M4-2 내장 미리보기(`feat/m4-preview`) — **내장 방식**(DR-7: 원본 .NET Nexa.Plugins SDK 비이관 — 플러그인 아님): 도크 종류 스트립(정보|미리보기 — 클릭 전환·활성 강조)·**텍스트**(첫 16KB·UTF-8 lossy·탭→4칸·200줄 상한·1KB NUL=이진 판정)·**이미지**(WIC: 디코더→Fant 스케일러[확대 없음]→32bppBGRA→StretchDIBits — png/jpg/jpeg/bmp/gif/ico/tif·(경로,크기) 캐시 8건·상주 트림 시 소멸). `DrawCtx::draw_image` 프리미티브 신설. WIC은 CoCreateInstance 지연 활성화 — **임포트 테이블 무변(B3 통과)**. 독립 검증 예제 `examples/preview_image.rs`(동일 파이프라인 — `cargo run --example preview_image -- <경로>`).
 - ✅ M4-3 ConPTY 터미널(`feat/m4-terminal`) — 원본 VtScreen.cs·ConPtySession.cs(docs/37) 이식: **nexa-term rlib**(VT 파서+셀 그리드 — SGR 16/256/트루컬러·CSI 커서/지우기/삽입삭제·DECSTBM 마진·스크롤백 800·전각 연속 셀·테스트 9)·**ConPTY 세션**(pwsh→powershell→cmd 폴백·UTF-8 경계 보존 읽기 스레드·EXIT_FLAG 통지·세대 가드·Drop 정리)·**도크 [터미널] 종류**(Consolas 12 모노 셀 그리드[DrawCtx::term_text/term_cell_w 신설]·동일 색 런 병합·reverse/faint·캐럿·클릭 키 포커스·화살표 등 VT 시퀀스·셸 종료 시 아무 키 재시작·리사이즈 동기). 테스트 148 green·B2 0.69MB·B3 무변. **→ M4 전 항목 구현 완료 — 마감 게이트(B1) 잔여.**
 - ✅ M4-3 후속 — 실기 QA 시리즈(07-14, `fix/m4-term-qa`·`fix/term-caret-color`·`fix/m4-qa-batch2`·`feat/m4-term-select`·`fix/nav-freeze-watcher`): **터미널 상호작용 완성** — 셀 단위 렌더(폴백 글꼴 열 밀림 해소)·마우스 드래그 선택(엣지 자동 스크롤)·스크롤백 휠·Ctrl+C/V·세로바 캐럿(깜빡임·밝은 회색)·Backspace=DEL 교차 매핑·settings term_font. **프리즈 2건 근본 해소** — 파일별 아이콘 워커화(Defender/OneDrive)·watcher drop CloseHandle 직렬화(OVERLAPPED 재구현 — 자동 재현 12,009ms→4ms 실측). + 편집 필드 클립보드·리네임 더블클릭 지연·휠 hover 라우팅·.lnk 숨김. 테스트 151 green·B2 0.73MB·B3 무변.
+
+## M5 — 마감·릴리스 🚧
+
+- ✅ M5-2 릴리스 파이프라인(`feat/m5-release-pipeline`, 07-15) — `.github/workflows/release.yml` 신설: 버전 태그 push(`0.5.0` 형식·`v` 접두사 허용) → windows-latest `cargo test`+release 빌드 → **예산 게이트(B2 exe ≤10MB·B3 임포트 화이트리스트 — CI와 동일 스크립트 `scripts/budget-b3.ps1`)** 통과 필수 → `NexaDir2-<버전>-win-x64.exe`(포터블 단일 exe — DR-3) 개명 → **GitHub Release 자동 생성·첨부**(자동 노트). `workflow_dispatch` 수동 실행=게이트+아티팩트까지(Release는 태그에서만). 릴리스 절차 SSOT = [18](18-build-and-test.md) §5(`git tag X.Y.Z && git push origin X.Y.Z`). 첫 태그 실행 검증 대기.
+- ☐ M5-1 퀵 런처·일괄 이름변경 등 원본 잔여 패리티(원본 docs/25·44) · ☐ M5-3 접근성·IME 마감·서명 결정(원본 PKG-4 공동).
 
 ## M1+ (요약)
 
