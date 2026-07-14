@@ -1032,7 +1032,8 @@ unsafe fn term_paint(
         let cy = rc.y + 1 + t.screen.cursor_row() as i32 * cell_h;
         if cy + cell_h <= rc.bottom() {
             let w = (dpi as i32 / 96).max(1);
-            ctx.fill_rect(Rect::new(cx, cy + 1, w, cell_h - 2), theme.text);
+            // 밝은 회색 고정(QA 07-14) — 셀 배경이 어두워 theme.text로는 비가시
+            ctx.fill_rect(Rect::new(cx, cy + 1, w, cell_h - 2), argb(0x00CC_CCCC));
         }
     }
 }
