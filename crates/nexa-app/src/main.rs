@@ -20,6 +20,8 @@ mod dialog;
 mod dnd;
 #[cfg(windows)]
 mod icon;
+#[cfg(windows)]
+mod launcher;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod icons;
 #[cfg_attr(not(windows), allow(dead_code))]

@@ -8,6 +8,7 @@
 
 ## 2026-07-15
 
+- **M5-1 퀵 런처 바(`feat/m5-launcher` — 원본 docs/44 이식)**: 도구 모음 아래 **상시 표시 런처 바**(Toolbar 재사용·라벨 버튼) — `%path%`→활성 패널 폴더 치환 ShellExecuteW·실패 상태바 격리·보기 메뉴 토글·settings.cfg 영속(`launcherN=라벨|exe|인자`·count로 부재/비움 구분)·첫 실행 VS Code 시드(후보 3경로). `current_settings` 헬퍼 추출. 실기 QA 대기. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5-3 접근성·IME 마감+서명 결정(`feat/m5-a11y`)**: **UIA SelectionItem 실동작**(Select/Add/Remove → `WM_APP_UIA_SELECT`로 UI 스레드 전달·`select_program` 범위 방어) · **구조 변경 이벤트**(uia_notify가 (패널·경로·행 수) 서명 추적 → ChildrenInvalidated 발행 — M2-7 1차 한계 2건 해소) · **리네임 인라인 IME 조합 창 배치**(`rename_edit_info` 신설·필드 기하 paint와 단일 원천 — M3-2 α 한계 해소) · **서명 = 무서명 유지 확정**(DR-3 갱신 — 원본 PKG-4 공동 보류·Store/OV 비용 결정 대기·SmartScreen 감수·인증서 확보 시 release.yml 서명 단계). 테스트 160 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5-2 릴리스 파이프라인(`feat/m5-release-pipeline`)**: `release.yml` 신설 — 버전 태그 push → test+**예산 게이트(B2·B3)** → `NexaDir2-<버전>-win-x64.exe`(포터블 단일 exe — DR-3)를 **GitHub Release 자동 생성·첨부**(자동 노트). 릴리스 절차 = `git tag X.Y.Z && git push origin X.Y.Z`(docs/18 §5 SSOT 갱신·§6 재번호). 첫 태그 실행 검증 대기. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **UX QA 6차(main 직커밋, 사용자 QA/요청 4건)**: ① **설정 창 원본 UI 재현(X-9)** — 사이드바(검색+오너드로 카테고리 하이라이트)+구분선+우측 섹션 제목·라벨 일체형 체크박스·라디오 그룹(테마/언어)·터미널 카테고리 신설(Win32_UI_Controls 피처 — 신규 DLL 없음) ② **컬럼 짝 리사이즈** — 경계 드래그=좌우 동시 조절(총폭 보존·min 클램프)+경계 IDC_SIZEWE 커서 ③ **터미널 포커스 시 패널 전체 비활성**(탭 바·캐럿 테두리 포함) ④ **도크 Info/Preview 라인 선택·Ctrl+C 복사**(우선순위: 리네임>터미널>도크>파일). 테스트 158 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
