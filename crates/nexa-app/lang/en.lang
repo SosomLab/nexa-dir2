@@ -125,3 +125,17 @@ ops.skip = Skip
 ops.cancel = Cancel
 ops.progressTitle = File transfer
 ops.progressLabel = Transferring...
+
+pref.title = Preferences
+pref.theme = Theme
+pref.theme.system = System
+pref.theme.light = Light
+pref.theme.dark = Dark
+pref.lang = Language
+pref.lang.system = System
+pref.termFont = Terminal font (comma = fallback chain)
+pref.termFontSize = Terminal font size (8-32)
+pref.dlgFont = Dialog font
+pref.dlgFontSize = Dialog font size (7-24)
+pref.save = Save
+pref.cancel = Cancel

@@ -24,7 +24,8 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE,
     VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT,
-    VK_OEM_3, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    VK_OEM_3, VK_OEM_COMMA, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
+    VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -321,6 +322,9 @@ struct State {
     langs: Vec<(String, String)>,
     /// 터미널 글꼴 설정(QA 07-14 — data\settings term_font, 백엔드 생성 시 적용).
     term_font: String,
+    term_font_size: i32,
+    /// 대화상자 글꼴(확인창·진행 창 — dialog.rs 공유).
+    dlg_font: crate::dialog::DlgFont,
     /// 상주 자니터(M2-8): 마지막 입력 활동 시각(now_ms 기준)·트림 완료 플래그.
     last_activity_ms: u64,
     trimmed: bool,
@@ -340,6 +344,10 @@ struct State {
     watch_gen: u64,
     /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
     dock_drag: Option<usize>,
+    /// 도크 밴드 좌/우 스플리터 드래그 중(X-6 — 파일 스플리터와 독립).
+    dock_split_drag: bool,
+    /// 도크 밴드 좌/우 분할 비율(X-6 — 영속).
+    dock_split: f32,
     /// 패널별 ConPTY 터미널(M4-3) — 도크 종류 '터미널' 최초 전환 시 지연 시작.
     terms: [Option<TermState>; 2],
     term_gen: u64,
@@ -347,6 +355,8 @@ struct State {
     term_focus: Option<usize>,
     /// 터미널 마우스 선택 드래그 중(QA 07-14) — 패널 인덱스.
     term_drag: Option<usize>,
+    /// 터미널 마우스 모드 전달 중 눌린 버튼(X-5) — (패널, SGR 버튼 코드).
+    term_mouse_btn: Option<(usize, u8)>,
     /// 터미널 캐럿 깜빡임 위상(QA 07-14) — 포커스 중 타이머가 토글, 입력 시 true 리셋.
     term_caret_on: bool,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
@@ -444,6 +454,24 @@ impl State {
     fn active_panel(&mut self) -> &mut Panel {
         &mut self.panels[self.active]
     }
+    /// 좌표가 속한 패널(도크 밴드 인지 — X-6: 밴드 안은 dock_split 기준). 스플리터 존=None.
+    fn panel_at_pt(&self, x: i32, y: i32) -> Option<usize> {
+        if self.panels[0].dock_visible() {
+            let band = self.panels[0].dock.bounds();
+            if band.h > 0 && y >= band.y {
+                let right = self.panels[1].dock.bounds();
+                return if x < band.right() {
+                    Some(0)
+                } else if x >= right.x {
+                    Some(1)
+                } else {
+                    None // 도크 스플리터 존
+                };
+            }
+        }
+        self.panel_at(x)
+    }
+
     /// 좌표가 속한 패널 인덱스(스플리터 존이면 `None`).
     fn panel_at(&self, x: i32) -> Option<usize> {
         if x < self.panels[0].bounds().right() {
@@ -611,6 +639,11 @@ pub fn run() -> Result<()> {
         lang_setting: settings.lang,
         langs,
         term_font: settings.term_font,
+        term_font_size: settings.term_font_size,
+        dlg_font: crate::dialog::DlgFont {
+            family: settings.dlg_font,
+            size_pt: settings.dlg_font_size,
+        },
         last_activity_ms: 0,
         trimmed: false,
         uia_caret: None,
@@ -622,10 +655,13 @@ pub fn run() -> Result<()> {
         watchers: [None, None],
         watch_gen: 0,
         dock_drag: None,
+        dock_split_drag: false,
+        dock_split: settings.dock_split,
         terms: [None, None],
         term_gen: 0,
         term_focus: None,
         term_drag: None,
+        term_mouse_btn: None,
         term_caret_on: true,
         history: nexa_ops::history::OperationHistory::default(),
     });
@@ -733,12 +769,36 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
 
     let sx = splitter_x(hwnd, st);
     let half = s(SPLIT_HALF).max(1);
-    let ph = (bottom - top).max(0);
+    let area_h = (bottom - top).max(0);
+    // 하단 도크 = **전폭 밴드**(X-6, 원본 BottomLeftCol/Splitter/RightCol) — 파일 영역과
+    // 가로 분리·도크 좌/우는 파일 좌/우와 **독립 스플리터**(dock_split, 영속).
+    let m = panel_metrics(st.dpi);
+    let band_h = if st.panels[0].dock_visible() {
+        ((area_h as f32 * st.panels[0].dock_ratio()) as i32)
+            .clamp((m.row_h * 3).min(area_h / 2), area_h / 2)
+    } else {
+        0
+    };
+    let ph = (area_h - band_h).max(0);
     st.panels[0].set_bounds(GRect::new(0, top, (sx - half).max(0), ph), inv);
     st.panels[1].set_bounds(
         GRect::new(sx + half, top, (rc.w - sx - half).max(0), ph),
         inv,
     );
+    if band_h > 0 {
+        let band_y = top + ph;
+        let dsx = ((rc.w as f32 * st.dock_split) as i32).clamp(rc.w / 8, rc.w * 7 / 8);
+        st.panels[0]
+            .dock
+            .set_bounds(GRect::new(0, band_y, (dsx - half).max(0), band_h), inv);
+        st.panels[1].dock.set_bounds(
+            GRect::new(dsx + half, band_y, (rc.w - dsx - half).max(0), band_h),
+            inv,
+        );
+    } else {
+        st.panels[0].dock.set_bounds(GRect::default(), inv);
+        st.panels[1].dock.set_bounds(GRect::default(), inv);
+    }
 }
 
 /// 타이틀바 — 활성 패널 기준 경로·행/선택 수·페인트 시간.
@@ -782,7 +842,7 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
 
 unsafe fn ensure_dw(st: &mut State, hdc: windows::Win32::Graphics::Gdi::HDC, w: i32, h: i32) {
     match &mut st.dw {
-        None => match DwBackend::new(hdc, w, h, st.dpi, &st.term_font) {
+        None => match DwBackend::new(hdc, w, h, st.dpi, &st.term_font, st.term_font_size as f32) {
             Ok(b) => st.dw = Some(b),
             Err(e) => eprintln!("DirectWrite 초기화 실패: {e}"),
         },
@@ -998,12 +1058,13 @@ unsafe fn term_paint(
     rc: nexa_gui::Rect,
     cwd: &std::path::Path,
     dpi: u32,
+    font_px: i32,
     theme: &nexa_gui::Theme,
     caret_on: bool,
 ) {
     use nexa_gui::{Color, DrawCtx, Rect};
     let cell_w = ctx.term_cell_w();
-    let cell_h = ((16 * dpi as i32) / 96).max(12);
+    let cell_h = ((font_px * 4 / 3 * dpi as i32) / 96).max(12); // 줄 높이 ≈ 1.33×(X-3 크기 설정)
     let cols = ((rc.w - 4) / cell_w.max(1)) as usize;
     let rows = ((rc.h - 2) / cell_h) as usize;
     if cols < 2 || rows < 2 {
@@ -1765,6 +1826,7 @@ unsafe fn start_transfer(
                                     // 충돌 확인 문구는 UI 스레드에서 선확정(i18n 전역을 워커에서 조회하지 않음)
     let ow_title = tr("ops.overwriteTitle");
     let ow_text = tr("ops.overwrite");
+    let dlg_font = st.dlg_font.clone();
     let (b_yes, b_yes_all, b_skip, b_cancel) = (
         tr("ops.yes"),
         tr("ops.yesAll"),
@@ -1805,7 +1867,9 @@ unsafe fn start_transfer(
                         label: b_cancel.clone(),
                     },
                 ];
-                match unsafe { crate::dialog::show_buttons(hwnd, &ow_title, &text, &buttons) } {
+                match unsafe {
+                    crate::dialog::show_buttons(hwnd, &ow_title, &text, &buttons, &dlg_font)
+                } {
                     1 => nexa_ops::Conflict::Overwrite, // 이 파일만 — 다음 충돌 재질문
                     2 => {
                         decided = Some(nexa_ops::Conflict::Overwrite); // 모두 덮어쓰기
@@ -1835,8 +1899,12 @@ unsafe fn start_transfer(
         }
     });
     // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop)
-    let progress =
-        crate::dialog::Progress::open(hwnd, &tr("ops.progressTitle"), &tr("ops.progressLabel"));
+    let progress = crate::dialog::Progress::open(
+        hwnd,
+        &tr("ops.progressTitle"),
+        &tr("ops.progressLabel"),
+        &st.dlg_font,
+    );
     st.transfer = Some(TransferJob {
         shared,
         gen,
@@ -1984,6 +2052,7 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     trc,
                     &cwd,
                     st.dpi,
+                    st.term_font_size,
                     &st.theme,
                     caret_on,
                 );
@@ -2000,6 +2069,21 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             st.theme.border
         };
         ctx.fill_rect(GRect::new(lx, pb.y, w, pb.h), color);
+        // 도크 밴드 스플리터 + 상단 경계선(X-6 — 파일 스플리터와 독립)
+        if st.panels[0].dock_visible() {
+            let db = st.panels[0].dock.bounds();
+            if db.h > 0 {
+                let dx = db.right();
+                let dw = st.panels[1].dock.bounds().x - dx;
+                let dcolor = if st.dock_split_drag {
+                    st.theme.accent
+                } else {
+                    st.theme.border
+                };
+                ctx.fill_rect(GRect::new(dx, db.y, dw, db.h), dcolor);
+                ctx.fill_rect(GRect::new(0, db.y, rc.w, 1), st.theme.border);
+            }
+        }
         st.toolbar.paint(&mut ctx, &st.theme);
         st.statusbar.paint(&mut ctx, &st.theme);
         st.menubar.paint(&mut ctx, &st.theme); // 마지막 — 드롭다운 오버레이가 위에
@@ -2096,6 +2180,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.panels[0].set_dock_visible(on, &mut inv);
             st.panels[1].set_dock_visible(on, &mut inv);
             st.menubar.set_checked(CMD_TOGGLE_DOCK, on, &mut inv);
+            layout(hwnd, st, &mut inv); // 도크는 전폭 밴드 — 호스트 재배치(X-6)
             update_dock_info(st, &mut inv);
         }
         CMD_UNDO | CMD_REDO => {
@@ -2230,7 +2315,7 @@ unsafe fn wheel_target(hwnd: HWND, st: &State, lparam: LPARAM) -> (usize, i32, i
         y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
     };
     let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
-    (st.panel_at(pt.x).unwrap_or(st.active), pt.x, pt.y)
+    (st.panel_at_pt(pt.x, pt.y).unwrap_or(st.active), pt.x, pt.y)
 }
 
 /// 시스템 캐럿 깜빡임 주기(ms) — 0/비활성 값은 표준 530ms로 보정.
@@ -2241,6 +2326,30 @@ fn caret_blink_ms() -> u32 {
     } else {
         t
     }
+}
+
+/// 터미널 마우스 이벤트 전달(X-5 — Zellij 등 TUI): 마우스 모드(DECSET)가 켜져 있고
+/// SGR(1006) 인코딩일 때 `ESC[<b;col;row M/m`을 stdin으로. 전송했으면 `true`
+/// (호스트는 로컬 선택/스크롤을 억제). 레거시(비SGR) 인코딩은 바이트 >127이라
+/// 미지원 — 현대 TUI는 전부 1006(α).
+fn term_send_mouse(t: &TermState, x: i32, y: i32, btn: u8, press: bool) -> bool {
+    let Some((_, sgr)) = t.screen.mouse_mode() else {
+        return false;
+    };
+    if !sgr {
+        return false;
+    }
+    let (rc, cw, ch) = t.grid;
+    if !rc.contains(nexa_gui::Point { x, y }) {
+        return false;
+    }
+    let col = ((x - rc.x - 2) / cw.max(1)).max(0) as usize + 1;
+    let row = ((y - rc.y - 1) / ch.max(1)).max(0) as usize + 1;
+    t.pty.write(&format!(
+        "\x1b[<{btn};{col};{row}{}",
+        if press { 'M' } else { 'm' }
+    ));
+    true
 }
 
 /// 터미널 선택 끝점 갱신(QA 07-14) — 그리드 위/아래로 벗어나 있으면 1줄 자동 스크롤 후
@@ -2280,6 +2389,74 @@ unsafe fn invalidate_dock(hwnd: HWND, st: &State, panel: usize) {
         bottom: r.bottom(),
     };
     let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
+}
+
+/// 설정 창 열기(S6 — Ctrl+, 원본 docs/40): 현재 값 스냅샷 → 모달(State 참조 차단 —
+/// 재진입 규약) → 저장 시 적용(테마/언어=기존 명령 경로 재사용·글꼴=백엔드 재생성)
+/// + settings.cfg 즉시 저장(원본 PREF 영속 규율).
+unsafe fn open_prefs(hwnd: HWND) {
+    let req = state_of(hwnd).map(|st| {
+        (
+            crate::prefs::PrefValues {
+                theme: st.theme_mode.as_str().into(),
+                lang: st.lang_setting.clone(),
+                langs: st.langs.iter().map(|(c, _)| c.clone()).collect(),
+                term_font: st.term_font.clone(),
+                term_font_size: st.term_font_size,
+                dlg_font: st.dlg_font.family.clone(),
+                dlg_font_size: st.dlg_font.size_pt,
+            },
+            st.dlg_font.clone(),
+        )
+    });
+    let Some((vals, dfont)) = req else { return };
+    let Some(v) = crate::prefs::show(hwnd, vals, &dfont) else {
+        return;
+    };
+    let Some(st) = state_of(hwnd) else { return };
+    // 테마/언어 — 기존 명령 경로 재사용(라디오 동기·동적 전환 포함)
+    match v.theme.as_str() {
+        "light" => run_command(hwnd, st, CMD_THEME_LIGHT),
+        "dark" => run_command(hwnd, st, CMD_THEME_DARK),
+        _ => run_command(hwnd, st, CMD_THEME_SYSTEM),
+    }
+    let Some(st) = state_of(hwnd) else { return };
+    if v.lang != st.lang_setting {
+        if v.lang == "system" {
+            run_command(hwnd, st, CMD_LANG_SYSTEM);
+        } else if let Some(i) = st.langs.iter().position(|(c, _)| *c == v.lang) {
+            run_command(hwnd, st, CMD_LANG_BASE + i as u32);
+        }
+    }
+    let Some(st) = state_of(hwnd) else { return };
+    // 글꼴 — 터미널은 백엔드 재생성(mono_format·폴백 체인·글리프 캐시 재구축)
+    if v.term_font != st.term_font || v.term_font_size != st.term_font_size {
+        st.term_font = v.term_font.clone();
+        st.term_font_size = v.term_font_size;
+        st.dw = None;
+    }
+    st.dlg_font = crate::dialog::DlgFont {
+        family: v.dlg_font.clone(),
+        size_pt: v.dlg_font_size,
+    };
+    // 즉시 영속(원본 PREF 규율 — 종료 저장과 별개로 설정만 저장)
+    let settings = Settings {
+        theme: st.theme_mode.as_str().into(),
+        lang: st.lang_setting.clone(),
+        show_hidden: st.show_hidden,
+        show_dotfiles: st.show_dotfiles,
+        split: st.split,
+        dock: st.panels[0].dock_visible(),
+        dock_ratio: st.panels[0].dock_ratio(),
+        dock_split: st.dock_split,
+        term_font: st.term_font.clone(),
+        term_font_size: st.term_font_size,
+        dlg_font: st.dlg_font.family.clone(),
+        dlg_font_size: st.dlg_font.size_pt,
+    };
+    let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+    let _ = InvalidateRect(Some(hwnd), None, false);
+    update_title(hwnd, st, "");
 }
 
 /// 파일 실행(더블클릭·Enter·Alt+↓ — QA 07-14) — 기본 연결 프로그램(탐색기 동일).
@@ -2475,9 +2652,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let delta = (wparam.0 >> 16) as i16 as i32;
                 // 마우스 아래 패널로 라우팅(QA 07-14 — 활성 패널이 아닌 hover 기준)
                 let (target, px, py) = wheel_target(hwnd, st, lparam);
-                // 터미널 위 휠 = 스크롤백 보기(3줄/노치, QA 07-14)
+                // 터미널 위 휠: TUI 마우스 모드(X-5)면 휠 버튼(64/65) 전달, 아니면
+                // 스크롤백 보기(3줄/노치, QA 07-14). Shift=항상 로컬.
                 if wparam.0 & MK_SHIFT == 0 && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
+                        if t.screen.mouse_mode().is_some_and(|(_, sgr)| sgr) {
+                            let btn = if delta > 0 { 64 } else { 65 };
+                            for _ in 0..(delta.abs() / 120).max(1) {
+                                term_send_mouse(t, px, py, btn, true);
+                            }
+                            return LRESULT(0);
+                        }
                         if t.scroll_view(3 * delta / 120) {
                             invalidate_dock(hwnd, st, target);
                         }
@@ -2559,16 +2744,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 포커스아웃 = 편집 취소(docs/27 §2)
                         st.active_panel().pathbar.cancel_edit(&mut inv);
                     }
-                } else if (x - sx).abs() <= half.max(1) {
+                } else if st.panels[0].dock_visible()
+                    && st.panels[0].dock.bounds().h > 0
+                    && (y - st.panels[0].dock.bounds().y).abs() <= SPLIT_HALF
+                {
+                    // 도크 밴드 상단 경계 = 높이 드래그(전폭 — X-6)
+                    st.dock_drag = Some(0);
+                } else if st.panels[0].dock_visible()
+                    && y >= st.panels[0].dock.bounds().y
+                    && (x - st.panels[0].dock.bounds().right() - half).abs() <= half.max(1)
+                {
+                    // 도크 밴드 좌/우 스플리터(X-6 — 파일 스플리터와 독립)
+                    st.dock_split_drag = true;
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                } else if y < st.panels[0].bounds().bottom() && (x - sx).abs() <= half.max(1) {
+                    // 파일 영역 좌/우 스플리터(도크 밴드와 독립 — X-6)
                     st.split_drag = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
-                } else if let Some(idx) = st.panel_at(x).filter(|&i| {
-                    // 도크 상단 경계 ±3px = 높이 드래그 시작(M4-1 S2)
-                    st.panels[i].dock_visible()
-                        && (y - st.panels[i].dock.bounds().y).abs() <= SPLIT_HALF
-                }) {
-                    st.dock_drag = Some(idx);
-                } else if let Some(idx) = st.panel_at(x) {
+                } else if let Some(idx) = st.panel_at_pt(x, y) {
                     st.term_focus = None; // 기본 해제 — 아래에서 터미널 클릭이면 재설정(M4-3)
                     set_active(hwnd, st, idx);
                     // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
@@ -2600,13 +2793,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 캐럿 깜빡임(QA 07-14) — 포커스 동안만, 시스템 깜빡임 주기
                         SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                         update_dock_info(st, &mut inv); // 종류 전환 직후 내용 동기
-                                                        // 그리드 안 프레스 = 마우스 선택 시작(QA 07-14 — 드래그로 확장)
+                                                        // 그리드 안 프레스: TUI 마우스 모드(X-5)면 시퀀스 전달(Shift=
+                                                        // 로컬 우회 — 터미널 관례), 아니면 로컬 선택 시작(QA 07-14)
                         if let Some(t) = &mut st.terms[idx] {
                             if t.grid.0.contains(nexa_gui::Point { x, y }) {
-                                let cell = t.cell_at(x, y);
-                                t.sel = Some((cell, cell));
-                                st.term_drag = Some(idx);
-                                invalidate_dock(hwnd, st, idx);
+                                if !shift && term_send_mouse(t, x, y, 0, true) {
+                                    st.term_mouse_btn = Some((idx, 0));
+                                } else {
+                                    let cell = t.cell_at(x, y);
+                                    t.sel = Some((cell, cell));
+                                    st.term_drag = Some(idx);
+                                    invalidate_dock(hwnd, st, idx);
+                                }
                             }
                         }
                     } else if st.panels[idx].dock_visible() && y >= st.panels[idx].dock.bounds().y {
@@ -2644,7 +2842,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                if let Some(idx) = st.panel_at(x) {
+                // TUI 마우스 모드(X-5) — 터미널 그리드 우클릭은 앱에 전달(Shift=로컬)
+                if GetKeyState(VK_SHIFT.0 as i32) >= 0 {
+                    if let Some(ti) = st.term_focus {
+                        if term_hit(st, ti, x, y) {
+                            if let Some(t) = &st.terms[ti] {
+                                if term_send_mouse(t, x, y, 2, true) {
+                                    st.term_mouse_btn = Some((ti, 2));
+                                    return LRESULT(0);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(idx) = st.panel_at_pt(x, y) {
                     set_active(hwnd, st, idx);
                     let mut inv = Invalidations::default();
                     st.panels[idx].on_event(&InputEvent::RightDown { x, y }, &mut inv);
@@ -2665,6 +2876,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 선택 규약(단독 선택/유지/해제)은 RBUTTONDOWN에서 반영됨.
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            if let Some(st) = state_of(hwnd) {
+                // TUI 마우스 릴리스(X-5 — 우클릭) — 컨텍스트 메뉴 억제
+                if let Some((ti, 2)) = st.term_mouse_btn {
+                    st.term_mouse_btn = None;
+                    if let Some(t) = &st.terms[ti] {
+                        term_send_mouse(t, x, y, 2, false);
+                    }
+                    return LRESULT(0);
+                }
+            }
             let hit = state_of(hwnd).map(|st| {
                 let active = st.panel_at(x) == Some(st.active);
                 let rows = st.active_panel().rows();
@@ -2696,6 +2917,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                // TUI 마우스 모션 전달(X-5 — 1002/1003·버튼 유지 중)
+                if let Some(st) = state_of(hwnd) {
+                    if let Some((ti, b)) = st.term_mouse_btn {
+                        if wparam.0 & MK_LBUTTON != 0 || b == 2 {
+                            if let Some(t) = &st.terms[ti] {
+                                if matches!(t.screen.mouse_mode(), Some((m, _)) if m >= 1002) {
+                                    term_send_mouse(t, x, y, b | 32, true);
+                                }
+                            }
+                            return LRESULT(0);
+                        }
+                        st.term_mouse_btn = None;
+                    }
+                }
                 // 터미널 마우스 선택 드래그(QA 07-14) — 끝점 확장 + 엣지 자동 스크롤
                 if let Some(st) = state_of(hwnd) {
                     if let Some(ti) = st.term_drag {
@@ -2751,15 +2986,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let mut inv = Invalidations::default();
-                if let Some(idx) = st.dock_drag {
-                    // 도크 높이 드래그(M4-1 S2) — 리스트+도크 영역 대비 비율, 양 패널 동기
-                    let list_top = st.panels[idx].rows().bounds().y;
-                    let bottom = st.panels[idx].bounds().bottom();
-                    if bottom > list_top {
-                        let ratio = (bottom - y) as f32 / (bottom - list_top) as f32;
+                if st.dock_drag.is_some() {
+                    // 도크 밴드 높이 드래그(X-6 — 패널 상단~상태바 영역 대비 비율)
+                    let top = st.panels[0].bounds().y;
+                    let bottom = st.panels[0].dock.bounds().bottom();
+                    if bottom > top {
+                        let ratio = (bottom - y) as f32 / (bottom - top) as f32;
                         st.panels[0].set_dock_ratio(ratio, &mut inv);
                         st.panels[1].set_dock_ratio(ratio, &mut inv);
+                        layout(hwnd, st, &mut inv);
                         update_dock_info(st, &mut inv);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                } else if st.dock_split_drag {
+                    // 도크 밴드 좌/우 스플리터 드래그(X-6 — 파일 스플리터와 독립·영속)
+                    let rc = client_rect(hwnd);
+                    if rc.w > 0 {
+                        st.dock_split = (x as f32 / rc.w as f32).clamp(0.15, 0.85);
+                        layout(hwnd, st, &mut inv);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 } else if st.split_drag {
                     let rc = client_rect(hwnd);
@@ -2792,6 +3037,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
                 st.dock_drag = None; // 도크 높이 드래그 종료(M4-1 S2)
+                st.dock_split_drag = false; // 도크 좌/우 스플리터 종료(X-6)
+                if let Some((ti, b)) = st.term_mouse_btn.take() {
+                    // TUI 마우스 릴리스 전달(X-5)
+                    if b == 0 {
+                        if let Some(t) = &st.terms[ti] {
+                            term_send_mouse(t, x, y, b, false);
+                        }
+                    } else {
+                        st.term_mouse_btn = Some((ti, b)); // 우클릭은 RBUTTONUP에서
+                    }
+                }
                 if st.term_drag.take().is_some() {
                     // 터미널 선택 확정(QA 07-14) — 선택은 유지(Ctrl+C 복사), 타이머 종료
                     let _ = KillTimer(Some(hwnd), TIMER_TERM_SEL);
@@ -3046,6 +3302,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0);
                 } else if vk == VK_OEM_PERIOD.0 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_DOTFILES);
+                    return LRESULT(0);
+                } else if vk == VK_OEM_COMMA.0 && ctrl {
+                    open_prefs(hwnd); // Ctrl+, = 설정 창(S6 — 원본 docs/40)
                     return LRESULT(0);
                 } else if vk == VK_OEM_3.0 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_DOCK); // Ctrl+` = 하단 도크(M4-1, 원본)
@@ -3416,7 +3675,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     split: st.split,
                     dock: st.panels[0].dock_visible(),
                     dock_ratio: st.panels[0].dock_ratio(),
+                    dock_split: st.dock_split,
                     term_font: st.term_font.clone(),
+                    term_font_size: st.term_font_size,
+                    dlg_font: st.dlg_font.family.clone(),
+                    dlg_font_size: st.dlg_font.size_pt,
                 };
                 let (t0, a0) = st.panels[0].session();
                 let (t1, a1) = st.panels[1].session();

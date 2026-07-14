@@ -2,47 +2,110 @@
 //! 전송 확인창 4버튼 대응) + **전송 진행 창**(프로그레스 바·취소). user32/gdi32만 사용
 //! (comctl32 비의존 — B3 임포트 게이트 유지, M3-4 회피 규약 계승).
 //!
-//! - [`show_buttons`]: 메시지 + 호출자 정의 버튼 목록 → 클릭한 버튼 id(닫힘/Esc=0).
+//! **폰트**: 설정 `dlg_font`/`dlg_font_size`([`DlgFont`])를 따르고 모든 지표(버튼·여백·
+//! 창 크기)가 폰트 높이에서 파생 — 메시지는 워드랩 측정으로 **전체가 보이도록** 창 높이
+//! 산정(AdjustWindowRectEx로 비클라이언트 보정 — QA 07-14 잘림 수정).
+//!
+//! - [`show_buttons`]: 메시지 + 호출자 정의 버튼 목록 → 클릭한 버튼 id(닫힘=0).
 //!   자체 모달 루프 — 워커 스레드에서도 사용 가능(MessageBox 대체).
 //! - [`Progress`]: 비모달 진행 창 — 바(직접 페인트)·백분율 텍스트·[취소] 버튼.
-//!   UI 스레드 소유, 진행 값은 호출자가 [`Progress::update`]로 밀어 넣는다.
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC,
-    GetStockObject, ReleaseDC, SelectObject, SetBkMode, SetTextColor, DEFAULT_GUI_FONT,
-    DT_CALCRECT, DT_LEFT, DT_WORDBREAK, HBRUSH, HDC, HFONT, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC,
+    ReleaseDC, SelectObject, SetBkMode, SetTextColor, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
+    DEFAULT_QUALITY, DT_CALCRECT, DT_LEFT, DT_WORDBREAK, FF_DONTCARE, FW_NORMAL, HBRUSH, HFONT,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetWindowLongPtrW, GetWindowRect, IsWindow, RegisterClassW, SendMessageW, SetForegroundWindow,
-    SetWindowLongPtrW, TranslateMessage, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, GWLP_USERDATA, MSG,
-    SW_SHOWNORMAL, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_PAINT, WM_SETFONT,
-    WNDCLASSW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetClientRect, GetMessageW, GetWindowLongPtrW, GetWindowRect, IsWindow, RegisterClassW,
+    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage, BS_DEFPUSHBUTTON,
+    BS_PUSHBUTTON, GWLP_USERDATA, MSG, SW_SHOWNORMAL, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND,
+    WM_PAINT, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
-/// 대화상자 버튼(호출자 정의) — `id`는 1 이상(0=닫힘/Esc 예약).
+/// 대화상자 버튼(호출자 정의) — `id`는 1 이상(0=닫힘 예약).
 pub struct DlgButton {
     pub id: u32,
     pub label: String,
 }
 
-const BTN_W: i32 = 104;
-const BTN_H: i32 = 28;
-const PAD: i32 = 14;
-const DLG_W: i32 = 460;
+/// 대화상자 폰트 스펙(설정 `dlg_font`/`dlg_font_size` — pt 단위).
+#[derive(Clone)]
+pub struct DlgFont {
+    pub family: String,
+    pub size_pt: i32,
+}
 
-/// 모달 상태(GWLP_USERDATA) — wndproc가 기록, 모달 루프가 읽는다.
+/// 공용 상태(GWLP_USERDATA) — wndproc가 기록, 소유자가 읽는다.
 struct DlgState {
     result: u32,
-    /// 진행 창 전용: 취소 플래그(Arc 원시 — [`Progress`]가 소유·해제).
     text: Vec<u16>,
+    font: HFONT,
+    /// 본문 영역(클라이언트 좌표) — WM_PAINT가 사용.
+    text_rc: RECT,
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("NexaDlg");
+const PAD: i32 = 12;
+const GAP: i32 = 6;
+
+unsafe fn make_font(hwnd: HWND, spec: &DlgFont) -> HFONT {
+    let dpi = GetDpiForWindow(hwnd).max(96);
+    let h = -((spec.size_pt.clamp(7, 24) * dpi as i32) / 72);
+    let face = windows::core::HSTRING::from(&*spec.family);
+    CreateFontW(
+        h,
+        0,
+        0,
+        0,
+        FW_NORMAL.0 as i32,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        DEFAULT_QUALITY,
+        FF_DONTCARE.0 as u32,
+        PCWSTR(face.as_ptr()),
+    )
+}
+
+/// 폰트 기준 텍스트 측정 — (워드랩 높이, 한 줄 높이).
+unsafe fn measure(font: HFONT, text: &str, width: i32) -> (i32, i32) {
+    let hdc = GetDC(None);
+    let old = SelectObject(hdc, font.into());
+    let mut buf: Vec<u16> = text.encode_utf16().collect();
+    let mut rc = RECT {
+        right: width,
+        ..Default::default()
+    };
+    DrawTextW(hdc, &mut buf, &mut rc, DT_CALCRECT | DT_LEFT | DT_WORDBREAK);
+    let mut line: Vec<u16> = "Ag".encode_utf16().collect();
+    let mut lrc = RECT::default();
+    DrawTextW(hdc, &mut line, &mut lrc, DT_CALCRECT | DT_LEFT);
+    SelectObject(hdc, old);
+    ReleaseDC(None, hdc);
+    ((rc.bottom - rc.top).max(16), (lrc.bottom - lrc.top).max(14))
+}
+
+/// 폰트 기준 문자열 폭.
+unsafe fn text_width(font: HFONT, text: &str) -> i32 {
+    let hdc = GetDC(None);
+    let old = SelectObject(hdc, font.into());
+    let mut buf: Vec<u16> = text.encode_utf16().collect();
+    let mut rc = RECT::default();
+    DrawTextW(hdc, &mut buf, &mut rc, DT_CALCRECT | DT_LEFT);
+    SelectObject(hdc, old);
+    ReleaseDC(None, hdc);
+    rc.right - rc.left
+}
 
 unsafe fn ensure_class() {
     REGISTER.call_once(|| {
@@ -83,31 +146,18 @@ unsafe extern "system" fn dlg_proc(
             }
             LRESULT(0)
         }
-        WM_KEYDOWN => {
-            if wparam.0 as u16 == windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE.0 {
-                let _ = DestroyWindow(hwnd); // Esc = 0(취소 예약)
-            }
-            LRESULT(0)
-        }
         WM_CLOSE => {
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
         WM_PAINT => {
-            // 메시지 본문(멀티라인 워드랩) — STATIC 대신 직접 그려 폰트/여백 일관
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !state.is_null() {
-                let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
-                let old = SelectObject(hdc, font.into());
+                let old = SelectObject(hdc, (*state).font.into());
                 SetBkMode(hdc, TRANSPARENT);
                 SetTextColor(hdc, COLORREF(0x00000000));
-                let mut rc = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rc);
-                rc.left += PAD;
-                rc.top += PAD;
-                rc.right -= PAD;
-                rc.bottom -= PAD + BTN_H + PAD;
+                let mut rc = (*state).text_rc;
                 let mut text = (*state).text.clone();
                 DrawTextW(hdc, &mut text, &mut rc, DT_LEFT | DT_WORDBREAK);
                 SelectObject(hdc, old);
@@ -119,55 +169,73 @@ unsafe extern "system" fn dlg_proc(
     }
 }
 
-/// 메시지 높이 측정(DEFAULT_GUI_FONT·워드랩) — 창 크기 산정.
-unsafe fn measure_text(text: &str, width: i32) -> i32 {
-    let hdc: HDC = GetDC(None);
-    let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
-    let old = SelectObject(hdc, font.into());
-    let mut buf: Vec<u16> = text.encode_utf16().collect();
-    let mut rc = RECT {
-        right: width,
+/// 임의 버튼 모달 대화상자 — 클릭한 버튼 id(닫힘=0). 어느 스레드든 호출 가능
+/// (자체 메시지 루프 — MessageBox 동등). 첫 버튼 = 기본 강조.
+pub unsafe fn show_buttons(
+    owner: HWND,
+    title: &str,
+    message: &str,
+    buttons: &[DlgButton],
+    font_spec: &DlgFont,
+) -> u32 {
+    ensure_class();
+    let font = make_font(owner, font_spec);
+    // 지표 전부 폰트 파생(QA 07-14 — "폰트에 맞춰 전반적으로 작게")
+    let btn_widths: Vec<i32> = buttons
+        .iter()
+        .map(|b| (text_width(font, &b.label) + 20).max(56))
+        .collect();
+    let btn_total: i32 = btn_widths.iter().sum::<i32>() + GAP * (buttons.len() as i32 - 1).max(0);
+    let client_w = (btn_total + PAD * 2).max(380);
+    let (text_h, line_h) = measure(font, message, client_w - PAD * 2);
+    let btn_h = line_h + 10;
+    let client_h = PAD + text_h + PAD + btn_h + PAD;
+    // 비클라이언트(캡션·프레임) 보정 — 메시지 잘림 방지(QA 07-14)
+    let mut win = RECT {
+        right: client_w,
+        bottom: client_h,
         ..Default::default()
     };
-    DrawTextW(hdc, &mut buf, &mut rc, DT_CALCRECT | DT_LEFT | DT_WORDBREAK);
-    SelectObject(hdc, old);
-    ReleaseDC(None, hdc);
-    (rc.bottom - rc.top).max(20)
-}
-
-/// 임의 버튼 모달 대화상자 — 클릭한 버튼 id(닫힘/Esc=0). 어느 스레드든 호출 가능
-/// (자체 메시지 루프 — MessageBox 동등). 첫 버튼 = 기본(Enter).
-pub unsafe fn show_buttons(owner: HWND, title: &str, message: &str, buttons: &[DlgButton]) -> u32 {
-    ensure_class();
-    let text_h = measure_text(message, DLG_W - PAD * 2);
-    let h = PAD + text_h + PAD + BTN_H + PAD + 32; // +캡션 근사
-    let (cx, cy) = center_over(owner, DLG_W, h);
+    let _ = AdjustWindowRectEx(
+        &mut win,
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        false,
+        WINDOW_EX_STYLE(0x00000001), // DLGMODALFRAME
+    );
+    let (w, h) = (win.right - win.left, win.bottom - win.top);
+    let (cx, cy) = center_over(owner, w, h);
     let mut state = Box::new(DlgState {
         result: 0,
         text: message.encode_utf16().collect(),
+        font,
+        text_rc: RECT {
+            left: PAD,
+            top: PAD,
+            right: client_w - PAD,
+            bottom: PAD + text_h,
+        },
     });
     let title_w = windows::core::HSTRING::from(title);
     let Ok(dlg) = CreateWindowExW(
-        WINDOW_EX_STYLE(0x00000008 | 0x00000001), // TOPMOST | DLGMODALFRAME
+        WINDOW_EX_STYLE(0x00000001), // DLGMODALFRAME
         CLASS,
         PCWSTR(title_w.as_ptr()),
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         cx,
         cy,
-        DLG_W,
+        w,
         h,
         Some(owner),
         None,
         None,
         None,
     ) else {
+        let _ = DeleteObject(font.into());
         return 0;
     };
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut DlgState as isize);
-    // 버튼(우측 정렬·역순 배치 — 첫 버튼이 가장 왼쪽이 아니라 관례대로 왼→오 순서 유지)
-    let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
-    let total = buttons.len() as i32 * (BTN_W + 8) - 8;
-    let mut x = DLG_W - PAD - total - 8; // -8: 프레임 근사
+    // 버튼 — 우측 정렬(왼→오 순서 유지)
+    let mut x = client_w - PAD - btn_total;
     let by = PAD + text_h + PAD;
     for (i, b) in buttons.iter().enumerate() {
         let style = if i == 0 {
@@ -185,8 +253,8 @@ pub unsafe fn show_buttons(owner: HWND, title: &str, message: &str, buttons: &[D
                 | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(style as u32),
             x,
             by,
-            BTN_W,
-            BTN_H,
+            btn_widths[i],
+            btn_h,
             Some(dlg),
             Some(windows::Win32::UI::WindowsAndMessaging::HMENU(
                 b.id as usize as *mut core::ffi::c_void,
@@ -201,7 +269,7 @@ pub unsafe fn show_buttons(owner: HWND, title: &str, message: &str, buttons: &[D
                 Some(LPARAM(1)),
             );
         }
-        x += BTN_W + 8;
+        x += btn_widths[i] + GAP;
     }
     let _ = EnableWindow(owner, false); // 모달(소유자 입력 차단)
     let _ = SetForegroundWindow(dlg);
@@ -212,7 +280,13 @@ pub unsafe fn show_buttons(owner: HWND, title: &str, message: &str, buttons: &[D
     }
     let _ = EnableWindow(owner, true);
     let _ = SetForegroundWindow(owner);
+    let _ = DeleteObject(font.into());
     state.result
+}
+
+/// 폰트 생성 공개 래퍼(설정 창 등 다른 커스텀 창과 공용).
+pub unsafe fn make_font_pub(hwnd: HWND, spec: &DlgFont) -> HFONT {
+    make_font(hwnd, spec)
 }
 
 /// 소유자 중앙 좌표.
@@ -230,19 +304,18 @@ unsafe fn center_over(owner: HWND, w: i32, h: i32) -> (i32, i32) {
 
 // ── 전송 진행 창(비모달 — UI 스레드 소유) ────────────────────────
 
-/// 진행 창 wndproc용 공유 상태(GWLP_USERDATA — [`Progress`]가 Box 소유).
+/// 진행 창 상태(GWLP_USERDATA — [`Progress`]가 Box 소유).
 struct ProgState {
     done: u64,
     total: u64,
     label: Vec<u16>,
-    /// 취소 요청 — [취소] 버튼이 세팅, 호출자가 폴링([`Progress::cancelled`]).
+    font: HFONT,
+    line_h: i32,
     cancelled: bool,
 }
 
 static REGISTER_PROG: std::sync::Once = std::sync::Once::new();
 const CLASS_PROG: PCWSTR = w!("NexaProgress");
-const PROG_W: i32 = 420;
-const PROG_H: i32 = 150;
 const ID_CANCEL: u32 = 1;
 
 unsafe extern "system" fn prog_proc(
@@ -269,22 +342,23 @@ unsafe extern "system" fn prog_proc(
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !state.is_null() {
-                let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
-                let old = SelectObject(hdc, font.into());
+                let old = SelectObject(hdc, (*state).font.into());
                 SetBkMode(hdc, TRANSPARENT);
                 SetTextColor(hdc, COLORREF(0x00000000));
+                let mut crc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut crc);
+                let lh = (*state).line_h;
                 let (done, total) = ((*state).done, (*state).total);
                 let pct = if total > 0 {
                     ((done as f64 / total as f64) * 100.0) as i32
                 } else {
                     0
                 };
-                // 라벨 + 수치
                 let mut rc = RECT {
                     left: PAD,
                     top: PAD,
-                    right: PROG_W - PAD,
-                    bottom: PAD + 20,
+                    right: crc.right - PAD,
+                    bottom: PAD + lh,
                 };
                 let mut label = (*state).label.clone();
                 DrawTextW(hdc, &mut label, &mut rc, DT_LEFT);
@@ -292,17 +366,17 @@ unsafe extern "system" fn prog_proc(
                 let mut info_w: Vec<u16> = info.encode_utf16().collect();
                 let mut rc2 = RECT {
                     left: PAD,
-                    top: PAD + 22,
-                    right: PROG_W - PAD,
-                    bottom: PAD + 42,
+                    top: PAD + lh + 4,
+                    right: crc.right - PAD,
+                    bottom: PAD + lh * 2 + 4,
                 };
                 DrawTextW(hdc, &mut info_w, &mut rc2, DT_LEFT);
                 // 진행 바(직접 페인트 — comctl32 비의존)
                 let bar = RECT {
                     left: PAD,
-                    top: PAD + 48,
-                    right: PROG_W - PAD - 16,
-                    bottom: PAD + 66,
+                    top: rc2.bottom + 6,
+                    right: crc.right - PAD,
+                    bottom: rc2.bottom + 6 + lh,
                 };
                 let frame = CreateSolidBrush(COLORREF(0x00808080));
                 FillRect(hdc, &bar, frame);
@@ -342,8 +416,13 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// 진행 창 생성(소유자 중앙) — `label`=작업 설명(예: "복사 중…").
-    pub unsafe fn open(owner: HWND, title: &str, label: &str) -> Option<Progress> {
+    /// 진행 창 생성(소유자 중앙) — `label`=작업 설명. **대화상자 폰트 공유**(QA 07-14).
+    pub unsafe fn open(
+        owner: HWND,
+        title: &str,
+        label: &str,
+        font_spec: &DlgFont,
+    ) -> Option<Progress> {
         REGISTER_PROG.call_once(|| {
             let wc = WNDCLASSW {
                 lpszClassName: CLASS_PROG,
@@ -364,13 +443,33 @@ impl Progress {
             };
             let _ = RegisterClassW(&wc);
         });
+        let font = make_font(owner, font_spec);
+        let (_, line_h) = measure(font, "Ag", 400);
+        let btn_h = line_h + 10;
+        let btn_w = (text_width(font, &crate::i18n::tr("ops.cancel")) + 20).max(64);
+        let client_w = 400;
+        let client_h = PAD + line_h * 2 + 4 + 6 + line_h + 8 + btn_h + PAD;
+        let mut win = RECT {
+            right: client_w,
+            bottom: client_h,
+            ..Default::default()
+        };
+        let _ = AdjustWindowRectEx(
+            &mut win,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            false,
+            WINDOW_EX_STYLE(0),
+        );
+        let (w, h) = (win.right - win.left, win.bottom - win.top);
         let mut state = Box::new(ProgState {
             done: 0,
             total: 0,
             label: label.encode_utf16().collect(),
+            font,
+            line_h,
             cancelled: false,
         });
-        let (cx, cy) = center_over(owner, PROG_W, PROG_H);
+        let (cx, cy) = center_over(owner, w, h);
         let title_w = windows::core::HSTRING::from(title);
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -379,8 +478,8 @@ impl Progress {
             WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
             cx,
             cy,
-            PROG_W,
-            PROG_H,
+            w,
+            h,
             Some(owner),
             None,
             None,
@@ -388,8 +487,6 @@ impl Progress {
         )
         .ok()?;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, &mut *state as *mut ProgState as isize);
-        // [취소] 버튼
-        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
         let cancel = windows::core::HSTRING::from(crate::i18n::tr("ops.cancel"));
         if let Ok(btn) = CreateWindowExW(
             WINDOW_EX_STYLE(0),
@@ -398,10 +495,10 @@ impl Progress {
             WS_CHILD
                 | WS_VISIBLE
                 | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(BS_PUSHBUTTON as u32),
-            PROG_W - PAD - BTN_W - 16,
-            PROG_H - PAD - BTN_H - 32,
-            BTN_W,
-            BTN_H,
+            client_w - PAD - btn_w,
+            client_h - PAD - btn_h,
+            btn_w,
+            btn_h,
             Some(hwnd),
             Some(windows::Win32::UI::WindowsAndMessaging::HMENU(
                 ID_CANCEL as usize as *mut core::ffi::c_void,
@@ -412,7 +509,7 @@ impl Progress {
             SendMessageW(
                 btn,
                 WM_SETFONT,
-                Some(WPARAM(font.0 as usize)),
+                Some(WPARAM(state.font.0 as usize)),
                 Some(LPARAM(1)),
             );
         }
@@ -427,7 +524,7 @@ impl Progress {
         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, false);
     }
 
-    /// [취소]·X가 눌렸는가(1회성 아님 — 호스트가 cancel 플래그에 반영).
+    /// [취소]·X가 눌렸는가(호스트가 워커 cancel 플래그에 반영).
     pub fn cancelled(&self) -> bool {
         self.state.cancelled
     }
@@ -436,8 +533,9 @@ impl Progress {
 impl Drop for Progress {
     fn drop(&mut self) {
         unsafe {
-            SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0); // wndproc의 상태 참조 해제
+            SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0); // wndproc 상태 참조 해제
             let _ = DestroyWindow(self.hwnd);
+            let _ = DeleteObject(self.state.font.into());
         }
     }
 }

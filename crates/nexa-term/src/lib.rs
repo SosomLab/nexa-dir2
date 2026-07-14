@@ -64,6 +64,12 @@ pub struct VtScreen {
     reverse: bool,
     faint: bool,
     state: S,
+    /// CSI private 마커('?') — DECSET/DECRST(h/l) 판별(X-5 마우스 모드).
+    private: bool,
+    /// 마우스 추적 모드(DECSET 1000/1002/1003 — 0=꺼짐). TUI(Zellij 등)가 켠다.
+    mouse_mode: u16,
+    /// SGR 확장 마우스 인코딩(DECSET 1006).
+    mouse_sgr: bool,
     pars: Vec<i32>,
     cur: i32, // 현재 파라미터 누적(-1=없음)
 }
@@ -87,6 +93,9 @@ impl VtScreen {
             reverse: false,
             faint: false,
             state: S::Ground,
+            private: false,
+            mouse_mode: 0,
+            mouse_sgr: false,
             pars: Vec::new(),
             cur: -1,
         };
@@ -114,6 +123,16 @@ impl VtScreen {
 
     pub fn scrollback_count(&self) -> usize {
         self.scrollback.len()
+    }
+
+    /// 마우스 추적 모드(X-5 — TUI가 DECSET으로 켬): `(모드 1000/1002/1003, SGR 인코딩)`.
+    /// 꺼져 있으면 `None` — 호스트는 로컬 선택/스크롤을 유지한다.
+    pub fn mouse_mode(&self) -> Option<(u16, bool)> {
+        if self.mouse_mode == 0 {
+            None
+        } else {
+            Some((self.mouse_mode, self.mouse_sgr))
+        }
     }
 
     /// 총 라인 수(스크롤백 + 현재 화면).
@@ -226,6 +245,7 @@ impl VtScreen {
                 self.state = S::Csi;
                 self.pars.clear();
                 self.cur = -1;
+                self.private = false;
             }
             ']' => self.state = S::Osc,
             '(' | ')' | '*' | '+' => {} // charset 지정 — 다음 1글자 무시(간이·원본 동일)
@@ -248,7 +268,8 @@ impl VtScreen {
 
     fn csi(&mut self, ch: char) {
         if ch == '?' {
-            return; // private 마커 — 미사용(?…h/l은 최종 바이트에서 무시)
+            self.private = true; // private 마커(DECSET/DECRST — X-5 마우스 모드 추적)
+            return;
         }
         if ch.is_ascii_digit() {
             self.cur = self.cur.max(0) * 10 + (ch as i32 - '0' as i32);
@@ -285,6 +306,23 @@ impl VtScreen {
     }
 
     fn dispatch(&mut self, fin: char) {
+        // DECSET/DECRST(CSI ? Pm h/l) — 마우스 추적 모드만 추적(X-5), 그 외 private은 무시
+        if self.private {
+            self.private = false;
+            if fin == 'h' || fin == 'l' {
+                let on = fin == 'h';
+                for &p in &self.pars {
+                    match p {
+                        1000 | 1002 | 1003 => {
+                            self.mouse_mode = if on { p as u16 } else { 0 };
+                        }
+                        1006 => self.mouse_sgr = on,
+                        _ => {}
+                    }
+                }
+            }
+            return;
+        }
         let p0 = self.pars.first().copied().unwrap_or(0).max(0) as usize;
         let n1 = p0.max(1);
         match fin {
@@ -624,6 +662,24 @@ fn rgb(r: i32, g: i32, b: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decset_mouse_modes_tracked() {
+        // X-5: DECSET 1000/1002/1003(추적)·1006(SGR) — Zellij 등 TUI 마우스 전달용
+        let mut s = VtScreen::new(10, 4);
+        assert!(s.mouse_mode().is_none());
+        s.feed("\x1b[?1000;1006h");
+        assert_eq!(s.mouse_mode(), Some((1000, true)));
+        s.feed("\x1b[?1002h");
+        assert_eq!(s.mouse_mode(), Some((1002, true)));
+        s.feed("\x1b[?1006l");
+        assert_eq!(s.mouse_mode(), Some((1002, false)));
+        s.feed("\x1b[?1002l");
+        assert!(s.mouse_mode().is_none());
+        // private 시퀀스가 일반 CSI에 영향 없음
+        s.feed("\x1b[2;3H");
+        assert_eq!((s.cursor_row(), s.cursor_col()), (1, 2));
+    }
 
     fn text_of(s: &VtScreen, row: usize) -> String {
         s.line_at(s.scrollback_count() + row)
