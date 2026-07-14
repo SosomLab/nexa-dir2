@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `fix/nav-freeze-watcher` | 2026-07-14 | 2026-07-14 (`5f6b441`) | — | 2 | **이동 프리즈 진범 해소** — DirWatcher drop의 CloseHandle이 동기 RDCW 완료(=이전 폴더 변경 발생)까지 UI 블로킹(비 OVERLAPPED 파일 객체 잠금 직렬화). OVERLAPPED+중지 이벤트로 재구현(drop=SetEvent 논블로킹·복제 핸들). 자동 재현 12,009ms→4~6ms 실측 + 터미널 캐럿 깜빡임(GetCaretBlinkTime·입력 위상 리셋) | [2026-07-14](journal/2026-07-14.md) |
 | `feat/m4-term-select` | 2026-07-14 | 2026-07-14 (`8c8665c`) | — | 2 | 터미널 상호작용(QA/요청 5건) — 셀 단위 렌더(폴백 글꼴 전진폭 밀림 해소·단일 글리프 캐시)·마우스 드래그 선택(반전 하이라이트·엣지 자동 스크롤 60ms)·스크롤백 보기(휠 3줄/노치·보던 위치 고정·입력 시 스냅)·Ctrl+C(선택 복사/인터럽트)·Ctrl+V 붙여넣기·settings term_font(DWrite 해석·Consolas 폴백) | [2026-07-14](journal/2026-07-14.md) |
 | `fix/m4-qa-batch2` | 2026-07-14 | 2026-07-14 (`55bdcc2`) | — | 2 | 실기 QA 5건 — **프리즈 근본 해소**(파일별 아이콘 SHGetFileInfoW를 워커 스레드로 — Downloads/Documents의 MotW·OneDrive 블로킹)·편집 필드 Ctrl+C/X/V(CF_UNICODETEXT·EditState 선택 복사/잘라내기/붙여넣기)·느린 재클릭 리네임 더블클릭 시간 지연(더블클릭=열기 우선)·휠 hover 라우팅(wheel_target)·바로가기 .lnk 숨김(NeverShowExt·리네임 시 복원) | [2026-07-14](journal/2026-07-14.md) |
 | `fix/term-caret-color` | 2026-07-14 | 2026-07-14 (`d0e28d2`) | — | 1 | 사용자 지시 — 터미널 캐럿 밝은 회색(0xCCCCCC) 고정: 터미널 배경은 테마 무관 Campbell 다크라 theme.text가 라이트 테마에서 비가시 | [2026-07-14](journal/2026-07-14.md) |
@@ -49,6 +50,12 @@
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
+
+## fix/nav-freeze-watcher
+
+- **생성**: 2026-07-14 (분기: main `59ed7aa`). **커밋**: `fcbc562`(watcher OVERLAPPED 재구현+캐럿 깜빡임) → `e00143a`(journal 기록). 병합(`5f6b441`): 2026-07-14. 삭제: CI green 확인 후.
+- **검증**: **자동 재현 하네스**(PostMessage 키 주입+SendMessageTimeout 블로킹 실측) — 수정 전 홈→Documents **12,009ms** 무응답 → 수정 후 **6ms** · Documents→홈(조용한 OneDrive watcher 해제=최악) **4ms** · watcher 자동 반영 정상(생성/삭제 70→69) · 151 green · clippy 0 · B2 0.73MB · B3 무변(CancelIoEx/DuplicateHandle=kernel32).
+- **교훈**: 비 OVERLAPPED 핸들의 CloseHandle은 파일 객체 잠금 직렬화로 **대기 중인 동기 I/O 완료까지 블로킹** — "핸들 닫기=중지 신호" 패턴은 디렉터리 감시에 부적합. 원본 .NET FileSystemWatcher는 내부가 overlapped라 이 문제가 없었음(이식 시 단순화가 결함 유입).
 
 ## feat/m4-term-select
 
