@@ -116,6 +116,10 @@ pub trait RowSource {
     }
 }
 
+/// 인라인 이름변경 필드의 안쪽 여백 — 필드를 텍스트 왼쪽으로 확장(테두리+여백이 필드
+/// 안쪽)해 편집 진입 시 이름 x가 일반 표시와 동일(밀림 없음, QA 07-13 4차).
+const RENAME_FIELD_PAD: i32 = 3;
+
 /// 리사이즈 드래그 상태.
 #[derive(Clone, Copy, Debug)]
 struct ResizeDrag {
@@ -296,6 +300,49 @@ impl<S: RowSource> VirtualRows<S> {
         if self.rename.take().is_some() {
             inv.push(self.bounds);
         }
+    }
+
+    /// IME 조합 창 배치용(M5-3 — pathbar `edit_info`와 동일 계약): 편집 중이고 행이
+    /// 가시 범위면 (캐럿 앞 텍스트, 필드 rect, pad). 캐럿 = `rect.x + pad + text_width`.
+    pub fn rename_edit_info(&self) -> Option<(String, Rect, i32)> {
+        let (row, es) = self.rename.as_ref()?;
+        if *row < self.scroll_row {
+            return None;
+        }
+        let y = self.body_top() + (*row - self.scroll_row) as i32 * self.row_h;
+        if y >= self.bounds.bottom() {
+            return None;
+        }
+        let rc = self.rename_field_rect(*row, y);
+        Some((es.text_before_caret(), rc, RENAME_FIELD_PAD))
+    }
+
+    /// 인라인 이름변경 필드 rect(paint와 단일 기하 — M5-3에서 추출).
+    fn rename_field_rect(&self, row: usize, y: i32) -> Rect {
+        let b = self.bounds;
+        let (tc_x, tc_w) = if self.columns.is_empty() {
+            (b.x, b.w)
+        } else {
+            (self.col_x(0), self.columns[0].width)
+        };
+        let item = self.src.row(row);
+        let mut fx = tc_x + self.pad_x + item.depth as i32 * self.indent_w + self.indent_w;
+        if self.src.icon(row).is_some() {
+            fx += self.indent_w + self.pad_x / 2;
+        }
+        let fw = (tc_x + tc_w - fx).max(self.indent_w * 3);
+        Rect::new(fx - RENAME_FIELD_PAD, y, fw + RENAME_FIELD_PAD, self.row_h)
+    }
+
+    /// 프로그램적 선택(M5-3 UIA SelectionItem) — 캐럿 동반·가시 범위로 스크롤.
+    pub fn select_program(&mut self, row: usize, op: SelectOp, inv: &mut Invalidations) {
+        if row >= self.src.len() {
+            return;
+        }
+        self.caret = Some(row);
+        self.src.select(row, op);
+        self.scroll_into_view(row);
+        inv.push(self.bounds);
     }
 
     /// 편집 제출(Enter) — (행, 새 이름) 반환. 실제 rename·재로드는 호스트 책임.
@@ -1129,22 +1176,8 @@ impl<S: RowSource> Widget for VirtualRows<S> {
         if let Some((row, es)) = &self.rename {
             if *row >= first && *row < first + count {
                 let y = body_top + (*row - first) as i32 * self.row_h;
-                let (tc_x, tc_w) = if self.columns.is_empty() {
-                    (b.x, b.w)
-                } else {
-                    (self.col_x(0), self.columns[0].width)
-                };
-                let item = self.src.row(*row);
-                let mut fx = tc_x + self.pad_x + item.depth as i32 * self.indent_w + self.indent_w;
-                if self.src.icon(*row).is_some() {
-                    fx += self.indent_w + self.pad_x / 2;
-                }
-                // 필드를 텍스트 왼쪽으로 확장(테두리+여백이 필드 안쪽) — 편집 진입 시
-                // 이름 x가 일반 표시와 동일(밀림 없음, QA 07-13 4차)
-                const FIELD_PAD: i32 = 3;
-                let fw = (tc_x + tc_w - fx).max(self.indent_w * 3);
-                let rc = Rect::new(fx - FIELD_PAD, y, fw + FIELD_PAD, self.row_h);
-                es.paint_field(ctx, rc, FIELD_PAD, theme);
+                let rc = self.rename_field_rect(*row, y);
+                es.paint_field(ctx, rc, RENAME_FIELD_PAD, theme);
             }
         }
 
@@ -1197,6 +1230,11 @@ mod tests {
         v.begin_rename(2, "행 2", &mut inv);
         assert_eq!(v.rename_state(), Some((2, "행 2".to_string())));
         assert_eq!(v.caret(), Some(2), "편집 행으로 캐럿 이동");
+        // IME 배치 정보(M5-3) — 필드 rect가 편집 행 y에, pad=RENAME_FIELD_PAD
+        let (_, rc, pad) = v.rename_edit_info().expect("편집 중 IME 정보");
+        assert_eq!(rc.y, 2 * 20, "헤더 없음(컬럼 미설정) — 행 2의 y");
+        assert_eq!(rc.h, 20);
+        assert_eq!(pad, RENAME_FIELD_PAD);
         // 시작 = 선택 상태(확장자 없음 → 전체) — End로 접어 끝 편집으로 전환
         v.rename_key(crate::edit::EditKey::End, false, &mut inv);
         // 문자 입력·Backspace — Char 이벤트 경유(타입어헤드 대신 버퍼로)
@@ -1609,6 +1647,18 @@ mod tests {
         assert_eq!(v.caret(), Some(4));
         sdown(&mut v, &mut inv, 45, false, true); // Ctrl 토글 해제
         assert!(!v.source().is_selected(2));
+    }
+
+    #[test]
+    fn select_program_moves_caret_and_ignores_out_of_range() {
+        let (mut v, mut inv) = sel_list(10, 200);
+        v.select_program(3, SelectOp::Single, &mut inv); // UIA Select(M5-3)
+        assert!(v.source().is_selected(3) && v.source().sel.len() == 1);
+        assert_eq!(v.caret(), Some(3));
+        v.select_program(5, SelectOp::Toggle, &mut inv); // AddToSelection
+        assert_eq!(v.source().sel.len(), 2);
+        v.select_program(99, SelectOp::Single, &mut inv); // 낡은 스냅샷 인덱스 — 무시
+        assert_eq!(v.caret(), Some(5), "범위 밖 무시");
     }
 
     #[test]
