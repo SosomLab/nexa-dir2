@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/ux-convenience` | 2026-07-14 | 2026-07-14 (`71243d6`) | — | 5 | 편의 UX 배치 1(사용자 지시) — ① 경로바 자동완성(PATH-SUG: 하위 폴더 제안·↑/↓ 순환+입력 복원·클릭 이동)+환경변수 해석(%VAR%·$env:) ② 탭 UX(드래그 재정렬·잠금 🔒·우클릭 메뉴[잠금/복제/닫기]·세션 영속) ③ 전송 충돌 일괄 적용(모두 예/건너뛰기 — MessageBox 2단·comctl32 비의존). 테스트 159 green | [2026-07-14](journal/2026-07-14.md) |
 | `fix/cfg-filenames` | 2026-07-14 | 2026-07-14 (`b364368`) | — | 2 | 사용자 지시 — 영속 파일명 정비: settings.cfg(설정 전반)·session.cfg(패널·탭·펼침 세션) + 구 .txt 마이그레이션(load_migrated 폴백→저장 시 purge_legacy 정리·실기 왕복 검증) | [2026-07-14](journal/2026-07-14.md) |
 | `feat/f18-expanded` | 2026-07-14 | 2026-07-14 (`1612e8c`) | — | 2 | X-4 — 펼침 상태 유지(원본 F18 이식): 탭별 영속 Expanded 집합(BTreeMap 부모 우선)·경계 동기(펼침=등재·접힘=말소·비가시 보존=재펼침 복원)·리네임 접두사 치환·세션 영속(panelN.expM·상한 200/탭). "B000 진입 후 복귀 시 A000 펼침 소실" 해소·테스트 153 green | [2026-07-14](journal/2026-07-14.md) |
 | `fix/nav-freeze-watcher` | 2026-07-14 | 2026-07-14 (`5f6b441`) | — | 2 | **이동 프리즈 진범 해소** — DirWatcher drop의 CloseHandle이 동기 RDCW 완료(=이전 폴더 변경 발생)까지 UI 블로킹(비 OVERLAPPED 파일 객체 잠금 직렬화). OVERLAPPED+중지 이벤트로 재구현(drop=SetEvent 논블로킹·복제 핸들). 자동 재현 12,009ms→4~6ms 실측 + 터미널 캐럿 깜빡임(GetCaretBlinkTime·입력 위상 리셋) | [2026-07-14](journal/2026-07-14.md) |
@@ -52,6 +53,12 @@
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
+
+## feat/ux-convenience
+
+- **생성**: 2026-07-14 (분기: main `aa0339b`). **커밋**: `4740275`(① 경로바 자동완성+환경변수 — pathinput.rs·PathBar 팝업) → clippy 정리 → `b7abae5`(② 탭 UX — TabBar Move/Context·Panel move/dup/lock·세션 locked) → `d1901dc`(③ 전송 충돌 일괄 적용) → `5ef0a31`(docs). 병합(`71243d6`): 2026-07-14. 삭제: CI green 확인 후.
+- **검증**: `cargo test` **159 green**(신규 — pathinput expand/suggest·pathbar 제안 순환/복원/클릭·탭 move/lock/dup·세션 locked 왕복) · clippy 0 · fmt · B2 0.78MB · **B3 무변**(팝업 메뉴=user32·TaskDialog/comctl32 비의존 유지) · 릴리스 빌드. **실기 QA 대기**: 경로바 우클릭→타이핑 시 제안 팝업·↑/↓·클릭 이동·`%USERPROFILE%` 입력 이동 · 탭 드래그 재정렬·우클릭 메뉴(잠금 후 × 사라짐·Ctrl+W 거부·재시작 복원)·복제 · 파일 충돌 2건+ 전송 시 "남은 충돌 동일 적용" 확인창.
+- **α 한계(후속 배치)**: ④ 설정 창(원본 PreferencesWindow — VS Code식) · 드라이브 제안("C:" 단계) · 탭 패널 간 이동/Ctrl 복제 드래그·고정(pin)·멀티라인 · 전송 진행 창(현재 타이틀 %).
 
 ## feat/f18-expanded
 
