@@ -1,4 +1,4 @@
-# 예산 B3 게이트 — 임포트 DLL이 OS 인박스 화이트리스트 안인지 검사(docs/18 §5).
+# 예산 B3 게이트 — 임포트 DLL이 OS 인박스 화이트리스트 안인지 검사(docs/18 §6).
 # CI(ci.yml)와 로컬(push 전) 공용 단일 출처. 사용: pwsh scripts/budget-b3.ps1 [exe경로]
 param([string]$Exe = "target/release/nexa-app.exe")
 
