@@ -321,6 +321,9 @@ struct State {
     langs: Vec<(String, String)>,
     /// 터미널 글꼴 설정(QA 07-14 — data\settings term_font, 백엔드 생성 시 적용).
     term_font: String,
+    term_font_size: i32,
+    /// 대화상자 글꼴(확인창·진행 창 — dialog.rs 공유).
+    dlg_font: crate::dialog::DlgFont,
     /// 상주 자니터(M2-8): 마지막 입력 활동 시각(now_ms 기준)·트림 완료 플래그.
     last_activity_ms: u64,
     trimmed: bool,
@@ -611,6 +614,11 @@ pub fn run() -> Result<()> {
         lang_setting: settings.lang,
         langs,
         term_font: settings.term_font,
+        term_font_size: settings.term_font_size,
+        dlg_font: crate::dialog::DlgFont {
+            family: settings.dlg_font,
+            size_pt: settings.dlg_font_size,
+        },
         last_activity_ms: 0,
         trimmed: false,
         uia_caret: None,
@@ -1765,6 +1773,7 @@ unsafe fn start_transfer(
                                     // 충돌 확인 문구는 UI 스레드에서 선확정(i18n 전역을 워커에서 조회하지 않음)
     let ow_title = tr("ops.overwriteTitle");
     let ow_text = tr("ops.overwrite");
+    let dlg_font = st.dlg_font.clone();
     let (b_yes, b_yes_all, b_skip, b_cancel) = (
         tr("ops.yes"),
         tr("ops.yesAll"),
@@ -1805,7 +1814,7 @@ unsafe fn start_transfer(
                         label: b_cancel.clone(),
                     },
                 ];
-                match unsafe { crate::dialog::show_buttons(hwnd, &ow_title, &text, &buttons) } {
+                match unsafe { crate::dialog::show_buttons(hwnd, &ow_title, &text, &buttons, &dlg_font) } {
                     1 => nexa_ops::Conflict::Overwrite, // 이 파일만 — 다음 충돌 재질문
                     2 => {
                         decided = Some(nexa_ops::Conflict::Overwrite); // 모두 덮어쓰기
@@ -1835,8 +1844,12 @@ unsafe fn start_transfer(
         }
     });
     // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop)
-    let progress =
-        crate::dialog::Progress::open(hwnd, &tr("ops.progressTitle"), &tr("ops.progressLabel"));
+    let progress = crate::dialog::Progress::open(
+        hwnd,
+        &tr("ops.progressTitle"),
+        &tr("ops.progressLabel"),
+        &st.dlg_font,
+    );
     st.transfer = Some(TransferJob {
         shared,
         gen,
@@ -3417,6 +3430,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     dock: st.panels[0].dock_visible(),
                     dock_ratio: st.panels[0].dock_ratio(),
                     term_font: st.term_font.clone(),
+                    term_font_size: st.term_font_size,
+                    dlg_font: st.dlg_font.family.clone(),
+                    dlg_font_size: st.dlg_font.size_pt,
                 };
                 let (t0, a0) = st.panels[0].session();
                 let (t1, a1) = st.panels[1].session();
