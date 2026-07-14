@@ -2,6 +2,7 @@
 //! **VS Code식** = 상단 검색 + 좌측 카테고리 목록 + 우측 편집기(설정 레지스트리 구동)
 //! + **즉시 적용**(저장 버튼 없음 — 체크박스·순환=클릭 즉시, 텍스트·숫자=포커스 이탈 시)
 //! + **리사이즈 가능 창**(WS_THICKFRAME — 기본 크기가 최소).
+//!
 //! 네이티브 컨트롤(user32 STATIC/EDIT/BUTTON — comctl32 비의존)·모달·`Ctrl+,`.
 //!
 //! 원본 구조 계승: 영속 설정 전부를 [`Entry`] 목록(레지스트리)으로 등록 → 카테고리 렌더와
@@ -464,14 +465,12 @@ unsafe extern "system" fn prefs_proc(
                     set_text(HWND(lparam.0 as *mut core::ffi::c_void), &lbl);
                     (*st).apply_now();
                 }
-                i if i >= ID_FIELD_BASE => {
-                    // VS Code식 즉시 적용(X-8): 체크박스 클릭(BN_CLICKED=0)은 즉시,
-                    // EDIT(글꼴·크기)은 포커스 이탈(EN_KILLFOCUS=0x0200) 시 값 확정 후 적용
-                    // (키 입력마다 백엔드 재생성 방지 — EN_CHANGE는 무시).
-                    if notify == 0 || notify == 0x0200 {
-                        (*st).harvest();
-                        (*st).apply_now();
-                    }
+                // VS Code식 즉시 적용(X-8): 체크박스 클릭(BN_CLICKED=0)은 즉시,
+                // EDIT(글꼴·크기)은 포커스 이탈(EN_KILLFOCUS=0x0200) 시 값 확정 후 적용
+                // (키 입력마다 백엔드 재생성 방지 — EN_CHANGE는 무시).
+                i if i >= ID_FIELD_BASE && (notify == 0 || notify == 0x0200) => {
+                    (*st).harvest();
+                    (*st).apply_now();
                 }
                 _ => {}
             }
