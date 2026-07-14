@@ -18,6 +18,8 @@ mod conpty;
 mod dialog;
 #[cfg(windows)]
 mod dnd;
+#[cfg(windows)]
+mod icon;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod icons;
 #[cfg_attr(not(windows), allow(dead_code))]

@@ -158,6 +158,7 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
                 windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
             )
             .unwrap_or_default(),
+            hIcon: crate::icon::load(32).unwrap_or_default(), // 원본 아이콘 공통(QA 07-14)
             ..Default::default()
         };
         let _ = RegisterClassW(&wc);
