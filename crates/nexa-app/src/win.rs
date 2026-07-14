@@ -49,6 +49,10 @@ use crate::source::{COL_EXT, COL_KIND, COL_MODIFIED, COL_NAME, COL_SIZE};
 
 /// 기선택 항목 재클릭 → 이름 바꾸기 최소 간격(ms) — 이보다 짧으면 더블클릭 시도로 무시.
 const SLOW_CLICK_RENAME_MS: u64 = 1_000;
+/// 스플리터 공통 두께(px @96dpi — 파일 좌/우·도크 좌/우·가로 분리선 통일, QA 07-14).
+const SPLIT_TH: i32 = 3;
+/// 스플리터 자석 스냅 임계(px @96dpi — 창 50%·반대편 구분선. Alt=해제, 원본 F9).
+const SNAP_PX: i32 = 20;
 
 /// wParam 마우스 수식키 비트(winuser.h MK_LBUTTON/MK_SHIFT/MK_CONTROL).
 const MK_LBUTTON: usize = 0x0001;
@@ -260,17 +264,15 @@ fn build_menus(
 
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
 /// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
-fn build_toolbar() -> Vec<ToolButton> {
+fn build_toolbar(show_hidden: bool, show_dotfiles: bool) -> Vec<ToolButton> {
+    // 그룹화(QA 07-14 — 원본 PR#10): [새로고침] | [설정] | [숨김·닷파일 토글]
     vec![
-        ToolButton {
-            id: CMD_REFRESH,
-            glyph: "⟳".into(),
-        },
-        // 설정(S6 — QA 07-14: 도구모음 연결)
-        ToolButton {
-            id: CMD_PREFS,
-            glyph: "⚙".into(),
-        },
+        ToolButton::new(CMD_REFRESH, "⟳"),
+        ToolButton::sep(),
+        ToolButton::new(CMD_PREFS, "⚙"),
+        ToolButton::sep(),
+        ToolButton::new(CMD_TOGGLE_HIDDEN, "👁").toggled(show_hidden),
+        ToolButton::new(CMD_TOGGLE_DOTFILES, "…").toggled(show_dotfiles),
     ]
 }
 
@@ -634,7 +636,11 @@ pub fn run() -> Result<()> {
             m.row_h,
             m.pad_x,
         ),
-        toolbar: Toolbar::new(build_toolbar(), m.row_h, m.pad_x),
+        toolbar: Toolbar::new(
+            build_toolbar(settings.show_hidden, settings.show_dotfiles),
+            m.row_h,
+            m.pad_x,
+        ),
         statusbar: StatusBar::new(m.row_h, m.pad_x),
         panels: [left, right],
         active: active_panel,
@@ -793,7 +799,9 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         .set_bounds(GRect::new(0, bottom, rc.w, rc.h - bottom), inv);
 
     let sx = splitter_x(hwnd, st);
-    let half = s(SPLIT_HALF).max(1);
+    // 스플리터 두께 **통일**(QA 07-14 — 파일 좌/우·도크 좌/우·가로 분리선 전부 동일)
+    let gap = s(SPLIT_TH).max(2);
+    let g2 = gap / 2;
     let area_h = (bottom - top).max(0);
     // 하단 도크 = **전폭 밴드**(X-6, 원본 BottomLeftCol/Splitter/RightCol) — 파일 영역과
     // 가로 분리·도크 좌/우는 파일 좌/우와 **독립 스플리터**(dock_split, 영속).
@@ -805,20 +813,27 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         0
     };
     let ph = (area_h - band_h).max(0);
-    st.panels[0].set_bounds(GRect::new(0, top, (sx - half).max(0), ph), inv);
+    st.panels[0].set_bounds(GRect::new(0, top, (sx - g2).max(0), ph), inv);
     st.panels[1].set_bounds(
-        GRect::new(sx + half, top, (rc.w - sx - half).max(0), ph),
+        GRect::new(sx - g2 + gap, top, (rc.w - sx + g2 - gap).max(0), ph),
         inv,
     );
     if band_h > 0 {
         let band_y = top + ph;
         let dsx = ((rc.w as f32 * st.dock_split) as i32).clamp(rc.w / 8, rc.w * 7 / 8);
-        let dhalf = (half / 2).max(1); // 도크 스플리터 = 파일 스플리터 절반 두께(QA 07-14)
+        // 가로 분리선도 같은 두께(gap) — 도크 내용은 그 아래부터
+        let dock_y = band_y + gap;
+        let dock_h = (band_h - gap).max(0);
         st.panels[0]
             .dock
-            .set_bounds(GRect::new(0, band_y, (dsx - dhalf).max(0), band_h), inv);
+            .set_bounds(GRect::new(0, dock_y, (dsx - g2).max(0), dock_h), inv);
         st.panels[1].dock.set_bounds(
-            GRect::new(dsx + dhalf, band_y, (rc.w - dsx - dhalf).max(0), band_h),
+            GRect::new(
+                dsx - g2 + gap,
+                dock_y,
+                (rc.w - dsx + g2 - gap).max(0),
+                dock_h,
+            ),
             inv,
         );
     } else {
@@ -1304,6 +1319,8 @@ const CTX_REDO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 3;
 const CTX_PASTE_BG: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 4;
 /// 경로 복사(QA 07-14 — 원본 §7-5 Copy as path): **교차 폴더 전체 선택**을 텍스트로.
 const CTX_COPY_PATH: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 5;
+/// 이름 복사(QA 07-14 — 원본 PR#10 Copy as name): 경로 제외 **파일 이름만**.
+const CTX_COPY_NAME: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 6;
 
 /// 빈 본문 우클릭 = 폴더 **배경** 셸 메뉴(M3-4 S3, 원본 ADR-0005 S2) — 새로 만들기 서브메뉴·
 /// 속성 등 + 고유 Undo/Redo 병합(원본 빈영역 메뉴 항목 계승). paste 동사는 내부 클립보드로
@@ -1418,12 +1435,20 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         };
         // 고유 병합 항목(원본 S1: 셸이 제공하는 동사는 중복 금지) — 완전 삭제·폴더에 붙여넣기
         let paste_dir = caret_path.filter(|p| targets.len() == 1 && p.is_dir());
-        // "경로 복사"는 셸 항목 제자리 대체(hide→CTX_COPY_PATH — 윈도우 기본 라벨·위치·다국어)
-        let mut custom = vec![CustomItem {
-            id: CTX_DELETE_PERMANENT,
-            label: tr("ctx.deletePermanent"),
-            enabled: true,
-        }];
+        // "경로 복사"는 셸 항목 제자리 대체(hide→CTX_COPY_PATH — 앱 언어 라벨·윈도우 위치)
+        let mut custom = vec![
+            CustomItem {
+                id: CTX_DELETE_PERMANENT,
+                label: tr("ctx.deletePermanent"),
+                enabled: true,
+            },
+            // 이름 복사(QA 07-14 — 원본 Copy as name): 경로 제외 파일 이름만
+            CustomItem {
+                id: CTX_COPY_NAME,
+                label: tr("ctx.copyName"),
+                enabled: true,
+            },
+        ];
         if paste_dir.is_some() && crate::clipboard::has_files() {
             custom.push(CustomItem {
                 id: CTX_PASTE_INTO,
@@ -1478,6 +1503,16 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
                 .full
                 .iter()
                 .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("\r\n");
+            crate::clipboard::write_text(hwnd, &text);
+        }
+        shellmenu::Outcome::Custom(CTX_COPY_NAME) => {
+            // 이름 복사(QA 07-14) — 경로 제외 파일/폴더 이름만(표시 순서)
+            let text = req
+                .full
+                .iter()
+                .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
                 .collect::<Vec<_>>()
                 .join("\r\n");
             crate::clipboard::write_text(hwnd, &text);
@@ -2095,10 +2130,11 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             st.theme.border
         };
         ctx.fill_rect(GRect::new(lx, pb.y, w, pb.h), color);
-        // 도크 밴드 스플리터 + 상단 경계선(X-6 — 파일 스플리터와 독립)
+        // 도크 밴드 스플리터 + 가로 분리선(X-6 — 통일 두께·QA 07-14)
         if st.panels[0].dock_visible() {
             let db = st.panels[0].dock.bounds();
             if db.h > 0 {
+                let gap = ((SPLIT_TH * st.dpi as i32) / 96).max(2);
                 let dx = db.right();
                 let dw = st.panels[1].dock.bounds().x - dx;
                 let dcolor = if st.dock_split_drag {
@@ -2107,8 +2143,13 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     st.theme.border
                 };
                 ctx.fill_rect(GRect::new(dx, db.y, dw, db.h), dcolor);
-                // 파일↔정보 가로 분리선 — 다크에서 식별되도록 text_dim(QA 07-14)
-                ctx.fill_rect(GRect::new(0, db.y, rc.w, 1), st.theme.text_dim);
+                // 파일↔정보 가로 분리선 — 동일 두께·다크 식별(text_dim)·높이 드래그=accent
+                let hcolor = if st.dock_drag.is_some() {
+                    st.theme.accent
+                } else {
+                    st.theme.text_dim
+                };
+                ctx.fill_rect(GRect::new(0, db.y - gap, rc.w, gap), hcolor);
             }
         }
         st.toolbar.paint(&mut ctx, &st.theme);
@@ -2188,6 +2229,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.show_hidden = !st.show_hidden;
             let on = st.show_hidden;
             st.menubar.set_checked(CMD_TOGGLE_HIDDEN, on, &mut inv);
+            st.toolbar.set_checked(CMD_TOGGLE_HIDDEN, on, &mut inv); // 토글 그룹 동기
             let ctx = st.nav_ctx();
             st.active_panel().reopen_filtered(ctx, &mut inv);
         }
@@ -2195,6 +2237,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.show_dotfiles = !st.show_dotfiles;
             let on = st.show_dotfiles;
             st.menubar.set_checked(CMD_TOGGLE_DOTFILES, on, &mut inv);
+            st.toolbar.set_checked(CMD_TOGGLE_DOTFILES, on, &mut inv);
             let ctx = st.nav_ctx();
             st.active_panel().reopen_filtered(ctx, &mut inv);
         }
@@ -2336,6 +2379,25 @@ fn term_key_seq(vk: u16) -> Option<&'static str> {
         k if k == VK_NEXT.0 => Some("\x1b[6~"),
         _ => None,
     }
+}
+
+/// 스플리터 자석 스냅(원본 F9 — QA 07-14): 창 50% 및 `other`(반대편 구분선) 위치에
+/// [`SNAP_PX`] 이내로 근접하면 정렬. **Alt 유지 = 스냅 해제**(정밀 배치).
+unsafe fn snap_split_x(hwnd: HWND, st: &State, x: i32, other: i32) -> i32 {
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_MENU;
+    if GetKeyState(VK_MENU.0 as i32) < 0 {
+        return x; // Alt = 스냅 없음
+    }
+    let rc = client_rect(hwnd);
+    let snap = (SNAP_PX * st.dpi as i32) / 96;
+    let mid = rc.w / 2;
+    if (x - mid).abs() <= snap {
+        return mid;
+    }
+    if st.panels[0].dock_visible() && (x - other).abs() <= snap {
+        return other;
+    }
+    x
 }
 
 /// 휠 대상 패널·클라이언트 좌표(QA 07-14) — WM_MOUSEWHEEL lparam은 **화면 좌표**.
@@ -2688,6 +2750,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let half = s(SPLIT_HALF).max(1);
                 let band = st.panels[0].dock.bounds();
                 let dock_on = st.panels[0].dock_visible() && band.h > 0;
+                let gap = ((SPLIT_TH * st.dpi as i32) / 96).max(2);
+                let strip_top = band.y - gap;
                 let on_dock_split = dock_on
                     && pt.y >= band.y
                     && pt.x >= band.right() - 2
@@ -2695,7 +2759,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let on_file_split = pt.y >= st.panels[0].bounds().y
                     && pt.y < st.panels[0].bounds().bottom()
                     && (pt.x - splitter_x(hwnd, st)).abs() <= half;
-                let cursor = if dock_on && (pt.y - band.y).abs() <= SPLIT_HALF {
+                let cursor = if dock_on
+                    && pt.y >= strip_top - SPLIT_HALF
+                    && pt.y <= strip_top + gap + SPLIT_HALF
+                {
                     Some(windows::Win32::UI::WindowsAndMessaging::IDC_SIZENS)
                 } else if on_dock_split || on_file_split {
                     Some(windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE)
@@ -2808,15 +2875,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 포커스아웃 = 편집 취소(docs/27 §2)
                         st.active_panel().pathbar.cancel_edit(&mut inv);
                     }
-                } else if st.panels[0].dock_visible()
-                    && st.panels[0].dock.bounds().h > 0
-                    && (y - st.panels[0].dock.bounds().y).abs() <= SPLIT_HALF
-                {
-                    // 도크 밴드 상단 경계 = 높이 드래그(전폭 — X-6)
+                } else if st.panels[0].dock_visible() && st.panels[0].dock.bounds().h > 0 && {
+                    let gap = ((SPLIT_TH * st.dpi as i32) / 96).max(2);
+                    let strip_top = st.panels[0].dock.bounds().y - gap;
+                    y >= strip_top - SPLIT_HALF && y <= strip_top + gap + SPLIT_HALF
+                } {
+                    // 도크 밴드 상단 가로 분리선 = 높이 드래그(전폭 — X-6)
                     st.dock_drag = Some(0);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 } else if st.panels[0].dock_visible()
                     && y >= st.panels[0].dock.bounds().y
-                    && (x - st.panels[0].dock.bounds().right() - half).abs() <= half.max(1)
+                    && x >= st.panels[0].dock.bounds().right() - 2
+                    && x < st.panels[1].dock.bounds().x + 2
                 {
                     // 도크 밴드 좌/우 스플리터(X-6 — 파일 스플리터와 독립)
                     st.dock_split_drag = true;
@@ -2847,6 +2917,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
+                    // 터미널 [→] = 현재 폴더로 이동(QA 07-14 — 원본 '터미널에서 열기')
+                    if st.panels[idx].dock.take_goto() {
+                        let dir = st.panels[idx].root_path();
+                        if let Some(t) = &mut st.terms[idx] {
+                            if t.exited {
+                                st.terms[idx] = None; // 재시작(cwd=현재 폴더 lazy start)
+                            } else {
+                                t.pty.write(&format!("cd \"{}\"\r", dir.display()));
+                                t.view_off = 0;
+                            }
+                        }
+                        // 시작 전이면 다음 페인트의 지연 시작이 현재 폴더(cwd)로 연다
+                        st.term_caret_on = true;
+                        SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
+                        st.term_focus = Some(idx);
+                        update_dock_info(st, &mut inv);
+                        invalidate_dock(hwnd, st, idx);
+                    }
                     // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3)
                     if st.panels[idx].dock_visible()
                         && y >= st.panels[idx].dock.bounds().y
@@ -3063,16 +3151,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 } else if st.dock_split_drag {
-                    // 도크 밴드 좌/우 스플리터 드래그(X-6 — 파일 스플리터와 독립·영속)
+                    // 도크 밴드 좌/우 스플리터 드래그(X-6) — 50%·파일 스플리터에 자석 스냅
                     let rc = client_rect(hwnd);
                     if rc.w > 0 {
+                        let x = snap_split_x(hwnd, st, x, splitter_x(hwnd, st));
                         st.dock_split = (x as f32 / rc.w as f32).clamp(0.15, 0.85);
                         layout(hwnd, st, &mut inv);
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 } else if st.split_drag {
+                    // 파일 좌/우 스플리터 — 50%·도크 스플리터에 자석 스냅(원본 F9)
                     let rc = client_rect(hwnd);
                     if rc.w > 0 {
+                        let other = ((rc.w as f32 * st.dock_split) as i32).clamp(0, rc.w);
+                        let x = snap_split_x(hwnd, st, x, other);
                         st.split = (x as f32 / rc.w as f32).clamp(0.1, 0.9);
                         layout(hwnd, st, &mut inv);
                         let _ = InvalidateRect(Some(hwnd), None, false);

@@ -23,6 +23,10 @@ pub struct InfoDock {
     lines: Vec<String>,
     /// 이미지 미리보기 경로(Some = 라인 대신 이미지 — M4-2).
     image: Option<String>,
+    /// 터미널 "폴더로 이동"(→) 클릭 통지(QA 07-14 — 원본 '터미널에서 열기'). 1회성.
+    pending_goto: bool,
+    /// → 버튼 x 범위 캐시(paint가 채움 — 마지막 종류[터미널] 옆에 부착).
+    goto_range: std::cell::Cell<(i32, i32)>,
 }
 
 impl InfoDock {
@@ -36,7 +40,14 @@ impl InfoDock {
             ranges: std::cell::RefCell::new(Vec::new()),
             lines: Vec::new(),
             image: None,
+            pending_goto: false,
+            goto_range: std::cell::Cell::new((0, 0)),
         }
+    }
+
+    /// 터미널 "폴더로 이동"(→) 클릭 수거(1회성 — 호스트가 cd 전송·종류 전환).
+    pub fn take_goto(&mut self) -> bool {
+        std::mem::take(&mut self.pending_goto)
     }
 
     /// 종류 라벨 목록 교체(i18n 전환 포함) — 활성 인덱스는 범위로 클램프.
@@ -105,6 +116,16 @@ impl Widget for InfoDock {
         if let InputEvent::MouseDown { x, y, .. } = *ev {
             let strip_bottom = self.bounds.y + 1 + self.row_h;
             if y >= self.bounds.y && y < strip_bottom {
+                // → 버튼(터미널 옆 부착 — QA 07-14 '폴더로 이동')
+                let (glo, ghi) = self.goto_range.get();
+                if ghi > glo && x >= glo && x < ghi {
+                    self.pending_goto = true;
+                    if self.active + 1 != self.kinds.len() {
+                        self.active = self.kinds.len().saturating_sub(1); // 터미널로 전환
+                    }
+                    inv.push(self.bounds);
+                    return;
+                }
                 let hit = self
                     .ranges
                     .borrow()
@@ -134,10 +155,13 @@ impl Widget for InfoDock {
         ctx.fill_rect(strip, theme.header_bg);
         let mut ranges = Vec::with_capacity(self.kinds.len());
         let mut x = strip.x + self.pad_x;
+        let last = self.kinds.len().saturating_sub(1);
+        self.goto_range.set((0, 0));
         for (i, label) in self.kinds.iter().enumerate() {
             let w = ctx.text_width(label) + self.pad_x * 2;
             let cell = Rect::new(x, strip.y, w.min((strip.right() - x).max(0)), strip.h);
-            let (fg, bg) = if i == self.active {
+            let active = i == self.active;
+            let (fg, bg) = if active {
                 (theme.text, theme.sel_bg)
             } else {
                 (theme.text_dim, theme.header_bg)
@@ -146,7 +170,24 @@ impl Widget for InfoDock {
                 ctx.text_opaque(cell.x + self.pad_x, ty(cell), cell, label, fg, bg);
             }
             ranges.push((cell.x, cell.x + w));
-            x += w + self.pad_x;
+            x += w;
+            if i == last && self.kinds.len() > 1 {
+                // 터미널 옆 "폴더로 이동"(→) — 한 몸 버튼(QA 07-14, 원본 '터미널에서 열기').
+                // 활성=accent 배경, 비활성=무색(라벨과 동일 톤)
+                let gw = ctx.text_width("→") + self.pad_x * 2;
+                let gcell = Rect::new(x, strip.y, gw.min((strip.right() - x).max(0)), strip.h);
+                let (gfg, gbg) = if active {
+                    (theme.text, theme.accent)
+                } else {
+                    (theme.text_dim, theme.header_bg)
+                };
+                if gcell.w > 0 {
+                    ctx.text_opaque(gcell.x + self.pad_x, ty(gcell), gcell, "→", gfg, gbg);
+                }
+                self.goto_range.set((gcell.x, gcell.x + gw));
+                x += gw;
+            }
+            x += self.pad_x;
         }
         *self.ranges.borrow_mut() = ranges;
         // 이미지 미리보기(M4-2) — 내용 영역 전체에 비율 유지 가운데 표시

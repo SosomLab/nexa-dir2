@@ -139,3 +139,4 @@ pref.dlgFontSize = 대화상자 글꼴 크기(7~24)
 pref.save = 저장
 pref.cancel = 취소
 menu.file.prefs = 설정...
+ctx.copyName = 이름 복사

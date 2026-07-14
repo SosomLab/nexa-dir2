@@ -710,10 +710,7 @@ fn nav_btn_w(m: &PanelMetrics) -> i32 {
 fn nav_buttons() -> Vec<ToolButton> {
     [(BTN_BACK, "←"), (BTN_FORWARD, "→"), (BTN_UP, "↑")]
         .into_iter()
-        .map(|(id, g)| ToolButton {
-            id,
-            glyph: g.into(),
-        })
+        .map(|(id, g)| ToolButton::new(id, g))
         .collect()
 }
 
