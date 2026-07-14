@@ -83,4 +83,5 @@
 | X-5 | **터미널 마우스 프로토콜 전달**(Zellij 탭 클릭 등) | P2 | 중 | M4-3 | ✅ (07-14 — VtScreen DECSET 1000/1002/1003/1006 추적·SGR `ESC[<b;x;y M/m` 전달[클릭/우클릭/드래그/휠]·Shift=로컬 우회. 레거시 비SGR 인코딩=α 미지원) |
 | X-6 | **도크 레이아웃 재구성**(파일/정보 가로 분리·독립 좌/우 스플리터) | P1 | 중 | M4-1 | ✅ (07-14 — 원본 BottomLeftCol/Splitter/RightCol 이식: 전폭 밴드·dock_split 독립 비율(영속)·스플리터 3종 독립·panel_at_pt 라우팅. 실기 QA 대기) |
 | X-7 | **설정 창 전면 확장** | P3 | 중 | S6 | ✅ (07-14 — VS Code식 검색+카테고리+레지스트리·dir2 영속 설정 전부. 잔여: 재시작 필요 확인창[원본 PREF-9]·터미널 wrap/cols[X-3]·다중 폰트 슬롯은 해당 기능 도입 시) |
+| X-8 | **설정 창 VS Code식 완성**(X-7 후속, 사용자 요청 07-15) — 즉시 적용(저장 버튼 제거·WM_APP_PREFS_APPLY 동기 통지·EDIT=포커스 이탈 시)·리사이즈 창(WS_THICKFRAME·최소=기본 크기) | P3 | 소 | X-7 | ✅ (07-15 — 실기 QA 대기) |
 | X-3 | **터미널 설정**(원본 Settings §Terminal/Fonts 패리티): ① `term_wrap`(word wrap, 원본 NoWrap 기본 true) ② `term_cols`(80~1000, 원본 MaxColumns 240 — 가로 스크롤 동반) 잔여. ~~③ term_font~~ ✅ ~~④ term_font_size~~ ✅ ~~⑤ 명시 폴백 체인~~ ✅(07-14 — IDWriteFontFallbackBuilder·쉼표 목록·설정 창 노출) | P2 | 중 | M4-3 | 🚧 (①② 잔여) |

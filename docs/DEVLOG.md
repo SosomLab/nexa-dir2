@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-15
+
+- **UX QA 5차(main 직커밋, 사용자 QA/요청 6건)**: ① **비활성 패널 구분** — 테마 토큰 `sel_bg_inactive` 신설(무채색), `Panel::set_focused`가 전 탭 rows·dock에 전파(선택 하이라이트·도크 활성 종류·터미널 [→] 버튼 모두 비활성 색) + 기동 시 복원 활성 패널 반영 ② **스플리터 강조 잔존 수정** — 도크 좌/우·높이 드래그 해제 시 재도장 누락 → InvalidateRect ③ **이름 복사 위치** — `CustomItem.after_id` 앵커 삽입으로 "경로 복사" 바로 아래 ④ **설정 창 X-8** — VS Code식 **즉시 적용**(저장/취소 제거·`WM_APP_PREFS_APPLY` 동기 통지·EDIT=포커스 이탈 시·`apply_prefs` 분리 멱등) + **리사이즈 창**(WS_THICKFRAME·WM_SIZE 재배치·최소=기본 크기). 테스트 158 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
+
 ## 2026-07-14
 
 - **X-4 펼침 상태 유지(`feat/f18-expanded`) — 원본 F18 이식**: "B000 진입 후 복귀 시 A000 펼침 소실"(가시 트리 스냅샷 한계) → **탭별 영속 Expanded 집합**(BTreeMap 부모 우선·원본 PanelTab.Expanded) — 경계 동기(펼침=등재·접힘=말소·비가시 보존=재펼침 시 하위 복원)·리네임 접두사 치환(UpdateExpandedPaths)·**세션 영속**(panelN.expM — 원본 TabSession.Expanded, 상한 200/탭). 테스트 153 green(신규 4). 상세 [journal/2026-07-14.md](journal/2026-07-14.md).
