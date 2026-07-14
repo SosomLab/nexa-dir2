@@ -510,12 +510,12 @@ fn open_start_tree(path: &std::path::Path) -> Tree {
 pub fn run() -> Result<()> {
     let _ = now_ms(); // 기동 시각 고정 — 첫 렌더 계측 기준
     let tz = unsafe { tz_offset_min() };
-    // 설정/세션 로드(data\ — 없으면 기본값. M2-5)
+    // 설정/세션 로드(data\ — 없으면 기본값. M2-5. 구 .txt는 1회성 마이그레이션 폴백)
     let data = config::data_dir();
-    let settings = config::load(&data, SETTINGS_FILE)
+    let settings = config::load_migrated(&data, SETTINGS_FILE, config::SETTINGS_FILE_OLD)
         .map(|t| Settings::parse(&t))
         .unwrap_or_default();
-    let session = config::load(&data, SESSION_FILE)
+    let session = config::load_migrated(&data, SESSION_FILE, config::SESSION_FILE_OLD)
         .map(|t| Session::parse(&t))
         .unwrap_or_default();
     let theme_mode = ThemeMode::from_str(&settings.theme);
@@ -3192,10 +3192,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     ],
                 };
                 let dir = config::data_dir();
-                if let Err(e) = config::save(&dir, SETTINGS_FILE, &settings.serialize())
+                match config::save(&dir, SETTINGS_FILE, &settings.serialize())
                     .and_then(|_| config::save(&dir, SESSION_FILE, &session.serialize()))
                 {
-                    eprintln!("설정/세션 저장 실패: {e}");
+                    Ok(()) => config::purge_legacy(&dir), // 구 .txt 정리(마이그레이션 완료)
+                    Err(e) => eprintln!("설정/세션 저장 실패: {e}"),
                 }
             }
             PostQuitMessage(0);
