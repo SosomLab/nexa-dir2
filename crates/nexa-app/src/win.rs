@@ -71,6 +71,8 @@ const TIMER_JANITOR: usize = 3;
 const TIMER_RENAME: usize = 4;
 /// 터미널 선택 엣지 자동 스크롤 반복(QA 07-14) — 그리드 밖에서 버튼 유지 시 60ms 간격.
 const TIMER_TERM_SEL: usize = 5;
+/// 터미널 캐럿 깜빡임(QA 07-14) — 키 포커스 동안 GetCaretBlinkTime() 간격 토글.
+const TIMER_TERM_CARET: usize = 6;
 const JANITOR_TICK_MS: u32 = 10_000;
 const IDLE_TRIM_MS: u64 = 60_000;
 /// 폴더 watcher 통지(M3-6) — wparam=패널, lparam=세대(낡은 스레드 무시). 디바운스 타이머는
@@ -345,6 +347,8 @@ struct State {
     term_focus: Option<usize>,
     /// 터미널 마우스 선택 드래그 중(QA 07-14) — 패널 인덱스.
     term_drag: Option<usize>,
+    /// 터미널 캐럿 깜빡임 위상(QA 07-14) — 포커스 중 타이머가 토글, 입력 시 true 리셋.
+    term_caret_on: bool,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
     history: nexa_ops::history::OperationHistory,
 }
@@ -612,6 +616,7 @@ pub fn run() -> Result<()> {
         term_gen: 0,
         term_focus: None,
         term_drag: None,
+        term_caret_on: true,
         history: nexa_ops::history::OperationHistory::default(),
     });
 
@@ -984,6 +989,7 @@ unsafe fn term_paint(
     cwd: &std::path::Path,
     dpi: u32,
     theme: &nexa_gui::Theme,
+    caret_on: bool,
 ) {
     use nexa_gui::{Color, DrawCtx, Rect};
     let cell_w = ctx.term_cell_w();
@@ -1114,9 +1120,9 @@ unsafe fn term_paint(
             theme.panel_bg,
         );
     } else {
-        // 스크롤백 보기 중엔 캐럿 절대 라인이 화면 밖일 수 있음
+        // 스크롤백 보기 중엔 캐럿 절대 라인이 화면 밖일 수 있음. 깜빡임 오프 프레임은 생략
         let cr = sb + t.screen.cursor_row();
-        if cr >= top && cr < top + rows {
+        if caret_on && cr >= top && cr < top + rows {
             let cx = rc.x + 2 + t.screen.cursor_col() as i32 * cell_w;
             let cy = rc.y + 1 + (cr - top) as i32 * cell_h;
             if cy + cell_h <= rc.bottom() {
@@ -1866,6 +1872,8 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             if st.panels[i].dock_visible() && st.panels[i].dock.active_kind() == 2 {
                 let trc = st.panels[i].dock.content_rect();
                 let cwd = st.panels[i].root_path();
+                // 깜빡임(QA 07-14)은 키 포커스일 때만 — 비포커스는 상시 표시(원본 규약)
+                let caret_on = st.term_focus != Some(i) || st.term_caret_on;
                 term_paint(
                     &mut ctx,
                     hwnd,
@@ -1876,6 +1884,7 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     &cwd,
                     st.dpi,
                     &st.theme,
+                    caret_on,
                 );
             }
         }
@@ -2121,6 +2130,16 @@ unsafe fn wheel_target(hwnd: HWND, st: &State, lparam: LPARAM) -> (usize, i32, i
     };
     let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
     (st.panel_at(pt.x).unwrap_or(st.active), pt.x, pt.y)
+}
+
+/// 시스템 캐럿 깜빡임 주기(ms) — 0/비활성 값은 표준 530ms로 보정.
+fn caret_blink_ms() -> u32 {
+    let t = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCaretBlinkTime() };
+    if t == 0 || t == u32::MAX {
+        530
+    } else {
+        t
+    }
 }
 
 /// 터미널 선택 끝점 갱신(QA 07-14) — 그리드 위/아래로 벗어나 있으면 1줄 자동 스크롤 후
@@ -2375,6 +2394,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         && st.panels[idx].dock.active_kind() == 2
                     {
                         st.term_focus = Some(idx);
+                        st.term_caret_on = true;
+                        // 캐럿 깜빡임(QA 07-14) — 포커스 동안만, 시스템 깜빡임 주기
+                        SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                         update_dock_info(st, &mut inv); // 종류 전환 직후 내용 동기
                                                         // 그리드 안 프레스 = 마우스 선택 시작(QA 07-14 — 드래그로 확장)
                         if let Some(t) = &mut st.terms[idx] {
@@ -2960,6 +2982,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 }
                             }
                             if handled {
+                                st.term_caret_on = true; // 입력 중엔 캐럿 상시 표시(위상 리셋)
                                 invalidate_dock(hwnd, st, ti);
                                 return LRESULT(0);
                             }
@@ -3036,6 +3059,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                     if !st.icons.borrow().has_pending() {
                         let _ = KillTimer(Some(hwnd), TIMER_ICONS);
+                    }
+                }
+            } else if wparam.0 == TIMER_TERM_CARET {
+                // 터미널 캐럿 깜빡임(QA 07-14) — 포커스 해제 시 자연 종료(표시 위상 복원)
+                if let Some(st) = state_of(hwnd) {
+                    match st.term_focus {
+                        Some(ti) => {
+                            st.term_caret_on = !st.term_caret_on;
+                            invalidate_dock(hwnd, st, ti);
+                        }
+                        None => {
+                            st.term_caret_on = true;
+                            let _ = KillTimer(Some(hwnd), TIMER_TERM_CARET);
+                        }
                     }
                 }
             } else if wparam.0 == TIMER_TERM_SEL {
