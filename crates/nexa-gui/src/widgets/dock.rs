@@ -4,7 +4,7 @@
 
 use crate::draw::DrawCtx;
 use crate::event::InputEvent;
-use crate::geom::Rect;
+use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
 
@@ -29,6 +29,10 @@ pub struct InfoDock {
     goto_range: std::cell::Cell<(i32, i32)>,
     /// 호스트 패널 포커스 — 비활성 패널은 강조색(accent·sel_bg)을 무채색으로 낮춘다.
     focused: bool,
+    /// 내용 라인 선택(드래그 — QA 07-15: Info/Preview 텍스트 복사). (앵커, 현재) 라인.
+    sel: Option<(usize, usize)>,
+    /// 선택 드래그 중(MouseDown 시작 → MouseUp 종료, 선택은 유지).
+    sel_drag: bool,
 }
 
 impl InfoDock {
@@ -45,6 +49,36 @@ impl InfoDock {
             pending_goto: false,
             goto_range: std::cell::Cell::new((0, 0)),
             focused: false,
+            sel: None,
+            sel_drag: false,
+        }
+    }
+
+    /// 내용 라인 y→인덱스(이미지 미리보기·터미널 종류는 라인 없음 = None).
+    fn line_at(&self, x: i32, y: i32) -> Option<usize> {
+        if self.image.is_some() || self.lines.is_empty() {
+            return None;
+        }
+        let top = self.bounds.y + 1 + self.row_h.min((self.bounds.h - 1).max(0));
+        if !self.bounds.contains(Point { x, y }) || y < top {
+            return None;
+        }
+        let i = ((y - top) / self.row_h) as usize;
+        (i < self.lines.len()).then_some(i)
+    }
+
+    /// 선택 텍스트(라인 범위 — Ctrl+C 복사용, QA 07-15). 선택 없으면 `None`.
+    pub fn selected_text(&self) -> Option<String> {
+        let (a, b) = self.sel?;
+        let (lo, hi) = (a.min(b), a.max(b).min(self.lines.len().saturating_sub(1)));
+        Some(self.lines[lo..=hi].join("\r\n"))
+    }
+
+    /// 선택 해제(다른 영역 클릭 시 호스트가 호출).
+    pub fn clear_text_selection(&mut self, inv: &mut Invalidations) {
+        self.sel_drag = false;
+        if self.sel.take().is_some() {
+            inv.push(self.bounds);
         }
     }
 
@@ -94,9 +128,12 @@ impl InfoDock {
     }
 
     /// 표시 내용 교체(변경 시에만 무효화 — 선택 이동마다 호출돼도 무비용 유지).
+    /// 내용이 바뀌면 텍스트 선택도 해제(범위 무효 — QA 07-15).
     pub fn set_lines(&mut self, lines: Vec<String>, inv: &mut Invalidations) {
         if self.lines != lines {
             self.lines = lines;
+            self.sel = None;
+            self.sel_drag = false;
             inv.push(self.bounds);
         }
     }
@@ -124,32 +161,66 @@ impl Widget for InfoDock {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
-        // 종류 스트립 클릭 = 전환(M4-2 — 원본 SyncToggles 대응). 내용 갱신은 호스트.
-        if let InputEvent::MouseDown { x, y, .. } = *ev {
-            let strip_bottom = self.bounds.y + 1 + self.row_h;
-            if y >= self.bounds.y && y < strip_bottom {
-                // → 버튼(터미널 옆 부착 — QA 07-14 '폴더로 이동')
-                let (glo, ghi) = self.goto_range.get();
-                if ghi > glo && x >= glo && x < ghi {
-                    self.pending_goto = true;
-                    if self.active + 1 != self.kinds.len() {
-                        self.active = self.kinds.len().saturating_sub(1); // 터미널로 전환
-                    }
-                    inv.push(self.bounds);
-                    return;
-                }
-                let hit = self
-                    .ranges
-                    .borrow()
-                    .iter()
-                    .position(|&(lo, hi)| x >= lo && x < hi);
-                if let Some(i) = hit {
-                    if self.active != i {
-                        self.active = i;
+        match *ev {
+            // 종류 스트립 클릭 = 전환(M4-2 — 원본 SyncToggles 대응). 내용 갱신은 호스트.
+            InputEvent::MouseDown { x, y, .. } => {
+                let strip_bottom = self.bounds.y + 1 + self.row_h;
+                if y >= self.bounds.y && y < strip_bottom {
+                    // → 버튼(터미널 옆 부착 — QA 07-14 '폴더로 이동')
+                    let (glo, ghi) = self.goto_range.get();
+                    if ghi > glo && x >= glo && x < ghi {
+                        self.pending_goto = true;
+                        if self.active + 1 != self.kinds.len() {
+                            self.active = self.kinds.len().saturating_sub(1); // 터미널로 전환
+                        }
                         inv.push(self.bounds);
+                        return;
+                    }
+                    let hit = self
+                        .ranges
+                        .borrow()
+                        .iter()
+                        .position(|&(lo, hi)| x >= lo && x < hi);
+                    if let Some(i) = hit {
+                        if self.active != i {
+                            self.active = i;
+                            self.sel = None; // 종류 전환 = 내용 교체
+                            self.sel_drag = false;
+                            inv.push(self.bounds);
+                        }
+                    }
+                } else if let Some(i) = self.line_at(x, y) {
+                    // 내용 라인 드래그 선택 시작(QA 07-15 — Info/Preview 텍스트 복사)
+                    self.sel = Some((i, i));
+                    self.sel_drag = true;
+                    inv.push(self.bounds);
+                } else {
+                    self.clear_text_selection(inv);
+                }
+            }
+            InputEvent::MouseMove { x, y } => {
+                if self.sel_drag {
+                    // 내용 영역 밖은 첫/끝 라인으로 클램프(엣지 드래그)
+                    let top = self.bounds.y + 1 + self.row_h.min((self.bounds.h - 1).max(0));
+                    let i = if y < top {
+                        0
+                    } else {
+                        (((y - top) / self.row_h).max(0) as usize)
+                            .min(self.lines.len().saturating_sub(1))
+                    };
+                    let _ = x;
+                    if let Some((a, cur)) = self.sel {
+                        if cur != i {
+                            self.sel = Some((a, i));
+                            inv.push(self.bounds);
+                        }
                     }
                 }
             }
+            InputEvent::MouseUp { .. } => {
+                self.sel_drag = false; // 선택은 유지(Ctrl+C 복사 — 터미널 규약 동일)
+            }
+            _ => {}
         }
     }
 
@@ -218,21 +289,23 @@ impl Widget for InfoDock {
             ctx.draw_image(area, img);
             return;
         }
-        // 내용 라인들
+        // 내용 라인들 — 드래그 선택 라인은 하이라이트(QA 07-15, Ctrl+C 복사 대상)
+        let sel = self.sel.map(|(a, b2)| (a.min(b2), a.max(b2)));
         let mut y = strip.bottom();
-        for line in &self.lines {
+        for (i, line) in self.lines.iter().enumerate() {
             if y >= b.bottom() {
                 break;
             }
+            let bg = if sel.is_some_and(|(lo, hi)| i >= lo && i <= hi) {
+                theme.sel_bg
+            } else {
+                theme.panel_bg
+            };
             let cell = Rect::new(b.x, y, b.w, self.row_h.min(b.bottom() - y));
-            ctx.text_opaque(
-                cell.x + self.pad_x,
-                ty(cell),
-                cell,
-                line,
-                theme.text,
-                theme.panel_bg,
-            );
+            if bg != theme.panel_bg {
+                ctx.fill_rect(cell, bg);
+            }
+            ctx.text_opaque(cell.x + self.pad_x, ty(cell), cell, line, theme.text, bg);
             y += self.row_h;
         }
         // 잔여 배경

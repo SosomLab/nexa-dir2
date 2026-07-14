@@ -140,6 +140,7 @@ menu.file.prefs = 설정...
 ctx.copyName = 이름 복사
 pref.cat.appearance = 모양
 pref.cat.fonts = 글꼴
+pref.cat.terminal = 터미널
 pref.cat.list = 파일 목록
 pref.cat.dock = 하단 도크
 pref.cat.lang = 언어

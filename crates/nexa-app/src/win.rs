@@ -2347,12 +2347,12 @@ unsafe fn set_active(hwnd: HWND, st: &mut State, idx: usize) {
 }
 
 /// 포커스 시각 동기(QA 07-15) — **실제 키 포커스가 있는 영역만 강조**:
-/// 탭 바 accent=활성 패널 · 리스트 선택색=활성 패널이면서 터미널 비포커스 ·
-/// 도크 스트립(활성 종류 라벨·[→])=그 패널 터미널이 키 포커스일 때만 accent.
+/// 탭 바·리스트 선택색=활성 패널이면서 터미널 비포커스(터미널 포커스 중엔 패널 전부
+/// 비활성 표시 — 사용자 지시) · 도크 스트립(활성 종류 라벨·[→])=그 패널 터미널이
+/// 키 포커스일 때만 accent.
 unsafe fn sync_focus_visuals(st: &mut State, inv: &mut Invalidations) {
     for i in 0..2 {
-        st.panels[i].set_focused(st.active == i, inv);
-        st.panels[i].set_list_focused(st.active == i && st.term_focus.is_none(), inv);
+        st.panels[i].set_focused(st.active == i && st.term_focus.is_none(), inv);
         st.panels[i].dock.set_focused(st.term_focus == Some(i), inv);
     }
 }
@@ -2837,6 +2837,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     Some(windows::Win32::UI::WindowsAndMessaging::IDC_SIZENS)
                 } else if on_dock_split || on_file_split {
                     Some(windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE)
+                } else if st.panels.iter().any(|p| p.rows().resize_hot(pt.x, pt.y)) {
+                    // 컬럼 경계 리사이즈 존(QA 07-15) — 드래그 중 포함
+                    Some(windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE)
                 } else {
                     None
                 };
@@ -2985,6 +2988,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             })
                     };
                     let was_selected = hit.as_ref().is_some_and(|(sel, _)| *sel);
+                    // 반대 패널 도크 텍스트 선택 해제(QA 07-15 — 복사 대상은 한 곳만)
+                    st.panels[1 - idx].dock.clear_text_selection(&mut inv);
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
@@ -3509,8 +3514,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == b'A' as u16 && ctrl {
                     st.active_panel().on_event(&InputEvent::SelectAll, &mut inv);
                 } else if vk == b'C' as u16 && ctrl {
-                    // OS 클립보드 복사/잘라내기(M3-5 — CF_HDROP 단일 출처) — 선택 없으면 유지
-                    if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Copy) {
+                    // 도크 Info/Preview 텍스트 선택 우선(QA 07-15) — 없으면 파일 복사
+                    // (M3-5 — CF_HDROP 단일 출처. 선택 없으면 클립보드 유지)
+                    if let Some(t) = st
+                        .panels
+                        .iter()
+                        .find_map(|p| p.dock_visible().then(|| p.dock.selected_text()).flatten())
+                    {
+                        crate::clipboard::write_text(hwnd, &t);
+                    } else if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Copy) {
                         crate::clipboard::write_file_list(hwnd, &paths, op);
                     }
                 } else if vk == b'X' as u16 && ctrl {

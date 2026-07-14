@@ -302,16 +302,12 @@ impl Panel {
         self.set_bounds(self.bounds, inv);
     }
 
-    /// 패널 활성 표시(탭 바 accent) — 듀얼에서 어느 패널이 활성인지.
-    pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
-        self.tabbar.set_focused(focused, inv);
-    }
-
-    /// 리스트 키 포커스(선택 하이라이트 색 — QA 07-15): 터미널 포커스 중엔 활성 패널의
-    /// 리스트도 비활성 색(실제 포커스 영역만 강조). 도크 스트립 강조는 호스트가
+    /// 패널(탭 바+리스트) 키 포커스 표시 — QA 07-15: 터미널 포커스 중엔 활성 패널도
+    /// 전부 비활성 색(실제 포커스 영역만 강조). 도크 스트립 강조는 호스트가
     /// `dock.set_focused`로 터미널 포커스에 맞춰 직접 동기한다.
-    pub fn set_list_focused(&mut self, focused: bool, inv: &mut Invalidations) {
+    pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
         self.focused = focused;
+        self.tabbar.set_focused(focused, inv);
         for tab in &mut self.tabs {
             tab.rows.set_focused(focused, inv);
         }
@@ -658,6 +654,10 @@ impl Panel {
     pub fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
             InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y } => {
+                // 도크 밖 클릭 = 도크 텍스트 선택 해제(QA 07-15 — Ctrl+C 우선순위 복원)
+                if self.dock_visible && y < self.dock.bounds().y {
+                    self.dock.clear_text_selection(inv);
+                }
                 if y < self.pathbar.bounds().y {
                     self.tabbar.on_event(ev, inv);
                 } else if y < self.rows().bounds().y {
@@ -678,6 +678,9 @@ impl Panel {
                 self.navbtns.on_event(ev, inv);
                 self.pathbar.on_event(ev, inv);
                 self.tabs[self.active].rows.on_event(ev, inv);
+                if self.dock_visible {
+                    self.dock.on_event(ev, inv); // 내용 라인 드래그 선택(QA 07-15)
+                }
             }
             InputEvent::MouseUp { .. } => {
                 // 경로바 편집 드래그 선택 종료(QA 07-13) + 리스트 밴드/리사이즈 종료 +
@@ -685,6 +688,9 @@ impl Panel {
                 self.tabbar.on_event(ev, inv);
                 self.pathbar.on_event(ev, inv);
                 self.tabs[self.active].rows.on_event(ev, inv);
+                if self.dock_visible {
+                    self.dock.on_event(ev, inv); // 도크 선택 드래그 종료(QA 07-15)
+                }
             }
             _ => self.tabs[self.active].rows.on_event(ev, inv),
         }

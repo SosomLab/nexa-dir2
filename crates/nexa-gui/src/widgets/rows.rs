@@ -122,6 +122,9 @@ struct ResizeDrag {
     col: usize,
     start_x: i32,
     start_w: i32,
+    /// 오른쪽 이웃 컬럼 시작 폭 — Some이면 **한 쌍 동시 조절**(총폭 보존, QA 07-15:
+    /// 경계 드래그 시 좌우 컬럼이 함께 변한다). None = 마지막/고정 이웃(단독 조절).
+    start_w2: Option<i32>,
 }
 
 /// 러버밴드 드래그 상태(본문 빈 영역에서 시작).
@@ -193,6 +196,12 @@ impl<S: RowSource> VirtualRows<S> {
             press_pending: None,
             focused: true,
         }
+    }
+
+    /// 컬럼 경계 리사이즈 존 히트(호스트 커서 변경용 — QA 07-15: 경계=수평 리사이즈 커서).
+    /// 드래그 중에는 존 밖에서도 유지.
+    pub fn resize_hot(&self, x: i32, y: i32) -> bool {
+        self.resize.is_some() || matches!(self.header_hit(x, y), Some((_, true)))
     }
 
     /// 호스트 패널 포커스 상태 반영 — 선택 하이라이트 색만 바뀐다(선택 자체는 유지).
@@ -819,10 +828,15 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             InputEvent::MouseDown { x, y, shift, ctrl } => {
                 if let Some((i, handle)) = self.header_hit(x, y) {
                     if handle {
+                        // 오른쪽 이웃이 조절 가능하면 한 쌍 동시 조절(총폭 보존 — QA 07-15)
+                        let start_w2 = (i + 1 < self.columns.len()
+                            && self.columns[i + 1].resizable)
+                            .then(|| self.columns[i + 1].width);
                         self.resize = Some(ResizeDrag {
                             col: i,
                             start_x: x,
                             start_w: self.columns[i].width,
+                            start_w2,
                         });
                     } else if self.columns[i].sortable {
                         let key = self.columns[i].key;
@@ -879,12 +893,27 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             }
             InputEvent::MouseMove { x, y } => {
                 if let Some(drag) = self.resize {
-                    let w =
-                        (drag.start_w + (x - drag.start_x)).max(self.columns[drag.col].min_width);
-                    if w != self.columns[drag.col].width {
-                        self.columns[drag.col].width = w;
-                        self.clamp_scroll_x();
-                        inv.push(self.bounds);
+                    // 이동량을 양쪽 min_width로 제한 — 한 쌍 조절이면 이웃도 함께(QA 07-15)
+                    let mut dx = (x - drag.start_x)
+                        .max(self.columns[drag.col].min_width - drag.start_w);
+                    if let Some(w2) = drag.start_w2 {
+                        dx = dx.min(w2 - self.columns[drag.col + 1].min_width);
+                        let (nw1, nw2) = (drag.start_w + dx, w2 - dx);
+                        if nw1 != self.columns[drag.col].width
+                            || nw2 != self.columns[drag.col + 1].width
+                        {
+                            self.columns[drag.col].width = nw1;
+                            self.columns[drag.col + 1].width = nw2;
+                            self.clamp_scroll_x();
+                            inv.push(self.bounds);
+                        }
+                    } else {
+                        let w = drag.start_w + dx;
+                        if w != self.columns[drag.col].width {
+                            self.columns[drag.col].width = w;
+                            self.clamp_scroll_x();
+                            inv.push(self.bounds);
+                        }
                     }
                 } else if let Some(mut band) = self.band {
                     band.cx = x;
@@ -1019,14 +1048,20 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 }
             }
 
-            // 캐럿 행 테두리(1px accent) — 선택과 독립(키보드 기준점 표시). 폭 = 컬럼 총폭
+            // 캐럿 행 테두리(1px accent) — 선택과 독립(키보드 기준점 표시). 폭 = 컬럼 총폭.
+            // 비활성 패널(터미널 포커스 포함)은 무채색(text_dim)으로 낮춘다(QA 07-15).
             if self.caret == Some(row) {
+                let cc = if self.focused {
+                    theme.accent
+                } else {
+                    theme.text_dim
+                };
                 let cr = self.columns_right().min(b.right());
                 let cw = (cr - b.x).max(1);
-                ctx.fill_rect(Rect::new(b.x, y, cw, 1), theme.accent);
-                ctx.fill_rect(Rect::new(b.x, y + self.row_h - 1, cw, 1), theme.accent);
-                ctx.fill_rect(Rect::new(b.x, y, 1, self.row_h), theme.accent);
-                ctx.fill_rect(Rect::new(cr - 1, y, 1, self.row_h), theme.accent);
+                ctx.fill_rect(Rect::new(b.x, y, cw, 1), cc);
+                ctx.fill_rect(Rect::new(b.x, y + self.row_h - 1, cw, 1), cc);
+                ctx.fill_rect(Rect::new(b.x, y, 1, self.row_h), cc);
+                ctx.fill_rect(Rect::new(cr - 1, y, 1, self.row_h), cc);
             }
         }
 

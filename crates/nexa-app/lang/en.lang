@@ -141,6 +141,7 @@ menu.file.prefs = Preferences...
 ctx.copyName = Copy as name
 pref.cat.appearance = Appearance
 pref.cat.fonts = Fonts
+pref.cat.terminal = Terminal
 pref.cat.list = File list
 pref.cat.dock = Bottom dock
 pref.cat.lang = Language
