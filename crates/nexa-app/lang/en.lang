@@ -118,3 +118,10 @@ tab.close = Close tab
 ops.applyAll = (Yes=overwrite all / No=skip all / Cancel=abort - the choice applies to all remaining conflicts)
 
 ctx.copyPath = Copy as path
+
+ops.yes = Overwrite
+ops.yesAll = Overwrite all
+ops.skip = Skip
+ops.cancel = Cancel
+ops.progressTitle = File transfer
+ops.progressLabel = Transferring...

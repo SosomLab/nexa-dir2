@@ -112,6 +112,7 @@ pub unsafe fn show(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
+    hide: &[&str],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -119,7 +120,7 @@ pub unsafe fn show(
         return Outcome::Cancelled;
     }
     let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    let out = show_inner(hwnd, paths, extended_verbs, intercept, custom, at);
+    let out = show_inner(hwnd, paths, extended_verbs, intercept, hide, custom, at);
     if hr.is_ok() {
         CoUninitialize();
     }
@@ -131,6 +132,7 @@ unsafe fn show_inner(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
+    hide: &[&str],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -171,7 +173,7 @@ unsafe fn show_inner(
         let Ok(icm) = folder.GetUIObjectOf::<IContextMenu>(hwnd, &children, None) else {
             return Outcome::Cancelled;
         };
-        run_menu(hwnd, &icm, extended_verbs, intercept, custom, at)
+        run_menu(hwnd, &icm, extended_verbs, intercept, hide, custom, at)
     })();
     for pidl in full_pidls {
         CoTaskMemFree(Some(pidl as *const core::ffi::c_void)); // ILFree 동등
@@ -189,11 +191,12 @@ pub unsafe fn show_background(
     dir: &std::path::Path,
     extended_verbs: bool,
     intercept: &[&str],
+    hide: &[&str],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
     let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    let out = show_background_inner(hwnd, dir, extended_verbs, intercept, custom, at);
+    let out = show_background_inner(hwnd, dir, extended_verbs, intercept, hide, custom, at);
     if hr.is_ok() {
         CoUninitialize();
     }
@@ -205,6 +208,7 @@ unsafe fn show_background_inner(
     dir: &std::path::Path,
     extended_verbs: bool,
     intercept: &[&str],
+    hide: &[&str],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -228,7 +232,7 @@ unsafe fn show_background_inner(
         let Ok(icm) = folder.CreateViewObject::<IContextMenu>(hwnd) else {
             return Outcome::Cancelled;
         };
-        run_menu(hwnd, &icm, extended_verbs, intercept, custom, at)
+        run_menu(hwnd, &icm, extended_verbs, intercept, hide, custom, at)
     })();
     CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
     outcome
@@ -240,6 +244,7 @@ unsafe fn run_menu(
     icm: &IContextMenu,
     extended_verbs: bool,
     intercept: &[&str],
+    hide: &[&str],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -258,6 +263,25 @@ unsafe fn run_menu(
             .is_err()
         {
             return Outcome::Cancelled;
+        }
+        // 2-0) 셸 항목 숨김(원본 VerbReplacement — QA 07-14): 고유 항목으로 **대체**하는
+        // canonical verb는 셸 제공분을 제거(중복 표시·단일 부모 한계 오동작 방지).
+        if !hide.is_empty() {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                DeleteMenu, GetMenuItemCount, GetMenuItemID, MF_BYPOSITION,
+            };
+            let n = GetMenuItemCount(Some(hmenu));
+            for pos in (0..n.max(0)).rev() {
+                let id = GetMenuItemID(hmenu, pos);
+                if !(ID_SHELL_FIRST..=ID_SHELL_LAST).contains(&id) {
+                    continue;
+                }
+                if let Some(verb) = get_verb(icm, id - ID_SHELL_FIRST) {
+                    if hide.iter().any(|v| verb.eq_ignore_ascii_case(v)) {
+                        let _ = DeleteMenu(hmenu, pos as u32, MF_BYPOSITION);
+                    }
+                }
+            }
         }
         // 2-1) 고유 항목 병합(0x8000+) — 구분자로 섹션 분리(ADR-0005. 셸 제공 동사는 중복 금지).
         if !custom.is_empty() {

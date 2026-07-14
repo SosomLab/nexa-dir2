@@ -429,6 +429,8 @@ struct TransferJob {
     gen: u64,
     /// 완료 시 히스토리 기록용(M3-3) — Move/Copy에 따라 역연산이 다르다.
     op: nexa_ops::Op,
+    /// 진행 창(QA 07-14 — 커스텀 프로그레스·취소 버튼). Drop=창 닫기.
+    progress: Option<crate::dialog::Progress>,
 }
 
 impl State {
@@ -1161,6 +1163,28 @@ fn keyboard_targets(st: &mut State) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// **표시 순서** 선택 경로(QA 07-14 — selected_paths는 선택 삽입 순서라 화면 순서와 다름):
+/// 가시 행을 위에서부터 순회해 선택 항목을 수집. 선택 없으면 캐럿 폴백(keyboard_targets).
+fn display_order_targets(st: &mut State) -> Vec<PathBuf> {
+    let out: Vec<PathBuf> = {
+        let rows = st.active_panel().rows();
+        let tree = rows.source().tree();
+        (0..tree.visible_len())
+            .filter_map(|i| {
+                let id = tree.visible_id(i)?;
+                if !tree.is_selected(id) {
+                    return None;
+                }
+                tree.node_path(id).map(|p| p.to_path_buf())
+            })
+            .collect()
+    };
+    if out.is_empty() {
+        return keyboard_targets(st);
+    }
+    out
+}
+
 /// 우클릭 컨텍스트 대상(M3-4) — 선택(없으면 캐럿)을 **캐럿 항목의 부모 폴더 기준으로 축소**
 /// (ADR-0003 §다중 선택 규칙: GetUIObjectOf는 단일 부모만 표현. 교차 부모 확장은 후속).
 fn context_targets(st: &mut State) -> Vec<PathBuf> {
@@ -1234,7 +1258,7 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
     let Some((dir, shift, custom)) = req else {
         return;
     };
-    let outcome = shellmenu::show_background(hwnd, &dir, shift, &["paste"], &custom, None);
+    let outcome = shellmenu::show_background(hwnd, &dir, shift, &["paste"], &[], &custom, None);
     let Some(st) = state_of(hwnd) else { return };
     match outcome {
         shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 새로 만들기 등 FS 변경 가능
@@ -1277,7 +1301,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         at: Option<windows::Win32::Foundation::POINT>,
     }
     let req = state_of(hwnd).and_then(|st| {
-        let full = keyboard_targets(st);
+        let full = display_order_targets(st); // 표시 순서(QA 07-14 — 경로 복사 순서 정합)
         let targets = context_targets(st);
         if targets.is_empty() {
             return None;
@@ -1342,6 +1366,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         &req.targets,
         req.shift,
         &["delete", "rename", "copy", "cut"],
+        &["copyaspath"],
         &req.custom,
         req.at,
     );
@@ -1747,12 +1772,17 @@ unsafe fn start_transfer(
                                     // 충돌 확인 문구는 UI 스레드에서 선확정(i18n 전역을 워커에서 조회하지 않음)
     let ow_title = tr("ops.overwriteTitle");
     let ow_text = tr("ops.overwrite");
-    let ow_all = tr("ops.applyAll");
+    let (b_yes, b_yes_all, b_skip, b_cancel) = (
+        tr("ops.yes"),
+        tr("ops.yesAll"),
+        tr("ops.skip"),
+        tr("ops.cancel"),
+    );
     std::thread::spawn(move || {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
-        // 일괄 적용(편의 UX ③ 개정 — 사용자 QA 07-14 "탐색기처럼 1번만"): **첫 충돌에서
-        // 1회만** 확인하고 같은 선택을 전체에 적용. 예=모두 덮어쓰기 · 아니오=모두 건너뜀 ·
-        // 취소=전체 중단. 파일별 개별 선택(예/모두 예 4버튼)은 커스텀 대화상자 후속.
+        // 충돌 확인(QA 07-14 개정 — 원본 4버튼): **덮어쓰기/모두 덮어쓰기/건너뛰기/취소**
+        // 커스텀 대화상자(dialog.rs — MessageBox 대체). "모두 덮어쓰기"만 이후 무확인,
+        // 그 외에는 파일별로 다시 묻는다. 1건뿐이면 자연히 1회 질문.
         let mut decided: Option<nexa_ops::Conflict> = None;
         let out = nexa_ops::transfer(
             &sources,
@@ -1760,37 +1790,40 @@ unsafe fn start_transfer(
             op,
             // 워커 스레드 모달(자체 메시지 루프) — UI 스레드는 계속 펌프(진행 표시 유지).
             &mut |conflict| {
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL,
-                };
                 if let Some(choice) = decided {
                     return choice;
                 }
-                let text = HSTRING::from(format!(
-                    "{}\n\n{}",
-                    ow_text.replace("{0}", &nexa_ops::leaf_name(conflict)),
-                    ow_all
-                ));
-                let title = HSTRING::from(ow_title.as_str());
-                let r = unsafe {
-                    MessageBoxW(
-                        Some(hwnd),
-                        PCWSTR(text.as_ptr()),
-                        PCWSTR(title.as_ptr()),
-                        MB_YESNOCANCEL | MB_ICONQUESTION,
-                    )
-                };
-                let choice = if r == IDYES {
-                    nexa_ops::Conflict::Overwrite
-                } else {
-                    if r != windows::Win32::UI::WindowsAndMessaging::IDNO {
-                        sh.cancel.store(true, Ordering::Relaxed); // 취소 = 전체 중단
-                        return nexa_ops::Conflict::Skip;
+                let text = ow_text.replace("{0}", &nexa_ops::leaf_name(conflict));
+                let buttons = [
+                    crate::dialog::DlgButton {
+                        id: 1,
+                        label: b_yes.clone(),
+                    },
+                    crate::dialog::DlgButton {
+                        id: 2,
+                        label: b_yes_all.clone(),
+                    },
+                    crate::dialog::DlgButton {
+                        id: 3,
+                        label: b_skip.clone(),
+                    },
+                    crate::dialog::DlgButton {
+                        id: 4,
+                        label: b_cancel.clone(),
+                    },
+                ];
+                match unsafe { crate::dialog::show_buttons(hwnd, &ow_title, &text, &buttons) } {
+                    1 => nexa_ops::Conflict::Overwrite, // 이 파일만 — 다음 충돌 재질문
+                    2 => {
+                        decided = Some(nexa_ops::Conflict::Overwrite); // 모두 덮어쓰기
+                        nexa_ops::Conflict::Overwrite
                     }
-                    nexa_ops::Conflict::Skip
-                };
-                decided = Some(choice);
-                choice
+                    3 => nexa_ops::Conflict::Skip, // 이 파일만 건너뜀
+                    _ => {
+                        sh.cancel.store(true, Ordering::Relaxed); // 취소/Esc = 전체 중단
+                        nexa_ops::Conflict::Skip
+                    }
+                }
             },
             &mut |p, _| {
                 sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
@@ -1808,7 +1841,15 @@ unsafe fn start_transfer(
             let _ = PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(1));
         }
     });
-    st.transfer = Some(TransferJob { shared, gen, op });
+    // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop)
+    let progress =
+        crate::dialog::Progress::open(hwnd, &tr("ops.progressTitle"), &tr("ops.progressLabel"));
+    st.transfer = Some(TransferJob {
+        shared,
+        gen,
+        op,
+        progress,
+    });
     update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &["0"])));
 }
 
@@ -1824,6 +1865,14 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
             job.shared.total_bytes.load(Ordering::Relaxed),
         );
         let pct = (d * 100).checked_div(t).unwrap_or(100);
+        // 진행 창 갱신 + [취소]/X 폴링(QA 07-14) — 취소 요청은 워커 cancel 플래그로
+        let job = st.transfer.as_mut().unwrap();
+        if let Some(p) = &mut job.progress {
+            p.update(d, t);
+            if p.cancelled() {
+                job.shared.cancel.store(true, Ordering::Relaxed);
+            }
+        }
         update_title(
             hwnd,
             st,
