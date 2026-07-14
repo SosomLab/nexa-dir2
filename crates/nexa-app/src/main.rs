@@ -27,6 +27,8 @@ mod panel;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod pathinput;
 #[cfg(windows)]
+mod prefs;
+#[cfg(windows)]
 mod recycle;
 #[cfg(windows)]
 mod shellmenu;

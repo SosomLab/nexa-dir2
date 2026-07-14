@@ -154,7 +154,14 @@ pub struct DwBackend {
 
 impl DwBackend {
     /// `hdc`와 호환되는 비트맵 렌더 타깃을 만든다(9pt = 12 DIP, DPI는 PixelsPerDip로 반영).
-    pub unsafe fn new(hdc: HDC, w: i32, h: i32, dpi: u32, mono_font: &str, mono_size: f32) -> Result<Self> {
+    pub unsafe fn new(
+        hdc: HDC,
+        w: i32,
+        h: i32,
+        dpi: u32,
+        mono_font: &str,
+        mono_size: f32,
+    ) -> Result<Self> {
         let factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let interop: IDWriteGdiInterop = factory.GetGdiInterop()?;
         let brt = interop.CreateBitmapRenderTarget(Some(hdc), w.max(1) as u32, h.max(1) as u32)?;

@@ -115,8 +115,10 @@ unsafe fn ensure_class() {
             hInstance: windows::Win32::System::LibraryLoader::GetModuleHandleW(None)
                 .unwrap_or_default()
                 .into(),
-            hbrBackground: HBRUSH((windows::Win32::Graphics::Gdi::COLOR_BTNFACE.0 + 1) as isize
-                as *mut core::ffi::c_void),
+            hbrBackground: HBRUSH(
+                (windows::Win32::Graphics::Gdi::COLOR_BTNFACE.0 + 1) as isize
+                    as *mut core::ffi::c_void,
+            ),
             hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
                 None,
                 windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
@@ -282,6 +284,11 @@ pub unsafe fn show_buttons(
     state.result
 }
 
+/// 폰트 생성 공개 래퍼(설정 창 등 다른 커스텀 창과 공용).
+pub unsafe fn make_font_pub(hwnd: HWND, spec: &DlgFont) -> HFONT {
+    make_font(hwnd, spec)
+}
+
 /// 소유자 중앙 좌표.
 unsafe fn center_over(owner: HWND, w: i32, h: i32) -> (i32, i32) {
     let mut rc = RECT::default();
@@ -423,8 +430,10 @@ impl Progress {
                 hInstance: windows::Win32::System::LibraryLoader::GetModuleHandleW(None)
                     .unwrap_or_default()
                     .into(),
-                hbrBackground: HBRUSH((windows::Win32::Graphics::Gdi::COLOR_BTNFACE.0 + 1)
-                    as isize as *mut core::ffi::c_void),
+                hbrBackground: HBRUSH(
+                    (windows::Win32::Graphics::Gdi::COLOR_BTNFACE.0 + 1) as isize
+                        as *mut core::ffi::c_void,
+                ),
                 hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
                     None,
                     windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,

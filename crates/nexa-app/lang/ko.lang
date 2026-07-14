@@ -124,3 +124,17 @@ ops.skip = 건너뛰기
 ops.cancel = 취소
 ops.progressTitle = 파일 전송
 ops.progressLabel = 전송 중...
+
+pref.title = 설정
+pref.theme = 테마
+pref.theme.system = 시스템
+pref.theme.light = 라이트
+pref.theme.dark = 다크
+pref.lang = 언어
+pref.lang.system = 시스템
+pref.termFont = 터미널 글꼴(쉼표=폴백 체인)
+pref.termFontSize = 터미널 글꼴 크기(8~32)
+pref.dlgFont = 대화상자 글꼴
+pref.dlgFontSize = 대화상자 글꼴 크기(7~24)
+pref.save = 저장
+pref.cancel = 취소

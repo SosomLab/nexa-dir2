@@ -24,7 +24,8 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, VK_APPS, VK_CONTROL, VK_DELETE,
     VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_F2, VK_F3, VK_F5, VK_F6, VK_HOME, VK_LEFT, VK_NEXT,
-    VK_OEM_3, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+    VK_OEM_3, VK_OEM_COMMA, VK_OEM_PERIOD, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
+    VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
@@ -1866,7 +1867,9 @@ unsafe fn start_transfer(
                         label: b_cancel.clone(),
                     },
                 ];
-                match unsafe { crate::dialog::show_buttons(hwnd, &ow_title, &text, &buttons, &dlg_font) } {
+                match unsafe {
+                    crate::dialog::show_buttons(hwnd, &ow_title, &text, &buttons, &dlg_font)
+                } {
                     1 => nexa_ops::Conflict::Overwrite, // 이 파일만 — 다음 충돌 재질문
                     2 => {
                         decided = Some(nexa_ops::Conflict::Overwrite); // 모두 덮어쓰기
@@ -2388,6 +2391,74 @@ unsafe fn invalidate_dock(hwnd: HWND, st: &State, panel: usize) {
     let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
 }
 
+/// 설정 창 열기(S6 — Ctrl+, 원본 docs/40): 현재 값 스냅샷 → 모달(State 참조 차단 —
+/// 재진입 규약) → 저장 시 적용(테마/언어=기존 명령 경로 재사용·글꼴=백엔드 재생성)
+/// + settings.cfg 즉시 저장(원본 PREF 영속 규율).
+unsafe fn open_prefs(hwnd: HWND) {
+    let req = state_of(hwnd).map(|st| {
+        (
+            crate::prefs::PrefValues {
+                theme: st.theme_mode.as_str().into(),
+                lang: st.lang_setting.clone(),
+                langs: st.langs.iter().map(|(c, _)| c.clone()).collect(),
+                term_font: st.term_font.clone(),
+                term_font_size: st.term_font_size,
+                dlg_font: st.dlg_font.family.clone(),
+                dlg_font_size: st.dlg_font.size_pt,
+            },
+            st.dlg_font.clone(),
+        )
+    });
+    let Some((vals, dfont)) = req else { return };
+    let Some(v) = crate::prefs::show(hwnd, vals, &dfont) else {
+        return;
+    };
+    let Some(st) = state_of(hwnd) else { return };
+    // 테마/언어 — 기존 명령 경로 재사용(라디오 동기·동적 전환 포함)
+    match v.theme.as_str() {
+        "light" => run_command(hwnd, st, CMD_THEME_LIGHT),
+        "dark" => run_command(hwnd, st, CMD_THEME_DARK),
+        _ => run_command(hwnd, st, CMD_THEME_SYSTEM),
+    }
+    let Some(st) = state_of(hwnd) else { return };
+    if v.lang != st.lang_setting {
+        if v.lang == "system" {
+            run_command(hwnd, st, CMD_LANG_SYSTEM);
+        } else if let Some(i) = st.langs.iter().position(|(c, _)| *c == v.lang) {
+            run_command(hwnd, st, CMD_LANG_BASE + i as u32);
+        }
+    }
+    let Some(st) = state_of(hwnd) else { return };
+    // 글꼴 — 터미널은 백엔드 재생성(mono_format·폴백 체인·글리프 캐시 재구축)
+    if v.term_font != st.term_font || v.term_font_size != st.term_font_size {
+        st.term_font = v.term_font.clone();
+        st.term_font_size = v.term_font_size;
+        st.dw = None;
+    }
+    st.dlg_font = crate::dialog::DlgFont {
+        family: v.dlg_font.clone(),
+        size_pt: v.dlg_font_size,
+    };
+    // 즉시 영속(원본 PREF 규율 — 종료 저장과 별개로 설정만 저장)
+    let settings = Settings {
+        theme: st.theme_mode.as_str().into(),
+        lang: st.lang_setting.clone(),
+        show_hidden: st.show_hidden,
+        show_dotfiles: st.show_dotfiles,
+        split: st.split,
+        dock: st.panels[0].dock_visible(),
+        dock_ratio: st.panels[0].dock_ratio(),
+        dock_split: st.dock_split,
+        term_font: st.term_font.clone(),
+        term_font_size: st.term_font_size,
+        dlg_font: st.dlg_font.family.clone(),
+        dlg_font_size: st.dlg_font.size_pt,
+    };
+    let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+    let _ = InvalidateRect(Some(hwnd), None, false);
+    update_title(hwnd, st, "");
+}
+
 /// 파일 실행(더블클릭·Enter·Alt+↓ — QA 07-14) — 기본 연결 프로그램(탐색기 동일).
 unsafe fn shell_open(hwnd: HWND, file: &std::path::Path) {
     use windows::Win32::UI::Shell::ShellExecuteW;
@@ -2722,8 +2793,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 캐럿 깜빡임(QA 07-14) — 포커스 동안만, 시스템 깜빡임 주기
                         SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                         update_dock_info(st, &mut inv); // 종류 전환 직후 내용 동기
-                        // 그리드 안 프레스: TUI 마우스 모드(X-5)면 시퀀스 전달(Shift=
-                        // 로컬 우회 — 터미널 관례), 아니면 로컬 선택 시작(QA 07-14)
+                                                        // 그리드 안 프레스: TUI 마우스 모드(X-5)면 시퀀스 전달(Shift=
+                                                        // 로컬 우회 — 터미널 관례), 아니면 로컬 선택 시작(QA 07-14)
                         if let Some(t) = &mut st.terms[idx] {
                             if t.grid.0.contains(nexa_gui::Point { x, y }) {
                                 if !shift && term_send_mouse(t, x, y, 0, true) {
@@ -3231,6 +3302,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0);
                 } else if vk == VK_OEM_PERIOD.0 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_DOTFILES);
+                    return LRESULT(0);
+                } else if vk == VK_OEM_COMMA.0 && ctrl {
+                    open_prefs(hwnd); // Ctrl+, = 설정 창(S6 — 원본 docs/40)
                     return LRESULT(0);
                 } else if vk == VK_OEM_3.0 && ctrl {
                     run_command(hwnd, st, CMD_TOGGLE_DOCK); // Ctrl+` = 하단 도크(M4-1, 원본)

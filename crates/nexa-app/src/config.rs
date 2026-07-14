@@ -130,9 +130,7 @@ impl Settings {
                         s.term_font_size = n.clamp(8, 32);
                     }
                 }
-                "dlg_font" if !v.trim().is_empty() && v.len() <= 64 => {
-                    s.dlg_font = v.trim().into()
-                }
+                "dlg_font" if !v.trim().is_empty() && v.len() <= 64 => s.dlg_font = v.trim().into(),
                 "dlg_font_size" => {
                     if let Ok(n) = v.parse::<i32>() {
                         s.dlg_font_size = n.clamp(7, 24);
@@ -313,7 +311,10 @@ mod tests {
         assert!(!parsed.show_hidden && parsed.show_dotfiles);
         assert!(parsed.dock, "도크 표시 왕복(M4-1)");
         assert!((parsed.dock_ratio - 0.42).abs() < 0.001, "도크 비율 왕복");
-        assert!((parsed.dock_split - 0.61).abs() < 0.001, "도크 분할 왕복(X-6)");
+        assert!(
+            (parsed.dock_split - 0.61).abs() < 0.001,
+            "도크 분할 왕복(X-6)"
+        );
         assert_eq!(
             parsed.term_font, "D2Coding, JetBrainsMono Nerd Font",
             "터미널 글꼴 체인 왕복(QA 07-14)"
