@@ -27,6 +27,8 @@ pub struct Tab {
     /// 펼침 경로 집합(키=소문자 정규화·값=원 표기, BTreeMap=사전순 → **부모 우선** 재적용).
     /// 현재 트리와 별개로 유지 — 다른 폴더로 이동해도 펼침 상태가 소실되지 않는다.
     expanded: std::collections::BTreeMap<String, PathBuf>,
+    /// 탭 잠금(닫기 제외 — 원본 TAB-MENU, 편의 UX ②). 세션 영속.
+    locked: bool,
 }
 
 /// F18 펼침 키 — 대소문자 무시·후행 구분자 제거(원본 OrdinalIgnoreCase HashSet 대응).
@@ -76,6 +78,8 @@ pub struct Panel {
     active: usize,
     bounds: Rect,
     m: PanelMetrics,
+    /// 탭 우클릭 메뉴 요청(편의 UX ② — 표시는 호스트 몫, 1회성 수거).
+    pending_tab_menu: Option<usize>,
 }
 
 impl Panel {
@@ -97,10 +101,12 @@ impl Panel {
                 rows,
                 nav: History::new(root),
                 expanded: Default::default(),
+                locked: false,
             }],
             active: 0,
             bounds: Rect::default(),
             m,
+            pending_tab_menu: None,
         };
         p.sync_chrome(&mut inv);
         p
@@ -146,6 +152,7 @@ impl Panel {
                 rows,
                 nav: History::new(root),
                 expanded: Default::default(),
+                locked: false,
             };
             Self::seed_expanded(&mut tab, &exp);
             p.tabs.push(tab);
@@ -255,6 +262,8 @@ impl Panel {
         }
         self.dock
             .set_bounds(Rect::new(bounds.x, list_y + list_h, bounds.w, dock_h), inv);
+        // 자동완성 팝업 하한 = 리스트 바닥(도크/터미널 침범 금지 — PATH-SUG)
+        self.pathbar.set_overlay_bottom(list_y + list_h);
     }
 
     /// 하단 도크 표시 토글(호스트 전역 Ctrl+` — 원본 대원칙: 듀얼=패널별 아래).
@@ -310,12 +319,16 @@ impl Panel {
         self.navbtns.paint(ctx, theme);
         self.pathbar.paint(ctx, theme);
         self.tabbar.paint(ctx, theme);
+        // 자동완성 팝업(PATH-SUG) — 리스트 위 오버레이라 마지막에
+        self.pathbar.paint_suggest(ctx, theme);
     }
 
     /// 탭 바·경로 바를 활성 탭 상태와 동기화.
     fn sync_chrome(&mut self, inv: &mut Invalidations) {
         let titles = self.tabs.iter().map(|t| t.title()).collect();
         self.tabbar.set_tabs(titles, self.active, inv);
+        self.tabbar
+            .set_locked(self.tabs.iter().map(|t| t.locked).collect(), inv);
         let path = self.root_path().to_string_lossy().into_owned();
         self.pathbar.set_path(path, inv);
     }
@@ -334,15 +347,97 @@ impl Panel {
             rows,
             nav: History::new(path),
             expanded: Default::default(),
+            locked: false,
         });
         self.active = self.tabs.len() - 1;
         self.set_bounds(self.bounds, inv); // 새 탭 리스트 bounds 반영
         self.sync_chrome(inv);
     }
 
-    /// 탭 닫기(Ctrl+W·×) — 패널은 항상 ≥1 탭.
+    /// 탭 재정렬(드래그 — 편의 UX ②): `from` 탭을 `to` 위치로. 활성 탭 추종.
+    pub fn move_tab(&mut self, from: usize, to: usize, inv: &mut Invalidations) {
+        if from >= self.tabs.len() || to >= self.tabs.len() || from == to {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        // 활성 인덱스 추종(잡은 탭이 활성일 수도, 사이 탭이 밀릴 수도)
+        self.active = if self.active == from {
+            to
+        } else if from < self.active && self.active <= to {
+            self.active - 1
+        } else if to <= self.active && self.active < from {
+            self.active + 1
+        } else {
+            self.active
+        };
+        self.sync_chrome(inv);
+        inv.push(self.bounds);
+    }
+
+    /// 탭 복제(우클릭 메뉴 — 원본 TAB-MENU): 같은 경로 + 펼침 집합 복사, 바로 옆에 삽입.
+    pub fn duplicate_tab(&mut self, i: usize, ctx: NavCtx, inv: &mut Invalidations) {
+        if i >= self.tabs.len() {
+            return;
+        }
+        let path = self.tabs[i].rows.source().tree().root_path().to_path_buf();
+        let Some(src) = open_source(&path, ctx) else {
+            return;
+        };
+        let mut rows = VirtualRows::new(src, self.m.row_h, self.m.pad_x, self.m.indent_w);
+        rows.set_columns(self.rows().columns().to_vec(), inv);
+        let mut tab = Tab {
+            rows,
+            nav: History::new(path),
+            expanded: self.tabs[i].expanded.clone(),
+            locked: false, // 복제본은 잠금 해제 상태(원본 동일)
+        };
+        let entries: Vec<PathBuf> = tab.expanded.values().cloned().collect();
+        let tree = tab.rows.source_mut().tree_mut();
+        for p in &entries {
+            let _ = tree.expand_path(&p.to_string_lossy());
+        }
+        self.tabs.insert(i + 1, tab);
+        self.active = i + 1;
+        self.set_bounds(self.bounds, inv);
+        self.sync_chrome(inv);
+    }
+
+    /// 탭 잠금 토글(우클릭 메뉴 — 닫기 제외, 원본 TAB-MENU).
+    pub fn toggle_tab_lock(&mut self, i: usize, inv: &mut Invalidations) {
+        if let Some(t) = self.tabs.get_mut(i) {
+            t.locked = !t.locked;
+            self.sync_chrome(inv);
+        }
+    }
+
+    pub fn tab_locked(&self, i: usize) -> bool {
+        self.tabs.get(i).is_some_and(|t| t.locked)
+    }
+
+    /// 탭 우클릭 메뉴 요청 수거(1회성 — 호스트가 네이티브 팝업 표시).
+    pub fn take_tab_menu(&mut self) -> Option<usize> {
+        self.pending_tab_menu.take()
+    }
+
+    /// 세션 잠금 스냅샷(원본 TabSession.Locked).
+    pub fn session_locked(&self) -> Vec<bool> {
+        self.tabs.iter().map(|t| t.locked).collect()
+    }
+
+    /// 세션 잠금 복원 — restore 후 호출(탭 인덱스 정렬·부족분 무시).
+    pub fn seed_locked(&mut self, locked: &[bool], inv: &mut Invalidations) {
+        for (i, l) in locked.iter().enumerate() {
+            if let Some(t) = self.tabs.get_mut(i) {
+                t.locked = *l;
+            }
+        }
+        self.sync_chrome(inv);
+    }
+
+    /// 탭 닫기(Ctrl+W·×) — 패널은 항상 ≥1 탭·잠긴 탭은 닫지 않음(원본 TAB-MENU).
     pub fn close_tab(&mut self, i: usize, inv: &mut Invalidations) {
-        if self.tabs.len() <= 1 || i >= self.tabs.len() {
+        if self.tabs.len() <= 1 || i >= self.tabs.len() || self.tabs[i].locked {
             return;
         }
         self.tabs.remove(i);
@@ -588,9 +683,13 @@ impl Panel {
                 TabAction::Switch(i) => self.switch_tab(i, inv),
                 TabAction::Close(i) => self.close_tab(i, inv),
                 TabAction::New => self.new_tab(ctx, inv),
+                TabAction::Move { from, to } => self.move_tab(from, to, inv),
+                TabAction::Context(i) => self.pending_tab_menu = Some(i),
             }
         }
         if let Some(p) = self.pathbar.take_navigation() {
+            // 환경변수 해석(원본 PathInterpreter — %VAR%·$env:VAR·따옴표, PATH-SUG 동반)
+            let p = crate::pathinput::expand_env(&p);
             self.navigate_to(PathBuf::from(p), ctx, inv);
         }
         if let Some(btn) = self.navbtns.take_command() {
@@ -781,6 +880,29 @@ mod tests {
                 q.display()
             );
         }
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn tab_move_lock_duplicate() {
+        // 편의 UX ② — 드래그 재정렬(활성 추종)·잠금=닫기 거부·복제=경로+펼침 복사
+        let base = fixture("tabux");
+        let (mut p, mut inv) = panel(&base);
+        p.new_tab(ctx(), &mut inv); // 탭 2개, 활성=1
+        p.navigate_to(base.join("sub"), ctx(), &mut inv); // 탭1 = sub
+        p.move_tab(1, 0, &mut inv); // 활성 탭을 맨 앞으로
+        assert_eq!(p.active_index(), 0, "이동한 활성 탭 추종");
+        assert!(p.root_path().ends_with("sub"));
+        p.toggle_tab_lock(0, &mut inv);
+        assert!(p.tab_locked(0));
+        p.close_tab(0, &mut inv);
+        assert_eq!(p.tab_count(), 2, "잠긴 탭은 닫기 거부");
+        assert_eq!(p.session_locked(), vec![true, false]);
+        p.duplicate_tab(0, ctx(), &mut inv);
+        assert_eq!(p.tab_count(), 3);
+        assert_eq!(p.active_index(), 1, "복제본이 바로 옆·활성");
+        assert!(p.root_path().ends_with("sub"), "복제 = 같은 경로");
+        assert!(!p.tab_locked(1), "복제본은 잠금 해제");
         fs::remove_dir_all(&base).unwrap();
     }
 

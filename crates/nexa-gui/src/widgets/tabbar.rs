@@ -1,6 +1,7 @@
-//! 패널 탭 바 — 원본 PanelTab(docs/20 §2) 대응 위젯. 탭 표시·전환·닫기·새 탭.
-//! 도메인 비종속: 제목 목록만 알고, 동작은 [`TabAction`]으로 호스트에 통지(take_action).
-//! 드래그 재배열·잠금/고정·멀티라인은 후속(원본 탭 UX 세부).
+//! 패널 탭 바 — 원본 PanelTab(docs/20 §2) 대응 위젯. 탭 표시·전환·닫기·새 탭 +
+//! **드래그 재정렬·잠금 표시·우클릭 메뉴 통지**(편의 UX ② — 원본 탭 UX 계승).
+//! 도메인 비종속: 제목·잠금 목록만 알고, 동작은 [`TabAction`]으로 호스트에 통지(take_action).
+//! 패널 간 이동/Ctrl 복제 드래그·고정(pin)·멀티라인은 후속.
 
 use std::cell::RefCell;
 
@@ -16,11 +17,20 @@ pub enum TabAction {
     Switch(usize),
     Close(usize),
     New,
+    /// 드래그 재정렬(편의 UX ②) — `from` 탭을 `to` 위치로.
+    Move {
+        from: usize,
+        to: usize,
+    },
+    /// 탭 우클릭(컨텍스트 메뉴는 호스트가 표시 — 잠금/복제/닫기).
+    Context(usize),
 }
 
 /// 탭 바 위젯(높이 1줄). 활성 탭 = 패널 배경 + 상단 accent 줄(원본 규약).
 pub struct TabBar {
     titles: Vec<String>,
+    /// 탭별 잠금(닫기 제외 — 원본 TAB-MENU) 표시. titles와 인덱스 정렬(부족분=false).
+    locked: Vec<bool>,
     active: usize,
     /// 활성 패널 여부 — 비활성 패널은 accent 줄을 흐리게(테두리 색).
     focused: bool,
@@ -28,6 +38,8 @@ pub struct TabBar {
     row_h: i32,
     pad_x: i32,
     hover: Option<usize>,
+    /// 드래그 재정렬 상태: (현재 잡은 탭 인덱스, 프레스 x, 이동 시작 여부).
+    drag: Option<(usize, i32, bool)>,
     pending: Option<TabAction>,
     /// 페인트 시 캐시한 탭 x 범위 + [+] 버튼 범위.
     ranges: RefCell<HitRanges>,
@@ -43,12 +55,14 @@ impl TabBar {
     pub fn new(row_h: i32, pad_x: i32) -> Self {
         TabBar {
             titles: Vec::new(),
+            locked: Vec::new(),
             active: 0,
             focused: true,
             bounds: Rect::default(),
             row_h: row_h.max(1),
             pad_x,
             hover: None,
+            drag: None,
             pending: None,
             ranges: RefCell::new((Vec::new(), (0, 0))),
         }
@@ -59,6 +73,14 @@ impl TabBar {
         self.active = active.min(self.titles.len().saturating_sub(1));
         self.hover = None;
         inv.push(self.bounds);
+    }
+
+    /// 탭별 잠금 표시 갱신(편의 UX ② — sync_chrome에서 titles와 함께).
+    pub fn set_locked(&mut self, locked: Vec<bool>, inv: &mut Invalidations) {
+        if self.locked != locked {
+            self.locked = locked;
+            inv.push(self.bounds);
+        }
     }
 
     pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
@@ -120,23 +142,54 @@ impl Widget for TabBar {
         match *ev {
             InputEvent::MouseDown { x, y, .. } => {
                 if let Some((i, close)) = self.tab_at(x, y) {
-                    self.pending = Some(if close && self.titles.len() > 1 {
-                        TabAction::Close(i) // 마지막 탭은 닫기 불가(패널은 항상 ≥1 탭)
+                    let locked = self.locked.get(i).copied().unwrap_or(false);
+                    self.pending = Some(if close && self.titles.len() > 1 && !locked {
+                        // 마지막 탭·잠긴 탭은 닫기 불가(원본 TAB-MENU)
+                        TabAction::Close(i)
                     } else {
                         TabAction::Switch(i)
                     });
+                    if !close {
+                        self.drag = Some((i, x, false)); // 본문 프레스 = 드래그 재정렬 후보
+                    }
                     inv.push(self.bounds);
                 } else if self.plus_at(x, y) {
                     self.pending = Some(TabAction::New);
                     inv.push(self.bounds);
                 }
             }
+            InputEvent::RightDown { x, y } => {
+                if let Some((i, _)) = self.tab_at(x, y) {
+                    // 우클릭 메뉴는 호스트 몫(잠금/복제/닫기 — 원본 TAB-MENU)
+                    self.pending = Some(TabAction::Context(i));
+                }
+            }
             InputEvent::MouseMove { x, y } => {
+                // 드래그 재정렬(편의 UX ②): 임계(8px) 이동 후, 커서가 위치한 탭으로 이동 통지.
+                // 호스트가 이동을 반영(set_tabs)하면 잡은 인덱스를 목적지로 갱신해 연속 드래그.
+                if let Some((from, press_x, started)) = self.drag {
+                    let begun = started || (x - press_x).abs() > 8;
+                    if begun {
+                        if let Some((to, _)) = self.tab_at(x, y) {
+                            if to != from {
+                                self.pending = Some(TabAction::Move { from, to });
+                                self.drag = Some((to, x, true));
+                                inv.push(self.bounds);
+                                return;
+                            }
+                        }
+                        self.drag = Some((from, press_x, true));
+                    }
+                    return;
+                }
                 let hover = self.tab_at(x, y).map(|(i, _)| i);
                 if hover != self.hover {
                     self.hover = hover;
                     inv.push(self.bounds);
                 }
+            }
+            InputEvent::MouseUp { .. } => {
+                self.drag = None;
             }
             _ => {}
         }
@@ -151,7 +204,13 @@ impl Widget for TabBar {
         let mut x = b.x;
         let close_w = self.pad_x * CLOSE_ZONE_PADS;
         for (i, title) in self.titles.iter().enumerate() {
-            let text_w = ctx.text_width(title);
+            let locked = self.locked.get(i).copied().unwrap_or(false);
+            let shown = if locked {
+                format!("🔒{title}") // 잠금 표지(원본 TAB-MENU)
+            } else {
+                title.clone()
+            };
+            let text_w = ctx.text_width(&shown);
             let w = (text_w + self.pad_x * 2 + close_w).min((b.right() - x).max(0));
             if w <= 0 {
                 tabs.push((x, x));
@@ -166,14 +225,14 @@ impl Widget for TabBar {
             } else {
                 theme.tab_bar_bg
             };
-            ctx.text_opaque(cell.x + self.pad_x, ty, cell, title, theme.text, bg);
-            // 닫기 × (탭 오른쪽)
+            ctx.text_opaque(cell.x + self.pad_x, ty, cell, &shown, theme.text, bg);
+            // 닫기 × (탭 오른쪽 — 잠긴 탭은 흐린 표시 유지·클릭은 전환으로)
             let close_x = cell.right() - close_w + self.pad_x;
             ctx.text_opaque(
                 close_x,
                 ty,
                 Rect::new(cell.right() - close_w, b.y, close_w, b.h),
-                "×",
+                if locked { " " } else { "×" },
                 theme.text_dim,
                 bg,
             );

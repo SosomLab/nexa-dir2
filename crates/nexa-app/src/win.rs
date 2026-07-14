@@ -562,6 +562,12 @@ pub fn run() -> Result<()> {
         )
     };
     let (mut left, mut right) = (left, right);
+    // 탭 잠금 복원(편의 UX ② — 원본 TabSession.Locked)
+    {
+        let mut inv = Invalidations::default();
+        left.seed_locked(&session.panels[0].locked, &mut inv);
+        right.seed_locked(&session.panels[1].locked, &mut inv);
+    }
     {
         // 하단 도크 복원(M4-1 — 원본 세션 저장 계승: 표시·비율)
         let mut inv = Invalidations::default();
@@ -1705,19 +1711,26 @@ unsafe fn start_transfer(
                                     // 충돌 확인 문구는 UI 스레드에서 선확정(i18n 전역을 워커에서 조회하지 않음)
     let ow_title = tr("ops.overwriteTitle");
     let ow_text = tr("ops.overwrite");
+    let ow_all = tr("ops.applyAll");
     std::thread::spawn(move || {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+        // 일괄 적용(편의 UX ③ — 원본 "모두 예/건너뛰기"): 첫 응답 후 "남은 충돌에도 동일
+        // 적용?"을 한 번 물어 확정. Some(choice)=이후 무확인.
+        let mut apply_all: Option<nexa_ops::Conflict> = None;
         let out = nexa_ops::transfer(
             &sources,
             &dest,
             op,
-            // 충돌 항목만 순차 확인(원본 TRANSFER-ENGINE 규약 — 실기 QA로 α '무조건 건너뜀' 해소):
-            // 예=덮어쓰기 · 아니오=건너뜀 · 취소=전체 중단. 워커 스레드 모달(자체 메시지 루프) —
-            // UI 스레드는 계속 펌프(진행 표시 유지).
+            // 충돌 항목만 순차 확인(원본 TRANSFER-ENGINE 규약):
+            // 예=덮어쓰기 · 아니오=건너뜀 · 취소=전체 중단. 워커 스레드 모달(자체 메시지
+            // 루프) — UI 스레드는 계속 펌프(진행 표시 유지).
             &mut |conflict| {
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL,
+                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO, MB_YESNOCANCEL,
                 };
+                if let Some(choice) = apply_all {
+                    return choice;
+                }
                 let text = HSTRING::from(ow_text.replace("{0}", &nexa_ops::leaf_name(conflict)));
                 let title = HSTRING::from(ow_title.as_str());
                 let r = unsafe {
@@ -1728,14 +1741,29 @@ unsafe fn start_transfer(
                         MB_YESNOCANCEL | MB_ICONQUESTION,
                     )
                 };
-                if r == IDYES {
+                let choice = if r == IDYES {
                     nexa_ops::Conflict::Overwrite
                 } else {
                     if r != windows::Win32::UI::WindowsAndMessaging::IDNO {
                         sh.cancel.store(true, Ordering::Relaxed); // 취소 = 전체 중단
+                        return nexa_ops::Conflict::Skip;
                     }
                     nexa_ops::Conflict::Skip
+                };
+                // 남은 충돌 일괄 적용 여부(1회) — 예=이후 무확인(같은 선택 반복)
+                let all_text = HSTRING::from(ow_all.as_str());
+                let all = unsafe {
+                    MessageBoxW(
+                        Some(hwnd),
+                        PCWSTR(all_text.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        MB_YESNO | MB_ICONQUESTION,
+                    )
+                };
+                if all == IDYES {
+                    apply_all = Some(choice);
                 }
+                choice
             },
             &mut |p, _| {
                 sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
@@ -2185,6 +2213,83 @@ unsafe fn invalidate_dock(hwnd: HWND, st: &State, panel: usize) {
     let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
 }
 
+/// 탭 우클릭 메뉴(편의 UX ② — 원본 TAB-MENU): 잠금 토글·복제·닫기. 네이티브 팝업 —
+/// TrackPopupMenuEx 모달 루프 동안 wndproc 재진입이 있으므로 **State 참조 없이** 표시 후
+/// 결과만 재획득해 반영(shellmenu 동일 규약).
+unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenuEx, MF_GRAYED,
+        MF_STRING, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
+    };
+    const CMD_LOCK: usize = 1;
+    const CMD_DUP: usize = 2;
+    const CMD_CLOSE: usize = 3;
+    let (locked, count) = match state_of(hwnd) {
+        Some(st) if tab < st.panels[panel].tab_count() => (
+            st.panels[panel].tab_locked(tab),
+            st.panels[panel].tab_count(),
+        ),
+        _ => return,
+    };
+    let Ok(menu) = CreatePopupMenu() else { return };
+    let append = |id: usize, label: &str, enabled: bool| {
+        let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+        let flags = if enabled {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+        let _ = AppendMenuW(menu, flags, id, PCWSTR(wide.as_ptr()));
+    };
+    append(
+        CMD_LOCK,
+        &if locked {
+            tr("tab.unlock")
+        } else {
+            tr("tab.lock")
+        },
+        true,
+    );
+    append(CMD_DUP, &tr("tab.duplicate"), true);
+    append(CMD_CLOSE, &tr("tab.close"), !locked && count > 1);
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    let cmd = TrackPopupMenuEx(
+        menu,
+        (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD).0,
+        pt.x,
+        pt.y,
+        hwnd,
+        None,
+    );
+    let _ = DestroyMenu(menu);
+    let Some(st) = state_of(hwnd) else { return };
+    let mut inv = Invalidations::default();
+    match cmd.0 as usize {
+        CMD_LOCK => st.panels[panel].toggle_tab_lock(tab, &mut inv),
+        CMD_DUP => {
+            let ctx = st.nav_ctx();
+            st.panels[panel].duplicate_tab(tab, ctx, &mut inv);
+        }
+        CMD_CLOSE => st.panels[panel].close_tab(tab, &mut inv),
+        _ => {}
+    }
+    flush_invalidations(hwnd, &mut inv);
+    update_title(hwnd, st, "");
+    update_status(hwnd, st);
+}
+
+/// 경로바 편집 텍스트 **변경 후** 자동완성 갱신(PATH-SUG — 원본 TextChanged 대응).
+/// 환경변수 확장 후 베이스 폴더의 하위 폴더를 제안(최대 20 — 원본 상한).
+fn update_path_suggest(st: &mut State, inv: &mut Invalidations) {
+    let Some(text) = st.active_panel().pathbar.edit_text() else {
+        return;
+    };
+    let expanded = crate::pathinput::expand_env(&text);
+    let items = crate::pathinput::suggest_folders(&expanded, crate::pathinput::fs_dirs, 20);
+    st.active_panel().pathbar.set_suggestions(items, inv);
+}
+
 /// 붙여넣기용 클립보드 텍스트 정제(편집 필드는 한 줄) — 첫 줄만·제어 문자 제거.
 unsafe fn paste_line() -> Option<String> {
     let raw = crate::clipboard::read_text()?;
@@ -2349,6 +2454,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0); // 상태바 — 표시 전용
                 }
                 if st.active_panel().pathbar.is_editing() {
+                    if st.active_panel().pathbar.suggest_click(x, y, &mut inv) {
+                        // 제안 클릭 = 그 폴더로 즉시 이동(PATH-SUG — 탐색기 동일)
+                        let nav = st.nav_ctx();
+                        st.active_panel().drain_actions(nav, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
+                        update_status(hwnd, st);
+                        return LRESULT(0);
+                    }
                     if st
                         .active_panel()
                         .pathbar
@@ -2442,6 +2556,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
+            let mut tab_menu: Option<(usize, usize)> = None;
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
@@ -2449,8 +2564,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     set_active(hwnd, st, idx);
                     let mut inv = Invalidations::default();
                     st.panels[idx].on_event(&InputEvent::RightDown { x, y }, &mut inv);
+                    let ctx = st.nav_ctx();
+                    st.panels[idx].drain_actions(ctx, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
+                    // 탭 우클릭 메뉴(편의 UX ②) — 모달 팝업은 State 참조를 끊고(재진입 규약)
+                    tab_menu = st.panels[idx].take_tab_menu().map(|t| (idx, t));
                 }
+            }
+            if let Some((panel, tab)) = tab_menu {
+                show_tab_menu(hwnd, panel, tab);
             }
             LRESULT(0)
         }
@@ -2570,6 +2692,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 드롭다운 아래 hover 잔상 방지
                         st.panels[0].on_event(&ev, &mut inv);
                         st.panels[1].on_event(&ev, &mut inv);
+                        // 탭 드래그 재정렬(편의 UX ②) — Move 액션 즉시 반영
+                        let ctx = st.nav_ctx();
+                        st.panels[0].drain_actions(ctx, &mut inv);
+                        st.panels[1].drain_actions(ctx, &mut inv);
                     }
                 }
                 flush_invalidations(hwnd, &mut inv);
@@ -2654,7 +2780,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.active_panel().pathbar.submit_edit(&mut inv);
                         st.active_panel().drain_actions(ctx, &mut inv);
                     } else if vk == VK_ESCAPE.0 {
-                        st.active_panel().pathbar.cancel_edit(&mut inv);
+                        // 팝업 열림 = 팝업만 닫기(원본·탐색기 규약), 아니면 편집 취소
+                        if st.active_panel().pathbar.suggest_open() {
+                            st.active_panel().pathbar.close_suggest(&mut inv);
+                        } else {
+                            st.active_panel().pathbar.cancel_edit(&mut inv);
+                        }
+                    } else if vk == VK_UP.0 || vk == VK_DOWN.0 {
+                        // 자동완성 ↑/↓(PATH-SUG) — 선택 미리 채움·↑ 복원
+                        let d = if vk == VK_UP.0 { -1 } else { 1 };
+                        st.active_panel().pathbar.suggest_move(d, &mut inv);
                     } else if ctrl && vk == b'C' as u16 {
                         // 표준 편집 클립보드(QA 07-14) — 선택 복사/잘라내기/붙여넣기
                         if let Some(t) = st.active_panel().pathbar.edit_selected_text() {
@@ -2664,13 +2799,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if let Some(t) = st.active_panel().pathbar.edit_cut(&mut inv) {
                             crate::clipboard::write_text(hwnd, &t);
                         }
+                        update_path_suggest(st, &mut inv); // 텍스트 변경 — 제안 갱신
                     } else if ctrl && vk == b'V' as u16 {
                         if let Some(t) = paste_line() {
                             st.active_panel().pathbar.edit_paste(&t, &mut inv);
+                            update_path_suggest(st, &mut inv);
                         }
                     } else if let Some(k) = edit_key_of(vk, ctrl) {
                         // 캐럿 이동·선택·삭제(QA 07-13 — edit.rs 공용 모델)
                         st.active_panel().pathbar.edit_key(k, shift, &mut inv);
+                        if k == nexa_gui::EditKey::DeleteForward {
+                            update_path_suggest(st, &mut inv); // 텍스트 변경 시에만
+                        }
                     }
                     flush_invalidations(hwnd, &mut inv);
                     update_title(hwnd, st, "");
@@ -2996,6 +3136,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if st.active_panel().pathbar.is_editing() {
                         if c == '\u{8}' || !c.is_control() {
                             st.active_panel().pathbar.edit_char(c, &mut inv);
+                            update_path_suggest(st, &mut inv); // 자동완성 갱신(PATH-SUG)
                         }
                     } else if GetKeyState(VK_CONTROL.0 as i32) >= 0
                         && (c == '\u{8}'
@@ -3183,11 +3324,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             tabs: t0,
                             active: a0,
                             expanded: e0,
+                            locked: st.panels[0].session_locked(),
                         },
                         PanelSession {
                             tabs: t1,
                             active: a1,
                             expanded: e1,
+                            locked: st.panels[1].session_locked(),
                         },
                     ],
                 };
