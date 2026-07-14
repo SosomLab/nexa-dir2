@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// 설정(원본 ViewOptions·ThemeOptions 대응) — `data\settings.txt`.
+/// 설정(원본 ViewOptions·ThemeOptions 대응) — `data\settings.cfg`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     /// "system" | "light" | "dark"
@@ -51,7 +51,7 @@ pub struct PanelSession {
     pub expanded: Vec<Vec<PathBuf>>,
 }
 
-/// 세션(원본 session.json 대응) — `data\session.txt`.
+/// 세션(원본 session.json 대응) — `data\session.cfg`(패널·탭·활성·펼침).
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Session {
     pub active_panel: usize,
@@ -216,8 +216,26 @@ pub fn save(dir: &Path, name: &str, content: &str) -> io::Result<()> {
     fs::rename(&tmp, &dst)
 }
 
-pub const SETTINGS_FILE: &str = "settings.txt";
-pub const SESSION_FILE: &str = "session.txt";
+/// 영속 파일명(사용자 지시 07-14): 저장 항목을 포괄하는 이름 + `.cfg` 확장자.
+/// settings = 앱 설정 전반(테마·언어·보기·도크·터미널 글꼴) · session = 화면 세션
+/// (패널·탭·활성·펼침 집합).
+pub const SETTINGS_FILE: &str = "settings.cfg";
+pub const SESSION_FILE: &str = "session.cfg";
+/// 구 파일명(~0.5.0 — `.txt`) 마이그레이션 폴백.
+pub const SETTINGS_FILE_OLD: &str = "settings.txt";
+pub const SESSION_FILE_OLD: &str = "session.txt";
+
+/// 새 이름 우선 로드, 없으면 구 이름(1회성 마이그레이션 — 다음 저장은 새 이름·구 파일은
+/// [`purge_legacy`]가 정리).
+pub fn load_migrated(dir: &Path, name: &str, old: &str) -> Option<String> {
+    load(dir, name).or_else(|| load(dir, old))
+}
+
+/// 새 이름 저장 성공 후 구 `.txt` 파일 정리(포터블 data\ 청결 — 실패 무시).
+pub fn purge_legacy(dir: &Path) {
+    let _ = fs::remove_file(dir.join(SETTINGS_FILE_OLD));
+    let _ = fs::remove_file(dir.join(SESSION_FILE_OLD));
+}
 
 #[cfg(test)]
 mod tests {
