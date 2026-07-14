@@ -500,13 +500,10 @@ impl Panel {
 
     fn apply_source(&mut self, src: TreeSource, inv: &mut Invalidations) {
         // 펼침 상태 유지(원본 F18 — X-4): 경계에서 집합 동기 후 새 루트 아래 엔트리 재적용.
-        // 직전 루트도 등재 — 상위 이동 시 왔던 폴더가 펼쳐져 보임(사용자 지시 07-13).
+        // **방문 ≠ 확장**(사용자 지시 07-14): 더블클릭 진입은 확장 버튼과 동일 취급하지
+        // 않는다 — 직전 루트 자동 등재 없음. 마커로 명시 펼침한 폴더만 집합에 남는다.
         // 새 루트 밖·부모 접힘 경로는 expand_path가 무시하므로 방향 구분 불요.
         self.sync_expanded();
-        let cur = self.root_path();
-        self.tabs[self.active]
-            .expanded
-            .insert(expand_key(&cur), cur);
         self.tabs[self.active].rows.replace_source(src, inv);
         let entries: Vec<PathBuf> = self.tabs[self.active].expanded.values().cloned().collect();
         let tree = self.rows_mut().source_mut().tree_mut();
@@ -584,17 +581,24 @@ impl Panel {
         }
     }
 
-    /// 행 활성화(더블클릭·Enter) — 폴더면 진입. 파일 실행은 M3.
-    pub fn activate_row(&mut self, row: usize, ctx: NavCtx, inv: &mut Invalidations) {
+    /// 행 활성화(더블클릭·Enter·Alt+↓ — 원본 F19): 폴더=진입, **파일=경로 반환**
+    /// (실행은 호스트 몫 — ShellExecute는 플랫폼 종속·위젯/패널은 중립 유지).
+    pub fn activate_row(
+        &mut self,
+        row: usize,
+        ctx: NavCtx,
+        inv: &mut Invalidations,
+    ) -> Option<PathBuf> {
         let tree = self.rows().source().tree();
         let (Some(r), Some(id)) = (tree.row(row), tree.visible_id(row)) else {
-            return;
+            return None;
         };
-        if r.kind != FileKind::Dir {
-            return;
-        }
-        if let Some(p) = tree.node_path(id).map(Path::to_path_buf) {
-            self.navigate_to(p, ctx, inv);
+        let path = tree.node_path(id).map(Path::to_path_buf)?;
+        if r.kind == FileKind::Dir {
+            self.navigate_to(path, ctx, inv);
+            None
+        } else {
+            Some(path) // 파일 — 호스트가 실행(QA 07-14)
         }
     }
 
@@ -668,7 +672,9 @@ impl Panel {
                 self.tabs[self.active].rows.on_event(ev, inv);
             }
             InputEvent::MouseUp { .. } => {
-                // 경로바 편집 드래그 선택 종료(QA 07-13) + 리스트 밴드/리사이즈 종료
+                // 경로바 편집 드래그 선택 종료(QA 07-13) + 리스트 밴드/리사이즈 종료 +
+                // 탭 드래그 재정렬 종료(QA 07-14 — 미전달 시 드래그 상태 잔존 결함)
+                self.tabbar.on_event(ev, inv);
                 self.pathbar.on_event(ev, inv);
                 self.tabs[self.active].rows.on_event(ev, inv);
             }

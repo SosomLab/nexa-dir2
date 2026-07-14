@@ -1191,6 +1191,8 @@ const CTX_PASTE_INTO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 1;
 const CTX_UNDO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 2;
 const CTX_REDO: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 3;
 const CTX_PASTE_BG: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 4;
+/// 경로 복사(QA 07-14 — 원본 §7-5 Copy as path): **교차 폴더 전체 선택**을 텍스트로.
+const CTX_COPY_PATH: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 5;
 
 /// 빈 본문 우클릭 = 폴더 **배경** 셸 메뉴(M3-4 S3, 원본 ADR-0005 S2) — 새로 만들기 서브메뉴·
 /// 속성 등 + 고유 Undo/Redo 병합(원본 빈영역 메뉴 항목 계승). paste 동사는 내부 클립보드로
@@ -1267,12 +1269,15 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
     // 1단계: State에서 요청 데이터 추출 — 모달 메뉴 펌프 전 참조 종료(ADR-0003 재진입 안전)
     struct Req {
         targets: Vec<PathBuf>,
+        /// 축소 전 전체 선택(교차 폴더 포함) — copy/cut/경로 복사 가로채기용(QA 07-14).
+        full: Vec<PathBuf>,
         shift: bool,
         custom: Vec<CustomItem>,
         paste_dir: Option<PathBuf>,
         at: Option<windows::Win32::Foundation::POINT>,
     }
     let req = state_of(hwnd).and_then(|st| {
+        let full = keyboard_targets(st);
         let targets = context_targets(st);
         if targets.is_empty() {
             return None;
@@ -1302,11 +1307,19 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         };
         // 고유 병합 항목(원본 S1: 셸이 제공하는 동사는 중복 금지) — 완전 삭제·폴더에 붙여넣기
         let paste_dir = caret_path.filter(|p| targets.len() == 1 && p.is_dir());
-        let mut custom = vec![CustomItem {
-            id: CTX_DELETE_PERMANENT,
-            label: tr("ctx.deletePermanent"),
-            enabled: true,
-        }];
+        let mut custom = vec![
+            CustomItem {
+                id: CTX_DELETE_PERMANENT,
+                label: tr("ctx.deletePermanent"),
+                enabled: true,
+            },
+            // 경로 복사(QA 07-14 — 교차 폴더 전체 선택, 셸 단일 부모 한계 우회·원본 §7-5)
+            CustomItem {
+                id: CTX_COPY_PATH,
+                label: tr("ctx.copyPath"),
+                enabled: true,
+            },
+        ];
         if paste_dir.is_some() && crate::clipboard::has_files() {
             custom.push(CustomItem {
                 id: CTX_PASTE_INTO,
@@ -1316,6 +1329,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         }
         Some(Req {
             targets,
+            full,
             shift: GetKeyState(VK_SHIFT.0 as i32) < 0,
             custom,
             paste_dir,
@@ -1327,7 +1341,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         hwnd,
         &req.targets,
         req.shift,
-        &["delete", "rename"],
+        &["delete", "rename", "copy", "cut"],
         &req.custom,
         req.at,
     );
@@ -1340,6 +1354,28 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         }
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("rename") => {
             begin_rename_caret(hwnd, st); // 인라인 리네임 합류(M3-2)
+        }
+        shellmenu::Outcome::Verb(v)
+            if v.eq_ignore_ascii_case("copy") || v.eq_ignore_ascii_case("cut") =>
+        {
+            // 복사/잘라내기 가로채기(QA 07-14) — 셸 데이터 객체는 단일 부모만 표현
+            // (ADR-0003) → **교차 폴더 전체 선택**을 앱 클립보드 경로로(Ctrl+C/X 동일)
+            let op = if v.eq_ignore_ascii_case("cut") {
+                nexa_ops::Op::Move
+            } else {
+                nexa_ops::Op::Copy
+            };
+            crate::clipboard::write_file_list(hwnd, &req.full, op);
+        }
+        shellmenu::Outcome::Custom(CTX_COPY_PATH) => {
+            // 경로 복사 — 전체 선택(교차 폴더)을 줄바꿈 구분 텍스트로(원본 §7-5)
+            let text = req
+                .full
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("\r\n");
+            crate::clipboard::write_text(hwnd, &text);
         }
         shellmenu::Outcome::Custom(CTX_DELETE_PERMANENT) => do_delete(hwnd, st, true),
         shellmenu::Outcome::Custom(CTX_PASTE_INTO) => {
@@ -1714,24 +1750,27 @@ unsafe fn start_transfer(
     let ow_all = tr("ops.applyAll");
     std::thread::spawn(move || {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
-        // 일괄 적용(편의 UX ③ — 원본 "모두 예/건너뛰기"): 첫 응답 후 "남은 충돌에도 동일
-        // 적용?"을 한 번 물어 확정. Some(choice)=이후 무확인.
-        let mut apply_all: Option<nexa_ops::Conflict> = None;
+        // 일괄 적용(편의 UX ③ 개정 — 사용자 QA 07-14 "탐색기처럼 1번만"): **첫 충돌에서
+        // 1회만** 확인하고 같은 선택을 전체에 적용. 예=모두 덮어쓰기 · 아니오=모두 건너뜀 ·
+        // 취소=전체 중단. 파일별 개별 선택(예/모두 예 4버튼)은 커스텀 대화상자 후속.
+        let mut decided: Option<nexa_ops::Conflict> = None;
         let out = nexa_ops::transfer(
             &sources,
             &dest,
             op,
-            // 충돌 항목만 순차 확인(원본 TRANSFER-ENGINE 규약):
-            // 예=덮어쓰기 · 아니오=건너뜀 · 취소=전체 중단. 워커 스레드 모달(자체 메시지
-            // 루프) — UI 스레드는 계속 펌프(진행 표시 유지).
+            // 워커 스레드 모달(자체 메시지 루프) — UI 스레드는 계속 펌프(진행 표시 유지).
             &mut |conflict| {
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO, MB_YESNOCANCEL,
+                    MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL,
                 };
-                if let Some(choice) = apply_all {
+                if let Some(choice) = decided {
                     return choice;
                 }
-                let text = HSTRING::from(ow_text.replace("{0}", &nexa_ops::leaf_name(conflict)));
+                let text = HSTRING::from(format!(
+                    "{}\n\n{}",
+                    ow_text.replace("{0}", &nexa_ops::leaf_name(conflict)),
+                    ow_all
+                ));
                 let title = HSTRING::from(ow_title.as_str());
                 let r = unsafe {
                     MessageBoxW(
@@ -1750,19 +1789,7 @@ unsafe fn start_transfer(
                     }
                     nexa_ops::Conflict::Skip
                 };
-                // 남은 충돌 일괄 적용 여부(1회) — 예=이후 무확인(같은 선택 반복)
-                let all_text = HSTRING::from(ow_all.as_str());
-                let all = unsafe {
-                    MessageBoxW(
-                        Some(hwnd),
-                        PCWSTR(all_text.as_ptr()),
-                        PCWSTR(title.as_ptr()),
-                        MB_YESNO | MB_ICONQUESTION,
-                    )
-                };
-                if all == IDYES {
-                    apply_all = Some(choice);
-                }
+                decided = Some(choice);
                 choice
             },
             &mut |p, _| {
@@ -2211,6 +2238,21 @@ unsafe fn invalidate_dock(hwnd: HWND, st: &State, panel: usize) {
         bottom: r.bottom(),
     };
     let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
+}
+
+/// 파일 실행(더블클릭·Enter·Alt+↓ — QA 07-14) — 기본 연결 프로그램(탐색기 동일).
+unsafe fn shell_open(hwnd: HWND, file: &std::path::Path) {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = HSTRING::from(file.as_os_str());
+    let _ = ShellExecuteW(
+        Some(hwnd),
+        w!("open"),
+        PCWSTR(wide.as_ptr()),
+        None,
+        None,
+        SW_SHOWNORMAL,
+    );
 }
 
 /// 탭 우클릭 메뉴(편의 UX ② — 원본 TAB-MENU): 잠금 토글·복제·닫기. 네이티브 팝업 —
@@ -2748,11 +2790,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_LBUTTONDBLCLK => {
             // 더블클릭 = 열기 — 지연 중인 느린 재클릭 리네임 취소(QA 07-14)
             let _ = KillTimer(Some(hwnd), TIMER_RENAME);
+            let mut exec: Option<PathBuf> = None;
             if let Some(st) = state_of(hwnd) {
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
+                    // 탭 바 빈 공간 더블클릭 = 새 탭(원본 F20 — QA 07-14)
+                    if st.panels[idx].tabbar.empty_area_at(x, y) {
+                        let mut inv = Invalidations::default();
+                        let ctx = st.nav_ctx();
+                        st.panels[idx].new_tab(ctx, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
+                        return LRESULT(0);
+                    }
                     let rows = st.panels[idx].rows();
                     let hit = (!rows.marker_hit(x, y))
                         .then(|| rows.row_at(x, y))
@@ -2760,11 +2812,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Some(row) = hit {
                         let mut inv = Invalidations::default();
                         let ctx = st.nav_ctx();
-                        st.panels[idx].activate_row(row, ctx, &mut inv);
+                        exec = st.panels[idx].activate_row(row, ctx, &mut inv);
                         flush_invalidations(hwnd, &mut inv);
                         update_title(hwnd, st, "");
                     }
                 }
+            }
+            if let Some(file) = exec {
+                shell_open(hwnd, &file); // 파일 실행(QA 07-14 — 기본 연결 프로그램)
             }
             LRESULT(0)
         }
@@ -2928,7 +2983,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0);
                 } else if vk == VK_RETURN.0 {
                     if let Some(c) = st.active_panel().rows().caret() {
-                        st.active_panel().activate_row(c, ctx, &mut inv);
+                        if let Some(file) = st.active_panel().activate_row(c, ctx, &mut inv) {
+                            shell_open(hwnd, &file); // Enter = 파일 실행(QA 07-14)
+                        }
                     }
                 } else if vk == VK_F2.0 {
                     begin_rename_caret(hwnd, st); // F2 = 인라인 이름변경(M3-2)
@@ -2977,6 +3034,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     true
                 } else if vk == VK_UP.0 {
                     st.active_panel().nav_up(ctx, &mut inv);
+                    true
+                } else if vk == VK_DOWN.0 {
+                    // Alt+↓ = 캐럿 행 활성화(더블클릭 동등 — 원본 F19, QA 07-14)
+                    if let Some(c) = st.active_panel().rows().caret() {
+                        if let Some(file) = st.active_panel().activate_row(c, ctx, &mut inv) {
+                            shell_open(hwnd, &file);
+                        }
+                    }
                     true
                 } else {
                     false
