@@ -841,7 +841,7 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
 
 unsafe fn ensure_dw(st: &mut State, hdc: windows::Win32::Graphics::Gdi::HDC, w: i32, h: i32) {
     match &mut st.dw {
-        None => match DwBackend::new(hdc, w, h, st.dpi, &st.term_font) {
+        None => match DwBackend::new(hdc, w, h, st.dpi, &st.term_font, st.term_font_size as f32) {
             Ok(b) => st.dw = Some(b),
             Err(e) => eprintln!("DirectWrite 초기화 실패: {e}"),
         },
@@ -1057,12 +1057,13 @@ unsafe fn term_paint(
     rc: nexa_gui::Rect,
     cwd: &std::path::Path,
     dpi: u32,
+    font_px: i32,
     theme: &nexa_gui::Theme,
     caret_on: bool,
 ) {
     use nexa_gui::{Color, DrawCtx, Rect};
     let cell_w = ctx.term_cell_w();
-    let cell_h = ((16 * dpi as i32) / 96).max(12);
+    let cell_h = ((font_px * 4 / 3 * dpi as i32) / 96).max(12); // 줄 높이 ≈ 1.33×(X-3 크기 설정)
     let cols = ((rc.w - 4) / cell_w.max(1)) as usize;
     let rows = ((rc.h - 2) / cell_h) as usize;
     if cols < 2 || rows < 2 {
@@ -2048,6 +2049,7 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     trc,
                     &cwd,
                     st.dpi,
+                    st.term_font_size,
                     &st.theme,
                     caret_on,
                 );

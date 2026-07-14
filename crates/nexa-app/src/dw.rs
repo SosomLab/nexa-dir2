@@ -138,6 +138,8 @@ pub struct DwBackend {
     /// 터미널 모노스페이스 포맷(M4-3 — 기본 Consolas 12 DIP, 셀 그리드 정렬.
     /// 설정 `term_font`로 교체 — 미설치 글리프는 DWrite 시스템 폴백이 해석).
     mono_format: IDWriteTextFormat,
+    /// 명시 폴백 체인(X-3 — term_font 쉼표 목록 2순위 이후·시스템 폴백 연결).
+    mono_fallback: Option<windows::Win32::Graphics::DirectWrite::IDWriteFontFallback>,
     /// 터미널 단일 글리프 레이아웃 캐시(QA 07-14 — 셀 단위 렌더의 프레임당 생성 비용 제거).
     mono_glyphs: RefCell<HashMap<char, IDWriteTextLayout>>,
     /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
@@ -152,7 +154,7 @@ pub struct DwBackend {
 
 impl DwBackend {
     /// `hdc`와 호환되는 비트맵 렌더 타깃을 만든다(9pt = 12 DIP, DPI는 PixelsPerDip로 반영).
-    pub unsafe fn new(hdc: HDC, w: i32, h: i32, dpi: u32, mono_font: &str) -> Result<Self> {
+    pub unsafe fn new(hdc: HDC, w: i32, h: i32, dpi: u32, mono_font: &str, mono_size: f32) -> Result<Self> {
         let factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let interop: IDWriteGdiInterop = factory.GetGdiInterop()?;
         let brt = interop.CreateBitmapRenderTarget(Some(hdc), w.max(1) as u32, h.max(1) as u32)?;
@@ -187,13 +189,20 @@ impl DwBackend {
         icon_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
 
         // 터미널 모노스페이스(M4-3) — 기본 Consolas(비스타+ 인박스)·랩 없음·세로 중앙.
-        // 설정 `term_font`(QA 07-14): 사용자 설치 글꼴(D2Coding 등)은 시스템 컬렉션에서
-        // 해석, 생성 실패 시 Consolas 폴백. 지정 글꼴에 없는 글리프는 DWrite 폴백.
-        let mono_name: Vec<u16> = mono_font
-            .trim()
-            .encode_utf16()
-            .chain(std::iter::once(0))
+        // 설정 `term_font`(QA 07-14): **쉼표 목록 = 폴백 체인**(WT식 "D2Coding,
+        // JetBrainsMono Nerd Font") — 1순위 = 텍스트 포맷 패밀리, 2순위 이후는
+        // IDWriteFontFallback(X-3)으로 미보유 글리프 해석 → 시스템 폴백 체인 연결.
+        let families: Vec<String> = mono_font
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
             .collect();
+        let primary = families
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Consolas".to_string());
+        let mono_name: Vec<u16> = primary.encode_utf16().chain(std::iter::once(0)).collect();
+        let size = mono_size.clamp(8.0, 32.0);
         let mono_format = factory
             .CreateTextFormat(
                 windows::core::PCWSTR(mono_name.as_ptr()),
@@ -201,7 +210,7 @@ impl DwBackend {
                 windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
                 windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
                 windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-                12.0,
+                size,
                 w!("ko-kr"),
             )
             .or_else(|_| {
@@ -211,12 +220,41 @@ impl DwBackend {
                     windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
                     windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
                     windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-                    12.0,
+                    size,
                     w!("ko-kr"),
                 )
             })?;
         mono_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         mono_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        // 명시 폴백 체인(X-3 — 2순위 이후) — 실패는 조용히 시스템 폴백만 사용
+        let mono_fallback: Option<windows::Win32::Graphics::DirectWrite::IDWriteFontFallback> =
+            if families.len() > 1 {
+                (|| {
+                    use windows::core::Interface;
+                    use windows::Win32::Graphics::DirectWrite::{
+                        IDWriteFactory2, DWRITE_UNICODE_RANGE,
+                    };
+                    let f2: IDWriteFactory2 = factory.cast().ok()?;
+                    let builder = f2.CreateFontFallbackBuilder().ok()?;
+                    let range = DWRITE_UNICODE_RANGE {
+                        first: 0x0,
+                        last: 0x10FFFF,
+                    };
+                    let names: Vec<windows::core::HSTRING> = families[1..]
+                        .iter()
+                        .map(windows::core::HSTRING::from)
+                        .collect();
+                    let ptrs: Vec<*const u16> = names.iter().map(|h| h.as_ptr()).collect();
+                    builder
+                        .AddMapping(&[range], &ptrs, None, None, None, 1.0)
+                        .ok()?;
+                    let sys = f2.GetSystemFontFallback().ok()?;
+                    builder.AddMappings(&sys).ok()?;
+                    builder.CreateFontFallback().ok()
+                })()
+            } else {
+                None
+            };
 
         let color = Rc::new(Cell::new(COLORREF(0)));
         let renderer: IDWriteTextRenderer = BrtRenderer {
@@ -236,6 +274,7 @@ impl DwBackend {
             icon_format,
             ellipsis,
             mono_format,
+            mono_fallback,
             mono_glyphs: RefCell::new(HashMap::new()),
             layouts: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
@@ -277,6 +316,18 @@ impl DwBackend {
 
     pub fn size(&self) -> (i32, i32) {
         (self.w, self.h)
+    }
+
+    /// 터미널 레이아웃에 명시 폴백 체인 적용(X-3 — 없으면 무동작).
+    unsafe fn apply_mono_fallback(&self, layout: &IDWriteTextLayout) {
+        if let Some(fb) = &self.mono_fallback {
+            use windows::core::Interface;
+            if let Ok(l2) =
+                layout.cast::<windows::Win32::Graphics::DirectWrite::IDWriteTextLayout2>()
+            {
+                let _ = l2.SetFontFallback(fb);
+            }
+        }
     }
 
     pub unsafe fn resize(&mut self, w: i32, h: i32) -> Result<()> {
@@ -468,6 +519,7 @@ impl DrawCtx for DwCtx<'_> {
                     ) else {
                         return;
                     };
+                    self.back.apply_mono_fallback(&l); // 폴백 체인(X-3)
                     if cache.len() > 2048 {
                         cache.clear(); // 폭주 방지(비정상 출력) — 정상 사용은 수백 자
                     }
@@ -484,6 +536,7 @@ impl DrawCtx for DwCtx<'_> {
                 ) else {
                     return;
                 };
+                self.back.apply_mono_fallback(&l); // 폴백 체인(X-3)
                 l
             };
             self.back.color.set(colorref(fg));
