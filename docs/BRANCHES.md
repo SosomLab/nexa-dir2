@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `fix/m4-term-qa` | 2026-07-14 | 2026-07-14 (`149394b`) | — | 2 | 터미널 실기 QA 2건 — 세로바 캐럿(1px·DPI — Windows Terminal bar 동일)·Backspace=DEL 교차 매핑(0x08=Ctrl+Backspace 단어 삭제 해석 → 입력 전체 삭제 결함 수정, 원본 TerminalView 규약) + X-3 터미널 설정 백로그 등록 | [2026-07-14](journal/2026-07-14.md) |
 | `feat/m4-terminal` | 2026-07-14 | 2026-07-14 (`acbbdae`) | — | 4 | M4-3 — ConPTY 터미널(원본 VtScreen.cs·ConPtySession.cs 이식): nexa-term rlib(VT 파서·SGR 3계열·CSI·DECSTBM·스크롤백 800·전각·테스트 9)·ConPTY 세션(pwsh→cmd 폴백·UTF-8 경계 읽기 스레드·EXIT 통지·세대 가드)·도크 [터미널] 종류(Consolas 모노 그리드·런 병합·캐럿·클릭 포커스·VT 키·아무 키 재시작·리사이즈 동기). 테스트 148 green → **M4 전 항목 구현 완료** | [2026-07-14](journal/2026-07-14.md) |
 | `feat/m4-preview` | 2026-07-13 | 2026-07-14 (`30bd7b6`) | — | 4 | M4-2 — 내장 미리보기(DR-7 — 플러그인 아님): 도크 [정보\|미리보기] 스트립·텍스트(16KB·이진 판정)·이미지(WIC Fant·비율 유지·캐시 8건·CoCreateInstance 지연=임포트 무변)·draw_image 프리미티브·독립 예제(examples/preview_image.rs — 실기 jpg 확인) | [2026-07-13](journal/2026-07-13.md) |
 | `feat/m4-dock` | 2026-07-13 | 2026-07-13 (`b9942e7`) | — | 3 | M4-1 — 하단 도크(원본 BottomDockView·DockInfo·도크 대원칙): InfoDock 위젯·정보 뷰(다중=개수/단일=속성/없음=현재 폴더)·Ctrl+` 토글·높이 드래그(비율 0.15~0.5)·settings 영속(dock·dock_ratio). 테스트 140 green·실기 QA 대기 | [2026-07-13](journal/2026-07-13.md) |
@@ -45,6 +46,12 @@
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
+
+## fix/m4-term-qa
+
+- **생성**: 2026-07-14 (분기: main `1dea2c3`). **커밋**: `a0b4acf`(세로바 캐럿·Backspace=DEL 교차 매핑) → `cc54371`(docs — journal QA 기록·TODO X-3 터미널 설정 백로그). 병합(`149394b`): 2026-07-14. 삭제: CI green 확인 후.
+- **검증**: `cargo test` 148 green · clippy 0 · fmt · 릴리스 빌드. **결함 원인**: WM_CHAR 0x08 직송 → ConPTY(PSReadLine)가 Ctrl+Backspace(단어 삭제)로 해석 — 원본 TerminalView.OnKeyDown(:636) 규약(Backspace→0x7F·Ctrl+Backspace→0x08)으로 정정. 실기 QA 대기(1글자 삭제·세로바 캐럿).
+- **후속**: X-3 — 원본 터미널 설정 패리티(NoWrap 기본 true·MaxColumns 240 가로 스크롤·ConsoleFamily/Size) 미구현 확인·백로그 등재.
 
 ## feat/m4-terminal
 
