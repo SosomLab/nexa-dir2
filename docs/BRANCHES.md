@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `fix/m4-qa-batch2` | 2026-07-14 | 2026-07-14 (`55bdcc2`) | — | 2 | 실기 QA 5건 — **프리즈 근본 해소**(파일별 아이콘 SHGetFileInfoW를 워커 스레드로 — Downloads/Documents의 MotW·OneDrive 블로킹)·편집 필드 Ctrl+C/X/V(CF_UNICODETEXT·EditState 선택 복사/잘라내기/붙여넣기)·느린 재클릭 리네임 더블클릭 시간 지연(더블클릭=열기 우선)·휠 hover 라우팅(wheel_target)·바로가기 .lnk 숨김(NeverShowExt·리네임 시 복원) | [2026-07-14](journal/2026-07-14.md) |
 | `fix/term-caret-color` | 2026-07-14 | 2026-07-14 (`d0e28d2`) | — | 1 | 사용자 지시 — 터미널 캐럿 밝은 회색(0xCCCCCC) 고정: 터미널 배경은 테마 무관 Campbell 다크라 theme.text가 라이트 테마에서 비가시 | [2026-07-14](journal/2026-07-14.md) |
 | `fix/m4-term-qa` | 2026-07-14 | 2026-07-14 (`149394b`) | — | 2 | 터미널 실기 QA 2건 — 세로바 캐럿(1px·DPI — Windows Terminal bar 동일)·Backspace=DEL 교차 매핑(0x08=Ctrl+Backspace 단어 삭제 해석 → 입력 전체 삭제 결함 수정, 원본 TerminalView 규약) + X-3 터미널 설정 백로그 등록 | [2026-07-14](journal/2026-07-14.md) |
 | `feat/m4-terminal` | 2026-07-14 | 2026-07-14 (`acbbdae`) | — | 4 | M4-3 — ConPTY 터미널(원본 VtScreen.cs·ConPtySession.cs 이식): nexa-term rlib(VT 파서·SGR 3계열·CSI·DECSTBM·스크롤백 800·전각·테스트 9)·ConPTY 세션(pwsh→cmd 폴백·UTF-8 경계 읽기 스레드·EXIT 통지·세대 가드)·도크 [터미널] 종류(Consolas 모노 그리드·런 병합·캐럿·클릭 포커스·VT 키·아무 키 재시작·리사이즈 동기). 테스트 148 green → **M4 전 항목 구현 완료** | [2026-07-14](journal/2026-07-14.md) |
@@ -47,6 +48,12 @@
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
+
+## fix/m4-qa-batch2
+
+- **생성**: 2026-07-14 (분기: main `6b8bd58`). **커밋**: `f390606`(QA 5건 일괄 — 아이콘 비동기·편집 클립보드·리네임 지연·휠 라우팅·lnk 숨김) → `6fa6982`(journal 기록). 병합(`55bdcc2`): 2026-07-14. 삭제: CI green 확인 후.
+- **검증**: `cargo test` **151 green**(신규 3 — in-flight 중복 방지·insert 같은 키 대체 반환·display_name lnk/UTF-8 경계) · clippy 0 · fmt · 릴리스 빌드. **프리즈 재현 조건**: Downloads의 57.8MB 다운로드 exe(MotW) 아이콘 추출 → Defender 검사 수십 초 — 사용자 실기 재확인 대기(Downloads/Documents 진입·탭 추가 시 무응답 없어야 함).
+- **α 한계**: 아이콘 실패 키는 재페인트마다 재시도(원 동작 유지) · 붙여넣기는 한 줄로 정제 · lnk 숨김은 이름 컬럼만(종류/확장자 컬럼은 유지).
 
 ## fix/m4-term-qa
 
