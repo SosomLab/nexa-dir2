@@ -112,7 +112,7 @@ pub unsafe fn show(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[(&str, u32)],
+    hide: &[(&str, u32, String)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -132,7 +132,7 @@ unsafe fn show_inner(
     paths: &[PathBuf],
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[(&str, u32)],
+    hide: &[(&str, u32, String)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -191,7 +191,7 @@ pub unsafe fn show_background(
     dir: &std::path::Path,
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[(&str, u32)],
+    hide: &[(&str, u32, String)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -208,7 +208,7 @@ unsafe fn show_background_inner(
     dir: &std::path::Path,
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[(&str, u32)],
+    hide: &[(&str, u32, String)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -244,7 +244,7 @@ unsafe fn run_menu(
     icm: &IContextMenu,
     extended_verbs: bool,
     intercept: &[&str],
-    hide: &[(&str, u32)],
+    hide: &[(&str, u32, String)],
     custom: &[CustomItem],
     at: Option<POINT>,
 ) -> Outcome {
@@ -270,6 +270,7 @@ unsafe fn run_menu(
         if !hide.is_empty() {
             use windows::Win32::UI::WindowsAndMessaging::{
                 GetMenuItemCount, GetMenuItemID, SetMenuItemInfoW, MENUITEMINFOW, MIIM_ID,
+                MIIM_STRING,
             };
             let n = GetMenuItemCount(Some(hmenu));
             for pos in 0..n.max(0) {
@@ -278,13 +279,17 @@ unsafe fn run_menu(
                     continue;
                 }
                 if let Some(verb) = get_verb(icm, id - ID_SHELL_FIRST) {
-                    if let Some((_, custom_id)) =
-                        hide.iter().find(|(v, _)| verb.eq_ignore_ascii_case(v))
+                    if let Some((_, custom_id, label)) =
+                        hide.iter().find(|(v, _, _)| verb.eq_ignore_ascii_case(v))
                     {
+                        // 라벨 = 앱 언어(i18n — QA 07-14: 셸 OS 라벨 대신 앱 언어 추종)
+                        let mut wide: Vec<u16> =
+                            label.encode_utf16().chain(std::iter::once(0)).collect();
                         let mii = MENUITEMINFOW {
                             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-                            fMask: MIIM_ID,
+                            fMask: MIIM_ID | MIIM_STRING,
                             wID: *custom_id,
+                            dwTypeData: windows::core::PWSTR(wide.as_mut_ptr()),
                             ..Default::default()
                         };
                         let _ = SetMenuItemInfoW(hmenu, pos as u32, true, &mii);

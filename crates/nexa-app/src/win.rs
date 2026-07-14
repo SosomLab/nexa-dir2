@@ -85,6 +85,8 @@ const WATCH_DEBOUNCE_MS: u32 = 300;
 const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
 /// 파일별 아이콘 워커 결과(M4 QA 07-14 — WPARAM=Box<icons::shell::LoadResult>).
 const WM_APP_ICON: u32 = 0x8004; // WM_APP + 4
+/// 설정 창 열기 지연 실행(QA 07-14 — run_command의 State 차용과 모달 재진입 분리).
+const WM_APP_PREFS: u32 = 0x8005; // WM_APP + 5
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -110,6 +112,8 @@ const CMD_THEME_DARK: u32 = 32;
 /// 언어 라디오 — 40 = 시스템, 41+idx = State.langs[idx](발견 목록 순).
 const CMD_LANG_SYSTEM: u32 = 40;
 const CMD_LANG_BASE: u32 = 41;
+/// 설정 창(S6 — Ctrl+, / 메뉴·도구모음, QA 07-14).
+const CMD_PREFS: u32 = 60;
 
 /// 테마 모드(원본 docs/39 §3 — System/Light/Dark). 영속은 M2-5.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -234,6 +238,8 @@ fn build_menus(
                 MenuItem::new(CMD_NEW_FOLDER, tr("menu.file.newFolder"), "Ctrl+Shift+N"),
                 MenuItem::new(CMD_NEW_FILE, tr("menu.file.newFile"), ""),
                 MenuItem::separator(),
+                MenuItem::new(CMD_PREFS, tr("menu.file.prefs"), "Ctrl+,"),
+                MenuItem::separator(),
                 MenuItem::new(CMD_EXIT, tr("menu.file.exit"), ""),
             ],
         },
@@ -255,10 +261,17 @@ fn build_menus(
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
 /// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
 fn build_toolbar() -> Vec<ToolButton> {
-    vec![ToolButton {
-        id: CMD_REFRESH,
-        glyph: "⟳".into(),
-    }]
+    vec![
+        ToolButton {
+            id: CMD_REFRESH,
+            glyph: "⟳".into(),
+        },
+        // 설정(S6 — QA 07-14: 도구모음 연결)
+        ToolButton {
+            id: CMD_PREFS,
+            glyph: "⚙".into(),
+        },
+    ]
 }
 
 /// 단조 시각(ms) — 타입어헤드 버퍼 타임아웃 판정용(프로세스 기동 기준).
@@ -677,6 +690,8 @@ pub fn run() -> Result<()> {
             lpszClassName: class_name,
             lpfnWndProc: Some(wndproc),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
+            // 원본 앱 아이콘(QA 07-14 — Alt+Tab·타이틀바. 작은 아이콘은 WM_SETICON)
+            hIcon: crate::icon::load(32).unwrap_or_default(),
             ..Default::default()
         };
         let atom = RegisterClassW(&wc);
@@ -699,6 +714,16 @@ pub fn run() -> Result<()> {
             Some(hinstance.into()),
             Some(Box::into_raw(state) as *const core::ffi::c_void),
         )?;
+        // 작은 아이콘(타이틀바·작업표시줄 — QA 07-14 원본 아이콘 공통 적용)
+        if let Some(small) = crate::icon::load(16) {
+            use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, ICON_SMALL, WM_SETICON};
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(small.0 as isize)),
+            );
+        }
 
         // 외부(탐색기 등)→앱 드롭 수신 등록 — 수명은 OLE가 보유(AddRef), 해제는 WM_NCDESTROY
         let drop_target: windows::Win32::System::Ole::IDropTarget = crate::dnd::DropTarget::new(
@@ -788,11 +813,12 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     if band_h > 0 {
         let band_y = top + ph;
         let dsx = ((rc.w as f32 * st.dock_split) as i32).clamp(rc.w / 8, rc.w * 7 / 8);
+        let dhalf = (half / 2).max(1); // 도크 스플리터 = 파일 스플리터 절반 두께(QA 07-14)
         st.panels[0]
             .dock
-            .set_bounds(GRect::new(0, band_y, (dsx - half).max(0), band_h), inv);
+            .set_bounds(GRect::new(0, band_y, (dsx - dhalf).max(0), band_h), inv);
         st.panels[1].dock.set_bounds(
-            GRect::new(dsx + half, band_y, (rc.w - dsx - half).max(0), band_h),
+            GRect::new(dsx + dhalf, band_y, (rc.w - dsx - dhalf).max(0), band_h),
             inv,
         );
     } else {
@@ -1420,7 +1446,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         &req.targets,
         req.shift,
         &["delete", "rename", "copy", "cut"],
-        &[("copyaspath", CTX_COPY_PATH)],
+        &[("copyaspath", CTX_COPY_PATH, tr("ctx.copyPath"))],
         &req.custom,
         req.at,
     );
@@ -2081,7 +2107,8 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     st.theme.border
                 };
                 ctx.fill_rect(GRect::new(dx, db.y, dw, db.h), dcolor);
-                ctx.fill_rect(GRect::new(0, db.y, rc.w, 1), st.theme.border);
+                // 파일↔정보 가로 분리선 — 다크에서 식별되도록 text_dim(QA 07-14)
+                ctx.fill_rect(GRect::new(0, db.y, rc.w, 1), st.theme.text_dim);
             }
         }
         st.toolbar.paint(&mut ctx, &st.theme);
@@ -2182,6 +2209,10 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.menubar.set_checked(CMD_TOGGLE_DOCK, on, &mut inv);
             layout(hwnd, st, &mut inv); // 도크는 전폭 밴드 — 호스트 재배치(X-6)
             update_dock_info(st, &mut inv);
+        }
+        CMD_PREFS => {
+            // 모달 설정 창은 State 차용과 분리해 지연 실행(재진입 규약 — WM_APP_PREFS)
+            let _ = PostMessageW(Some(hwnd), WM_APP_PREFS, WPARAM(0), LPARAM(0));
         }
         CMD_UNDO | CMD_REDO => {
             do_undo_redo(hwnd, st, id == CMD_REDO);
@@ -2646,6 +2677,39 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             }
             LRESULT(0)
+        }
+        // 스플리터 hover 커서(QA 07-14): 좌/우 스플리터(파일·도크)=↔, 도크 상단 경계=↕
+        m if m == windows::Win32::UI::WindowsAndMessaging::WM_SETCURSOR => {
+            if let Some(st) = state_of(hwnd) {
+                let mut pt = windows::Win32::Foundation::POINT::default();
+                let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+                let s = |v: i32| (v * st.dpi as i32) / 96;
+                let half = s(SPLIT_HALF).max(1);
+                let band = st.panels[0].dock.bounds();
+                let dock_on = st.panels[0].dock_visible() && band.h > 0;
+                let on_dock_split = dock_on
+                    && pt.y >= band.y
+                    && pt.x >= band.right() - 2
+                    && pt.x < st.panels[1].dock.bounds().x + 2;
+                let on_file_split = pt.y >= st.panels[0].bounds().y
+                    && pt.y < st.panels[0].bounds().bottom()
+                    && (pt.x - splitter_x(hwnd, st)).abs() <= half;
+                let cursor = if dock_on && (pt.y - band.y).abs() <= SPLIT_HALF {
+                    Some(windows::Win32::UI::WindowsAndMessaging::IDC_SIZENS)
+                } else if on_dock_split || on_file_split {
+                    Some(windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE)
+                } else {
+                    None
+                };
+                if let Some(id) = cursor {
+                    if let Ok(c) = LoadCursorW(None, id) {
+                        windows::Win32::UI::WindowsAndMessaging::SetCursor(Some(c));
+                        return LRESULT(1);
+                    }
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOUSEWHEEL => {
             if let Some(st) = state_of(hwnd) {
@@ -3402,6 +3466,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
             }
+            LRESULT(0)
+        }
+        m if m == WM_APP_PREFS => {
+            open_prefs(hwnd); // 설정 창(S6) — State 차용 없는 시점에서 모달
             LRESULT(0)
         }
         // 파일별 아이콘 워커 결과(QA 07-14) — WPARAM=Box<LoadResult> 소유권 인수(항상 해제)

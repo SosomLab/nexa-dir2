@@ -124,6 +124,7 @@ unsafe fn ensure_class() {
                 windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
             )
             .unwrap_or_default(),
+            hIcon: crate::icon::load(32).unwrap_or_default(), // 원본 아이콘 공통(QA 07-14)
             ..Default::default()
         };
         let _ = RegisterClassW(&wc);
@@ -203,7 +204,7 @@ pub unsafe fn show_buttons(
         WINDOW_EX_STYLE(0x00000001), // DLGMODALFRAME
     );
     let (w, h) = (win.right - win.left, win.bottom - win.top);
-    let (cx, cy) = center_over(owner, w, h);
+    let (cx, cy) = center_over(owner, w, h, 110); // 진행 창(위)과 비겹침(QA 07-14)
     let mut state = Box::new(DlgState {
         result: 0,
         text: message.encode_utf16().collect(),
@@ -290,15 +291,16 @@ pub unsafe fn make_font_pub(hwnd: HWND, spec: &DlgFont) -> HFONT {
 }
 
 /// 소유자 중앙 좌표.
-unsafe fn center_over(owner: HWND, w: i32, h: i32) -> (i32, i32) {
+unsafe fn center_over(owner: HWND, w: i32, h: i32, dy: i32) -> (i32, i32) {
+    // dy = 세로 오프셋(QA 07-14 — 확인창은 아래·진행 창은 위: 서로 겹치지 않게)
     let mut rc = RECT::default();
     if GetWindowRect(owner, &mut rc).is_ok() {
         (
             rc.left + ((rc.right - rc.left) - w) / 2,
-            rc.top + ((rc.bottom - rc.top) - h) / 2,
+            rc.top + ((rc.bottom - rc.top) - h) / 2 + dy,
         )
     } else {
-        (200, 200)
+        (200, 200 + dy)
     }
 }
 
@@ -439,6 +441,7 @@ impl Progress {
                     windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
                 )
                 .unwrap_or_default(),
+                hIcon: crate::icon::load(32).unwrap_or_default(), // 원본 아이콘 공통(QA 07-14)
                 ..Default::default()
             };
             let _ = RegisterClassW(&wc);
@@ -469,7 +472,7 @@ impl Progress {
             line_h,
             cancelled: false,
         });
-        let (cx, cy) = center_over(owner, w, h);
+        let (cx, cy) = center_over(owner, w, h, -110); // 확인창(아래)과 비겹침(QA 07-14)
         let title_w = windows::core::HSTRING::from(title);
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
