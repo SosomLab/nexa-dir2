@@ -123,6 +123,11 @@ impl TabBar {
         let (_, (lo, hi)) = *self.ranges.borrow();
         x >= lo && x < hi
     }
+
+    /// 탭 바 안 빈 공간(탭·[+] 밖) 판정 — 더블클릭=새 탭(원본 F20, QA 07-14).
+    pub fn empty_area_at(&self, x: i32, y: i32) -> bool {
+        self.bounds.contains(Point { x, y }) && self.tab_at(x, y).is_none() && !self.plus_at(x, y)
+    }
 }
 
 impl Widget for TabBar {

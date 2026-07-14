@@ -115,4 +115,6 @@ tab.lock = Lock tab
 tab.unlock = Unlock tab
 tab.duplicate = Duplicate tab
 tab.close = Close tab
-ops.applyAll = Apply the same choice to remaining conflicts?
+ops.applyAll = (Yes=overwrite all / No=skip all / Cancel=abort - the choice applies to all remaining conflicts)
+
+ctx.copyPath = Copy as path
