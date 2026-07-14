@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m4-term-select` | 2026-07-14 | 2026-07-14 (`8c8665c`) | — | 2 | 터미널 상호작용(QA/요청 5건) — 셀 단위 렌더(폴백 글꼴 전진폭 밀림 해소·단일 글리프 캐시)·마우스 드래그 선택(반전 하이라이트·엣지 자동 스크롤 60ms)·스크롤백 보기(휠 3줄/노치·보던 위치 고정·입력 시 스냅)·Ctrl+C(선택 복사/인터럽트)·Ctrl+V 붙여넣기·settings term_font(DWrite 해석·Consolas 폴백) | [2026-07-14](journal/2026-07-14.md) |
 | `fix/m4-qa-batch2` | 2026-07-14 | 2026-07-14 (`55bdcc2`) | — | 2 | 실기 QA 5건 — **프리즈 근본 해소**(파일별 아이콘 SHGetFileInfoW를 워커 스레드로 — Downloads/Documents의 MotW·OneDrive 블로킹)·편집 필드 Ctrl+C/X/V(CF_UNICODETEXT·EditState 선택 복사/잘라내기/붙여넣기)·느린 재클릭 리네임 더블클릭 시간 지연(더블클릭=열기 우선)·휠 hover 라우팅(wheel_target)·바로가기 .lnk 숨김(NeverShowExt·리네임 시 복원) | [2026-07-14](journal/2026-07-14.md) |
 | `fix/term-caret-color` | 2026-07-14 | 2026-07-14 (`d0e28d2`) | — | 1 | 사용자 지시 — 터미널 캐럿 밝은 회색(0xCCCCCC) 고정: 터미널 배경은 테마 무관 Campbell 다크라 theme.text가 라이트 테마에서 비가시 | [2026-07-14](journal/2026-07-14.md) |
 | `fix/m4-term-qa` | 2026-07-14 | 2026-07-14 (`149394b`) | — | 2 | 터미널 실기 QA 2건 — 세로바 캐럿(1px·DPI — Windows Terminal bar 동일)·Backspace=DEL 교차 매핑(0x08=Ctrl+Backspace 단어 삭제 해석 → 입력 전체 삭제 결함 수정, 원본 TerminalView 규약) + X-3 터미널 설정 백로그 등록 | [2026-07-14](journal/2026-07-14.md) |
@@ -48,6 +49,12 @@
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
+
+## feat/m4-term-select
+
+- **생성**: 2026-07-14 (분기: main `b9f032c`). **커밋**: `3782477`(셀 정렬·선택·스크롤백·클립보드·글꼴 설정) → `2dcb73a`(docs — journal·X-3 현행화). 병합(`8c8665c`): 2026-07-14. 삭제: CI green 확인 후.
+- **검증**: `cargo test` 151 green(config term_font 왕복 포함) · clippy 0 · fmt · B2 0.73MB · B3 무변(GetCursorPos/CoInitializeEx=기존 화이트리스트) · 릴리스 빌드. **실기 QA 대기**: ls 한글 파일명 열 정렬·드래그 선택+반전 표시·그리드 밖 자동 스크롤·휠 스크롤백(터미널 위)·Ctrl+C 복사/Ctrl+V 붙여넣기·data\settings.txt `term_font=D2Coding` 후 재시작.
+- **α 한계**: 스크롤백 800 상한 도달 시 선택/보기 절대 인덱스 드리프트 · 더블클릭 단어 선택 없음 · 명시 폴백 체인(1→2순위 글꼴)·글꼴 크기 설정 = X-3 잔여.
 
 ## fix/m4-qa-batch2
 
