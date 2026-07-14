@@ -61,7 +61,7 @@
 |---|---|---|---|---|
 | M4-1 | 하단 도크(정보 뷰·토글·세션) | P1 | 중 | ✅ (07-13 — InfoDock 위젯(패널별 1개 = 원본 대원칙)·정보 뷰(원본 DockInfo: 다중=개수/단일=이름·종류·크기·수정·경로/없음=현재 폴더)·Ctrl+`/보기 메뉴 토글·높이 드래그(비율 0.15~0.5)·settings 영속(dock·dock_ratio). 실기 QA 대기) |
 | M4-2 | 내장 미리보기(텍스트·이미지 — WIC 디코딩) | P1 | 중 | ✅ (07-13 — **내장**(DR-7 플러그인 비이관): 도크 종류 스트립(정보\|미리보기 클릭 전환)·텍스트(16KB·UTF-8 lossy·이진 판정)·이미지(WIC Fant 스케일·비율 유지·8건 캐시·CoCreateInstance 지연=B3 무변)·draw_image 프리미티브. 독립 예제 examples/preview_image.rs. 실기 QA 대기) |
-| M4-3 | `nexa-term` ConPTY + VT 스크린(원본 VtScreen·docs/37 이식) | P1 | 대 | ✅ (07-14 — **nexa-term rlib**(VtScreen: SGR 16/256/트루컬러·CSI 커서/지우기/삽입삭제/DECSTBM·스크롤백 800·전각 셀·테스트 9)·ConPTY 세션(pwsh→cmd 폴백·읽기 스레드 UTF-8 경계·EXIT 통지·세대 가드)·도크 [터미널] 종류(Consolas 모노 그리드·런 병합·reverse/faint·캐럿·클릭 포커스·VT 키 시퀀스·아무 키 재시작). 실기 QA 대기. α: 스크롤백 스크롤·마우스 선택 복사=후속) |
+| M4-3 | `nexa-term` ConPTY + VT 스크린(원본 VtScreen·docs/37 이식) | P1 | 대 | ✅ (07-14 — **nexa-term rlib**(VtScreen: SGR 16/256/트루컬러·CSI 커서/지우기/삽입삭제/DECSTBM·스크롤백 800·전각 셀·테스트 9)·ConPTY 세션(pwsh→cmd 폴백·읽기 스레드 UTF-8 경계·EXIT 통지·세대 가드)·도크 [터미널] 종류. **+ QA 시리즈**: 셀 단위 렌더(한글 열 정렬)·드래그 선택(엣지 자동 스크롤)·스크롤백 휠·Ctrl+C/V·세로바 캐럿(깜빡임)·Backspace=DEL·term_font. **M4 마감 `0.5.0`**(B1 터미널 상주 5.07MB) — 잔여는 X-3) |
 
 ## §6. M5 — 마감·릴리스
 

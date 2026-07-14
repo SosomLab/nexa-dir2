@@ -7,7 +7,7 @@
 
 **Nexa Dir 2** = 원본 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어+WinUI 3/C#)의 기능을
 **포터블 단일 exe · 초저메모리(RSS ≤30MB) · unmanaged 올 러스트**로 재구축하는 Windows 파일 탐색기.
-원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`. 현 단계: **M2(셸 골격) 진행** — M0(`0.1.0`)·M1(`0.2.0`) 완료.
+원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`. 현 단계: **M5(마감) 진행** — M0(`0.1.0`)~M4(`0.5.0`) 완료.
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com (원본과 동일)
 
