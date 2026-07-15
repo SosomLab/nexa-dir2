@@ -17,7 +17,7 @@
 | --- | --- |
 | DR-1 | **올 러스트 단일 바이너리** — Win32(windows-rs)+커스텀 드로잉(GDI→DirectWrite interop). 관리 런타임·UI 프레임워크 금지 (ADR-0001) |
 | DR-2 | **예산 게이트**: 유휴 RSS ≤30MB · exe ≤10MB · 임포트=OS 인박스 DLL만 — 초과 시 main 병합 금지 |
-| DR-3 | 배포 = **포터블 단일 exe 단독**, 영속물은 exe 옆 `data\` |
+| DR-3 | **개정(07-16)**: 배포 = 포터블 단일 exe **기본** + **설치형 exe(Inno Setup) 보조** 2채널 — 영속물은 exe 옆 `data\`(쓰기 불가 위치는 `%LOCALAPPDATA%\NexaDir2\data` 폴백, [docs/21](docs/21-distribution.md)) |
 | DR-4 | 원본 nexa-core/vfs/tree **rlib 이식**(cdylib/FFI/ABI 폐지) |
 | DR-5 | 원본 M1 기능 패리티 + 디자인 규약(고밀도·다크·키보드 우선) 계승 |
 | DR-6 | PolyForm NC + 의존성 **퍼미시브 온리**(GPL 금지 — Slint 배제 근거) |

@@ -41,7 +41,7 @@
 | --- | --- | --- |
 | DR-1 | 스택 | **올 러스트 단일 바이너리** — Win32(windows-rs)+커스텀 드로잉 · ADR-0001 Accepted |
 | DR-2 | 예산 | 유휴 RSS ≤30MB · exe ≤10MB · 임포트=OS 인박스만 — **병합 게이트** |
-| DR-3 | 배포 | 포터블 **단일 exe 단독** 채널(`data\` 영속) |
+| DR-3 | 배포 | **개정(07-16)**: 포터블 단일 exe **기본** + 설치형 exe **보조** 2채널(`data\` 영속·쓰기 불가 시 LOCALAPPDATA 폴백 — [21](21-distribution.md)) |
 | DR-4 | 코어 | 원본 nexa-core/vfs/tree **rlib 이식**(FFI 폐지) |
 | DR-5 | UX | 원본 M1 기능 패리티·디자인 규약 계승 |
 | DR-6 | 라이선스 | PolyForm NC + 의존성 퍼미시브 온리 |
