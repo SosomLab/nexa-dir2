@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/dist-installer` | 2026-07-16 | 2026-07-16 (`e8edc2c`) | 2026-07-16 | 1 | 배포 2채널(DR-3 개정 — 사용자 요청) — 포터블 최소파일 설계 명문화([21-distribution](21-distribution.md) 신설)·**설치형 exe**(installer/nexa.iss — 사용자별 설치 기본·exe 1개 복사·제거기)·release.yml ISCC 빌드+**Release 2종 첨부**·**data_dir 쓰기 폴백**(%LOCALAPPDATA% — 테스트 포함). 171 green | [2026-07-16](journal/2026-07-16.md) |
 | `refactor/optimization-pass` | 2026-07-16 | 2026-07-16 (`0cf339a`) | 2026-07-16 | 7 | X-16 최적화 1차(사용자 요청) — 3축 점검(구조·핫패스·경계) 후 redundant clone 8건·workspace lints+widgets 파사드·**Tree::row_ref 셀 핫패스 무클론**·**DW 레이아웃 캐시 중첩 맵 무할당 조회**·**아이콘 틱 무효화 rect 축소**(+런처 바)·mouse_xy/Invalidations 정리. 잔여 구조 개편 7건 = X-16 백로그. X-15/X-17 등재. 170 green | [2026-07-16](journal/2026-07-16.md) |
 | `feat/x13-launcher-crud` | 2026-07-16 | **보류(미병합)** | — | 1 | X-13 1/2 — LauncherItem.icon+`launcherN.icon` 별도 키 직렬화(하위호환)·바 아이콘 오버라이드(`0888677`). 2/2 설정 편집기 후속 | [2026-07-16](journal/2026-07-16.md) |
 | `feat/session-autosave` | 2026-07-15 | 2026-07-15 (`16c00b7`) | 2026-07-15 | 1 | 세션 **디바운스 자동 저장**(탭/경로 변경 플래그→1초 코얼레싱 flush·마지막 상태만 — 원본 SESS 이행·크래시 방어) + 진행 창 **[닫기 (N)] 카운트다운 버튼**(자동/클릭 즉시). 회귀 테스트·168 green | [2026-07-15](journal/2026-07-15.md) |
