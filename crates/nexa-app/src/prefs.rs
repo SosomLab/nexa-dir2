@@ -22,13 +22,13 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow, MoveWindow,
-    RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW,
-    TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, ES_AUTOHSCROLL, ES_NUMBER,
-    GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
-    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT,
-    WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    GetDlgCtrlID, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, ES_AUTOHSCROLL,
+    ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE,
+    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO,
+    WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX,
+    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::dialog::DlgFont;
@@ -65,10 +65,12 @@ enum Kind {
     CheckBox, // 불리언(라벨 일체형 — 원본 스크린샷)
 }
 
-/// 설정 항목(레지스트리) — 카테고리·라벨키·종류·대상 필드 id.
+/// 설정 항목(레지스트리) — 카테고리·라벨키·설명키·종류·대상 필드 id.
 struct Entry {
     cat: &'static str,
     label_key: &'static str,
+    /// 설명 문장(X-10 ③ — 제목 아래 회색 한 줄). `라벨키.desc` 규약.
+    desc_key: &'static str,
     kind: Kind,
     field: u32,
 }
@@ -123,26 +125,41 @@ fn tree_index(key: &str) -> Option<usize> {
     TREE.iter().position(|n| n.0 == key)
 }
 
+/// 검색어 → 소문자 토큰(X-10 ② — 공백 구분 **AND 매칭**, VS Code 규약).
+fn q_tokens(q: &str) -> Vec<String> {
+    q.to_lowercase()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+/// 라벨이 전 토큰을 포함하는가(AND).
+fn label_hits(label: &str, tokens: &[String]) -> bool {
+    let l = label.to_lowercase();
+    tokens.iter().all(|t| l.contains(t))
+}
+
+/// 카테고리의 상세 설정 중 토큰 매치 항목 수(X-10 ① 매치 수·필터 공용).
+fn cat_match_count(key: &str, tokens: &[String], reg: &[Entry]) -> usize {
+    reg.iter()
+        .filter(|e| e.cat == key && label_hits(&tr(e.label_key), tokens))
+        .count()
+}
+
 /// 카테고리 매치(검색 기준 — 트리 필터·그룹 페이지 링크 공용): **라벨 매치** 또는
 /// **하위 상세 설정(항목 라벨) 매치**.
-fn cat_matches(key: &str, label_key: &str, q: &str, reg: &[Entry]) -> bool {
-    tr(label_key).to_lowercase().contains(q)
-        || reg
-            .iter()
-            .any(|e| e.cat == key && tr(e.label_key).to_lowercase().contains(q))
+fn cat_matches(key: &str, label_key: &str, tokens: &[String], reg: &[Entry]) -> bool {
+    label_hits(&tr(label_key), tokens) || cat_match_count(key, tokens, reg) > 0
 }
 
 /// 검색 중 트리 필터(X-10 ① — 사용자 요청 07-15): **노드 라벨에 검색어가 있거나**,
 /// 라벨엔 없어도 **하위 상세 설정(항목 라벨)에 검색어가 있는** 노드만 표시.
 /// 매치 노드의 조상(경로)은 유지, 그룹 라벨 자체 매치면 하위 전체 표시.
-fn tree_visible_search(q: &str, reg: &[Entry]) -> Vec<usize> {
-    let leaf_detail_hit = |key: &str| {
-        reg.iter()
-            .any(|e| e.cat == key && tr(e.label_key).to_lowercase().contains(q))
-    };
+fn tree_visible_search(tokens: &[String], reg: &[Entry]) -> Vec<usize> {
+    let leaf_detail_hit = |key: &str| cat_match_count(key, tokens, reg) > 0;
     let mut keep = vec![false; TREE.len()];
     for i in 0..TREE.len() {
-        let name_hit = tr(TREE[i].1).to_lowercase().contains(q);
+        let name_hit = label_hits(&tr(TREE[i].1), tokens);
         let detail_hit = tree_cats(i).iter().any(|(k, _)| leaf_detail_hit(k));
         if !(name_hit || detail_hit) {
             continue;
@@ -200,54 +217,63 @@ fn registry() -> Vec<Entry> {
         Entry {
             cat: "appearance",
             label_key: "pref.theme",
+            desc_key: "pref.theme.desc",
             kind: Kind::Radio(THEME_OPTS),
             field: F_THEME,
         },
         Entry {
             cat: "fonts",
             label_key: "pref.dlgFont",
+            desc_key: "pref.dlgFont.desc",
             kind: Kind::Text,
             field: F_DLG_FONT,
         },
         Entry {
             cat: "fonts",
             label_key: "pref.dlgFontSize",
+            desc_key: "pref.dlgFontSize.desc",
             kind: Kind::Number,
             field: F_DLG_SIZE,
         },
         Entry {
             cat: "list",
             label_key: "pref.showHidden",
+            desc_key: "pref.showHidden.desc",
             kind: Kind::CheckBox,
             field: F_HIDDEN,
         },
         Entry {
             cat: "list",
             label_key: "pref.showDotfiles",
+            desc_key: "pref.showDotfiles.desc",
             kind: Kind::CheckBox,
             field: F_DOTFILES,
         },
         Entry {
             cat: "terminal",
             label_key: "pref.termFont",
+            desc_key: "pref.termFont.desc",
             kind: Kind::Text,
             field: F_TERM_FONT,
         },
         Entry {
             cat: "terminal",
             label_key: "pref.termFontSize",
+            desc_key: "pref.termFontSize.desc",
             kind: Kind::Number,
             field: F_TERM_SIZE,
         },
         Entry {
             cat: "dock",
             label_key: "pref.dock",
+            desc_key: "pref.dock.desc",
             kind: Kind::CheckBox,
             field: F_DOCK,
         },
         Entry {
             cat: "lang",
             label_key: "pref.lang",
+            desc_key: "pref.lang.desc",
             kind: Kind::LangRadio,
             field: F_LANG,
         },
@@ -271,6 +297,10 @@ struct PrefState {
     expanded: Vec<bool>,
     /// 현재 가시 노드(트리 목록 행 → TREE 인덱스).
     visible: Vec<usize>,
+    /// 검색 중 TREE 인덱스별 매치 항목 수(X-10 ① — 트리 행 "(N)" 표기).
+    search_counts: Vec<usize>,
+    /// 수정됨 바(X-10 ④) 브러시 — 창 수명 동안 재사용(WM_CTLCOLORSTATIC).
+    accent_brush: windows::Win32::Graphics::Gdi::HBRUSH,
     /// 상단 검색창(사이드바 상단 — 원본 스크린샷 위치).
     search: HWND,
     /// 사이드바/본문 세로 구분선(리사이즈 시 높이 추종).
@@ -289,6 +319,10 @@ struct PrefState {
 const ID_SEARCH: u32 = 1002;
 /// 검색어 빠른 지우개(✕ — 사용자 요청 07-15).
 const ID_SEARCH_CLEAR: u32 = 1003;
+/// 수정됨 표시 바(X-10 ④ — 기본값과 다른 항목 좌측 세로 accent). 여러 컨트롤 공유 id.
+const ID_MODBAR: u32 = 1997;
+/// 설명 문장(X-10 ③ — 회색 텍스트). 여러 컨트롤 공유 id.
+const ID_DESC: u32 = 1998;
 const ID_TREE: u32 = 1100; // 사이드바 트리(오너드로 LISTBOX)
 const ID_FIELD_BASE: u32 = 1200; // +field(체크/EDIT 명령)
 const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
@@ -409,7 +443,6 @@ impl PrefState {
         self.editors.clear();
         self.radios.clear();
         let reg = registry();
-        let q = self.query.to_lowercase();
         let x0 = self.body_x();
         let pane_w = (self.cw - x0 - PAD).max(120);
         // 표시 모드(드릴다운 개편 07-15 — 사용자 QA): **그룹 = 하위 메뉴 목록만**
@@ -417,10 +450,20 @@ impl PrefState {
         // 항목만**), 검색 중 미선택(category 빈 값) = 전 카테고리 매치 목록.
         let node = tree_index(&self.category);
         let is_group = node.is_some_and(tree_has_children);
+        let tokens = q_tokens(&self.query);
+        // 전역 검색 페이지 제목 = “검색어” — N개 일치(X-10 ② 결과 수)
         let title = if let Some(i) = node {
             tr(TREE[i].1)
         } else {
-            format!("\u{201C}{}\u{201D}", self.query)
+            let n = reg
+                .iter()
+                .filter(|e| label_hits(&tr(e.label_key), &tokens))
+                .count();
+            format!(
+                "\u{201C}{}\u{201D} — {}",
+                self.query,
+                crate::i18n::trf("pref.search.results", &[&n.to_string()])
+            )
         };
         let th = mk(
             self.hwnd,
@@ -441,7 +484,7 @@ impl PrefState {
             // 그룹 페이지 = 하위 메뉴 링크(클릭 = 그 메뉴로 이동 — SS_NOTIFY).
             // 검색 중엔 매치 기준(라벨/상세 — 트리 필터와 동일) 자식만.
             for (key, lk) in tree_cats(node.unwrap_or_default()) {
-                if !q.is_empty() && !cat_matches(key, lk, &q, &reg) {
+                if !tokens.is_empty() && !cat_matches(key, lk, &tokens, &reg) {
                     continue;
                 }
                 let Some(ti) = tree_index(key) else { continue };
@@ -465,24 +508,32 @@ impl PrefState {
             // (검색 중 = 라벨 매치만 — 메뉴명 매치로 진입해 상세 매치가 0이면 전체 표시)
             let list: Vec<&Entry> = if node.is_none() {
                 reg.iter()
-                    .filter(|e| tr(e.label_key).to_lowercase().contains(&q))
+                    .filter(|e| label_hits(&tr(e.label_key), &tokens))
                     .collect()
             } else {
                 let matched: Vec<&Entry> = reg
                     .iter()
                     .filter(|e| {
                         e.cat == self.category
-                            && (q.is_empty() || tr(e.label_key).to_lowercase().contains(&q))
+                            && (tokens.is_empty() || label_hits(&tr(e.label_key), &tokens))
                     })
                     .collect();
-                if matched.is_empty() && !q.is_empty() {
+                if matched.is_empty() && !tokens.is_empty() {
                     reg.iter().filter(|e| e.cat == self.category).collect()
                 } else {
                     matched
                 }
             };
             for e in list {
-                let label = tr(e.label_key);
+                // 전역 검색 결과 = "카테고리: 항목" 접두(X-10 ⑤ — VS Code 규약)
+                let label = if node.is_none() {
+                    let cat_label = tree_index(e.cat).map(|i| tr(TREE[i].1)).unwrap_or_default();
+                    format!("{cat_label}: {}", tr(e.label_key))
+                } else {
+                    tr(e.label_key)
+                };
+                // 수정됨 표시(X-10 ④) — 기본값과 다른 항목 좌측 세로 accent 바
+                let y0 = y;
                 match e.kind {
                     Kind::CheckBox => {
                         // 라벨 일체형 체크박스(원본 스크린샷) — 클릭 즉시 적용
@@ -613,18 +664,82 @@ impl PrefState {
                         y += ROW_H + 4;
                     }
                 }
+                // 설명 문장(X-10 ③) — 제목/컨트롤 아래 회색 한 줄(ID_DESC 색 분기)
+                let desc = tr(e.desc_key);
+                if desc != e.desc_key {
+                    let d = mk(
+                        self.hwnd,
+                        self.font,
+                        w!("STATIC"),
+                        &desc,
+                        0,
+                        x0 + 2,
+                        y,
+                        pane_w - 2,
+                        18,
+                        ID_DESC,
+                    );
+                    self.rows.push(d);
+                    y += 26;
+                }
+                // 수정됨 표시(X-10 ④) — 기본값과 다른 항목 좌측 세로 accent 바
+                if self.is_modified(e.field) {
+                    let bar = mk(
+                        self.hwnd,
+                        self.font,
+                        w!("STATIC"),
+                        "",
+                        0,
+                        x0 - 8,
+                        y0 + 2,
+                        3,
+                        (y - y0 - 8).max(18),
+                        ID_MODBAR,
+                    );
+                    self.rows.push(bar);
+                }
             }
         }
         let _ = InvalidateRect(Some(self.hwnd), None, true);
     }
 
+    /// 항목이 기본값과 다른가(X-10 ④ — config::Settings::default 단일 원천).
+    fn is_modified(&self, field: u32) -> bool {
+        let v = &self.values;
+        let d = crate::config::Settings::default();
+        match field {
+            F_THEME => v.theme != d.theme,
+            F_LANG => v.lang != d.lang,
+            F_TERM_FONT => v.term_font != d.term_font,
+            F_TERM_SIZE => v.term_font_size != d.term_font_size,
+            F_DLG_FONT => v.dlg_font != d.dlg_font,
+            F_DLG_SIZE => v.dlg_font_size != d.dlg_font_size,
+            F_HIDDEN => v.show_hidden != d.show_hidden,
+            F_DOTFILES => v.show_dotfiles != d.show_dotfiles,
+            F_DOCK => v.dock != d.dock,
+            _ => false,
+        }
+    }
+
     /// 트리 목록 재적재 — 검색 중 = 매치 필터(라벨/상세 — X-10 ①), 아니면 펼침 상태.
-    /// 현재 선택 노드가 가시 목록에 있으면 선택 유지.
+    /// 현재 선택 노드가 가시 목록에 있으면 선택 유지. 검색 중 매치 수(N)도 함께 계산.
     unsafe fn repopulate_tree(&mut self) {
-        self.visible = if self.query.is_empty() {
+        let reg = registry();
+        let tokens = q_tokens(&self.query);
+        self.visible = if tokens.is_empty() {
+            self.search_counts = vec![0; TREE.len()];
             tree_visible(&self.expanded)
         } else {
-            tree_visible_search(&self.query.to_lowercase(), &registry())
+            // 노드별 매치 수 = 커버 카테고리들의 매치 항목 합(그룹=하위 합)
+            self.search_counts = (0..TREE.len())
+                .map(|i| {
+                    tree_cats(i)
+                        .iter()
+                        .map(|(k, _)| cat_match_count(k, &tokens, &reg))
+                        .sum()
+                })
+                .collect();
+            tree_visible_search(&tokens, &reg)
         };
         // 행 높이(LBS_OWNERDRAWFIXED — WM_MEASUREITEM은 상태 설정 전 도착이라 여기서)
         SendMessageW(
@@ -635,7 +750,14 @@ impl PrefState {
         );
         SendMessageW(self.tree, 0x0184 /* LB_RESETCONTENT */, None, None);
         for &i in &self.visible {
-            let w = windows::core::HSTRING::from(tr(TREE[i].1));
+            // 검색 중 매치 수 "(N)"은 저장 문자열에도 포함(오너드로와 일치 — 접근성/판독)
+            let mut label = tr(TREE[i].1);
+            if !tokens.is_empty() {
+                if let Some(n) = self.search_counts.get(i).filter(|n| **n > 0) {
+                    label.push_str(&format!(" ({n})"));
+                }
+            }
+            let w = windows::core::HSTRING::from(label);
             SendMessageW(
                 self.tree,
                 0x0180, // LB_ADDSTRING
@@ -701,8 +823,8 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     let old = SelectObject(dis.hDC, st.font.into());
     SetBkMode(dis.hDC, TRANSPARENT);
     // 그룹 = ▸(접힘)/▾(펼침) 마커, leaf = 마커 없음(트리 시각 규약 — rows.rs와 동일).
-    // 검색 중엔 필터가 하위를 강제 표시하므로 항상 ▾.
-    let label = if tree_has_children(node) {
+    // 검색 중엔 필터가 하위를 강제 표시하므로 항상 ▾ + 매치 수 "(N)"(X-10 ①).
+    let mut label = if tree_has_children(node) {
         format!(
             "{} {}",
             if st.expanded[node] || !st.query.is_empty() {
@@ -715,6 +837,11 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     } else {
         tr(label_key)
     };
+    if !st.query.is_empty() {
+        if let Some(n) = st.search_counts.get(node).filter(|n| **n > 0) {
+            label.push_str(&format!(" ({n})"));
+        }
+    }
     let mut wide: Vec<u16> = label.encode_utf16().collect();
     let mut rc = RECT {
         left: dis.rcItem.left + 10 + depth * 14,
@@ -838,10 +965,19 @@ unsafe extern "system" fn prefs_proc(
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
-        // 라이트 고정 네이티브 창(원본 스크린샷) — 라벨·체크박스 배경을 창 배경과 일치
+        // 라이트 고정 네이티브 창(원본 스크린샷) — 라벨·체크박스 배경을 창 배경과 일치.
+        // ID_MODBAR = accent 채움(수정됨 바 — X-10 ④) · ID_DESC = 회색 텍스트(설명 — ③).
         m if m == WM_CTLCOLORSTATIC || m == WM_CTLCOLORBTN => {
             let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
+            let child = HWND(lparam.0 as *mut core::ffi::c_void);
+            let id = GetDlgCtrlID(child) as u32;
+            if id == ID_MODBAR {
+                return LRESULT((*st).accent_brush.0 as isize);
+            }
             SetBkMode(hdc, TRANSPARENT);
+            if id == ID_DESC {
+                windows::Win32::Graphics::Gdi::SetTextColor(hdc, COLORREF(0x0078_6E68));
+            }
             LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
         }
         m if m == WM_CTLCOLOREDIT => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -990,6 +1126,9 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         tree: HWND::default(),
         expanded: vec![true; TREE.len()], // 기본 = 전부 펼침
         visible: Vec::new(),
+        search_counts: Vec::new(),
+        // 수정됨 바(X-10 ④) — Windows accent 근사색(라이트 고정 창)
+        accent_brush: CreateSolidBrush(COLORREF(0x00D4_7800)),
         search: HWND::default(),
         divider: HWND::default(),
         cw: CLIENT_W,
@@ -1082,6 +1221,7 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
     let _ = SetForegroundWindow(owner);
     let _ = DeleteObject(font.into());
     let _ = DeleteObject(title_font.into());
+    let _ = DeleteObject(state.accent_brush.into());
     // 즉시 적용 방식(X-8) — 닫기 = 확정. 최종 값 반환(미이탈 편집 값 포함, WM_CLOSE에서 수거).
     let mut v = state.values.clone();
     sanitize(&mut v);
