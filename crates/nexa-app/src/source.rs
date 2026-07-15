@@ -34,7 +34,8 @@ impl TreeSource {
             tz_offset_min,
             folders_first: true,
             case_sensitive: false,
-            sort_keys: Vec::new(),
+            // Tree 기본(name_asc)과 일치 — 옵션 토글 시 빈 키로 열거 순서 퇴행 방지(07-15)
+            sort_keys: vec![(SortKey::Name, false)],
         }
     }
 

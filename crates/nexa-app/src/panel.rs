@@ -74,6 +74,9 @@ pub struct Panel {
     dock_visible: bool,
     /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
     nav_up_align: nexa_gui::widgets::rows::ScrollAlign,
+    /// 정렬 옵션(G-13·07-15) — **새 소스(탐색·재로드·새 탭)에도 재적용**하기 위해 보관.
+    sort_folders_first: bool,
+    sort_case: bool,
     /// 도크 높이 비율(리스트+도크 영역 대비 — S2 드래그·영속. 전역 공유 값이 양 패널에 적용).
     dock_ratio: f32,
     tabs: Vec<Tab>,
@@ -101,6 +104,8 @@ impl Panel {
             dock: InfoDock::new("", m.row_h, m.pad_x),
             dock_visible: false,
             nav_up_align: nexa_gui::widgets::rows::ScrollAlign::default(),
+            sort_folders_first: true,
+            sort_case: false,
             dock_ratio: 0.3,
             tabs: vec![Tab {
                 rows,
@@ -356,6 +361,7 @@ impl Panel {
             locked: false,
         });
         self.active = self.tabs.len() - 1;
+        self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 새 탭 유지)
         self.set_bounds(self.bounds, inv); // 새 탭 리스트 bounds 반영
         self.sync_chrome(inv);
     }
@@ -512,6 +518,7 @@ impl Panel {
         // 새 루트 밖·부모 접힘 경로는 expand_path가 무시하므로 방향 구분 불요.
         self.sync_expanded();
         self.tabs[self.active].rows.replace_source(src, inv);
+        self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 탐색/재로드 유지)
         let entries: Vec<PathBuf> = self.tabs[self.active].expanded.values().cloned().collect();
         let tree = self.rows_mut().source_mut().tree_mut();
         for p in &entries {
@@ -596,20 +603,30 @@ impl Panel {
         self.nav_up_align = align;
     }
 
-    /// 폴더 우선 정렬 토글(G-13) — 전 탭 소스에 전파·즉시 재정렬.
+    /// 폴더 우선 정렬 토글(G-13) — 전 탭 소스에 전파·즉시 재정렬(+새 소스용 보관).
     pub fn set_folders_first(&mut self, on: bool, inv: &mut Invalidations) {
+        self.sort_folders_first = on;
         for t in &mut self.tabs {
             t.rows.source_mut().set_folders_first(on);
             inv.push(t.rows.bounds());
         }
     }
 
-    /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 전 탭 소스에 전파·즉시 재정렬.
+    /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 전 탭 소스에 전파·즉시 재정렬(+보관).
     pub fn set_sort_case(&mut self, on: bool, inv: &mut Invalidations) {
+        self.sort_case = on;
         for t in &mut self.tabs {
             t.rows.source_mut().set_case_sensitive(on);
             inv.push(t.rows.bounds());
         }
+    }
+
+    /// 새로 만든 소스에 보관된 정렬 옵션 적용(탐색·재로드·새 탭 공통 — 07-15 전파 수정).
+    fn apply_sort_opts(&mut self, tab: usize) {
+        let (sf, sc) = (self.sort_folders_first, self.sort_case);
+        let src = self.tabs[tab].rows.source_mut();
+        src.set_folders_first(sf);
+        src.set_case_sensitive(sc);
     }
 
     /// 가시 목록에서 경로가 일치하는 행을 캐럿+단일 선택(G-7 — 최상위 자식은 항상 가시).
@@ -816,6 +833,26 @@ mod tests {
             tab_h: 22,
             bar_h: 24,
         }
+    }
+
+    #[test]
+    fn sort_opts_propagate_to_new_sources() {
+        // 07-15 전파 수정: 대소문자 정렬이 토글 즉시·재로드·새 탭에서 유지되는가
+        let base = std::env::temp_dir().join(format!("nexa_panel_case_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("abb.txt"), b"x").unwrap();
+        fs::write(base.join("Abc.txt"), b"x").unwrap();
+        let (mut p, mut inv) = panel(&base);
+        let first = |p: &Panel| p.rows().source().tree().row(0).unwrap().name.clone();
+        assert_eq!(first(&p), "abb.txt", "기본 = 대소문자 무시(abb < abc)");
+        p.set_sort_case(true, &mut inv);
+        assert_eq!(first(&p), "Abc.txt", "토글 즉시 대문자 그룹 상단");
+        p.reopen_filtered(ctx(), &mut inv);
+        assert_eq!(first(&p), "Abc.txt", "재로드 후 유지");
+        p.new_tab(ctx(), &mut inv);
+        assert_eq!(first(&p), "Abc.txt", "새 탭에도 유지");
+        fs::remove_dir_all(&base).unwrap();
     }
 
     fn fixture(tag: &str) -> PathBuf {

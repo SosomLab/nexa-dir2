@@ -595,8 +595,13 @@ impl<S: RowSource> VirtualRows<S> {
         self.caret = None;
         self.band = None;
         self.typeahead.clear();
+        // 위젯 정렬이 **명시된 경우에만** 새 소스에 재적용(07-15 수정) — 빈 상태(미지정)로
+        // set_sort(&[])를 호출하면 소스 기본 정렬(이름 오름차순)이 열거 순서로 퇴행해
+        // 정렬 옵션(대소문자 등)이 무효화된다. 헤더 3상태 '없음'은 헤더 클릭 경로가 처리.
         let keys = self.sort.clone();
-        self.src.set_sort(&keys);
+        if !keys.is_empty() {
+            self.src.set_sort(&keys);
+        }
         self.clamp_scroll();
         inv.push(self.bounds);
     }
