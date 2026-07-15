@@ -66,6 +66,36 @@ pub fn read_dir_entries(
     Ok(iter)
 }
 
+/// 가상 최상위 "내 PC"의 **센티널 경로**(X-17). 콜론이 파일명에 불가한 문자라
+/// 실제 경로와 충돌하지 않는다. 이 경로를 루트로 열면 드라이브 목록이 열거되고,
+/// 항목 이름이 `C:\` 형태(절대 경로)라 `join` 시 부모를 대체 — 진입이 실 경로가 된다.
+pub const MY_PC: &str = "::PC::";
+
+/// `path`가 가상 최상위(내 PC)인가.
+pub fn is_virtual_root(path: impl AsRef<Path>) -> bool {
+    path.as_ref().as_os_str() == MY_PC
+}
+
+/// 존재하는 드라이브 루트 열거(X-17 — std만: `A:\`~`Z:\` metadata 프로브,
+/// Win32 API 불요 = 크레이트 플랫폼 중립 유지. 비Windows에선 자연히 빈 목록).
+/// 이름 = `C:\`(절대 경로 형태 — [`MY_PC`] 문서 참조). 볼륨명·용량 데코는 β(Win32).
+pub fn drive_entries() -> Vec<Entry> {
+    let mut out = Vec::new();
+    for c in b'A'..=b'Z' {
+        let root = format!("{}:\\", c as char);
+        if fs::metadata(&root).is_ok() {
+            out.push(Entry {
+                name: root,
+                kind: FileKind::Dir,
+                size: 0,
+                modified: None, // 드라이브는 수정일 개념 없음 — 표시층에서 빈 셀
+                attrs: 0,
+            });
+        }
+    }
+    out
+}
+
 /// 저장소 공급자 추상화. (로컬/SFTP/S3/클라우드)
 ///
 /// 후속 단위에서 `list`/`stat`/`read`/`watch` 등을 추가한다.
@@ -77,6 +107,27 @@ pub trait Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn virtual_root_and_drive_entries() {
+        assert!(is_virtual_root(MY_PC));
+        assert!(!is_virtual_root("C:\\"));
+        // 드라이브 항목: 이름 = `X:\`(절대) → 센티널과 join하면 부모가 대체된다
+        #[cfg(windows)]
+        {
+            let drives = drive_entries();
+            assert!(!drives.is_empty(), "Windows에는 드라이브 1개 이상");
+            for d in &drives {
+                assert!(d.name.len() == 3 && d.name.ends_with(":\\"), "{}", d.name);
+                assert_eq!(d.kind, FileKind::Dir);
+                assert_eq!(
+                    Path::new(MY_PC).join(&d.name),
+                    Path::new(&d.name),
+                    "절대 이름 join = 실 드라이브 경로"
+                );
+            }
+        }
+    }
 
     #[test]
     fn entry_holds_kind() {

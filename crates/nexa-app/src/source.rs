@@ -132,9 +132,13 @@ impl RowSource for TreeSource {
                     human_size(r.size)
                 }
             }
+            // 0 = 메타 없음(드라이브 등 — X-17) → 1970 표기 대신 빈 셀
+            COL_MODIFIED if r.modified_unix_ms == 0 => String::new(),
             COL_MODIFIED => fmt_datetime(r.modified_unix_ms, self.tz_offset_min),
             // 페인트 시점 tr() 조회 — 언어 전환 시 재그리기만으로 반영(M2-6, 원본 kind.* 키)
             COL_KIND => match r.kind {
+                // 드라이브 루트(이름 = `C:\` — X-17 내 PC 항목)는 전용 라벨
+                FileKind::Dir if r.name.ends_with(":\\") => tr("kind.drive"),
                 FileKind::Dir => tr("kind.folder"),
                 FileKind::Symlink => tr("kind.link"),
                 FileKind::File => {
