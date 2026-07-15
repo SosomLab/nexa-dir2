@@ -100,7 +100,7 @@ pub struct SortSpec {
     /// (키, 내림차순 여부). 빈 목록 또는 `None` 키 = 열거 순서.
     pub keys: Vec<(SortKey, bool)>,
     pub folders_first: bool,
-    /// 대소문자 구분 이름/확장자 비교(사용자 요청 07-15 — 기본 false=탐색기 규약).
+    /// 대소문자 구분 이름/확장자 비교(07-15 — 기본 false. 알파벳 순 유지·같은 이름은 대문자 우선).
     pub case_sensitive: bool,
 }
 
@@ -275,10 +275,10 @@ impl Tree {
             if key == SortKey::None {
                 return a.cmp(&b); // 열거 순서(방향 무시)
             }
-            // 대소문자 구분 옵션(07-15) — 구분 시 유니코드 코드포인트 순 비교
+            // 대소문자 구분 옵션(07-15) — 알파벳 순서는 유지하되 같은 이름은 대문자 우선
             let cmp_name = |x: &str, y: &str| {
                 if self.sort.case_sensitive {
-                    x.cmp(y)
+                    cmp_cs_upper_first(x, y)
                 } else {
                     cmp_ci(x, y)
                 }
@@ -663,6 +663,31 @@ fn cmp_ci(a: &str, b: &str) -> std::cmp::Ordering {
     a.chars()
         .flat_map(char::to_lowercase)
         .cmp(b.chars().flat_map(char::to_lowercase))
+}
+
+/// 대소문자 **구분** 비교(사용자 요청 07-15 보완): 알파벳 순서는 대소문자 무시로
+/// 유지하고, 무시 기준 동률일 때만 **대문자를 앞에** 둔다(예: `Apple` < `apple` <
+/// `Banana` < `banana`, `README` < `readme`). 순수 코드포인트 비교는 대문자 그룹이
+/// 통째로 앞서 알파벳 순서가 깨져 보이는(`Zebra` < `apple`) 문제가 있어 배제.
+fn cmp_cs_upper_first(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    cmp_ci(a, b).then_with(|| {
+        // 무시 기준 동률 — 첫 케이스 차이에서 대문자 우선
+        for (ca, cb) in a.chars().zip(b.chars()) {
+            if ca != cb {
+                let ua = ca.is_uppercase();
+                if ua != cb.is_uppercase() {
+                    return if ua {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    };
+                }
+                return ca.cmp(&cb);
+            }
+        }
+        a.len().cmp(&b.len())
+    })
 }
 
 /// 파일명의 확장자(마지막 `.` 뒤). 선행 `.`만 있는 dotfile은 확장자 없음("").
@@ -1081,6 +1106,22 @@ mod tests {
             folders_first,
             case_sensitive: false,
         }
+    }
+
+    #[test]
+    fn case_sensitive_keeps_alpha_and_prefers_upper() {
+        use std::cmp::Ordering;
+        // 알파벳 순서 유지 + 같은 이름은 대문자 우선(07-15 보완)
+        assert_eq!(cmp_cs_upper_first("Apple", "apple"), Ordering::Less);
+        assert_eq!(cmp_cs_upper_first("apple", "Banana"), Ordering::Less);
+        assert_eq!(cmp_cs_upper_first("README", "readme"), Ordering::Less);
+        assert_eq!(
+            cmp_cs_upper_first("Zebra", "apple"),
+            Ordering::Greater,
+            "코드포인트 그룹핑 배제 — 알파벳 순 유지"
+        );
+        assert_eq!(cmp_cs_upper_first("abC", "abc"), Ordering::Less);
+        assert_eq!(cmp_cs_upper_first("ab", "abc"), Ordering::Less);
     }
 
     #[test]

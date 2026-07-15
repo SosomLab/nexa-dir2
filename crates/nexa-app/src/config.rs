@@ -64,7 +64,7 @@ pub struct Settings {
     pub dlg_font_size: i32,
     /// 폴더 우선 정렬(G-13 — 기본 true=탐색기 규약. false=파일·폴더 혼합 정렬).
     pub sort_folders_first: bool,
-    /// 대소문자 구분 정렬(사용자 요청 07-15 — 기본 false=탐색기 규약).
+    /// 대소문자 구분 정렬(사용자 요청 07-15 — 기본 false. 같은 이름은 **대문자 우선**).
     pub sort_case_sensitive: bool,
     /// Alt+↑ 떠난 폴더 자동 선택의 뷰 배치(사용자 QA 07-15): "top"|"center"|"bottom".
     pub nav_up_align: String,
