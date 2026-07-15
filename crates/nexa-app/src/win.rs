@@ -80,6 +80,9 @@ const TIMER_TERM_SEL: usize = 5;
 const TIMER_TERM_CARET: usize = 6;
 /// 전송 완료 진행 창 자동 닫기(원본 PROG-WIN 2초 — 사용자 요청 07-15).
 const TIMER_PROG_CLOSE: usize = 7;
+/// 세션 디바운스 자동 저장(사용자 요청 07-15 — 탭/경로 변경 폭주 시 마지막 상태 1회만).
+const TIMER_SESSION_SAVE: usize = 8;
+const SESSION_SAVE_DEBOUNCE_MS: u32 = 1_000;
 const JANITOR_TICK_MS: u32 = 10_000;
 const IDLE_TRIM_MS: u64 = 60_000;
 /// 폴더 watcher 통지(M3-6) — wparam=패널, lparam=세대(낡은 스레드 무시). 디바운스 타이머는
@@ -2186,11 +2189,12 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         return;
     }
     let mut job = st.transfer.take().unwrap();
-    // 진행 창 = 완료 표기 후 2초 자동 닫기(원본 PROG-WIN — 사용자 요청 07-15)
+    // 진행 창 = 완료 표기 + [닫기 (2)] 카운트다운(창 자체가 닫힘 — 사용자 요청 07-15).
+    // 호스트 타이머는 백스톱: 구조체 지연 해제(창은 이미 닫혔어도 무해).
     if let Some(mut p) = job.progress.take() {
         p.set_done(&tr("ops.doneClosing"));
         st.transfer_close = Some(p);
-        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, 2_000, None);
+        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, 2_500, None);
     }
     let out = job
         .shared
@@ -2407,6 +2411,16 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     update_dock_info(st, &mut inv); // 선택 변경 → 도크 정보(M4-1 — 변경 시에만 무효화)
     uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
     sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
+                             // 세션 자동 저장(07-15): 탭/경로 변경 플래그 → 디바운스 재무장(변경 폭주 = 타이머
+                             // 연장 = 중간 상태 무효화, 조용해진 뒤 마지막 상태만 1회 flush — 원본 SESS 코얼레싱)
+    if st.panels[0].take_session_dirty() | st.panels[1].take_session_dirty() {
+        SetTimer(
+            Some(hwnd),
+            TIMER_SESSION_SAVE,
+            SESSION_SAVE_DEBOUNCE_MS,
+            None,
+        );
+    }
     flush_invalidations(hwnd, &mut inv);
 }
 
@@ -2970,6 +2984,31 @@ fn align_of(s: &str) -> nexa_gui::widgets::rows::ScrollAlign {
         "top" => ScrollAlign::Top,
         "bottom" => ScrollAlign::Bottom,
         _ => ScrollAlign::Center,
+    }
+}
+
+/// 현재 상태 → 세션 스냅샷(종료 저장·디바운스 자동 저장 공용 — 단일 원천, 07-15).
+fn current_session(st: &mut State) -> Session {
+    let (t0, a0) = st.panels[0].session();
+    let (t1, a1) = st.panels[1].session();
+    Session {
+        active_panel: st.active,
+        panels: [
+            PanelSession {
+                tabs: t0,
+                active: a0,
+                expanded: st.panels[0].session_expanded(),
+                locked: st.panels[0].session_locked(),
+                pinned: st.panels[0].session_pinned(),
+            },
+            PanelSession {
+                tabs: t1,
+                active: a1,
+                expanded: st.panels[1].session_expanded(),
+                locked: st.panels[1].session_locked(),
+                pinned: st.panels[1].session_pinned(),
+            },
+        ],
     }
 }
 
@@ -4277,6 +4316,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_TIMER => {
+            if wparam.0 == TIMER_SESSION_SAVE {
+                // 디바운스 만료 — 마지막 세션 상태 1회 flush(원자적 쓰기·실패 무해)
+                let _ = KillTimer(Some(hwnd), TIMER_SESSION_SAVE);
+                if let Some(st) = state_of(hwnd) {
+                    let session = current_session(st);
+                    let _ = config::save(&config::data_dir(), SESSION_FILE, &session.serialize());
+                }
+                return LRESULT(0);
+            }
             if wparam.0 == TIMER_PROG_CLOSE {
                 // 전송 완료 2초 경과 — 진행 창 닫기(drop = DestroyWindow)
                 let _ = KillTimer(Some(hwnd), TIMER_PROG_CLOSE);
@@ -4423,34 +4471,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => {
-            // 종료 저장(M2-5 — data\ 원자적 쓰기). 주기 저장·코얼레싱은 후속(원본 SESS)
+            // 종료 저장(M2-5 — data\ 원자적 쓰기 + 탭 변경 시 디바운스 자동 저장 07-15)
             if let Some(st) = state_of(hwnd) {
                 let settings = current_settings(st);
-                let (t0, a0) = st.panels[0].session();
-                let (t1, a1) = st.panels[1].session();
-                let (e0, e1) = (
-                    st.panels[0].session_expanded(),
-                    st.panels[1].session_expanded(),
-                );
-                let session = Session {
-                    active_panel: st.active,
-                    panels: [
-                        PanelSession {
-                            tabs: t0,
-                            active: a0,
-                            expanded: e0,
-                            locked: st.panels[0].session_locked(),
-                            pinned: st.panels[0].session_pinned(),
-                        },
-                        PanelSession {
-                            tabs: t1,
-                            active: a1,
-                            expanded: e1,
-                            locked: st.panels[1].session_locked(),
-                            pinned: st.panels[1].session_pinned(),
-                        },
-                    ],
-                };
+                let session = current_session(st);
                 let dir = config::data_dir();
                 match config::save(&dir, SETTINGS_FILE, &settings.serialize())
                     .and_then(|_| config::save(&dir, SESSION_FILE, &session.serialize()))

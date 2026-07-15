@@ -22,10 +22,11 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetClientRect, GetMessageW, GetWindowLongPtrW, GetWindowRect, IsWindow, RegisterClassW,
-    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage, BS_DEFPUSHBUTTON,
-    BS_PUSHBUTTON, GWLP_USERDATA, MSG, SW_SHOWNORMAL, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND,
-    WM_PAINT, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    GetClientRect, GetMessageW, GetWindowLongPtrW, GetWindowRect, IsWindow, KillTimer,
+    RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+    TranslateMessage, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, GWLP_USERDATA, MSG, SW_SHOWNORMAL,
+    WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_PAINT, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CAPTION,
+    WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
 /// 대화상자 버튼(호출자 정의) — `id`는 1 이상(0=닫힘 예약).
@@ -308,6 +309,10 @@ unsafe fn center_over(owner: HWND, w: i32, h: i32, dy: i32) -> (i32, i32) {
 
 /// 진행 창 상태(GWLP_USERDATA — [`Progress`]가 Box 소유).
 struct ProgState {
+    /// 완료 카운트다운(초 — Some이면 닫기 모드: 버튼 [닫기 (N)]·0=자동 닫힘, 07-15).
+    closing: Option<i32>,
+    /// 하단 버튼(취소→닫기 전환·카운트다운 재라벨).
+    btn: HWND,
     done: u64,
     total: u64,
     label: Vec<u16>,
@@ -320,6 +325,16 @@ static REGISTER_PROG: std::sync::Once = std::sync::Once::new();
 const CLASS_PROG: PCWSTR = w!("NexaProgress");
 const ID_CANCEL: u32 = 1;
 
+/// [닫기 (N)] 버튼 라벨(카운트다운 — 07-15).
+unsafe fn set_btn_countdown(btn: HWND, n: i32) {
+    if btn.is_invalid() {
+        return;
+    }
+    let label = format!("{} ({n})", crate::i18n::tr("ops.close"));
+    let w = windows::core::HSTRING::from(label);
+    let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(btn, PCWSTR(w.as_ptr()));
+}
+
 unsafe extern "system" fn prog_proc(
     hwnd: HWND,
     msg: u32,
@@ -330,13 +345,40 @@ unsafe extern "system" fn prog_proc(
     match msg {
         WM_COMMAND => {
             if (wparam.0 & 0xFFFF) as u32 == ID_CANCEL && !state.is_null() {
-                (*state).cancelled = true;
+                if (*state).closing.is_some() {
+                    // 닫기 모드(완료) — 버튼 = 즉시 닫기 트리거(07-15)
+                    let _ = KillTimer(Some(hwnd), 1);
+                    let _ = DestroyWindow(hwnd);
+                } else {
+                    (*state).cancelled = true;
+                }
             }
             LRESULT(0)
         }
         WM_CLOSE => {
             if !state.is_null() {
-                (*state).cancelled = true; // X = 취소 요청(창은 완료 시 호스트가 닫음)
+                if (*state).closing.is_some() {
+                    let _ = KillTimer(Some(hwnd), 1);
+                    let _ = DestroyWindow(hwnd); // 완료 후 X = 즉시 닫기
+                } else {
+                    (*state).cancelled = true; // 진행 중 X = 취소 요청
+                }
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            // 완료 카운트다운(07-15) — [닫기 (N)] 재라벨, 0 = 자동 닫힘
+            if !state.is_null() {
+                if let Some(n) = (*state).closing {
+                    let left = n - 1;
+                    if left <= 0 {
+                        let _ = KillTimer(Some(hwnd), 1);
+                        let _ = DestroyWindow(hwnd);
+                    } else {
+                        (*state).closing = Some(left);
+                        set_btn_countdown((*state).btn, left);
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -465,6 +507,8 @@ impl Progress {
         );
         let (w, h) = (win.right - win.left, win.bottom - win.top);
         let mut state = Box::new(ProgState {
+            closing: None,
+            btn: HWND::default(),
             done: 0,
             total: 0,
             label: label.encode_utf16().collect(),
@@ -515,6 +559,7 @@ impl Progress {
                 Some(WPARAM(state.font.0 as usize)),
                 Some(LPARAM(1)),
             );
+            state.btn = btn;
         }
         let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(hwnd, SW_SHOWNORMAL);
         Some(Progress { hwnd, state })
@@ -533,12 +578,17 @@ impl Progress {
         self.state.cancelled
     }
 
-    /// 완료 표시(원본 PROG-WIN — 성공 시 2초 카운트다운 자동 닫기): 라벨 교체 + 바 100%.
-    /// 실제 닫기는 호스트가 지연 후 drop(TIMER_TICK — 사용자 요청 07-15).
+    /// 완료 표시(원본 PROG-WIN — **커스텀 카운트다운 닫기 버튼**, 사용자 요청 07-15):
+    /// 라벨 교체 + 바 100% + [취소]→[닫기 (2)] 전환. 창 자체 타이머가 1초마다 (N)을
+    /// 줄이고 0이 되거나 버튼 클릭 시 창을 닫는다(닫기 트리거 = 버튼). 호스트는
+    /// 백스톱 타이머로 구조체만 지연 해제.
     pub unsafe fn set_done(&mut self, label: &str) {
         self.state.label = label.encode_utf16().collect();
         self.state.done = 1;
         self.state.total = 1;
+        self.state.closing = Some(2);
+        set_btn_countdown(self.state.btn, 2);
+        SetTimer(Some(self.hwnd), 1, 1_000, None);
         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
     }
 }
