@@ -122,6 +122,44 @@ fn tree_index(key: &str) -> Option<usize> {
     TREE.iter().position(|n| n.0 == key)
 }
 
+/// 검색 중 트리 필터(X-10 ① — 사용자 요청 07-15): **노드 라벨에 검색어가 있거나**,
+/// 라벨엔 없어도 **하위 상세 설정(항목 라벨)에 검색어가 있는** 노드만 표시.
+/// 매치 노드의 조상(경로)은 유지, 그룹 라벨 자체 매치면 하위 전체 표시.
+fn tree_visible_search(q: &str, reg: &[Entry]) -> Vec<usize> {
+    let leaf_detail_hit = |key: &str| {
+        reg.iter()
+            .any(|e| e.cat == key && tr(e.label_key).to_lowercase().contains(q))
+    };
+    let mut keep = vec![false; TREE.len()];
+    for i in 0..TREE.len() {
+        let name_hit = tr(TREE[i].1).to_lowercase().contains(q);
+        let detail_hit = tree_cats(i).iter().any(|(k, _)| leaf_detail_hit(k));
+        if !(name_hit || detail_hit) {
+            continue;
+        }
+        keep[i] = true;
+        // 조상 경로 유지(트리 문맥 보존)
+        let mut d = TREE[i].2;
+        for j in (0..i).rev() {
+            if TREE[j].2 < d {
+                keep[j] = true;
+                d = TREE[j].2;
+            }
+        }
+        // 그룹 라벨 자체가 매치 = 하위 전체가 대상(카테고리 검색 의미)
+        if name_hit && tree_has_children(i) {
+            let base = TREE[i].2;
+            for j in i + 1..TREE.len() {
+                if TREE[j].2 <= base {
+                    break;
+                }
+                keep[j] = true;
+            }
+        }
+    }
+    (0..TREE.len()).filter(|&i| keep[i]).collect()
+}
+
 /// 펼침 상태 기준 가시 노드 인덱스(pre-order — 접힌 그룹의 하위는 생략).
 fn tree_visible(expanded: &[bool]) -> Vec<usize> {
     let mut out = Vec::new();
@@ -564,9 +602,14 @@ impl PrefState {
         let _ = InvalidateRect(Some(self.hwnd), None, true);
     }
 
-    /// 트리 목록 재적재(펼침 상태 반영) — 현재 선택 노드 유지.
+    /// 트리 목록 재적재 — 검색 중 = 매치 필터(라벨/상세 — X-10 ①), 아니면 펼침 상태.
+    /// 현재 선택 노드가 가시 목록에 있으면 선택 유지.
     unsafe fn repopulate_tree(&mut self) {
-        self.visible = tree_visible(&self.expanded);
+        self.visible = if self.query.is_empty() {
+            tree_visible(&self.expanded)
+        } else {
+            tree_visible_search(&self.query.to_lowercase(), &registry())
+        };
         // 행 높이(LBS_OWNERDRAWFIXED — WM_MEASUREITEM은 상태 설정 전 도착이라 여기서)
         SendMessageW(
             self.tree,
@@ -641,11 +684,16 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     }
     let old = SelectObject(dis.hDC, st.font.into());
     SetBkMode(dis.hDC, TRANSPARENT);
-    // 그룹 = ▸(접힘)/▾(펼침) 마커, leaf = 마커 없음(트리 시각 규약 — rows.rs와 동일)
+    // 그룹 = ▸(접힘)/▾(펼침) 마커, leaf = 마커 없음(트리 시각 규약 — rows.rs와 동일).
+    // 검색 중엔 필터가 하위를 강제 표시하므로 항상 ▾.
     let label = if tree_has_children(node) {
         format!(
             "{} {}",
-            if st.expanded[node] { "▾" } else { "▸" },
+            if st.expanded[node] || !st.query.is_empty() {
+                "▾"
+            } else {
+                "▸"
+            },
             tr(label_key)
         )
     } else {
@@ -683,10 +731,11 @@ unsafe extern "system" fn prefs_proc(
             let notify = (wparam.0 >> 16) as u32;
             match id {
                 ID_SEARCH if notify == 0x0300 => {
-                    // EN_CHANGE — 검색어 갱신·재구성
-                    let text = get_text(HWND(lparam.0 as *mut core::ffi::c_void));
-                    (*st).query = text;
-                    (*st).rebuild();
+                    // EN_CHANGE — 검색어 갱신·트리 필터(X-10 ①)·우측 재구성
+                    let s = &mut *st;
+                    s.query = get_text(HWND(lparam.0 as *mut core::ffi::c_void));
+                    s.repopulate_tree();
+                    s.rebuild();
                     // 사이드바 선택 표시 갱신(검색 중=선택 없음)
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
@@ -699,14 +748,16 @@ unsafe extern "system" fn prefs_proc(
                     else {
                         return LRESULT(0);
                     };
+                    let was_search = !s.query.is_empty();
                     s.harvest(); // 이동 전 현재 편집 값 보존
                     s.category = TREE[node].0.to_string();
-                    if tree_has_children(node) {
+                    // 펼침 토글은 일반 모드만 — 검색 중 클릭 = 그 노드로 이동(검색 종료)
+                    if !was_search && tree_has_children(node) {
                         s.expanded[node] = !s.expanded[node];
-                        s.repopulate_tree();
                     }
                     s.query.clear();
                     set_text(s.search, ""); // 검색창 비우기
+                    s.repopulate_tree(); // 검색 필터 해제·펼침 상태 반영(항상)
                     s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
