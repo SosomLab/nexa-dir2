@@ -8,6 +8,7 @@
 
 ## 2026-07-15
 
+- **대소문자 정렬 = 대문자 그룹 상단(`fix/case-sort-group` — 사용자 스크린샷 확정)**: 코드포인트 순으로 교체(Abc.txt < a c.txt < abb.txt — NTFS 저장 순서와 무관·앱 정렬이라 제약 없음 확인). 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **대소문자 정렬 규칙 보완(`fix/case-sort-upper` — 사용자 QA)**: 코드포인트 비교 → `cmp_cs_upper_first`(**알파벳 순 유지 + 같은 이름은 대문자 우선** — Apple<apple<Banana·README<readme). 테스트 167 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **Alt+↑ 선택 위치·대소문자 정렬(`fix/navup-align` — 사용자 QA 2건)**: `nav_up_align` 설정(상단/중단/하단 라디오·기본 중단 — select_program_aligned 명시 배치) · `SortSpec.case_sensitive`+`sort_case_sensitive` 설정(폴더 우선 아래 체크박스·코드포인트 비교·전 탭 즉시 재정렬). 실기: 설정 노출·영속 확인. 테스트 166 green·B2 1.04MB. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **X-3·X-10 잔여·쉬운 갭 배치(사용자 지시 — 브랜치 3개)**: **X-10 완결**(트리 매치 수 "(N)"·다중 토큰 AND+"N개 일치"·설명 문장 9종·수정됨 accent 바·"카테고리: 항목" 접두 — 기본값 복원만 잔여) · **X-3 완결**(term_wrap·term_cols 80~1000+가로 스크롤 Shift+휠/가로 휠·설정 노출·영속) · **쉬운 갭**(G-7 위로 시 떠난 폴더 선택·G-12 webp·G-13 폴더 우선 정렬 옵션) · **런처 시드 v2**(pwsh·cmd 아이콘 — launcher_seed 마커 1회 마이그레이션). 테스트 166 green·B2 1.03MB. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
