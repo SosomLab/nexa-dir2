@@ -24,11 +24,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow, MoveWindow,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW,
-    TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW, ES_AUTOHSCROLL, ES_NUMBER,
+    TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, ES_AUTOHSCROLL, ES_NUMBER,
     GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
     WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT,
     WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::dialog::DlgFont;
@@ -84,15 +84,62 @@ const F_HIDDEN: u32 = 7;
 const F_DOTFILES: u32 = 8;
 const F_DOCK: u32 = 9;
 
-/// 카테고리(좌측 목록 순서 — 원본 트리 순서 차용: 모양/글꼴/파일 목록/터미널/도크/언어).
-const CATEGORIES: &[(&str, &str)] = &[
-    ("appearance", "pref.cat.appearance"),
-    ("fonts", "pref.cat.fonts"),
-    ("list", "pref.cat.list"),
-    ("terminal", "pref.cat.terminal"),
-    ("dock", "pref.cat.dock"),
-    ("lang", "pref.cat.lang"),
+/// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
+/// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
+/// 그룹 노드 클릭 = 펼침 토글 + 하위 카테고리 전체를 섹션으로 표시, leaf = 그 카테고리만.
+const TREE: &[(&str, &str, i32)] = &[
+    ("general", "pref.grp.general", 0),
+    ("appearance", "pref.cat.appearance", 1),
+    ("fonts", "pref.cat.fonts", 1),
+    ("lang", "pref.cat.lang", 1),
+    ("list", "pref.cat.list", 0),
+    ("panel", "pref.grp.panel", 0),
+    ("dock", "pref.cat.dock", 1),
+    ("terminal", "pref.cat.terminal", 1),
 ];
+
+fn tree_has_children(i: usize) -> bool {
+    TREE.get(i + 1).is_some_and(|n| n.2 > TREE[i].2)
+}
+
+/// 노드가 커버하는 leaf 카테고리 목록 — (카테고리 key, 라벨 키). leaf면 자신 1개.
+fn tree_cats(i: usize) -> Vec<(&'static str, &'static str)> {
+    if !tree_has_children(i) {
+        return vec![(TREE[i].0, TREE[i].1)];
+    }
+    let d = TREE[i].2;
+    let mut out = Vec::new();
+    for n in &TREE[i + 1..] {
+        if n.2 <= d {
+            break;
+        }
+        out.push((n.0, n.1));
+    }
+    out
+}
+
+fn tree_index(key: &str) -> Option<usize> {
+    TREE.iter().position(|n| n.0 == key)
+}
+
+/// 펼침 상태 기준 가시 노드 인덱스(pre-order — 접힌 그룹의 하위는 생략).
+fn tree_visible(expanded: &[bool]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut hide_deeper: Option<i32> = None;
+    for (i, n) in TREE.iter().enumerate() {
+        if let Some(d) = hide_deeper {
+            if n.2 > d {
+                continue;
+            }
+            hide_deeper = None;
+        }
+        out.push(i);
+        if tree_has_children(i) && !expanded[i] {
+            hide_deeper = Some(n.2);
+        }
+    }
+    out
+}
 
 const THEME_OPTS: &[(&str, &str)] = &[
     ("system", "pref.theme.system"),
@@ -167,9 +214,15 @@ struct PrefState {
     font: HFONT,
     /// 섹션 제목용 큰 글꼴(X-9 — 원본 스크린샷 "File List" 헤더).
     title_font: HFONT,
-    /// 현재 카테고리(빈 검색 시)·검색어(있으면 전 카테고리에서 필터).
+    /// 현재 선택 노드 key(빈 검색 시)·검색어(있으면 전 카테고리에서 필터).
     category: String,
     query: String,
+    /// 사이드바 트리(오너드로 LISTBOX 단일 컴포넌트 — 전면 개편 07-15).
+    tree: HWND,
+    /// TREE 인덱스별 펼침 상태(기본 = 전부 펼침).
+    expanded: Vec<bool>,
+    /// 현재 가시 노드(트리 목록 행 → TREE 인덱스).
+    visible: Vec<usize>,
     /// 상단 검색창(사이드바 상단 — 원본 스크린샷 위치).
     search: HWND,
     /// 사이드바/본문 세로 구분선(리사이즈 시 높이 추종).
@@ -186,7 +239,7 @@ struct PrefState {
 }
 
 const ID_SEARCH: u32 = 1002;
-const ID_CAT_BASE: u32 = 1100; // +카테고리 인덱스(오너드로 사이드바 항목)
+const ID_TREE: u32 = 1100; // 사이드바 트리(오너드로 LISTBOX)
 const ID_FIELD_BASE: u32 = 1200; // +field(체크/EDIT 명령)
 const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
 
@@ -308,14 +361,34 @@ impl PrefState {
         let x0 = self.body_x();
         let pane_w = (self.cw - x0 - PAD).max(120);
         // 섹션 제목(원본 스크린샷 "File List") — 검색 중이면 검색어 표기
+        let node = tree_index(&self.category);
         let title = if q.is_empty() {
-            CATEGORIES
-                .iter()
-                .find(|(k, _)| *k == self.category)
-                .map(|(_, lk)| tr(lk))
-                .unwrap_or_default()
+            node.map(|i| tr(TREE[i].1)).unwrap_or_default()
         } else {
             format!("\u{201C}{}\u{201D}", self.query)
+        };
+        // 섹션 구성(트리 개편 07-15): 검색 = 전 카테고리 매치 1섹션 ·
+        // 그룹 노드 = 자식 카테고리별 부제목 섹션 · leaf = 그 카테고리 1섹션(부제목 없음)
+        let sections: Vec<(Option<String>, Vec<&Entry>)> = if !q.is_empty() {
+            vec![(
+                None,
+                reg.iter()
+                    .filter(|e| tr(e.label_key).to_lowercase().contains(&q))
+                    .collect(),
+            )]
+        } else if let Some(i) = node {
+            let cats = tree_cats(i);
+            let multi = cats.len() > 1;
+            cats.into_iter()
+                .map(|(key, lk)| {
+                    (
+                        multi.then(|| tr(lk)),
+                        reg.iter().filter(|e| e.cat == key).collect(),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
         };
         let th = mk(
             self.hwnd,
@@ -332,146 +405,195 @@ impl PrefState {
         self.rows.push(th);
         let mut y = PAD + 40;
         let mut opt_seq = 0u32;
-        for e in &reg {
-            let label = tr(e.label_key);
-            let visible = if q.is_empty() {
-                e.cat == self.category
-            } else {
-                label.to_lowercase().contains(&q)
-            };
-            if !visible {
+        for (sub, entries) in &sections {
+            if entries.is_empty() {
                 continue;
             }
-            match e.kind {
-                Kind::CheckBox => {
-                    // 라벨 일체형 체크박스(원본 스크린샷) — 클릭 즉시 적용
-                    let b = mk(
-                        self.hwnd,
-                        self.font,
-                        w!("BUTTON"),
-                        &label,
-                        WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
-                        x0,
-                        y,
-                        pane_w,
-                        24,
-                        ID_FIELD_BASE + e.field,
-                    );
-                    let on = match e.field {
-                        F_HIDDEN => self.values.show_hidden,
-                        F_DOTFILES => self.values.show_dotfiles,
-                        F_DOCK => self.values.dock,
-                        _ => false,
-                    };
-                    SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
-                    self.rows.push(b);
-                    self.editors.push((e.field, b));
-                    y += ROW_H;
-                }
-                Kind::Radio(_) | Kind::LangRadio => {
-                    // 캡션 + 세로 라디오 그룹(원본 스크린샷 "Where to show ..." 형식)
-                    let cap = mk(
-                        self.hwnd,
-                        self.font,
-                        w!("STATIC"),
-                        &label,
-                        0,
-                        x0,
-                        y,
-                        pane_w,
-                        20,
-                        0,
-                    );
-                    self.rows.push(cap);
-                    y += 26;
-                    let opts: Vec<(String, String)> = match e.kind {
-                        Kind::Radio(list) => {
-                            list.iter().map(|(v, lk)| (v.to_string(), tr(lk))).collect()
-                        }
-                        _ => {
-                            let mut o = vec![("system".to_string(), lang_label("system"))];
-                            o.extend(self.values.langs.iter().map(|c| (c.clone(), lang_label(c))));
-                            o
-                        }
-                    };
-                    let cur = match e.field {
-                        F_THEME => self.values.theme.clone(),
-                        F_LANG => self.values.lang.clone(),
-                        _ => String::new(),
-                    };
-                    for (gi, (val, olabel)) in opts.into_iter().enumerate() {
-                        let id = ID_OPT_BASE + opt_seq;
-                        opt_seq += 1;
-                        let mut style = WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32;
-                        if gi == 0 {
-                            style |= WS_GROUP.0; // 라디오 그룹 경계
-                        }
-                        let r = mk(
+            if let Some(sub) = sub {
+                // 그룹 노드 = 자식 카테고리 부제목(하위 섹션 — 트리 개편 07-15)
+                let sh = mk(
+                    self.hwnd,
+                    self.title_font,
+                    w!("STATIC"),
+                    sub,
+                    0,
+                    x0,
+                    y,
+                    pane_w,
+                    24,
+                    0,
+                );
+                self.rows.push(sh);
+                y += 32;
+            }
+            for e in entries {
+                let label = tr(e.label_key);
+                match e.kind {
+                    Kind::CheckBox => {
+                        // 라벨 일체형 체크박스(원본 스크린샷) — 클릭 즉시 적용
+                        let b = mk(
                             self.hwnd,
                             self.font,
                             w!("BUTTON"),
-                            &olabel,
-                            style,
-                            x0 + 8,
+                            &label,
+                            WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
+                            x0,
                             y,
-                            pane_w - 8,
+                            pane_w,
                             24,
-                            id,
+                            ID_FIELD_BASE + e.field,
                         );
-                        if val == cur {
-                            SendMessageW(r, 0x00F1, Some(WPARAM(1)), Some(LPARAM(0)));
+                        let on = match e.field {
+                            F_HIDDEN => self.values.show_hidden,
+                            F_DOTFILES => self.values.show_dotfiles,
+                            F_DOCK => self.values.dock,
+                            _ => false,
+                        };
+                        SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
+                        self.rows.push(b);
+                        self.editors.push((e.field, b));
+                        y += ROW_H;
+                    }
+                    Kind::Radio(_) | Kind::LangRadio => {
+                        // 캡션 + 세로 라디오 그룹(원본 스크린샷 "Where to show ..." 형식)
+                        let cap = mk(
+                            self.hwnd,
+                            self.font,
+                            w!("STATIC"),
+                            &label,
+                            0,
+                            x0,
+                            y,
+                            pane_w,
+                            20,
+                            0,
+                        );
+                        self.rows.push(cap);
+                        y += 26;
+                        let opts: Vec<(String, String)> = match e.kind {
+                            Kind::Radio(list) => {
+                                list.iter().map(|(v, lk)| (v.to_string(), tr(lk))).collect()
+                            }
+                            _ => {
+                                let mut o = vec![("system".to_string(), lang_label("system"))];
+                                o.extend(
+                                    self.values.langs.iter().map(|c| (c.clone(), lang_label(c))),
+                                );
+                                o
+                            }
+                        };
+                        let cur = match e.field {
+                            F_THEME => self.values.theme.clone(),
+                            F_LANG => self.values.lang.clone(),
+                            _ => String::new(),
+                        };
+                        for (gi, (val, olabel)) in opts.into_iter().enumerate() {
+                            let id = ID_OPT_BASE + opt_seq;
+                            opt_seq += 1;
+                            let mut style = WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32;
+                            if gi == 0 {
+                                style |= WS_GROUP.0; // 라디오 그룹 경계
+                            }
+                            let r = mk(
+                                self.hwnd,
+                                self.font,
+                                w!("BUTTON"),
+                                &olabel,
+                                style,
+                                x0 + 8,
+                                y,
+                                pane_w - 8,
+                                24,
+                                id,
+                            );
+                            if val == cur {
+                                SendMessageW(r, 0x00F1, Some(WPARAM(1)), Some(LPARAM(0)));
+                            }
+                            self.rows.push(r);
+                            self.radios.push((id, e.field, val));
+                            y += 28;
                         }
-                        self.rows.push(r);
-                        self.radios.push((id, e.field, val));
-                        y += 28;
+                        y += 8;
                     }
-                    y += 8;
-                }
-                Kind::Text | Kind::Number => {
-                    // [EDIT] [라벨] — 원본 스크린샷 "1000 ⌃⌄ Type-ahead input reset (ms)" 형식
-                    let val = match e.field {
-                        F_TERM_FONT => self.values.term_font.clone(),
-                        F_TERM_SIZE => self.values.term_font_size.to_string(),
-                        F_DLG_FONT => self.values.dlg_font.clone(),
-                        F_DLG_SIZE => self.values.dlg_font_size.to_string(),
-                        _ => String::new(),
-                    };
-                    let mut style = (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32;
-                    if e.kind == Kind::Number {
-                        style |= ES_NUMBER as u32;
+                    Kind::Text | Kind::Number => {
+                        // [EDIT] [라벨] — 원본 스크린샷 "1000 ⌃⌄ Type-ahead input reset (ms)" 형식
+                        let val = match e.field {
+                            F_TERM_FONT => self.values.term_font.clone(),
+                            F_TERM_SIZE => self.values.term_font_size.to_string(),
+                            F_DLG_FONT => self.values.dlg_font.clone(),
+                            F_DLG_SIZE => self.values.dlg_font_size.to_string(),
+                            _ => String::new(),
+                        };
+                        let mut style = (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32;
+                        if e.kind == Kind::Number {
+                            style |= ES_NUMBER as u32;
+                        }
+                        let ed = mk(
+                            self.hwnd,
+                            self.font,
+                            w!("EDIT"),
+                            &val,
+                            style,
+                            x0,
+                            y,
+                            EDIT_W,
+                            24,
+                            ID_FIELD_BASE + e.field,
+                        );
+                        let lbl = mk(
+                            self.hwnd,
+                            self.font,
+                            w!("STATIC"),
+                            &label,
+                            0,
+                            x0 + EDIT_W + 8,
+                            y + 3,
+                            (pane_w - EDIT_W - 8).max(40),
+                            20,
+                            0,
+                        );
+                        self.rows.push(ed);
+                        self.rows.push(lbl);
+                        self.editors.push((e.field, ed));
+                        y += ROW_H + 4;
                     }
-                    let ed = mk(
-                        self.hwnd,
-                        self.font,
-                        w!("EDIT"),
-                        &val,
-                        style,
-                        x0,
-                        y,
-                        EDIT_W,
-                        24,
-                        ID_FIELD_BASE + e.field,
-                    );
-                    let lbl = mk(
-                        self.hwnd,
-                        self.font,
-                        w!("STATIC"),
-                        &label,
-                        0,
-                        x0 + EDIT_W + 8,
-                        y + 3,
-                        (pane_w - EDIT_W - 8).max(40),
-                        20,
-                        0,
-                    );
-                    self.rows.push(ed);
-                    self.rows.push(lbl);
-                    self.editors.push((e.field, ed));
-                    y += ROW_H + 4;
                 }
             }
+            y += 10; // 섹션 간 여백
         }
         let _ = InvalidateRect(Some(self.hwnd), None, true);
+    }
+
+    /// 트리 목록 재적재(펼침 상태 반영) — 현재 선택 노드 유지.
+    unsafe fn repopulate_tree(&mut self) {
+        self.visible = tree_visible(&self.expanded);
+        // 행 높이(LBS_OWNERDRAWFIXED — WM_MEASUREITEM은 상태 설정 전 도착이라 여기서)
+        SendMessageW(
+            self.tree,
+            0x01A0, // LB_SETITEMHEIGHT
+            Some(WPARAM(0)),
+            Some(LPARAM((CAT_H - 4) as isize)),
+        );
+        SendMessageW(self.tree, 0x0184 /* LB_RESETCONTENT */, None, None);
+        for &i in &self.visible {
+            let w = windows::core::HSTRING::from(tr(TREE[i].1));
+            SendMessageW(
+                self.tree,
+                0x0180, // LB_ADDSTRING
+                None,
+                Some(LPARAM(w.as_ptr() as isize)),
+            );
+        }
+        if let Some(pos) =
+            tree_index(&self.category).and_then(|i| self.visible.iter().position(|&v| v == i))
+        {
+            SendMessageW(
+                self.tree,
+                0x0186, /* LB_SETCURSEL */
+                Some(WPARAM(pos)),
+                None,
+            );
+        }
     }
 
     /// 편집 컨트롤 현재 값을 values에 흡수(적용/카테고리 전환 전).
@@ -499,29 +621,39 @@ impl PrefState {
     }
 }
 
-/// 사이드바 카테고리 오너드로(X-9 — 원본 스크린샷: 선택=연회색 하이라이트·좌측 정렬 텍스트).
-unsafe fn draw_category(st: &PrefState, dis: &DRAWITEMSTRUCT) {
-    let i = (dis.CtlID - ID_CAT_BASE) as usize;
-    let Some((key, label_key)) = CATEGORIES.get(i) else {
+/// 사이드바 트리 행 오너드로(전면 개편 07-15 — 단일 LISTBOX 컴포넌트): 들여쓰기 +
+/// 그룹 ▸/▾ 마커 + 라벨, 선택 = 연회색 하이라이트(X-9 계승).
+unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
+    let row = dis.itemID as usize;
+    let Some(&node) = st.visible.get(row) else {
+        // 목록 비었을 때의 -1 요청 — 배경만
+        FillRect(dis.hDC, &dis.rcItem, GetSysColorBrush(COLOR_WINDOW));
         return;
     };
-    let selected = st.query.is_empty() && st.category == *key;
-    let bg = if selected {
+    let (key, label_key, depth) = TREE[node];
+    let selected = st.category == key;
+    if selected {
         let b = CreateSolidBrush(COLORREF(SEL_BGR));
         FillRect(dis.hDC, &dis.rcItem, b);
         let _ = DeleteObject(b.into());
-        true
     } else {
         FillRect(dis.hDC, &dis.rcItem, GetSysColorBrush(COLOR_WINDOW));
-        false
-    };
-    let _ = bg;
+    }
     let old = SelectObject(dis.hDC, st.font.into());
     SetBkMode(dis.hDC, TRANSPARENT);
-    let label = tr(label_key);
+    // 그룹 = ▸(접힘)/▾(펼침) 마커, leaf = 마커 없음(트리 시각 규약 — rows.rs와 동일)
+    let label = if tree_has_children(node) {
+        format!(
+            "{} {}",
+            if st.expanded[node] { "▾" } else { "▸" },
+            tr(label_key)
+        )
+    } else {
+        tr(label_key)
+    };
     let mut wide: Vec<u16> = label.encode_utf16().collect();
     let mut rc = RECT {
-        left: dis.rcItem.left + 10,
+        left: dis.rcItem.left + 10 + depth * 14,
         top: dis.rcItem.top,
         right: dis.rcItem.right - 4,
         bottom: dis.rcItem.bottom,
@@ -558,12 +690,24 @@ unsafe extern "system" fn prefs_proc(
                     // 사이드바 선택 표시 갱신(검색 중=선택 없음)
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                i if (ID_CAT_BASE..ID_CAT_BASE + CATEGORIES.len() as u32).contains(&i) => {
-                    (*st).harvest(); // 카테고리 이동 전 현재 편집 값 보존
-                    (*st).category = CATEGORIES[(i - ID_CAT_BASE) as usize].0.to_string();
-                    (*st).query.clear();
-                    set_text((*st).search, ""); // 검색창 비우기
-                    (*st).rebuild();
+                ID_TREE if notify == 1 => {
+                    // LBN_SELCHANGE — 트리 노드 선택(전면 개편 07-15): 그룹 = 펼침 토글 +
+                    // 하위 섹션 전체 표시, leaf = 그 카테고리 표시
+                    let s = &mut *st;
+                    let row = SendMessageW(s.tree, 0x0188 /* LB_GETCURSEL */, None, None).0;
+                    let Some(&node) = usize::try_from(row).ok().and_then(|r| s.visible.get(r))
+                    else {
+                        return LRESULT(0);
+                    };
+                    s.harvest(); // 이동 전 현재 편집 값 보존
+                    s.category = TREE[node].0.to_string();
+                    if tree_has_children(node) {
+                        s.expanded[node] = !s.expanded[node];
+                        s.repopulate_tree();
+                    }
+                    s.query.clear();
+                    set_text(s.search, ""); // 검색창 비우기
+                    s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 i if i >= ID_OPT_BASE => {
@@ -593,8 +737,8 @@ unsafe extern "system" fn prefs_proc(
         }
         WM_DRAWITEM => {
             let dis = &*(lparam.0 as *const DRAWITEMSTRUCT);
-            if (ID_CAT_BASE..ID_CAT_BASE + CATEGORIES.len() as u32).contains(&dis.CtlID) {
-                draw_category(&*st, dis);
+            if dis.CtlID == ID_TREE {
+                draw_tree_item(&*st, dis);
                 return LRESULT(1);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -623,6 +767,9 @@ unsafe extern "system" fn prefs_proc(
                     (h - PAD * 2).max(0),
                     true,
                 );
+                // 트리 높이 추종(전면 개편 07-15)
+                let ty = PAD + SEARCH_H + 10;
+                let _ = MoveWindow((*st).tree, PAD, ty, CAT_W - 8, (h - ty - PAD).max(40), true);
                 (*st).harvest(); // 재구성 전 편집 값 보존
                 (*st).rebuild();
             }
@@ -743,8 +890,11 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         owner,
         font,
         title_font,
-        category: "appearance".into(),
+        category: "general".into(), // 첫 화면 = 일반 그룹(하위 섹션 전체)
         query: String::new(),
+        tree: HWND::default(),
+        expanded: vec![true; TREE.len()], // 기본 = 전부 펼침
+        visible: Vec::new(),
         search: HWND::default(),
         divider: HWND::default(),
         cw: CLIENT_W,
@@ -779,21 +929,24 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
             Some(LPARAM(cue.as_ptr() as isize)),
         );
     }
-    // 좌측 카테고리(오너드로 — 선택 하이라이트)
-    for (i, (_, label_key)) in CATEGORIES.iter().enumerate() {
-        mk(
-            dlg,
-            font,
-            w!("BUTTON"),
-            &tr(label_key),
-            WS_TABSTOP.0 | BS_OWNERDRAW as u32,
-            PAD,
-            PAD + SEARCH_H + 10 + i as i32 * CAT_H,
-            CAT_W - 8,
-            CAT_H - 4,
-            ID_CAT_BASE + i as u32,
-        );
-    }
+    // 좌측 계층 트리(전면 개편 07-15 — 오너드로 LISTBOX **단일 컴포넌트**):
+    // 들여쓰기·▸/▾ 마커·선택 하이라이트, 클릭 = 우측 세부 표시(그룹=펼침 토글 겸)
+    state.tree = mk(
+        dlg,
+        font,
+        w!("LISTBOX"),
+        "",
+        (WS_TABSTOP | WS_VSCROLL).0
+            | 0x0001 /* LBS_NOTIFY */
+            | 0x0010 /* LBS_OWNERDRAWFIXED */
+            | 0x0040 /* LBS_HASSTRINGS */
+            | 0x0100, /* LBS_NOINTEGRALHEIGHT */
+        PAD,
+        PAD + SEARCH_H + 10,
+        CAT_W - 8,
+        CLIENT_H - (PAD + SEARCH_H + 10) - PAD,
+        ID_TREE,
+    );
     // 사이드바/본문 구분선
     state.divider = mk(
         dlg,
@@ -808,6 +961,7 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         0,
     );
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut PrefState as isize);
+    state.repopulate_tree();
     state.rebuild();
 
     let _ = EnableWindow(owner, false);

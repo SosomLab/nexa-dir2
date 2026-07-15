@@ -196,3 +196,5 @@ bulk.extTo = 새 확장자
 bulk.preset.name = 프리셋 이름
 bulk.preset.save = 저장
 bulk.preset.load = 불러오기
+pref.grp.general = 일반
+pref.grp.panel = 하단 패널
