@@ -211,3 +211,7 @@ pref.showDotfiles.desc = Show files and folders whose name starts with a dot.
 pref.dock.desc = Show the bottom dock (info, preview, terminal).
 pref.sortFoldersFirst = Sort folders first
 pref.sortFoldersFirst.desc = Group folders before files regardless of sort order.
+pref.termWrap = Terminal word wrap
+pref.termWrap.desc = Wrap lines to the view width. Off = fixed columns with horizontal scroll.
+pref.termCols = Terminal columns (80~1000)
+pref.termCols.desc = Fixed column count when word wrap is off. Scroll horizontally with Shift+wheel.

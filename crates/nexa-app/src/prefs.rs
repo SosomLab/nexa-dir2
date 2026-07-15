@@ -46,6 +46,8 @@ pub struct PrefValues {
     pub langs: Vec<String>,
     pub term_font: String,
     pub term_font_size: i32,
+    pub term_wrap: bool,
+    pub term_cols: i32,
     pub dlg_font: String,
     pub dlg_font_size: i32,
     pub show_hidden: bool,
@@ -88,6 +90,8 @@ const F_HIDDEN: u32 = 7;
 const F_DOTFILES: u32 = 8;
 const F_DOCK: u32 = 9;
 const F_FOLDERS_FIRST: u32 = 10;
+const F_TERM_WRAP: u32 = 11;
+const F_TERM_COLS: u32 = 12;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -274,6 +278,20 @@ fn registry() -> Vec<Entry> {
             field: F_TERM_SIZE,
         },
         Entry {
+            cat: "terminal",
+            label_key: "pref.termWrap",
+            desc_key: "pref.termWrap.desc",
+            kind: Kind::CheckBox,
+            field: F_TERM_WRAP,
+        },
+        Entry {
+            cat: "terminal",
+            label_key: "pref.termCols",
+            desc_key: "pref.termCols.desc",
+            kind: Kind::Number,
+            field: F_TERM_COLS,
+        },
+        Entry {
             cat: "dock",
             label_key: "pref.dock",
             desc_key: "pref.dock.desc",
@@ -423,6 +441,7 @@ fn sanitize(v: &mut PrefValues) {
         v.dlg_font = "Segoe UI".into();
     }
     v.term_font_size = v.term_font_size.clamp(8, 32);
+    v.term_cols = v.term_cols.clamp(80, 1000);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
 }
 
@@ -564,6 +583,7 @@ impl PrefState {
                             F_DOTFILES => self.values.show_dotfiles,
                             F_DOCK => self.values.dock,
                             F_FOLDERS_FIRST => self.values.sort_folders_first,
+                            F_TERM_WRAP => self.values.term_wrap,
                             _ => false,
                         };
                         SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
@@ -637,6 +657,7 @@ impl PrefState {
                         let val = match e.field {
                             F_TERM_FONT => self.values.term_font.clone(),
                             F_TERM_SIZE => self.values.term_font_size.to_string(),
+                            F_TERM_COLS => self.values.term_cols.to_string(),
                             F_DLG_FONT => self.values.dlg_font.clone(),
                             F_DLG_SIZE => self.values.dlg_font_size.to_string(),
                             _ => String::new(),
@@ -729,6 +750,8 @@ impl PrefState {
             F_DOTFILES => v.show_dotfiles != d.show_dotfiles,
             F_DOCK => v.dock != d.dock,
             F_FOLDERS_FIRST => v.sort_folders_first != d.sort_folders_first,
+            F_TERM_WRAP => v.term_wrap != d.term_wrap,
+            F_TERM_COLS => v.term_cols != d.term_cols,
             _ => false,
         }
     }
@@ -797,15 +820,17 @@ impl PrefState {
                 F_TERM_SIZE => {
                     self.values.term_font_size = get_text(hw).trim().parse().unwrap_or(12)
                 }
+                F_TERM_COLS => self.values.term_cols = get_text(hw).trim().parse().unwrap_or(240),
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),
-                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST => {
+                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_TERM_WRAP => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
                         F_DOTFILES => self.values.show_dotfiles = on,
                         F_DOCK => self.values.dock = on,
                         F_FOLDERS_FIRST => self.values.sort_folders_first = on,
+                        F_TERM_WRAP => self.values.term_wrap = on,
                         _ => {}
                     }
                 }

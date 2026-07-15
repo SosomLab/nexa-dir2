@@ -375,6 +375,9 @@ struct State {
     /// 터미널 글꼴 설정(QA 07-14 — data\settings term_font, 백엔드 생성 시 적용).
     term_font: String,
     term_font_size: i32,
+    /// 터미널 줄 바꿈·고정 열(X-3 — 비줄바꿈이면 term_cols 고정+가로 스크롤).
+    term_wrap: bool,
+    term_cols: i32,
     /// 대화상자 글꼴(확인창·진행 창 — dialog.rs 공유).
     dlg_font: crate::dialog::DlgFont,
     /// 상주 자니터(M2-8): 마지막 입력 활동 시각(now_ms 기준)·트림 완료 플래그.
@@ -428,6 +431,8 @@ struct TermState {
     sel: Option<((usize, usize), (usize, usize))>,
     /// 페인트가 캐시한 셀 그리드: (내용 rect, cell_w, cell_h) — 마우스 히트 테스트용.
     grid: (nexa_gui::Rect, i32, i32),
+    /// 가로 보기 오프셋(열 — X-3 비줄바꿈 고정 열 모드의 가로 스크롤).
+    view_x: usize,
 }
 
 impl TermState {
@@ -439,6 +444,21 @@ impl TermState {
             view_off: 0,
             sel: None,
             grid: (nexa_gui::Rect::default(), 8, 16),
+            view_x: 0,
+        }
+    }
+
+    /// 가로 보기 이동(X-3 — 비줄바꿈 고정 열). 양수=오른쪽. 변화가 있었으면 `true`.
+    fn scroll_view_x(&mut self, delta_cols: i32) -> bool {
+        let (rc, cw, _) = self.grid;
+        let vis = ((rc.w - 4) / cw.max(1)).max(1) as usize;
+        let max_x = self.screen.cols().saturating_sub(vis);
+        let nx = (self.view_x as i64 + delta_cols as i64).clamp(0, max_x as i64) as usize;
+        if nx != self.view_x {
+            self.view_x = nx;
+            true
+        } else {
+            false
         }
     }
 
@@ -458,7 +478,8 @@ impl TermState {
     /// 클라이언트 좌표 → (절대 라인, 열) — 그리드 캐시 기준(범위 밖은 가장자리로 클램프).
     fn cell_at(&self, x: i32, y: i32) -> (usize, usize) {
         let (rc, cw, ch) = self.grid;
-        let col = (((x - rc.x - 2) / cw.max(1)).max(0) as usize).min(self.screen.cols());
+        let col =
+            (self.view_x + ((x - rc.x - 2) / cw.max(1)).max(0) as usize).min(self.screen.cols());
         let row = (((y - rc.y - 1) / ch.max(1)).max(0) as usize)
             .min(self.screen.rows().saturating_sub(1));
         let sb = self.screen.scrollback_count();
@@ -720,6 +741,8 @@ pub fn run() -> Result<()> {
         langs,
         term_font: settings.term_font,
         term_font_size: settings.term_font_size,
+        term_wrap: settings.term_wrap,
+        term_cols: settings.term_cols,
         dlg_font: crate::dialog::DlgFont {
             family: settings.dlg_font,
             size_pt: settings.dlg_font_size,
@@ -1193,13 +1216,21 @@ unsafe fn term_paint(
     font_px: i32,
     theme: &nexa_gui::Theme,
     caret_on: bool,
+    wrap: bool,
+    cols_setting: i32,
 ) {
     use nexa_gui::{Color, DrawCtx, Rect};
     let cell_w = ctx.term_cell_w();
     let cell_h = ((font_px * 4 / 3 * dpi as i32) / 96).max(12); // 줄 높이 ≈ 1.33×(X-3 크기 설정)
-    let cols = ((rc.w - 4) / cell_w.max(1)) as usize;
+                                                                // X-3: 줄 바꿈 = 뷰 폭 열(현행) · 비줄바꿈 = 고정 열(term_cols)+가로 스크롤
+    let vis_cols = ((rc.w - 4) / cell_w.max(1)) as usize;
+    let cols = if wrap {
+        vis_cols
+    } else {
+        (cols_setting.clamp(80, 1000)) as usize
+    };
     let rows = ((rc.h - 2) / cell_h) as usize;
-    if cols < 2 || rows < 2 {
+    if vis_cols < 2 || rows < 2 {
         return;
     }
     if term.is_none() {
@@ -1235,6 +1266,7 @@ unsafe fn term_paint(
         t.pty.resize(cols as i16, rows as i16);
     }
     t.grid = (rc, cell_w, cell_h); // 마우스 히트 테스트용 캐시(QA 07-14)
+    t.view_x = t.view_x.min(cols.saturating_sub(vis_cols)); // 래핑 전환·리사이즈 방어
     let argb = |c: u32| Color {
         r: (c >> 16) as u8,
         g: (c >> 8) as u8,
@@ -1273,18 +1305,20 @@ unsafe fn term_paint(
         // 동일 (fg,bg) 런 = 배경 채움 단위. 문자는 **셀 x에 개별 배치** — 런 단위
         // 레이아웃은 폴백 글꼴(한글·아이콘) 전진폭이 셀 그리드와 어긋나 열이 밀림
         // (QA 07-14 — ls 이름 컬럼 깨짐).
-        let mut c = 0usize;
-        while c < cols.min(line.len()) {
+        let c0 = t.view_x;
+        let c_end = cols.min(line.len()).min(c0 + vis_cols);
+        let mut c = c0.min(c_end);
+        while c < c_end {
             let (fg, bg, faint) = eff(c);
             let start = c;
-            while c < cols.min(line.len()) {
+            while c < c_end {
                 let (cf, cb, _) = eff(c);
                 if cf != fg || cb != bg {
                     break;
                 }
                 c += 1;
             }
-            let x = rc.x + 2 + start as i32 * cell_w;
+            let x = rc.x + 2 + (start - c0) as i32 * cell_w;
             let clip = Rect::new(x, y, (c - start) as i32 * cell_w, row_h);
             ctx.fill_rect(clip, argb(bg));
             let mut fgc = argb(fg);
@@ -1303,7 +1337,7 @@ unsafe fn term_paint(
                     continue; // 전각 연속 셀·공백 = 배경만
                 }
                 let wide = line.get(i + 1).is_some_and(|n| n.ch == '\0');
-                let cx = rc.x + 2 + i as i32 * cell_w;
+                let cx = rc.x + 2 + (i - c0) as i32 * cell_w;
                 let cclip = Rect::new(cx, y, if wide { 2 } else { 1 } * cell_w, row_h);
                 let mut buf = [0u8; 4];
                 ctx.term_text(cx, y, cclip, ch.encode_utf8(&mut buf), fgc, argb(bg));
@@ -1325,8 +1359,9 @@ unsafe fn term_paint(
     } else {
         // 스크롤백 보기 중엔 캐럿 절대 라인이 화면 밖일 수 있음. 깜빡임 오프 프레임은 생략
         let cr = sb + t.screen.cursor_row();
-        if caret_on && cr >= top && cr < top + rows {
-            let cx = rc.x + 2 + t.screen.cursor_col() as i32 * cell_w;
+        let cc = t.screen.cursor_col();
+        if caret_on && cr >= top && cr < top + rows && cc >= t.view_x && cc < t.view_x + vis_cols {
+            let cx = rc.x + 2 + (cc - t.view_x) as i32 * cell_w;
             let cy = rc.y + 1 + (cr - top) as i32 * cell_h;
             if cy + cell_h <= rc.bottom() {
                 let w = (dpi as i32 / 96).max(1);
@@ -2216,6 +2251,8 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     st.term_font_size,
                     &st.theme,
                     caret_on,
+                    st.term_wrap,
+                    st.term_cols,
                 );
             }
         }
@@ -2639,6 +2676,8 @@ unsafe fn open_prefs(hwnd: HWND) {
                 langs: st.langs.iter().map(|(c, _)| c.clone()).collect(),
                 term_font: st.term_font.clone(),
                 term_font_size: st.term_font_size,
+                term_wrap: st.term_wrap,
+                term_cols: st.term_cols,
                 dlg_font: st.dlg_font.family.clone(),
                 dlg_font_size: st.dlg_font.size_pt,
                 show_hidden: st.show_hidden,
@@ -2781,6 +2820,12 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         update_dock_info(st, &mut inv);
         flush_invalidations(hwnd, &mut inv);
     }
+    // 터미널 줄 바꿈·고정 열(X-3) — 다음 페인트에서 cols 재계산·PTY resize
+    if v.term_wrap != st.term_wrap || v.term_cols != st.term_cols {
+        st.term_wrap = v.term_wrap;
+        st.term_cols = v.term_cols.clamp(80, 1000);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
     // 폴더 우선 정렬 토글(G-13) — 전 탭 즉시 재정렬
     if v.sort_folders_first != st.sort_folders_first {
         st.sort_folders_first = v.sort_folders_first;
@@ -2810,6 +2855,8 @@ fn current_settings(st: &State) -> Settings {
         dock_split: st.dock_split,
         term_font: st.term_font.clone(),
         term_font_size: st.term_font_size,
+        term_wrap: st.term_wrap,
+        term_cols: st.term_cols,
         dlg_font: st.dlg_font.family.clone(),
         dlg_font_size: st.dlg_font.size_pt,
         launcher: st.launcher_visible,
@@ -3055,6 +3102,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let (target, px, py) = wheel_target(hwnd, st, lparam);
                 // 터미널 위 휠: TUI 마우스 모드(X-5)면 휠 버튼(64/65) 전달, 아니면
                 // 스크롤백 보기(3줄/노치, QA 07-14). Shift=항상 로컬.
+                // Shift+휠 = 터미널 가로 스크롤(X-3 비줄바꿈 고정 열 — 4열/노치)
+                if wparam.0 & MK_SHIFT != 0 && !st.term_wrap && term_hit(st, target, px, py) {
+                    if let Some(t) = &mut st.terms[target] {
+                        if t.scroll_view_x(-4 * delta / 120) {
+                            invalidate_dock(hwnd, st, target);
+                        }
+                    }
+                    return LRESULT(0);
+                }
                 if wparam.0 & MK_SHIFT == 0 && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
                         if t.screen.mouse_mode().is_some_and(|(_, sgr)| sgr) {
@@ -3084,7 +3140,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEHWHEEL => {
             if let Some(st) = state_of(hwnd) {
                 let delta = (wparam.0 >> 16) as i16 as i32;
-                let (target, _, _) = wheel_target(hwnd, st, lparam);
+                let (target, px, py) = wheel_target(hwnd, st, lparam);
+                // 터미널 위 가로 휠 = 가로 스크롤(X-3 비줄바꿈 고정 열)
+                if !st.term_wrap && term_hit(st, target, px, py) {
+                    if let Some(t) = &mut st.terms[target] {
+                        if t.scroll_view_x(4 * delta / 120) {
+                            invalidate_dock(hwnd, st, target);
+                        }
+                    }
+                    return LRESULT(0);
+                }
                 let mut inv = Invalidations::default();
                 st.panels[target].on_event(&InputEvent::HWheel { delta }, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
