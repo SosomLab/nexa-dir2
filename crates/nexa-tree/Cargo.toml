@@ -11,3 +11,6 @@ description = "Nexa Dir 인라인 트리/교차 선택 모델 (가시 노드 평
 [dependencies]
 nexa-core = { workspace = true }
 nexa-vfs = { workspace = true }
+
+[lints]
+workspace = true

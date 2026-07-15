@@ -75,7 +75,7 @@ pub struct Panel {
     pub dock: InfoDock,
     dock_visible: bool,
     /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
-    nav_up_align: nexa_gui::widgets::rows::ScrollAlign,
+    nav_up_align: nexa_gui::widgets::ScrollAlign,
     /// 정렬 옵션(G-13·07-15) — **새 소스(탐색·재로드·새 탭)에도 재적용**하기 위해 보관.
     sort_folders_first: bool,
     sort_case: bool,
@@ -110,7 +110,7 @@ impl Panel {
             pathbar: PathBar::new(root.to_string_lossy(), m.row_h, m.pad_x),
             dock: InfoDock::new("", m.row_h, m.pad_x),
             dock_visible: false,
-            nav_up_align: nexa_gui::widgets::rows::ScrollAlign::default(),
+            nav_up_align: nexa_gui::widgets::ScrollAlign::default(),
             sort_folders_first: true,
             sort_case: false,
             ta_opts: (
@@ -656,7 +656,7 @@ impl Panel {
     /// 위로(부모 폴더) — Alt+↑. **떠난 폴더를 자동 선택**(G-7 — 원본 F13-1 이식):
     /// 부모 목록에서 방금 떠난 폴더가 캐럿+단일 선택되어 위치 감각을 보존한다.
     pub fn nav_up(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
-        let left = self.root_path().to_path_buf();
+        let left = self.root_path();
         if let Some(parent) = left.parent().map(Path::to_path_buf) {
             self.navigate_to(parent, ctx, inv);
             self.select_path(&left, inv);
@@ -664,7 +664,7 @@ impl Panel {
     }
 
     /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
-    pub fn set_nav_up_align(&mut self, align: nexa_gui::widgets::rows::ScrollAlign) {
+    pub fn set_nav_up_align(&mut self, align: nexa_gui::widgets::ScrollAlign) {
         self.nav_up_align = align;
     }
 
@@ -741,7 +741,7 @@ impl Panel {
             let align = self.nav_up_align;
             self.rows_mut().select_program_aligned(
                 i,
-                nexa_gui::widgets::rows::SelectOp::Single,
+                nexa_gui::widgets::SelectOp::Single,
                 align,
                 inv,
             );
@@ -942,7 +942,7 @@ mod tests {
         fs::write(base.join("abb.txt"), b"x").unwrap();
         fs::write(base.join("Abc.txt"), b"x").unwrap();
         let (mut p, mut inv) = panel(&base);
-        let first = |p: &Panel| p.rows().source().tree().row(0).unwrap().name.clone();
+        let first = |p: &Panel| p.rows().source().tree().row(0).unwrap().name;
         assert_eq!(first(&p), "abb.txt", "기본 = 대소문자 무시(abb < abc)");
         p.set_sort_case(true, &mut inv);
         assert_eq!(first(&p), "Abc.txt", "토글 즉시 대문자 그룹 상단");
@@ -1056,7 +1056,7 @@ mod tests {
             let id = tree.visible_id(i).unwrap();
             tree.collapse(id);
         }
-        p.navigate_to(b.clone(), ctx(), &mut inv);
+        p.navigate_to(b, ctx(), &mut inv);
         p.nav_back(ctx(), &mut inv);
         let tree = p.rows().source().tree();
         let i = tree.index_of_path(&a.to_string_lossy()).unwrap();

@@ -143,7 +143,12 @@ pub struct DwBackend {
     /// 터미널 단일 글리프 레이아웃 캐시(QA 07-14 — 셀 단위 렌더의 프레임당 생성 비용 제거).
     mono_glyphs: RefCell<HashMap<char, IDWriteTextLayout>>,
     /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
-    layouts: RefCell<HashMap<(String, i32), IDWriteTextLayout>>,
+    /// 레이아웃 캐시 — 외측 키 = 폭(px, 아이콘 포맷은 음수 네임스페이스), 내측 = 텍스트.
+    /// 중첩 맵인 이유(X-16): 튜플 키 `(String, i32)`는 조회마다 `to_owned()` 할당이 필요
+    /// 하지만, 내측 `HashMap<String, _>`은 `&str`로 무할당 조회가 된다(Borrow<str>).
+    layouts: RefCell<HashMap<i32, HashMap<String, IDWriteTextLayout>>>,
+    /// 캐시 총 항목 수(중첩 맵 합산 대신 카운터 — 상한 도달 시 전체 비움).
+    layout_count: std::cell::Cell<usize>,
     /// 미리보기 이미지 캐시(M4-2) — (경로, 맞춤 폭, 높이) → 디코드 결과. 상한 초과 시 비움.
     /// 백엔드는 상주 트림에서 통째로 해제되므로 캐시도 함께 소멸(M2-8 규율 부합).
     images: RefCell<HashMap<ImageKey, DecodedImage>>,
@@ -284,6 +289,7 @@ impl DwBackend {
             mono_fallback,
             mono_glyphs: RefCell::new(HashMap::new()),
             layouts: RefCell::new(HashMap::new()),
+            layout_count: std::cell::Cell::new(0),
             images: RefCell::new(HashMap::new()),
             wic: RefCell::new(None),
             w,
@@ -294,8 +300,13 @@ impl DwBackend {
     /// `(text, max_w_px)`의 레이아웃(캐시 히트 시 재사용) — 폭 초과분은 말줄임표 트리밍.
     /// `max_h_dip` = 행 높이(세로 중앙 정렬 기준).
     fn layout_for(&self, text: &str, max_w_px: i32, max_h_dip: f32) -> Option<IDWriteTextLayout> {
-        let key = (text.to_owned(), max_w_px);
-        if let Some(l) = self.layouts.borrow().get(&key) {
+        // 히트 경로 무할당(X-16) — &str 그대로 내측 맵 조회
+        if let Some(l) = self
+            .layouts
+            .borrow()
+            .get(&max_w_px)
+            .and_then(|m| m.get(text))
+        {
             return Some(l.clone());
         }
         let ppd = self.pixels_per_dip();
@@ -314,10 +325,15 @@ impl DwBackend {
             layout
         };
         let mut cache = self.layouts.borrow_mut();
-        if cache.len() >= LAYOUT_CACHE_CAP {
+        if self.layout_count.get() >= LAYOUT_CACHE_CAP {
             cache.clear();
+            self.layout_count.set(0);
         }
-        cache.insert(key, layout.clone());
+        cache
+            .entry(max_w_px)
+            .or_default()
+            .insert(text.to_owned(), layout.clone());
+        self.layout_count.set(self.layout_count.get() + 1);
         Some(layout)
     }
 
@@ -651,13 +667,14 @@ impl DrawCtx for DwCtx<'_> {
         }
         unsafe {
             let ppd = self.back.pixels_per_dip();
-            // 아이콘 포맷 전용 캐시 키(제어문자 접두사로 본문 캐시와 분리)
-            let key = format!("\u{1}{text}");
+            // 아이콘 포맷 캐시 = **음수 폭 네임스페이스**(본문 캐시와 분리 — clip.w > 0
+            // 보장이므로 -clip.w는 충돌 없음). 히트 경로 무할당(X-16).
             let layout = self
                 .back
                 .layouts
                 .borrow()
-                .get(&(key.clone(), clip.w))
+                .get(&-clip.w)
+                .and_then(|m| m.get(text))
                 .cloned();
             let layout = match layout {
                 Some(l) => l,
@@ -672,10 +689,15 @@ impl DrawCtx for DwCtx<'_> {
                         return;
                     };
                     let mut cache = self.back.layouts.borrow_mut();
-                    if cache.len() >= LAYOUT_CACHE_CAP {
+                    if self.back.layout_count.get() >= LAYOUT_CACHE_CAP {
                         cache.clear();
+                        self.back.layout_count.set(0);
                     }
-                    cache.insert((key, clip.w), l.clone());
+                    cache
+                        .entry(-clip.w)
+                        .or_default()
+                        .insert(text.to_owned(), l.clone());
+                    self.back.layout_count.set(self.back.layout_count.get() + 1);
                     l
                 }
             };

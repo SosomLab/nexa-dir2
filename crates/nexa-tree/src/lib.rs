@@ -55,6 +55,15 @@ pub struct VisibleRow {
     pub has_children: bool,
 }
 
+/// 셀 렌더용 경량 참조 뷰([`Tree::row_ref`] — X-16) — 이름은 빌린 `&str`(클론 없음).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VisibleRowRef<'a> {
+    pub kind: FileKind,
+    pub name: &'a str,
+    pub size: u64,
+    pub modified_unix_ms: i64,
+}
+
 /// 펼침/접힘으로 인한 가시 목록 변경 구간(호스트가 행 삽입/삭제에 사용).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RangeChange {
@@ -420,6 +429,20 @@ impl Tree {
             attrs: n.attrs,
             expanded: n.expanded,
             has_children: n.is_dir(),
+        })
+    }
+
+    /// 가시 인덱스의 셀 렌더용 **경량 참조 뷰**(X-16 핫패스) — `row()`와 달리 이름을
+    /// 클론하지 않는다. 셀/아이콘 조회는 프레임당 가시 행×열로 호출되므로 통 [`VisibleRow`]
+    /// 클론(힙 String 포함)은 행당 수 회의 낭비 할당이었다.
+    pub fn row_ref(&self, index: usize) -> Option<VisibleRowRef<'_>> {
+        let id = *self.visible.get(index)?;
+        let n = &self.nodes[id as usize];
+        Some(VisibleRowRef {
+            kind: n.kind,
+            name: &n.name,
+            size: n.size,
+            modified_unix_ms: n.modified_unix_ms,
         })
     }
 
@@ -1091,6 +1114,23 @@ mod tests {
             folders_first,
             case_sensitive: false,
         }
+    }
+
+    #[test]
+    fn row_ref_matches_row_without_clone() {
+        // X-16: 참조 뷰 = row()와 동일 필드(이름은 빌림) — 셀 렌더 핫패스 회귀 가드
+        let base = make_sort_fixture("rowref");
+        let tree = Tree::open(&base).unwrap();
+        for i in 0..tree.visible_len() {
+            let full = tree.row(i).unwrap();
+            let r = tree.row_ref(i).unwrap();
+            assert_eq!(r.name, full.name);
+            assert_eq!(r.kind, full.kind);
+            assert_eq!(r.size, full.size);
+            assert_eq!(r.modified_unix_ms, full.modified_unix_ms);
+        }
+        assert!(tree.row_ref(tree.visible_len()).is_none(), "범위 밖 None");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
