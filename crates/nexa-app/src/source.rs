@@ -23,6 +23,8 @@ pub struct TreeSource {
     folders_first: bool,
     /// 대소문자 구분 정렬(사용자 요청 07-15 — 기본 false).
     case_sensitive: bool,
+    /// 타입어헤드 검색 범위(원본 docs/32 §5 — 설정 07-15).
+    find_scope: FindScope,
     /// 마지막 정렬 키(폴더 우선 토글 시 재적용용).
     sort_keys: Vec<(SortKey, bool)>,
 }
@@ -34,6 +36,7 @@ impl TreeSource {
             tz_offset_min,
             folders_first: true,
             case_sensitive: false,
+            find_scope: FindScope::VisibleStream,
             // Tree 기본(name_asc)과 일치 — 옵션 토글 시 빈 키로 열거 순서 퇴행 방지(07-15)
             sort_keys: vec![(SortKey::Name, false)],
         }
@@ -45,6 +48,11 @@ impl TreeSource {
             self.folders_first = on;
             self.apply_sort();
         }
+    }
+
+    /// 타입어헤드 검색 범위(설정 — 07-15).
+    pub fn set_find_scope(&mut self, scope: FindScope) {
+        self.find_scope = scope;
     }
 
     /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 즉시 재정렬.
@@ -201,8 +209,7 @@ impl RowSource for TreeSource {
 
     fn find_prefix(&self, caret: Option<usize>, prefix: &str) -> Option<usize> {
         // 범위 = 가시 스트림 위치상대 + wrap(C, 기본 — docs/32 §5). A/B 설정 노출은 M2.
-        self.tree
-            .find_prefix(caret, prefix, FindScope::VisibleStream)
+        self.tree.find_prefix(caret, prefix, self.find_scope)
     }
 
     fn icon(&self, index: usize) -> Option<(String, String)> {

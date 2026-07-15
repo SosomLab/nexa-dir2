@@ -33,6 +33,11 @@ impl TypeAhead {
         &self.buf
     }
 
+    /// 입력 리셋 타임아웃 변경(설정 — 원본 "Type-ahead input reset (ms)").
+    pub fn set_timeout(&mut self, ms: u64) {
+        self.timeout_ms = ms.max(1);
+    }
+
     pub fn clear(&mut self) {
         self.buf.clear();
     }

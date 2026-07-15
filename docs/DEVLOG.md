@@ -8,6 +8,7 @@
 
 ## 2026-07-15
 
+- **설정 배치 2(`feat/prefs-batch2` — 사용자 요청 ①~③)**: 전송 완료 **2초 자동 닫기**(PROG-WIN) · **탭 더블클릭 동작**(닫기 기본/고정/잠금)+**탭 고정(핀) 신규**(📌·그룹 앞 정렬·세션 영속·우클릭 메뉴) · **타입어헤드 옵션 전면 노출**(범위 FindScope 3종·리셋 ms·HUD 3×3·특수문자/공백/Backspace). ④런처 CRUD·⑤우클릭 메뉴 설정·⑥폰트 슬롯 = X-13/X-14/X-12 등재. 168 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **정렬 옵션 전파 수정(`fix/sort-opts-propagate` — 사용자 QA "순서 불변")**: replace_source가 빈 위젯 정렬로 소스 기본 정렬을 **열거 순서로 퇴행**시키던 결함(NTFS 열거 순서가 은폐) + 새 소스(탐색·재로드·새 탭)에 정렬 옵션 미전파 — Panel 보관·apply_sort_opts 재적용·TreeSource 기본 키 Name asc. 회귀 테스트(토글→재로드→새 탭 유지). 168 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **대소문자 정렬 = 대문자 그룹 상단(`fix/case-sort-group` — 사용자 스크린샷 확정)**: 코드포인트 순으로 교체(Abc.txt < a c.txt < abb.txt — NTFS 저장 순서와 무관·앱 정렬이라 제약 없음 확인). 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **대소문자 정렬 규칙 보완(`fix/case-sort-upper` — 사용자 QA)**: 코드포인트 비교 → `cmp_cs_upper_first`(**알파벳 순 유지 + 같은 이름은 대문자 우선** — Apple<apple<Banana·README<readme). 테스트 167 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).

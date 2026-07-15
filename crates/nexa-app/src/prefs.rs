@@ -59,6 +59,15 @@ pub struct PrefValues {
     pub sort_case_sensitive: bool,
     /// Alt+↑ 자동 선택 배치("top"|"center"|"bottom" — 07-15).
     pub nav_up_align: String,
+    /// 탭 더블클릭 동작("close"|"pin"|"lock" — 07-15).
+    pub tab_dblclick: String,
+    /// 타입어헤드(원본 docs/32 §7 — 07-15).
+    pub typeahead_scope: String,
+    pub typeahead_reset_ms: i32,
+    pub typeahead_pos: i32,
+    pub typeahead_special: bool,
+    pub typeahead_space: bool,
+    pub typeahead_backspace: bool,
 }
 
 /// 설정 항목 종류(편집 컨트롤 형태) — 레지스트리 최소 단위.
@@ -98,6 +107,13 @@ const F_TERM_WRAP: u32 = 11;
 const F_TERM_COLS: u32 = 12;
 const F_CASE_SORT: u32 = 13;
 const F_NAV_UP: u32 = 14;
+const F_TAB_DBL: u32 = 15;
+const F_TA_SCOPE: u32 = 16;
+const F_TA_RESET: u32 = 17;
+const F_TA_POS: u32 = 18;
+const F_TA_SPECIAL: u32 = 19;
+const F_TA_SPACE: u32 = 20;
+const F_TA_BS: u32 = 21;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -109,6 +125,7 @@ const TREE: &[(&str, &str, i32)] = &[
     ("fonts", "pref.cat.fonts", 1),
     ("lang", "pref.cat.lang", 1),
     ("list", "pref.cat.list", 0),
+    ("tabs", "pref.cat.tabs", 0),
     ("panel", "pref.grp.panel", 0),
     ("dock", "pref.cat.dock", 1),
     ("terminal", "pref.cat.terminal", 1),
@@ -219,6 +236,33 @@ fn tree_visible(expanded: &[bool]) -> Vec<usize> {
     out
 }
 
+/// 타입어헤드 검색 범위(원본 docs/32 §5 — 07-15).
+const TA_SCOPE_OPTS: &[(&str, &str)] = &[
+    ("global", "pref.taScope.global"),
+    ("level", "pref.taScope.level"),
+    ("visible", "pref.taScope.visible"),
+];
+
+/// 타입어헤드 HUD 배지 위치(3×3 — 원본 §7-A 피커의 라디오 대응).
+const TA_POS_OPTS: &[(&str, &str)] = &[
+    ("0", "pref.taPos.tl"),
+    ("1", "pref.taPos.tc"),
+    ("2", "pref.taPos.tr"),
+    ("3", "pref.taPos.ml"),
+    ("4", "pref.taPos.mc"),
+    ("5", "pref.taPos.mr"),
+    ("6", "pref.taPos.bl"),
+    ("7", "pref.taPos.bc"),
+    ("8", "pref.taPos.br"),
+];
+
+/// 탭 더블클릭 동작(사용자 요청 07-15 — 기본 닫기·옵션 추가 예정).
+const TAB_DBL_OPTS: &[(&str, &str)] = &[
+    ("close", "pref.tabDbl.close"),
+    ("pin", "pref.tabDbl.pin"),
+    ("lock", "pref.tabDbl.lock"),
+];
+
 /// Alt+↑ 자동 선택 배치 옵션(07-15 — 상단/중단/하단).
 const NAV_UP_OPTS: &[(&str, &str)] = &[
     ("top", "pref.align.top"),
@@ -289,6 +333,55 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.navUpAlign.desc",
             kind: Kind::Radio(NAV_UP_OPTS),
             field: F_NAV_UP,
+        },
+        Entry {
+            cat: "tabs",
+            label_key: "pref.tabDblclick",
+            desc_key: "pref.tabDblclick.desc",
+            kind: Kind::Radio(TAB_DBL_OPTS),
+            field: F_TAB_DBL,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.taScope",
+            desc_key: "pref.taScope.desc",
+            kind: Kind::Radio(TA_SCOPE_OPTS),
+            field: F_TA_SCOPE,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.taReset",
+            desc_key: "pref.taReset.desc",
+            kind: Kind::Number,
+            field: F_TA_RESET,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.taSpecial",
+            desc_key: "pref.taSpecial.desc",
+            kind: Kind::CheckBox,
+            field: F_TA_SPECIAL,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.taSpace",
+            desc_key: "pref.taSpace.desc",
+            kind: Kind::CheckBox,
+            field: F_TA_SPACE,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.taBackspace",
+            desc_key: "pref.taBackspace.desc",
+            kind: Kind::CheckBox,
+            field: F_TA_BS,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.taPos",
+            desc_key: "pref.taPos.desc",
+            kind: Kind::Radio(TA_POS_OPTS),
+            field: F_TA_POS,
         },
         Entry {
             cat: "terminal",
@@ -469,6 +562,8 @@ fn sanitize(v: &mut PrefValues) {
     }
     v.term_font_size = v.term_font_size.clamp(8, 32);
     v.term_cols = v.term_cols.clamp(80, 1000);
+    v.typeahead_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
+    v.typeahead_pos = v.typeahead_pos.clamp(0, 8);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
 }
 
@@ -612,6 +707,9 @@ impl PrefState {
                             F_FOLDERS_FIRST => self.values.sort_folders_first,
                             F_TERM_WRAP => self.values.term_wrap,
                             F_CASE_SORT => self.values.sort_case_sensitive,
+                            F_TA_SPECIAL => self.values.typeahead_special,
+                            F_TA_SPACE => self.values.typeahead_space,
+                            F_TA_BS => self.values.typeahead_backspace,
                             _ => false,
                         };
                         SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
@@ -651,6 +749,9 @@ impl PrefState {
                             F_THEME => self.values.theme.clone(),
                             F_LANG => self.values.lang.clone(),
                             F_NAV_UP => self.values.nav_up_align.clone(),
+                            F_TAB_DBL => self.values.tab_dblclick.clone(),
+                            F_TA_SCOPE => self.values.typeahead_scope.clone(),
+                            F_TA_POS => self.values.typeahead_pos.to_string(),
                             _ => String::new(),
                         };
                         for (gi, (val, olabel)) in opts.into_iter().enumerate() {
@@ -783,6 +884,13 @@ impl PrefState {
             F_TERM_COLS => v.term_cols != d.term_cols,
             F_CASE_SORT => v.sort_case_sensitive != d.sort_case_sensitive,
             F_NAV_UP => v.nav_up_align != d.nav_up_align,
+            F_TAB_DBL => v.tab_dblclick != d.tab_dblclick,
+            F_TA_SCOPE => v.typeahead_scope != d.typeahead_scope,
+            F_TA_RESET => v.typeahead_reset_ms != d.typeahead_reset_ms,
+            F_TA_POS => v.typeahead_pos != d.typeahead_pos,
+            F_TA_SPECIAL => v.typeahead_special != d.typeahead_special,
+            F_TA_SPACE => v.typeahead_space != d.typeahead_space,
+            F_TA_BS => v.typeahead_backspace != d.typeahead_backspace,
             _ => false,
         }
     }
@@ -852,9 +960,13 @@ impl PrefState {
                     self.values.term_font_size = get_text(hw).trim().parse().unwrap_or(12)
                 }
                 F_TERM_COLS => self.values.term_cols = get_text(hw).trim().parse().unwrap_or(240),
+                F_TA_RESET => {
+                    self.values.typeahead_reset_ms = get_text(hw).trim().parse().unwrap_or(1000)
+                }
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),
-                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_TERM_WRAP | F_CASE_SORT => {
+                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_TERM_WRAP | F_CASE_SORT
+                | F_TA_SPECIAL | F_TA_SPACE | F_TA_BS => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
@@ -863,6 +975,9 @@ impl PrefState {
                         F_FOLDERS_FIRST => self.values.sort_folders_first = on,
                         F_TERM_WRAP => self.values.term_wrap = on,
                         F_CASE_SORT => self.values.sort_case_sensitive = on,
+                        F_TA_SPECIAL => self.values.typeahead_special = on,
+                        F_TA_SPACE => self.values.typeahead_space = on,
+                        F_TA_BS => self.values.typeahead_backspace = on,
                         _ => {}
                     }
                 }
@@ -1011,6 +1126,9 @@ unsafe extern "system" fn prefs_proc(
                             F_THEME => (*st).values.theme = val,
                             F_LANG => (*st).values.lang = val,
                             F_NAV_UP => (*st).values.nav_up_align = val,
+                            F_TAB_DBL => (*st).values.tab_dblclick = val,
+                            F_TA_SCOPE => (*st).values.typeahead_scope = val,
+                            F_TA_POS => (*st).values.typeahead_pos = val.parse().unwrap_or(6),
                             _ => {}
                         }
                         (*st).harvest();
