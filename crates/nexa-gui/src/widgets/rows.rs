@@ -120,6 +120,15 @@ pub trait RowSource {
 /// 안쪽)해 편집 진입 시 이름 x가 일반 표시와 동일(밀림 없음, QA 07-13 4차).
 const RENAME_FIELD_PAD: i32 = 3;
 
+/// 프로그램적 선택 시 뷰 내 배치 위치(사용자 QA 07-15 — Alt+↑ 떠난 폴더 자동 선택).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ScrollAlign {
+    Top,
+    #[default]
+    Center,
+    Bottom,
+}
+
 /// 리사이즈 드래그 상태.
 #[derive(Clone, Copy, Debug)]
 struct ResizeDrag {
@@ -342,6 +351,30 @@ impl<S: RowSource> VirtualRows<S> {
         self.caret = Some(row);
         self.src.select(row, op);
         self.scroll_into_view(row);
+        inv.push(self.bounds);
+    }
+
+    /// 프로그램적 선택 + **뷰 정렬 스크롤**(사용자 QA 07-15 — Alt+↑ 자동 선택 위치):
+    /// 선택 행을 뷰의 상단/중단/하단에 배치(최소 이동 규칙 대신 명시 위치).
+    pub fn select_program_aligned(
+        &mut self,
+        row: usize,
+        op: SelectOp,
+        align: ScrollAlign,
+        inv: &mut Invalidations,
+    ) {
+        if row >= self.src.len() {
+            return;
+        }
+        self.caret = Some(row);
+        self.src.select(row, op);
+        let full = ((self.body_h() / self.row_h).max(1)) as usize;
+        let target = match align {
+            ScrollAlign::Top => row,
+            ScrollAlign::Center => row.saturating_sub(full / 2),
+            ScrollAlign::Bottom => row.saturating_sub(full.saturating_sub(1)),
+        };
+        self.scroll_row = target.min(self.max_scroll());
         inv.push(self.bounds);
     }
 

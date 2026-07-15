@@ -64,6 +64,10 @@ pub struct Settings {
     pub dlg_font_size: i32,
     /// 폴더 우선 정렬(G-13 — 기본 true=탐색기 규약. false=파일·폴더 혼합 정렬).
     pub sort_folders_first: bool,
+    /// 대소문자 구분 정렬(사용자 요청 07-15 — 기본 false=탐색기 규약).
+    pub sort_case_sensitive: bool,
+    /// Alt+↑ 떠난 폴더 자동 선택의 뷰 배치(사용자 QA 07-15): "top"|"center"|"bottom".
+    pub nav_up_align: String,
     /// 퀵 런처 바 표시(M5-1 — 원본 LayoutState.ShowLauncher 대응, 기본 표시).
     pub launcher: bool,
     /// 퀵 런처 항목(M5-1). `None` = 키 부재(첫 실행 — 호스트가 시드 주입) ·
@@ -92,6 +96,8 @@ impl Default for Settings {
             dlg_font: "Segoe UI".into(),
             dlg_font_size: 9,
             sort_folders_first: true,
+            sort_case_sensitive: false,
+            nav_up_align: "center".into(),
             launcher: true,
             launcher_items: None,
             launcher_seed: 0,
@@ -163,8 +169,10 @@ impl Settings {
             self.term_cols
         ));
         out.push_str(&format!(
-            "sort_folders_first={}\n",
-            u8::from(self.sort_folders_first)
+            "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\n",
+            u8::from(self.sort_folders_first),
+            u8::from(self.sort_case_sensitive),
+            self.nav_up_align
         ));
         out.push_str(&format!("launcher_seed={}\n", self.launcher_seed));
         if let Some(items) = &self.launcher_items {
@@ -236,6 +244,10 @@ impl Settings {
                     }
                 }
                 "sort_folders_first" => s.sort_folders_first = v != "0",
+                "sort_case_sensitive" => s.sort_case_sensitive = v != "0",
+                "nav_up_align" if matches!(v, "top" | "center" | "bottom") => {
+                    s.nav_up_align = v.into()
+                }
                 "launcher" => s.launcher = v != "0",
                 "launcher_seed" => s.launcher_seed = v.parse().unwrap_or(0),
                 // count 키 존재 = 항목 목록 확정(비움 포함) — launcherN은 아래에서 채움
@@ -419,6 +431,8 @@ mod tests {
             dlg_font: "맑은 고딕".into(),
             dlg_font_size: 10,
             sort_folders_first: false,
+            sort_case_sensitive: true,
+            nav_up_align: "top".into(),
             launcher: false,
             launcher_items: Some(vec![
                 LauncherItem {
@@ -456,6 +470,13 @@ mod tests {
             Settings::parse("term_cols=20").term_cols,
             80,
             "열 하한 클램프"
+        );
+        assert!(parsed.sort_case_sensitive, "대소문자 정렬 왕복");
+        assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
+        assert_eq!(
+            Settings::parse("nav_up_align=middle").nav_up_align,
+            "center",
+            "미지 값 = 기본"
         );
         assert_eq!(parsed.dlg_font, "맑은 고딕", "대화상자 글꼴 왕복");
         assert_eq!(parsed.dlg_font_size, 10);

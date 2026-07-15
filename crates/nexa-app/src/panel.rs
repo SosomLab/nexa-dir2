@@ -72,6 +72,8 @@ pub struct Panel {
     /// 하단 도크(M4-1, 원본 대원칙: 듀얼=좌↔좌·우↔우 — 패널별 1개). 표시 여부는 호스트 전역.
     pub dock: InfoDock,
     dock_visible: bool,
+    /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
+    nav_up_align: nexa_gui::widgets::rows::ScrollAlign,
     /// 도크 높이 비율(리스트+도크 영역 대비 — S2 드래그·영속. 전역 공유 값이 양 패널에 적용).
     dock_ratio: f32,
     tabs: Vec<Tab>,
@@ -98,6 +100,7 @@ impl Panel {
             pathbar: PathBar::new(root.to_string_lossy(), m.row_h, m.pad_x),
             dock: InfoDock::new("", m.row_h, m.pad_x),
             dock_visible: false,
+            nav_up_align: nexa_gui::widgets::rows::ScrollAlign::default(),
             dock_ratio: 0.3,
             tabs: vec![Tab {
                 rows,
@@ -588,10 +591,23 @@ impl Panel {
         }
     }
 
+    /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
+    pub fn set_nav_up_align(&mut self, align: nexa_gui::widgets::rows::ScrollAlign) {
+        self.nav_up_align = align;
+    }
+
     /// 폴더 우선 정렬 토글(G-13) — 전 탭 소스에 전파·즉시 재정렬.
     pub fn set_folders_first(&mut self, on: bool, inv: &mut Invalidations) {
         for t in &mut self.tabs {
             t.rows.source_mut().set_folders_first(on);
+            inv.push(t.rows.bounds());
+        }
+    }
+
+    /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 전 탭 소스에 전파·즉시 재정렬.
+    pub fn set_sort_case(&mut self, on: bool, inv: &mut Invalidations) {
+        for t in &mut self.tabs {
+            t.rows.source_mut().set_case_sensitive(on);
             inv.push(t.rows.bounds());
         }
     }
@@ -607,8 +623,13 @@ impl Panel {
             })
         };
         if let Some(i) = row {
-            self.rows_mut()
-                .select_program(i, nexa_gui::widgets::rows::SelectOp::Single, inv);
+            let align = self.nav_up_align;
+            self.rows_mut().select_program_aligned(
+                i,
+                nexa_gui::widgets::rows::SelectOp::Single,
+                align,
+                inv,
+            );
         }
     }
 
