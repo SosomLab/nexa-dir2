@@ -369,6 +369,9 @@ struct State {
     show_dotfiles: bool,
     /// 폴더 우선 정렬(G-13 — 설정 영속·전 탭 전파).
     sort_folders_first: bool,
+    /// 대소문자 구분 정렬·Alt+↑ 자동 선택 배치(사용자 요청 07-15 — 설정 영속).
+    sort_case_sensitive: bool,
+    nav_up_align: String,
     /// 언어 설정값("system"|코드)·발견 목록(메뉴 라디오 CMD_LANG_BASE+idx 매핑) — M2-6.
     lang_setting: String,
     langs: Vec<(String, String)>,
@@ -683,11 +686,20 @@ pub fn run() -> Result<()> {
             right.set_dock_visible(true, &mut inv);
         }
     }
-    // 폴더 우선 정렬(G-13) — 기본(true)이 아니면 기동 시 전 탭 적용
-    if !settings.sort_folders_first {
+    // 정렬·Alt+↑ 배치 설정 — 기본이 아니면 기동 시 전 탭 적용
+    {
         let mut inv = Invalidations::default();
-        left.set_folders_first(false, &mut inv);
-        right.set_folders_first(false, &mut inv);
+        if !settings.sort_folders_first {
+            left.set_folders_first(false, &mut inv);
+            right.set_folders_first(false, &mut inv);
+        }
+        if settings.sort_case_sensitive {
+            left.set_sort_case(true, &mut inv);
+            right.set_sort_case(true, &mut inv);
+        }
+        let align = align_of(&settings.nav_up_align);
+        left.set_nav_up_align(align);
+        right.set_nav_up_align(align);
         let _ = inv; // 창 생성 전 — 첫 페인트가 대체
     }
     // 퀵 런처 항목(M5-1) — 키 부재(첫 실행)면 시드(VS Code│pwsh·cmd — v2).
@@ -737,6 +749,8 @@ pub fn run() -> Result<()> {
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
         sort_folders_first: settings.sort_folders_first,
+        sort_case_sensitive: settings.sort_case_sensitive,
+        nav_up_align: settings.nav_up_align.clone(),
         lang_setting: settings.lang,
         langs,
         term_font: settings.term_font,
@@ -2684,6 +2698,8 @@ unsafe fn open_prefs(hwnd: HWND) {
                 show_dotfiles: st.show_dotfiles,
                 dock: st.panels[0].dock_visible(),
                 sort_folders_first: st.sort_folders_first,
+                sort_case_sensitive: st.sort_case_sensitive,
+                nav_up_align: st.nav_up_align.clone(),
             },
             st.dlg_font.clone(),
         )
@@ -2834,11 +2850,36 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         st.panels[1].set_folders_first(v.sort_folders_first, &mut inv);
         flush_invalidations(hwnd, &mut inv);
     }
+    // 대소문자 구분 정렬 토글(07-15) — 전 탭 즉시 재정렬
+    if v.sort_case_sensitive != st.sort_case_sensitive {
+        st.sort_case_sensitive = v.sort_case_sensitive;
+        let mut inv = Invalidations::default();
+        st.panels[0].set_sort_case(v.sort_case_sensitive, &mut inv);
+        st.panels[1].set_sort_case(v.sort_case_sensitive, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+    }
+    // Alt+↑ 자동 선택 배치(07-15)
+    if v.nav_up_align != st.nav_up_align {
+        st.nav_up_align = v.nav_up_align.clone();
+        let align = align_of(&st.nav_up_align);
+        st.panels[0].set_nav_up_align(align);
+        st.panels[1].set_nav_up_align(align);
+    }
     // 즉시 영속(원본 PREF 규율 — 종료 저장과 별개로 설정만 저장)
     let settings = current_settings(st);
     let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
     let _ = InvalidateRect(Some(hwnd), None, false);
     update_title(hwnd, st, "");
+}
+
+/// 설정 문자열 → 뷰 배치(Alt+↑ 자동 선택 — 미지 값은 중단).
+fn align_of(s: &str) -> nexa_gui::widgets::rows::ScrollAlign {
+    use nexa_gui::widgets::rows::ScrollAlign;
+    match s {
+        "top" => ScrollAlign::Top,
+        "bottom" => ScrollAlign::Bottom,
+        _ => ScrollAlign::Center,
+    }
 }
 
 /// 현재 상태 → 설정 스냅샷(즉시 영속·종료 저장 공용 — 단일 원천).
@@ -2851,6 +2892,8 @@ fn current_settings(st: &State) -> Settings {
         split: st.split,
         dock: st.panels[0].dock_visible(),
         sort_folders_first: st.sort_folders_first,
+        sort_case_sensitive: st.sort_case_sensitive,
+        nav_up_align: st.nav_up_align.clone(),
         dock_ratio: st.panels[0].dock_ratio(),
         dock_split: st.dock_split,
         term_font: st.term_font.clone(),

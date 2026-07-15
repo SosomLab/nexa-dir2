@@ -21,6 +21,8 @@ pub struct TreeSource {
     tz_offset_min: i32,
     /// 폴더 우선 그룹핑(G-13 — 설정 `sort_folders_first`, 기본 true=탐색기 규약).
     folders_first: bool,
+    /// 대소문자 구분 정렬(사용자 요청 07-15 — 기본 false).
+    case_sensitive: bool,
     /// 마지막 정렬 키(폴더 우선 토글 시 재적용용).
     sort_keys: Vec<(SortKey, bool)>,
 }
@@ -31,6 +33,7 @@ impl TreeSource {
             tree,
             tz_offset_min,
             folders_first: true,
+            case_sensitive: false,
             sort_keys: Vec::new(),
         }
     }
@@ -39,11 +42,25 @@ impl TreeSource {
     pub fn set_folders_first(&mut self, on: bool) {
         if self.folders_first != on {
             self.folders_first = on;
-            self.tree.set_sort(SortSpec {
-                keys: self.sort_keys.clone(),
-                folders_first: on,
-            });
+            self.apply_sort();
         }
+    }
+
+    /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 즉시 재정렬.
+    pub fn set_case_sensitive(&mut self, on: bool) {
+        if self.case_sensitive != on {
+            self.case_sensitive = on;
+            self.apply_sort();
+        }
+    }
+
+    /// 현재 키+옵션으로 정렬 재적용(단일 원천).
+    fn apply_sort(&mut self) {
+        self.tree.set_sort(SortSpec {
+            keys: self.sort_keys.clone(),
+            folders_first: self.folders_first,
+            case_sensitive: self.case_sensitive,
+        });
     }
 
     pub fn tree(&self) -> &Tree {
@@ -210,11 +227,8 @@ impl RowSource for TreeSource {
             })
             .collect();
         // 빈 목록 = 열거 순서. 폴더 우선은 설정(G-13, 기본 true=탐색기 규약)
-        self.sort_keys = mapped.clone();
-        self.tree.set_sort(SortSpec {
-            keys: mapped,
-            folders_first: self.folders_first,
-        });
+        self.sort_keys = mapped;
+        self.apply_sort();
         true
     }
 }

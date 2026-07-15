@@ -100,6 +100,8 @@ pub struct SortSpec {
     /// (키, 내림차순 여부). 빈 목록 또는 `None` 키 = 열거 순서.
     pub keys: Vec<(SortKey, bool)>,
     pub folders_first: bool,
+    /// 대소문자 구분 이름/확장자 비교(사용자 요청 07-15 — 기본 false=탐색기 규약).
+    pub case_sensitive: bool,
 }
 
 impl SortSpec {
@@ -108,6 +110,7 @@ impl SortSpec {
         SortSpec {
             keys: vec![(SortKey::Name, false)],
             folders_first: true,
+            case_sensitive: false,
         }
     }
 }
@@ -272,9 +275,17 @@ impl Tree {
             if key == SortKey::None {
                 return a.cmp(&b); // 열거 순서(방향 무시)
             }
+            // 대소문자 구분 옵션(07-15) — 구분 시 유니코드 코드포인트 순 비교
+            let cmp_name = |x: &str, y: &str| {
+                if self.sort.case_sensitive {
+                    x.cmp(y)
+                } else {
+                    cmp_ci(x, y)
+                }
+            };
             let ord = match key {
-                SortKey::Name => cmp_ci(&na.name, &nb.name),
-                SortKey::Ext => cmp_ci(ext_of(&na.name), ext_of(&nb.name)),
+                SortKey::Name => cmp_name(&na.name, &nb.name),
+                SortKey::Ext => cmp_name(ext_of(&na.name), ext_of(&nb.name)),
                 // 폴더 크기는 OS 잡음값 → 정렬상 0으로 정규화(폴더는 이름 tie-break로, 탐색기와 동일).
                 SortKey::Size => {
                     let sa = if na.is_dir() { 0 } else { na.size };
@@ -286,7 +297,7 @@ impl Tree {
                 // 셸 타입 문자열이 없으므로 확장자를 타입 대용으로 2차 비교(파일 간 변별력 + 방향 반영).
                 SortKey::Kind => kind_rank(na.kind)
                     .cmp(&kind_rank(nb.kind))
-                    .then_with(|| cmp_ci(ext_of(&na.name), ext_of(&nb.name))),
+                    .then_with(|| cmp_name(ext_of(&na.name), ext_of(&nb.name))),
                 SortKey::None => Ordering::Equal, // 위에서 처리(도달 안 함)
             };
             let ord = if desc { ord.reverse() } else { ord };
@@ -1068,6 +1079,7 @@ mod tests {
         SortSpec {
             keys: vec![(key, desc)],
             folders_first,
+            case_sensitive: false,
         }
     }
 

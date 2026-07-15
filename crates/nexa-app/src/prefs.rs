@@ -55,6 +55,10 @@ pub struct PrefValues {
     pub dock: bool,
     /// 폴더 우선 정렬(G-13).
     pub sort_folders_first: bool,
+    /// 대소문자 구분 정렬(07-15).
+    pub sort_case_sensitive: bool,
+    /// Alt+↑ 자동 선택 배치("top"|"center"|"bottom" — 07-15).
+    pub nav_up_align: String,
 }
 
 /// 설정 항목 종류(편집 컨트롤 형태) — 레지스트리 최소 단위.
@@ -92,6 +96,8 @@ const F_DOCK: u32 = 9;
 const F_FOLDERS_FIRST: u32 = 10;
 const F_TERM_WRAP: u32 = 11;
 const F_TERM_COLS: u32 = 12;
+const F_CASE_SORT: u32 = 13;
+const F_NAV_UP: u32 = 14;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -213,6 +219,13 @@ fn tree_visible(expanded: &[bool]) -> Vec<usize> {
     out
 }
 
+/// Alt+↑ 자동 선택 배치 옵션(07-15 — 상단/중단/하단).
+const NAV_UP_OPTS: &[(&str, &str)] = &[
+    ("top", "pref.align.top"),
+    ("center", "pref.align.center"),
+    ("bottom", "pref.align.bottom"),
+];
+
 const THEME_OPTS: &[(&str, &str)] = &[
     ("system", "pref.theme.system"),
     ("light", "pref.theme.light"),
@@ -262,6 +275,20 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.sortFoldersFirst.desc",
             kind: Kind::CheckBox,
             field: F_FOLDERS_FIRST,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.sortCaseSensitive",
+            desc_key: "pref.sortCaseSensitive.desc",
+            kind: Kind::CheckBox,
+            field: F_CASE_SORT,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.navUpAlign",
+            desc_key: "pref.navUpAlign.desc",
+            kind: Kind::Radio(NAV_UP_OPTS),
+            field: F_NAV_UP,
         },
         Entry {
             cat: "terminal",
@@ -584,6 +611,7 @@ impl PrefState {
                             F_DOCK => self.values.dock,
                             F_FOLDERS_FIRST => self.values.sort_folders_first,
                             F_TERM_WRAP => self.values.term_wrap,
+                            F_CASE_SORT => self.values.sort_case_sensitive,
                             _ => false,
                         };
                         SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
@@ -622,6 +650,7 @@ impl PrefState {
                         let cur = match e.field {
                             F_THEME => self.values.theme.clone(),
                             F_LANG => self.values.lang.clone(),
+                            F_NAV_UP => self.values.nav_up_align.clone(),
                             _ => String::new(),
                         };
                         for (gi, (val, olabel)) in opts.into_iter().enumerate() {
@@ -752,6 +781,8 @@ impl PrefState {
             F_FOLDERS_FIRST => v.sort_folders_first != d.sort_folders_first,
             F_TERM_WRAP => v.term_wrap != d.term_wrap,
             F_TERM_COLS => v.term_cols != d.term_cols,
+            F_CASE_SORT => v.sort_case_sensitive != d.sort_case_sensitive,
+            F_NAV_UP => v.nav_up_align != d.nav_up_align,
             _ => false,
         }
     }
@@ -823,7 +854,7 @@ impl PrefState {
                 F_TERM_COLS => self.values.term_cols = get_text(hw).trim().parse().unwrap_or(240),
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),
-                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_TERM_WRAP => {
+                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_TERM_WRAP | F_CASE_SORT => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
@@ -831,6 +862,7 @@ impl PrefState {
                         F_DOCK => self.values.dock = on,
                         F_FOLDERS_FIRST => self.values.sort_folders_first = on,
                         F_TERM_WRAP => self.values.term_wrap = on,
+                        F_CASE_SORT => self.values.sort_case_sensitive = on,
                         _ => {}
                     }
                 }
@@ -978,6 +1010,7 @@ unsafe extern "system" fn prefs_proc(
                         match field {
                             F_THEME => (*st).values.theme = val,
                             F_LANG => (*st).values.lang = val,
+                            F_NAV_UP => (*st).values.nav_up_align = val,
                             _ => {}
                         }
                         (*st).harvest();

@@ -215,3 +215,10 @@ pref.termWrap = Terminal word wrap
 pref.termWrap.desc = Wrap lines to the view width. Off = fixed columns with horizontal scroll.
 pref.termCols = Terminal columns (80~1000)
 pref.termCols.desc = Fixed column count when word wrap is off. Scroll horizontally with Shift+wheel.
+pref.sortCaseSensitive = Case-sensitive sort
+pref.sortCaseSensitive.desc = Compare names case-sensitively when sorting (code point order).
+pref.navUpAlign = Selection position after Go Up
+pref.navUpAlign.desc = Where the left folder is placed in the view after Alt+Up.
+pref.align.top = Top
+pref.align.center = Center
+pref.align.bottom = Bottom
