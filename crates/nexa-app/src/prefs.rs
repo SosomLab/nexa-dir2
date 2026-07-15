@@ -86,7 +86,8 @@ const F_DOCK: u32 = 9;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
-/// 그룹 노드 클릭 = 펼침 토글 + 하위 카테고리 전체를 섹션으로 표시, leaf = 그 카테고리만.
+/// 그룹 노드 클릭 = 펼침 토글 + **하위 메뉴 링크 페이지**(세부는 하위 선택 시 — 드릴다운
+/// 개편 07-15), leaf = 그 카테고리 항목(검색 중엔 검색어 매치 항목만).
 const TREE: &[(&str, &str, i32)] = &[
     ("general", "pref.grp.general", 0),
     ("appearance", "pref.cat.appearance", 1),
@@ -120,6 +121,15 @@ fn tree_cats(i: usize) -> Vec<(&'static str, &'static str)> {
 
 fn tree_index(key: &str) -> Option<usize> {
     TREE.iter().position(|n| n.0 == key)
+}
+
+/// 카테고리 매치(검색 기준 — 트리 필터·그룹 페이지 링크 공용): **라벨 매치** 또는
+/// **하위 상세 설정(항목 라벨) 매치**.
+fn cat_matches(key: &str, label_key: &str, q: &str, reg: &[Entry]) -> bool {
+    tr(label_key).to_lowercase().contains(q)
+        || reg
+            .iter()
+            .any(|e| e.cat == key && tr(e.label_key).to_lowercase().contains(q))
 }
 
 /// 검색 중 트리 필터(X-10 ① — 사용자 요청 07-15): **노드 라벨에 검색어가 있거나**,
@@ -277,9 +287,13 @@ struct PrefState {
 }
 
 const ID_SEARCH: u32 = 1002;
+/// 검색어 빠른 지우개(✕ — 사용자 요청 07-15).
+const ID_SEARCH_CLEAR: u32 = 1003;
 const ID_TREE: u32 = 1100; // 사이드바 트리(오너드로 LISTBOX)
 const ID_FIELD_BASE: u32 = 1200; // +field(체크/EDIT 명령)
 const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
+/// 그룹 페이지의 하위 메뉴 링크(드릴다운 개편 07-15) — +TREE 인덱스.
+const ID_NAV_BASE: u32 = 1600;
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("NexaPrefs");
@@ -398,35 +412,15 @@ impl PrefState {
         let q = self.query.to_lowercase();
         let x0 = self.body_x();
         let pane_w = (self.cw - x0 - PAD).max(120);
-        // 섹션 제목(원본 스크린샷 "File List") — 검색 중이면 검색어 표기
+        // 표시 모드(드릴다운 개편 07-15 — 사용자 QA): **그룹 = 하위 메뉴 목록만**
+        // (세부는 하위 메뉴 선택 시), leaf = 그 카테고리 항목(검색 중엔 **검색어 매치
+        // 항목만**), 검색 중 미선택(category 빈 값) = 전 카테고리 매치 목록.
         let node = tree_index(&self.category);
-        let title = if q.is_empty() {
-            node.map(|i| tr(TREE[i].1)).unwrap_or_default()
+        let is_group = node.is_some_and(tree_has_children);
+        let title = if let Some(i) = node {
+            tr(TREE[i].1)
         } else {
             format!("\u{201C}{}\u{201D}", self.query)
-        };
-        // 섹션 구성(트리 개편 07-15): 검색 = 전 카테고리 매치 1섹션 ·
-        // 그룹 노드 = 자식 카테고리별 부제목 섹션 · leaf = 그 카테고리 1섹션(부제목 없음)
-        let sections: Vec<(Option<String>, Vec<&Entry>)> = if !q.is_empty() {
-            vec![(
-                None,
-                reg.iter()
-                    .filter(|e| tr(e.label_key).to_lowercase().contains(&q))
-                    .collect(),
-            )]
-        } else if let Some(i) = node {
-            let cats = tree_cats(i);
-            let multi = cats.len() > 1;
-            cats.into_iter()
-                .map(|(key, lk)| {
-                    (
-                        multi.then(|| tr(lk)),
-                        reg.iter().filter(|e| e.cat == key).collect(),
-                    )
-                })
-                .collect()
-        } else {
-            Vec::new()
         };
         let th = mk(
             self.hwnd,
@@ -443,28 +437,51 @@ impl PrefState {
         self.rows.push(th);
         let mut y = PAD + 40;
         let mut opt_seq = 0u32;
-        for (sub, entries) in &sections {
-            if entries.is_empty() {
-                continue;
-            }
-            if let Some(sub) = sub {
-                // 그룹 노드 = 자식 카테고리 부제목(하위 섹션 — 트리 개편 07-15)
-                let sh = mk(
+        if is_group {
+            // 그룹 페이지 = 하위 메뉴 링크(클릭 = 그 메뉴로 이동 — SS_NOTIFY).
+            // 검색 중엔 매치 기준(라벨/상세 — 트리 필터와 동일) 자식만.
+            for (key, lk) in tree_cats(node.unwrap_or_default()) {
+                if !q.is_empty() && !cat_matches(key, lk, &q, &reg) {
+                    continue;
+                }
+                let Some(ti) = tree_index(key) else { continue };
+                let link = mk(
                     self.hwnd,
                     self.title_font,
                     w!("STATIC"),
-                    sub,
-                    0,
+                    &tr(lk),
+                    0x0100, // SS_NOTIFY — STN_CLICKED로 이동
                     x0,
                     y,
                     pane_w,
                     24,
-                    0,
+                    ID_NAV_BASE + ti as u32,
                 );
-                self.rows.push(sh);
-                y += 32;
+                self.rows.push(link);
+                y += 34;
             }
-            for e in entries {
+        } else {
+            // 항목 페이지: 검색 미선택 = 전 카테고리 매치 · leaf = 그 카테고리 항목
+            // (검색 중 = 라벨 매치만 — 메뉴명 매치로 진입해 상세 매치가 0이면 전체 표시)
+            let list: Vec<&Entry> = if node.is_none() {
+                reg.iter()
+                    .filter(|e| tr(e.label_key).to_lowercase().contains(&q))
+                    .collect()
+            } else {
+                let matched: Vec<&Entry> = reg
+                    .iter()
+                    .filter(|e| {
+                        e.cat == self.category
+                            && (q.is_empty() || tr(e.label_key).to_lowercase().contains(&q))
+                    })
+                    .collect();
+                if matched.is_empty() && !q.is_empty() {
+                    reg.iter().filter(|e| e.cat == self.category).collect()
+                } else {
+                    matched
+                }
+            };
+            for e in list {
                 let label = tr(e.label_key);
                 match e.kind {
                     Kind::CheckBox => {
@@ -597,7 +614,6 @@ impl PrefState {
                     }
                 }
             }
-            y += 10; // 섹션 간 여백
         }
         let _ = InvalidateRect(Some(self.hwnd), None, true);
     }
@@ -731,13 +747,22 @@ unsafe extern "system" fn prefs_proc(
             let notify = (wparam.0 >> 16) as u32;
             match id {
                 ID_SEARCH if notify == 0x0300 => {
-                    // EN_CHANGE — 검색어 갱신·트리 필터(X-10 ①)·우측 재구성
+                    // EN_CHANGE — 검색어 갱신·트리 필터(X-10 ①)·우측 재구성.
+                    // 입력/변경 = 선택 해제(전역 매치 페이지) · 명시적 비움 = 기본 노드 복귀.
                     let s = &mut *st;
                     s.query = get_text(HWND(lparam.0 as *mut core::ffi::c_void));
+                    s.category = if s.query.is_empty() {
+                        "general".into()
+                    } else {
+                        String::new()
+                    };
                     s.repopulate_tree();
                     s.rebuild();
-                    // 사이드바 선택 표시 갱신(검색 중=선택 없음)
                     let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                ID_SEARCH_CLEAR if notify == 0 => {
+                    // ✕ 빠른 지우개(사용자 요청 07-15) — EN_CHANGE 경유로 상태 일원화
+                    set_text((*st).search, "");
                 }
                 ID_TREE if notify == 1 => {
                     // LBN_SELCHANGE — 트리 노드 선택(전면 개편 07-15): 그룹 = 펼침 토글 +
@@ -748,16 +773,35 @@ unsafe extern "system" fn prefs_proc(
                     else {
                         return LRESULT(0);
                     };
-                    let was_search = !s.query.is_empty();
                     s.harvest(); // 이동 전 현재 편집 값 보존
                     s.category = TREE[node].0.to_string();
-                    // 펼침 토글은 일반 모드만 — 검색 중 클릭 = 그 노드로 이동(검색 종료)
-                    if !was_search && tree_has_children(node) {
+                    // 검색어는 **메뉴 탐색 중 유지**(사용자 요청 07-15 — 명시적 삭제만
+                    // 지움). 펼침 토글은 일반 모드만(검색 중 = 필터가 하위 강제 표시).
+                    if s.query.is_empty() && tree_has_children(node) {
                         s.expanded[node] = !s.expanded[node];
+                        s.repopulate_tree();
                     }
-                    s.query.clear();
-                    set_text(s.search, ""); // 검색창 비우기
-                    s.repopulate_tree(); // 검색 필터 해제·펼침 상태 반영(항상)
+                    s.rebuild();
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                i if (ID_NAV_BASE..ID_NAV_BASE + TREE.len() as u32).contains(&i) && notify == 0 => {
+                    // 그룹 페이지의 하위 메뉴 링크 클릭(STN_CLICKED) — 그 메뉴로 이동
+                    // (검색어 유지 — 트리 클릭과 동일 규약)
+                    let s = &mut *st;
+                    let ti = (i - ID_NAV_BASE) as usize;
+                    s.harvest();
+                    s.category = TREE[ti].0.to_string();
+                    if s.query.is_empty() {
+                        // 조상 펼침(선택 노드 가시화)
+                        let mut d = TREE[ti].2;
+                        for j in (0..ti).rev() {
+                            if TREE[j].2 < d {
+                                s.expanded[j] = true;
+                                d = TREE[j].2;
+                            }
+                        }
+                    }
+                    s.repopulate_tree();
                     s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
@@ -954,7 +998,7 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         editors: Vec::new(),
         radios: Vec::new(),
     });
-    // 사이드바 상단 검색창(원본 스크린샷 위치)
+    // 사이드바 상단 검색창(원본 스크린샷 위치) + 우측 끝 ✕ 빠른 지우개(사용자 요청 07-15)
     state.search = mk(
         dlg,
         font,
@@ -963,9 +1007,21 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
         PAD,
         PAD,
-        CAT_W - 8,
+        CAT_W - 8 - 24,
         SEARCH_H,
         ID_SEARCH,
+    );
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        "✕",
+        WS_TABSTOP.0,
+        PAD + CAT_W - 8 - 22,
+        PAD,
+        22,
+        SEARCH_H,
+        ID_SEARCH_CLEAR,
     );
     // 검색창 플레이스홀더(EM_SETCUEBANNER — 미지원 환경은 무해한 no-op)
     {
