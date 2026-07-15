@@ -197,3 +197,5 @@ bulk.extTo = To ext
 bulk.preset.name = Preset name
 bulk.preset.save = Save
 bulk.preset.load = Load
+pref.grp.general = General
+pref.grp.panel = Bottom Panel
