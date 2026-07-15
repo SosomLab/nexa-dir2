@@ -524,7 +524,8 @@ impl Progress {
     pub unsafe fn update(&mut self, done: u64, total: u64) {
         self.state.done = done;
         self.state.total = total;
-        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, false);
+        // erase=true — WM_PAINT가 TRANSPARENT로 그려 이전 텍스트가 중첩(QA 07-15)
+        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
     }
 
     /// [취소]·X가 눌렸는가(호스트가 워커 cancel 플래그에 반영).
@@ -538,7 +539,7 @@ impl Progress {
         self.state.label = label.encode_utf16().collect();
         self.state.done = 1;
         self.state.total = 1;
-        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, false);
+        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
     }
 }
 

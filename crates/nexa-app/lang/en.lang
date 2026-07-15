@@ -255,3 +255,5 @@ pref.taSpace = Include Space (while typing a prefix)
 pref.taSpace.desc = Space toggles selection when no prefix is active.
 pref.taBackspace = Backspace erases last character
 pref.taBackspace.desc = Off = Backspace is ignored during type-ahead.
+pref.cat.listGeneral = View & Sort
+pref.cat.typeahead = Type-ahead

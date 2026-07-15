@@ -24,11 +24,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetDlgCtrlID, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
     MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, ES_AUTOHSCROLL,
-    ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO,
-    WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX,
-    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW,
+    ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
+    WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use crate::dialog::DlgFont;
@@ -77,6 +78,8 @@ enum Kind {
     Radio(&'static [(&'static str, &'static str)]),
     /// 언어 라디오(동적 — system + 발견 언어).
     LangRadio,
+    /// 3×3 위치 피커(오너드로 이미지 버튼 — 원본 §7-A, QA 07-15).
+    PosGrid,
     Text,     // 글꼴 이름(EDIT)
     Number,   // 글꼴 크기(EDIT ES_NUMBER)
     CheckBox, // 불리언(라벨 일체형 — 원본 스크린샷)
@@ -124,7 +127,9 @@ const TREE: &[(&str, &str, i32)] = &[
     ("appearance", "pref.cat.appearance", 1),
     ("fonts", "pref.cat.fonts", 1),
     ("lang", "pref.cat.lang", 1),
-    ("list", "pref.cat.list", 0),
+    ("filelist", "pref.cat.list", 0),
+    ("list", "pref.cat.listGeneral", 1),
+    ("typeahead", "pref.cat.typeahead", 1),
     ("tabs", "pref.cat.tabs", 0),
     ("panel", "pref.grp.panel", 0),
     ("dock", "pref.cat.dock", 1),
@@ -243,19 +248,6 @@ const TA_SCOPE_OPTS: &[(&str, &str)] = &[
     ("visible", "pref.taScope.visible"),
 ];
 
-/// 타입어헤드 HUD 배지 위치(3×3 — 원본 §7-A 피커의 라디오 대응).
-const TA_POS_OPTS: &[(&str, &str)] = &[
-    ("0", "pref.taPos.tl"),
-    ("1", "pref.taPos.tc"),
-    ("2", "pref.taPos.tr"),
-    ("3", "pref.taPos.ml"),
-    ("4", "pref.taPos.mc"),
-    ("5", "pref.taPos.mr"),
-    ("6", "pref.taPos.bl"),
-    ("7", "pref.taPos.bc"),
-    ("8", "pref.taPos.br"),
-];
-
 /// 탭 더블클릭 동작(사용자 요청 07-15 — 기본 닫기·옵션 추가 예정).
 const TAB_DBL_OPTS: &[(&str, &str)] = &[
     ("close", "pref.tabDbl.close"),
@@ -342,45 +334,45 @@ fn registry() -> Vec<Entry> {
             field: F_TAB_DBL,
         },
         Entry {
-            cat: "list",
+            cat: "typeahead",
             label_key: "pref.taScope",
             desc_key: "pref.taScope.desc",
             kind: Kind::Radio(TA_SCOPE_OPTS),
             field: F_TA_SCOPE,
         },
         Entry {
-            cat: "list",
+            cat: "typeahead",
             label_key: "pref.taReset",
             desc_key: "pref.taReset.desc",
             kind: Kind::Number,
             field: F_TA_RESET,
         },
         Entry {
-            cat: "list",
+            cat: "typeahead",
             label_key: "pref.taSpecial",
             desc_key: "pref.taSpecial.desc",
             kind: Kind::CheckBox,
             field: F_TA_SPECIAL,
         },
         Entry {
-            cat: "list",
+            cat: "typeahead",
             label_key: "pref.taSpace",
             desc_key: "pref.taSpace.desc",
             kind: Kind::CheckBox,
             field: F_TA_SPACE,
         },
         Entry {
-            cat: "list",
+            cat: "typeahead",
             label_key: "pref.taBackspace",
             desc_key: "pref.taBackspace.desc",
             kind: Kind::CheckBox,
             field: F_TA_BS,
         },
         Entry {
-            cat: "list",
+            cat: "typeahead",
             label_key: "pref.taPos",
             desc_key: "pref.taPos.desc",
-            kind: Kind::Radio(TA_POS_OPTS),
+            kind: Kind::PosGrid,
             field: F_TA_POS,
         },
         Entry {
@@ -456,6 +448,10 @@ struct PrefState {
     /// 현재 클라이언트 크기(리사이즈 추종 레이아웃 — X-8).
     cw: i32,
     ch: i32,
+    /// 본문 세로 스크롤(QA 07-15 — 항목이 창보다 길 때 휠 스크롤). 재구성 시 오프셋.
+    scroll_y: i32,
+    /// 마지막 재구성의 콘텐츠 전체 높이(스크롤 상한 계산).
+    content_h: i32,
     /// 동적 생성한 우측 컨트롤들(카테고리/검색 변경 시 파괴·재생성).
     rows: Vec<HWND>,
     /// 각 편집 컨트롤 (field, hwnd) — 값 수거용(체크박스·EDIT).
@@ -476,6 +472,8 @@ const ID_FIELD_BASE: u32 = 1200; // +field(체크/EDIT 명령)
 const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
 /// 그룹 페이지의 하위 메뉴 링크(드릴다운 개편 07-15) — +TREE 인덱스.
 const ID_NAV_BASE: u32 = 1600;
+/// 타입어헤드 위치 3×3 피커 셀(오너드로 — QA 07-15) — +0..9.
+const ID_POS_BASE: u32 = 1900;
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("NexaPrefs");
@@ -623,13 +621,13 @@ impl PrefState {
             &title,
             0,
             x0,
-            PAD,
+            PAD - self.scroll_y,
             pane_w,
             28,
             0,
         );
         self.rows.push(th);
-        let mut y = PAD + 40;
+        let mut y = PAD + 40 - self.scroll_y;
         let mut opt_seq = 0u32;
         if is_group {
             // 그룹 페이지 = 하위 메뉴 링크(클릭 = 그 메뉴로 이동 — SS_NOTIFY).
@@ -686,6 +684,40 @@ impl PrefState {
                 // 수정됨 표시(X-10 ④) — 기본값과 다른 항목 좌측 세로 accent 바
                 let y0 = y;
                 match e.kind {
+                    Kind::PosGrid => {
+                        // 3×3 이미지 피커(원본 §7-A — QA 07-15 라디오 9종 대체)
+                        let cap = mk(
+                            self.hwnd,
+                            self.font,
+                            w!("STATIC"),
+                            &label,
+                            0,
+                            x0,
+                            y,
+                            pane_w,
+                            20,
+                            0,
+                        );
+                        self.rows.push(cap);
+                        y += 24;
+                        for gi in 0..9u32 {
+                            let (col, row_i) = ((gi % 3) as i32, (gi / 3) as i32);
+                            let b = mk(
+                                self.hwnd,
+                                self.font,
+                                w!("BUTTON"),
+                                "",
+                                WS_TABSTOP.0 | BS_OWNERDRAW as u32,
+                                x0 + col * 30,
+                                y + row_i * 30,
+                                26,
+                                26,
+                                ID_POS_BASE + gi,
+                            );
+                            self.rows.push(b);
+                        }
+                        y += 3 * 30 + 6;
+                    }
                     Kind::CheckBox => {
                         // 라벨 일체형 체크박스(원본 스크린샷) — 클릭 즉시 적용
                         let b = mk(
@@ -788,6 +820,7 @@ impl PrefState {
                             F_TERM_FONT => self.values.term_font.clone(),
                             F_TERM_SIZE => self.values.term_font_size.to_string(),
                             F_TERM_COLS => self.values.term_cols.to_string(),
+                            F_TA_RESET => self.values.typeahead_reset_ms.to_string(),
                             F_DLG_FONT => self.values.dlg_font.clone(),
                             F_DLG_SIZE => self.values.dlg_font_size.to_string(),
                             _ => String::new(),
@@ -862,6 +895,7 @@ impl PrefState {
                 }
             }
         }
+        self.content_h = y + self.scroll_y + PAD; // 스크롤 상한 계산용(QA 07-15)
         let _ = InvalidateRect(Some(self.hwnd), None, true);
     }
 
@@ -1043,6 +1077,41 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     SelectObject(dis.hDC, old);
 }
 
+/// 3×3 위치 피커 셀 오너드로(QA 07-15) — 선택 = accent 테두리+점, 비선택 = 회색.
+unsafe fn draw_pos_cell(st: &PrefState, dis: &DRAWITEMSTRUCT) {
+    let idx = (dis.CtlID - ID_POS_BASE) as i32;
+    let selected = st.values.typeahead_pos == idx;
+    FillRect(dis.hDC, &dis.rcItem, GetSysColorBrush(COLOR_WINDOW));
+    let border = CreateSolidBrush(COLORREF(if selected { 0x00D4_7800 } else { 0x00C8_C8C8 }));
+    let r = dis.rcItem;
+    let t = if selected { 2 } else { 1 };
+    // 테두리(두께 t)
+    for (x, y, w, h) in [
+        (r.left, r.top, r.right - r.left, t),
+        (r.left, r.bottom - t, r.right - r.left, t),
+        (r.left, r.top, t, r.bottom - r.top),
+        (r.right - t, r.top, t, r.bottom - r.top),
+    ] {
+        let rc = RECT {
+            left: x,
+            top: y,
+            right: x + w,
+            bottom: y + h,
+        };
+        FillRect(dis.hDC, &rc, border);
+    }
+    // 중앙 점(선택 = accent·비선택 = 회색)
+    let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    let dot = RECT {
+        left: cx - 3,
+        top: cy - 3,
+        right: cx + 3,
+        bottom: cy + 3,
+    };
+    FillRect(dis.hDC, &dot, border);
+    let _ = DeleteObject(border.into());
+}
+
 unsafe extern "system" fn prefs_proc(
     hwnd: HWND,
     msg: u32,
@@ -1068,6 +1137,7 @@ unsafe extern "system" fn prefs_proc(
                     } else {
                         String::new()
                     };
+                    s.scroll_y = 0;
                     s.repopulate_tree();
                     s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
@@ -1087,6 +1157,7 @@ unsafe extern "system" fn prefs_proc(
                     };
                     s.harvest(); // 이동 전 현재 편집 값 보존
                     s.category = TREE[node].0.to_string();
+                    s.scroll_y = 0;
                     // 검색어는 **메뉴 탐색 중 유지**(사용자 요청 07-15 — 명시적 삭제만
                     // 지움). 펼침 토글은 일반 모드만(검색 중 = 필터가 하위 강제 표시).
                     if s.query.is_empty() && tree_has_children(node) {
@@ -1103,6 +1174,7 @@ unsafe extern "system" fn prefs_proc(
                     let ti = (i - ID_NAV_BASE) as usize;
                     s.harvest();
                     s.category = TREE[ti].0.to_string();
+                    s.scroll_y = 0;
                     if s.query.is_empty() {
                         // 조상 펼침(선택 노드 가시화)
                         let mut d = TREE[ti].2;
@@ -1115,6 +1187,13 @@ unsafe extern "system" fn prefs_proc(
                     }
                     s.repopulate_tree();
                     s.rebuild();
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                i if (ID_POS_BASE..ID_POS_BASE + 9).contains(&i) && notify == 0 => {
+                    // 3×3 피커 클릭(QA 07-15) — 값 반영 + 즉시 적용 + 셀 재도장
+                    (*st).values.typeahead_pos = (i - ID_POS_BASE) as i32;
+                    (*st).harvest();
+                    (*st).apply_now();
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 i if i >= ID_OPT_BASE => {
@@ -1152,7 +1231,24 @@ unsafe extern "system" fn prefs_proc(
                 draw_tree_item(&*st, dis);
                 return LRESULT(1);
             }
+            if (ID_POS_BASE..ID_POS_BASE + 9).contains(&dis.CtlID) {
+                draw_pos_cell(&*st, dis);
+                return LRESULT(1);
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        // 본문 휠 스크롤(QA 07-15 — 항목이 창보다 길 때)
+        0x020A /* WM_MOUSEWHEEL */ => {
+            let delta = (wparam.0 >> 16) as i16 as i32;
+            let s = &mut *st;
+            let max = (s.content_h - s.ch).max(0);
+            let ny = (s.scroll_y - delta / 120 * 48).clamp(0, max);
+            if ny != s.scroll_y {
+                s.scroll_y = ny;
+                s.harvest();
+                s.rebuild();
+            }
+            LRESULT(0)
         }
         // 라이트 고정 네이티브 창(원본 스크린샷) — 라벨·체크박스 배경을 창 배경과 일치.
         // ID_MODBAR = accent 채움(수정됨 바 — X-10 ④) · ID_DESC = 회색 텍스트(설명 — ③).
@@ -1322,6 +1418,8 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         divider: HWND::default(),
         cw: CLIENT_W,
         ch: CLIENT_H,
+        scroll_y: 0,
+        content_h: 0,
         rows: Vec::new(),
         editors: Vec::new(),
         radios: Vec::new(),

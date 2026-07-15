@@ -4253,8 +4253,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     } else if GetKeyState(VK_CONTROL.0 as i32) >= 0
                         && (c == '\u{8}'
                             || (!c.is_control()
-                                // 스페이스는 선택 토글 키 — 단 이름변경 중엔 버퍼로(M3-2)
-                                && (c != ' ' || st.active_panel().rows().is_renaming())))
+                                // 스페이스 = 선택 토글 키. 단 이름변경 중이거나
+                                // **타입어헤드 접두사 입력 중**(공백 포함 옵션 — QA 07-15)엔 버퍼로
+                                && (c != ' '
+                                    || st.active_panel().rows().is_renaming()
+                                    || !st.active_panel().rows().typeahead_text().is_empty())))
                     {
                         st.active_panel().on_event(
                             &InputEvent::Char {
