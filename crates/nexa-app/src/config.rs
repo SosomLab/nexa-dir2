@@ -54,6 +54,11 @@ pub struct Settings {
     pub term_font: String,
     /// 터미널 글꼴 크기(DIP, 8~32 — 원본 ConsoleSize 대응).
     pub term_font_size: i32,
+    /// 터미널 줄 바꿈(X-3 ① — false=고정 열+가로 스크롤. 기본 true=현행 유지 —
+    /// 원본 NoWrap 기본 true와 다름: dir2는 뷰 폭 래핑이 기존 동작이라 보존).
+    pub term_wrap: bool,
+    /// 터미널 고정 열 수(X-3 ② — 80~1000, 원본 MaxColumns 240. `term_wrap=false`일 때만).
+    pub term_cols: i32,
     /// 대화상자(확인창·진행 창) 글꼴/크기(pt — QA 07-14 "대화창용 폰트 설정").
     pub dlg_font: String,
     pub dlg_font_size: i32,
@@ -82,6 +87,8 @@ impl Default for Settings {
             dock_split: 0.5,
             term_font: "Consolas".into(),
             term_font_size: 12,
+            term_wrap: true,
+            term_cols: 240,
             dlg_font: "Segoe UI".into(),
             dlg_font_size: 9,
             sort_folders_first: true,
@@ -151,6 +158,11 @@ impl Settings {
         );
         // 항목은 시드 주입 후 항상 Some — count를 명시해 "부재(첫 실행)"와 "비움"을 구분
         out.push_str(&format!(
+            "term_wrap={}\nterm_cols={}\n",
+            u8::from(self.term_wrap),
+            self.term_cols
+        ));
+        out.push_str(&format!(
             "sort_folders_first={}\n",
             u8::from(self.sort_folders_first)
         ));
@@ -215,6 +227,12 @@ impl Settings {
                         if f.is_finite() {
                             s.split = f.clamp(0.1, 0.9);
                         }
+                    }
+                }
+                "term_wrap" => s.term_wrap = v != "0",
+                "term_cols" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.term_cols = n.clamp(80, 1000);
                     }
                 }
                 "sort_folders_first" => s.sort_folders_first = v != "0",
@@ -396,6 +414,8 @@ mod tests {
             dock_split: 0.61,
             term_font: "D2Coding, JetBrainsMono Nerd Font".into(),
             term_font_size: 14,
+            term_wrap: false,
+            term_cols: 132,
             dlg_font: "맑은 고딕".into(),
             dlg_font_size: 10,
             sort_folders_first: false,
@@ -430,6 +450,13 @@ mod tests {
             "터미널 글꼴 체인 왕복(QA 07-14)"
         );
         assert_eq!(parsed.term_font_size, 14);
+        assert!(!parsed.term_wrap, "터미널 줄 바꿈 왕복(X-3)");
+        assert_eq!(parsed.term_cols, 132, "터미널 고정 열 왕복(X-3)");
+        assert_eq!(
+            Settings::parse("term_cols=20").term_cols,
+            80,
+            "열 하한 클램프"
+        );
         assert_eq!(parsed.dlg_font, "맑은 고딕", "대화상자 글꼴 왕복");
         assert_eq!(parsed.dlg_font_size, 10);
         assert!((parsed.split - 0.62).abs() < 0.001);
