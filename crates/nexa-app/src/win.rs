@@ -891,6 +891,14 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// lparam → 클라이언트 좌표 (x, y) — WM_MOUSE* 공용(부호 확장 포함, X-16 중복 제거).
+fn mouse_xy(lparam: LPARAM) -> (i32, i32) {
+    (
+        (lparam.0 & 0xFFFF) as i16 as i32,
+        ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+    )
+}
+
 unsafe fn state_of<'a>(hwnd: HWND) -> Option<&'a mut State> {
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
     ptr.as_mut()
@@ -2863,28 +2871,18 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     if v.show_hidden != st.show_hidden || v.show_dotfiles != st.show_dotfiles {
         st.show_hidden = v.show_hidden;
         st.show_dotfiles = v.show_dotfiles;
-        st.menubar.set_checked(
-            CMD_TOGGLE_HIDDEN,
-            st.show_hidden,
-            &mut Invalidations::default(),
-        );
-        st.menubar.set_checked(
-            CMD_TOGGLE_DOTFILES,
-            st.show_dotfiles,
-            &mut Invalidations::default(),
-        );
-        st.toolbar.set_checked(
-            CMD_TOGGLE_HIDDEN,
-            st.show_hidden,
-            &mut Invalidations::default(),
-        );
-        st.toolbar.set_checked(
-            CMD_TOGGLE_DOTFILES,
-            st.show_dotfiles,
-            &mut Invalidations::default(),
-        );
-        let ctx = st.nav_ctx();
+        // 무효화 수집기 공유(X-16) — 버려지는 Invalidations 4건은 체크 표시의
+        // 재도장 힌트를 유실시키고 말미 전창 무효화에 기대던 취약 지점
         let mut inv = Invalidations::default();
+        st.menubar
+            .set_checked(CMD_TOGGLE_HIDDEN, st.show_hidden, &mut inv);
+        st.menubar
+            .set_checked(CMD_TOGGLE_DOTFILES, st.show_dotfiles, &mut inv);
+        st.toolbar
+            .set_checked(CMD_TOGGLE_HIDDEN, st.show_hidden, &mut inv);
+        st.toolbar
+            .set_checked(CMD_TOGGLE_DOTFILES, st.show_dotfiles, &mut inv);
+        let ctx = st.nav_ctx();
         st.panels[0].reopen_filtered(ctx, &mut inv);
         st.panels[1].reopen_filtered(ctx, &mut inv);
         flush_invalidations(hwnd, &mut inv);
@@ -3350,8 +3348,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_LBUTTONDOWN => {
             if let Some(st) = state_of(hwnd) {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (x, y) = mouse_xy(lparam);
                 let shift = wparam.0 & MK_SHIFT != 0;
                 let ctrl = wparam.0 & MK_CONTROL != 0;
                 let mut inv = Invalidations::default();
@@ -3530,8 +3527,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_RBUTTONDOWN => {
             let mut tab_menu: Option<(usize, usize)> = None;
             if let Some(st) = state_of(hwnd) {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (x, y) = mouse_xy(lparam);
                 // TUI 마우스 모드(X-5) — 터미널 그리드 우클릭은 앱에 전달(Shift=로컬)
                 if GetKeyState(VK_SHIFT.0 as i32) >= 0 {
                     if let Some(ti) = st.term_focus {
@@ -3564,8 +3560,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_RBUTTONUP => {
             // 행 우클릭 = 셸 컨텍스트 메뉴 · 빈 본문 = 폴더 배경 메뉴(M3-4, ADR-0003).
             // 선택 규약(단독 선택/유지/해제)은 RBUTTONDOWN에서 반영됨.
-            let x = (lparam.0 & 0xFFFF) as i16 as i32;
-            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let (x, y) = mouse_xy(lparam);
             if let Some(st) = state_of(hwnd) {
                 // TUI 마우스 릴리스(X-5 — 우클릭) — 컨텍스트 메뉴 억제
                 if let Some((ti, 2)) = st.term_mouse_btn {
@@ -3605,8 +3600,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // OLE 드래그 발신(M3-5 S4): 행 누름 후 좌버튼 유지 + 임계 이동 → 모달 드래그.
             // 모달 루프 동안 wndproc 재진입 — State 참조를 끊고 시작(shellmenu 동일 규약).
             {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (x, y) = mouse_xy(lparam);
                 // TUI 마우스 모션 전달(X-5 — 1002/1003·버튼 유지 중)
                 if let Some(st) = state_of(hwnd) {
                     if let Some((ti, b)) = st.term_mouse_btn {
@@ -3673,8 +3667,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             }
             if let Some(st) = state_of(hwnd) {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (x, y) = mouse_xy(lparam);
                 let mut inv = Invalidations::default();
                 if st.dock_drag.is_some() {
                     // 도크 밴드 높이 드래그(X-6 — 패널 상단~상태바 영역 대비 비율)
@@ -3743,8 +3736,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_LBUTTONUP => {
             if let Some(st) = state_of(hwnd) {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (x, y) = mouse_xy(lparam);
                 st.drag_press = None; // 드래그 후보 해제(임계 미달 클릭)
                 if st.dock_drag.take().is_some() {
                     // 도크 높이 드래그 종료(M4-1 S2) — 강조색 해제 재도장 필수
@@ -3807,8 +3799,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = KillTimer(Some(hwnd), TIMER_RENAME);
             let mut exec: Option<PathBuf> = None;
             if let Some(st) = state_of(hwnd) {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (x, y) = mouse_xy(lparam);
                 if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
                     // 탭 본체 더블클릭 = 설정 동작(사용자 요청 07-15 — 기본 닫기)
