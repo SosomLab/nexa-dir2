@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/m5-ui-polish` | 2026-07-15 | 2026-07-15 (`f73a909`) | 2026-07-15 | 1 | M5-1 보완(사용자 요청 4건) — 런처 exe 아이콘 16×16 정사각(draw_icon 반환값 폴백)·그룹 구분선(`launcherN=-`)·도구 모음 토글 시각(배경 sel_bg+accent)·**일괄 이름변경 순서형 파이프라인**(RenameOp 목록 — 정규식 regex-lite[원장 등재·B2 1.01MB]·구간 이동·확장자 변경·블록 ▲▼✕·프리셋 data\renames\*.cfg). docs/19-parity-gap 신설. 테스트 166 green | [2026-07-15](journal/2026-07-15.md) |
 | `feat/m5-bulk-rename` | 2026-07-15 | 2026-07-15 (`3a5834a`) | 2026-07-15 | 1 | M5-1 일괄 이름변경 α(원본 docs/25 스펙 최초 구현 — 원본도 설계만) — nexa-ops::batch_rename(치환→대소문자→삽입→연번 고정 파이프라인·이름부만·충돌 4종)+bulkrename.rs 다이얼로그(실시간 미리보기 LISTBOX·충돌 ⚠·[적용]=충돌 0)+MoveBatchOp 트랜잭션 undo·Ctrl+Shift+R. 테스트 163 green | [2026-07-15](journal/2026-07-15.md) |
 | `feat/m5-launcher` | 2026-07-15 | 2026-07-15 (`28444ee`) | 2026-07-15 | 1 | M5-1 퀵 런처 바(원본 docs/44 이식) — 도구 모음 아래 외부 프로그램 버튼 바(%path% 치환 ShellExecuteW·실패 상태바 격리)·settings.cfg 영속(launcherN=라벨\|exe\|인자·count로 부재/비움 구분)·VS Code 시드·보기 메뉴 토글·current_settings 헬퍼 | [2026-07-15](journal/2026-07-15.md) |
 | `feat/m5-a11y` | 2026-07-15 | 2026-07-15 (`eba53fc`) | 2026-07-15 | 1 | M5-3 접근성·IME 마감·서명 결정 — UIA SelectionItem 실동작(WM_APP_UIA_SELECT→select_program 범위 방어)·구조 변경 이벤트(ChildrenInvalidated — M2-7 1차 한계 2건 해소)·리네임 인라인 IME 조합 창 배치(rename_edit_info — M3-2 α 해소)·서명=무서명 유지 확정(DR-3 갱신). 테스트 160 green | [2026-07-15](journal/2026-07-15.md) |
