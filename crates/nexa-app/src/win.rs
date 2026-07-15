@@ -4171,7 +4171,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 *unsafe { Box::from_raw(wparam.0 as *mut crate::icons::shell::LoadResult) };
             if let Some(st) = state_of(hwnd) {
                 if st.icons.borrow_mut().on_result(key, raw) {
-                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    // 파일 목록 본문만 무효화(X-16 — TIMER_ICONS와 동일 근거)
+                    let mut inv = Invalidations::default();
+                    inv.push(st.panels[0].rows().bounds());
+                    inv.push(st.panels[1].rows().bounds());
+                    inv.push(st.launcherbar.bounds()); // 런처 버튼도 셸 아이콘 사용(M5-1)
+                    flush_invalidations(hwnd, &mut inv);
                 }
             } else if raw != 0 {
                 unsafe {
@@ -4371,7 +4376,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             } else if wparam.0 == TIMER_ICONS {
                 if let Some(st) = state_of(hwnd) {
                     if st.icons.borrow_mut().tick(hwnd, WM_APP_ICON) {
-                        let _ = InvalidateRect(Some(hwnd), None, false);
+                        // 아이콘은 파일 목록 본문에만 그려짐 — 전체 창 대신 두 패널의
+                        // 목록 rect만 무효화(X-16: 로딩 중 80ms 틱마다 전창 재도장 방지)
+                        let mut inv = Invalidations::default();
+                        inv.push(st.panels[0].rows().bounds());
+                        inv.push(st.panels[1].rows().bounds());
+                        inv.push(st.launcherbar.bounds()); // 런처 버튼도 셸 아이콘 사용
+                        flush_invalidations(hwnd, &mut inv);
                     }
                     if !st.icons.borrow().has_pending() {
                         let _ = KillTimer(Some(hwnd), TIMER_ICONS);
