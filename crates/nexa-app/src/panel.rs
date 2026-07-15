@@ -81,6 +81,9 @@ pub struct Panel {
     sort_case: bool,
     /// 타입어헤드 옵션(07-15): (범위, 리셋 ms, 특수문자, 공백, Backspace, HUD 위치).
     ta_opts: (nexa_tree::FindScope, u64, bool, bool, bool, u8),
+    /// 세션 저장 요청 플래그(사용자 요청 07-15 — 탭/경로 변경 시 표시만, 저장은
+    /// 호스트가 디바운스 flush: 폭주해도 마지막 상태 1회만 기록).
+    session_dirty: bool,
     /// 도크 높이 비율(리스트+도크 영역 대비 — S2 드래그·영속. 전역 공유 값이 양 패널에 적용).
     dock_ratio: f32,
     tabs: Vec<Tab>,
@@ -118,6 +121,7 @@ impl Panel {
                 true,
                 6,
             ),
+            session_dirty: false,
             dock_ratio: 0.3,
             tabs: vec![Tab {
                 rows,
@@ -379,12 +383,14 @@ impl Panel {
         });
         self.active = self.tabs.len() - 1;
         self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 새 탭 유지)
+        self.session_dirty = true;
         self.set_bounds(self.bounds, inv); // 새 탭 리스트 bounds 반영
         self.sync_chrome(inv);
     }
 
     /// 탭 재정렬(드래그 — 편의 UX ②): `from` 탭을 `to` 위치로. 활성 탭 추종.
     pub fn move_tab(&mut self, from: usize, to: usize, inv: &mut Invalidations) {
+        self.session_dirty = true;
         if from >= self.tabs.len() || to >= self.tabs.len() || from == to {
             return;
         }
@@ -436,6 +442,7 @@ impl Panel {
 
     /// 탭 잠금 토글(우클릭 메뉴 — 닫기 제외, 원본 TAB-MENU).
     pub fn toggle_tab_lock(&mut self, i: usize, inv: &mut Invalidations) {
+        self.session_dirty = true;
         if let Some(t) = self.tabs.get_mut(i) {
             t.locked = !t.locked;
             self.sync_chrome(inv);
@@ -448,6 +455,7 @@ impl Panel {
 
     /// 탭 고정 토글(사용자 요청 07-15) — 고정 시 핀 그룹 끝으로, 해제 시 그룹 밖으로 이동.
     pub fn toggle_tab_pin(&mut self, i: usize, inv: &mut Invalidations) {
+        self.session_dirty = true;
         let Some(t) = self.tabs.get_mut(i) else {
             return;
         };
@@ -504,6 +512,7 @@ impl Panel {
 
     /// 탭 닫기(Ctrl+W·×) — 패널은 항상 ≥1 탭·잠긴 탭은 닫지 않음(원본 TAB-MENU).
     pub fn close_tab(&mut self, i: usize, inv: &mut Invalidations) {
+        self.session_dirty = true;
         if self.tabs.len() <= 1 || i >= self.tabs.len() || self.tabs[i].locked {
             return;
         }
@@ -516,6 +525,7 @@ impl Panel {
     }
 
     pub fn switch_tab(&mut self, i: usize, inv: &mut Invalidations) {
+        self.session_dirty = true;
         if i < self.tabs.len() && i != self.active {
             self.active = i;
             self.sync_chrome(inv);
@@ -573,6 +583,7 @@ impl Panel {
         self.sync_expanded();
         self.tabs[self.active].rows.replace_source(src, inv);
         self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 탐색/재로드 유지)
+        self.session_dirty = true; // 경로/구성 변경 — 디바운스 세션 저장(07-15)
         let entries: Vec<PathBuf> = self.tabs[self.active].expanded.values().cloned().collect();
         let tree = self.rows_mut().source_mut().tree_mut();
         for p in &entries {
@@ -673,6 +684,11 @@ impl Panel {
             t.rows.source_mut().set_case_sensitive(on);
             inv.push(t.rows.bounds());
         }
+    }
+
+    /// 세션 저장 요청 수거(1회성 — 호스트 update_status가 폴링해 디바운스 타이머 무장).
+    pub fn take_session_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.session_dirty)
     }
 
     /// 새로 만든 소스에 보관된 정렬·타입어헤드 옵션 적용(탐색·재로드·새 탭 공통 — 07-15).
@@ -934,6 +950,24 @@ mod tests {
         assert_eq!(first(&p), "Abc.txt", "재로드 후 유지");
         p.new_tab(ctx(), &mut inv);
         assert_eq!(first(&p), "Abc.txt", "새 탭에도 유지");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn session_dirty_flag_on_tab_ops() {
+        // 07-15 세션 자동 저장: 탭 변경 = 플래그 1회성(디바운스 flush는 호스트 몫)
+        let base = fixture("dirty");
+        let (mut p, mut inv) = panel(&base);
+        assert!(!p.take_session_dirty(), "초기 = 깨끗");
+        p.new_tab(ctx(), &mut inv);
+        assert!(p.take_session_dirty(), "새 탭 = 더티");
+        assert!(!p.take_session_dirty(), "수거 후 = 리셋(1회성)");
+        p.switch_tab(0, &mut inv);
+        assert!(p.take_session_dirty(), "탭 전환 = 더티");
+        p.toggle_tab_pin(0, &mut inv);
+        assert!(p.take_session_dirty(), "고정 = 더티");
+        p.close_tab(1, &mut inv);
+        assert!(p.take_session_dirty(), "닫기 = 더티");
         fs::remove_dir_all(&base).unwrap();
     }
 

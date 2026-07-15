@@ -256,3 +256,4 @@ pref.taBackspace = Backspace로 마지막 글자 지우기
 pref.taBackspace.desc = 끄면 타입어헤드 중 Backspace를 무시합니다.
 pref.cat.listGeneral = 보기·정렬
 pref.cat.typeahead = 타입어헤드
+ops.close = 닫기

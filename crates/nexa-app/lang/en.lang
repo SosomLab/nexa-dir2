@@ -257,3 +257,4 @@ pref.taBackspace = Backspace erases last character
 pref.taBackspace.desc = Off = Backspace is ignored during type-ahead.
 pref.cat.listGeneral = View & Sort
 pref.cat.typeahead = Type-ahead
+ops.close = Close
