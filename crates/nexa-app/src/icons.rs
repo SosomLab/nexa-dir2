@@ -286,9 +286,14 @@ pub mod shell {
     }
 
     /// 키 종류별 셸 아이콘 로드. 실패(접근 불가 등) 시 `None` — 글리프 없이 공백 유지(오류 격리).
+    /// `L|` 접두사 = **라지 아이콘**(32px — 타일 보기 07-16). 캐시 키가 달라 소/라지 공존.
     unsafe fn load_icon(key: &str, hint: &str) -> Option<HICON> {
         let mut info = SHFILEINFOW::default();
-        let flags = SHGFI_ICON | SHGFI_SMALLICON;
+        let (key, size_flag) = match key.strip_prefix("L|") {
+            Some(k) => (k, windows::Win32::UI::Shell::SHGFI_LARGEICON),
+            None => (key, SHGFI_SMALLICON),
+        };
+        let flags = SHGFI_ICON | size_flag;
         let ok = if key == "dir" {
             SHGetFileInfoW(
                 w!("folder"),

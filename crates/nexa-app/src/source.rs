@@ -13,6 +13,9 @@ pub const COL_EXT: u32 = 1;
 pub const COL_SIZE: u32 = 2;
 pub const COL_MODIFIED: u32 = 3;
 pub const COL_KIND: u32 = 4;
+/// 내 PC 드라이브 전용 컬럼(X-17 — 탐색기 '전체 크기'/'사용 가능한 공간').
+pub const COL_TOTAL: u32 = 5;
+pub const COL_FREE: u32 = 6;
 
 /// 트리 한 그루를 행 스트림으로 노출. 클릭 토글 = 펼침/접힘(캐럿·선택은 M1-5).
 pub struct TreeSource {
@@ -27,11 +30,38 @@ pub struct TreeSource {
     find_scope: FindScope,
     /// 마지막 정렬 키(폴더 우선 토글 시 재적용용).
     sort_keys: Vec<(SortKey, bool)>,
+    /// 드라이브 용량 (전체, 여유) — 가상 루트(내 PC)일 때만 채움(X-17 타일/컬럼).
+    /// 행 이름(`C:\`) → 값. 소스 생성 시 1회 조회(재로드 = 새 소스 = 갱신).
+    drive_space: std::collections::HashMap<String, (u64, u64)>,
+}
+
+/// 드라이브 용량 조회(Windows — GetDiskFreeSpaceExW). 비Windows/실패 = None.
+#[cfg(windows)]
+fn drive_space_of(root: &str) -> Option<(u64, u64)> {
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let w = HSTRING::from(root);
+    let (mut total, mut free) = (0u64, 0u64);
+    unsafe {
+        GetDiskFreeSpaceExW(
+            windows::core::PCWSTR(w.as_ptr()),
+            None,
+            Some(&mut total),
+            Some(&mut free),
+        )
+        .ok()?;
+    }
+    Some((total, free))
+}
+
+#[cfg(not(windows))]
+fn drive_space_of(_root: &str) -> Option<(u64, u64)> {
+    None
 }
 
 impl TreeSource {
     pub fn new(tree: Tree, tz_offset_min: i32) -> Self {
-        TreeSource {
+        let mut src = TreeSource {
             tree,
             tz_offset_min,
             folders_first: true,
@@ -39,7 +69,19 @@ impl TreeSource {
             find_scope: FindScope::VisibleStream,
             // Tree 기본(name_asc)과 일치 — 옵션 토글 시 빈 키로 열거 순서 퇴행 방지(07-15)
             sort_keys: vec![(SortKey::Name, false)],
+            drive_space: std::collections::HashMap::new(),
+        };
+        // 내 PC(X-17): 드라이브 용량 1회 조회(타일 용량 바·전체/여유 컬럼)
+        if nexa_vfs::is_virtual_root(src.tree.root_path()) {
+            for i in 0..src.tree.visible_len() {
+                if let Some(r) = src.tree.row_ref(i) {
+                    if let Some(sp) = drive_space_of(r.name) {
+                        src.drive_space.insert(r.name.to_string(), sp);
+                    }
+                }
+            }
         }
+        src
     }
 
     /// 폴더 우선 그룹핑 토글(G-13) — 현재 정렬 키를 유지한 채 즉시 재정렬.
@@ -133,6 +175,17 @@ impl RowSource for TreeSource {
                 }
             }
             // 0 = 메타 없음(드라이브 등 — X-17) → 1970 표기 대신 빈 셀
+            // 내 PC 드라이브 컬럼(X-17) — 용량 미조회(비드라이브 루트 등)면 빈 셀
+            COL_TOTAL => self
+                .drive_space
+                .get(r.name)
+                .map(|(t, _)| human_size(*t))
+                .unwrap_or_default(),
+            COL_FREE => self
+                .drive_space
+                .get(r.name)
+                .map(|(_, f)| human_size(*f))
+                .unwrap_or_default(),
             COL_MODIFIED if r.modified_unix_ms == 0 => String::new(),
             COL_MODIFIED => fmt_datetime(r.modified_unix_ms, self.tz_offset_min),
             // 페인트 시점 tr() 조회 — 언어 전환 시 재그리기만으로 반영(M2-6, 원본 kind.* 키)
@@ -215,6 +268,26 @@ impl RowSource for TreeSource {
     fn find_prefix(&self, caret: Option<usize>, prefix: &str) -> Option<usize> {
         // 범위 = 가시 스트림 위치상대 + wrap(C, 기본 — docs/32 §5). A/B 설정 노출은 M2.
         self.tree.find_prefix(caret, prefix, self.find_scope)
+    }
+
+    fn tile_info(&self, index: usize) -> (String, Option<f32>) {
+        // 타일 보조 줄(07-16): 드라이브 = "X 중 Y 사용 가능"+사용량 바, 그 외 = 종류
+        let Some(r) = self.tree.row_ref(index) else {
+            return (String::new(), None);
+        };
+        if let Some(&(total, free)) = self.drive_space.get(r.name) {
+            let used = total.saturating_sub(free);
+            let frac = if total > 0 {
+                used as f32 / total as f32
+            } else {
+                0.0
+            };
+            return (
+                trf("drive.freeOf", &[&human_size(total), &human_size(free)]),
+                Some(frac),
+            );
+        }
+        (self.cell(index, COL_KIND), None)
     }
 
     fn icon(&self, index: usize) -> Option<(String, String)> {

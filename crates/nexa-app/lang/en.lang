@@ -18,6 +18,9 @@ menu.edit = Edit
 menu.edit.undo = Undo
 menu.edit.redo = Redo
 menu.view = View
+menu.view.modeTree = Tree folder view
+menu.view.modeFlat = Normal folder view
+menu.view.modeTiles = Tiles
 menu.view.hidden = Show Hidden Files
 menu.view.dot = Show Dot Files
 menu.view.dock = Bottom Panel
@@ -261,3 +264,6 @@ pref.cat.typeahead = Type-ahead
 ops.close = Close
 # X-17 virtual top-level
 nav.mypc = This PC
+col.total = Total size
+col.free = Free space
+drive.freeOf = {1} free of {0}

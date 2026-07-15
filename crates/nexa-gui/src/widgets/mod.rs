@@ -11,5 +11,5 @@ pub use chrome::{StatusBar, ToolButton, Toolbar};
 pub use dock::InfoDock;
 pub use menubar::{Menu, MenuBar, MenuItem};
 pub use pathbar::{split_path, PathBar, Segment};
-pub use rows::{Marker, RowItem, RowSource, ScrollAlign, SelectOp, VirtualRows};
+pub use rows::{Marker, RowItem, RowSource, ScrollAlign, SelectOp, ViewMode, VirtualRows};
 pub use tabbar::{TabAction, TabBar};

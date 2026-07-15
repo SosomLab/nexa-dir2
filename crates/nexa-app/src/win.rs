@@ -117,6 +117,10 @@ const CMD_TOGGLE_LAUNCHER: u32 = 9;
 const CMD_TOGGLE_HIDDEN: u32 = 10;
 const CMD_TOGGLE_DOTFILES: u32 = 11;
 const CMD_REFRESH: u32 = 12;
+/// 보기 모드 라디오(사용자 요청 07-16 — 트리 폴더/일반 폴더/타일).
+const CMD_VIEW_TREE: u32 = 13;
+const CMD_VIEW_FLAT: u32 = 14;
+const CMD_VIEW_TILES: u32 = 15;
 const CMD_NAV_BACK: u32 = 20;
 const CMD_NAV_FORWARD: u32 = 21;
 const CMD_NAV_UP: u32 = 22;
@@ -216,6 +220,7 @@ impl ThemeMode {
 
 /// 메뉴 정의(파일·보기 — 도구/도움말은 후속 M5). 라벨 = i18n(언어 전환 시 재호출·set_menus).
 /// `langs` = 발견된 언어 (code, 표기) — 라디오는 시스템 + 각 언어(원본 docs/42 §4-3 동적 목록).
+#[allow(clippy::too_many_arguments)] // 전역 보기 상태 전달(구조체화는 후속)
 fn build_menus(
     show_hidden: bool,
     show_dotfiles: bool,
@@ -224,8 +229,14 @@ fn build_menus(
     mode: ThemeMode,
     lang_setting: &str,
     langs: &[(String, String)],
+    view_mode: &str,
 ) -> Vec<Menu> {
     let mut view_items = vec![
+        // 보기 모드 라디오(07-16 — 원본 FR-A4 1차: 계층/일반/타일)
+        MenuItem::new(CMD_VIEW_TREE, tr("menu.view.modeTree"), "").checked(view_mode == "tree"),
+        MenuItem::new(CMD_VIEW_FLAT, tr("menu.view.modeFlat"), "").checked(view_mode == "flat"),
+        MenuItem::new(CMD_VIEW_TILES, tr("menu.view.modeTiles"), "").checked(view_mode == "tiles"),
+        MenuItem::separator(),
         MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
         MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
         MenuItem::new(CMD_TOGGLE_DOCK, tr("menu.view.dock"), "Ctrl+`").checked(dock),
@@ -354,6 +365,8 @@ struct State {
     launcherbar: Toolbar,
     launcher_visible: bool,
     launcher_items: Vec<crate::config::LauncherItem>,
+    /// 보기 모드 "tree"|"flat"|"tiles"(사용자 요청 07-16 — 영속).
+    view_mode: String,
     statusbar: StatusBar,
     /// 듀얼 패널(0=좌 주, 1=우 — docs/20 §2). 우 패널 숨김 토글은 후속.
     panels: [Panel; 2],
@@ -718,6 +731,12 @@ pub fn run() -> Result<()> {
         let align = align_of(&settings.nav_up_align);
         left.set_nav_up_align(align);
         right.set_nav_up_align(align);
+        // 보기 모드 복원(07-16 — 기본 tree가 아니면 전 탭 적용)
+        if settings.view_mode != "tree" {
+            let mode = mode_of(&settings.view_mode);
+            left.set_view_mode(mode, &mut inv);
+            right.set_view_mode(mode, &mut inv);
+        }
         // 타입어헤드 옵션(07-15) — 항상 적용(리셋 ms 등 기본값 아님 가능)
         let scope = scope_of(&settings.typeahead_scope);
         for p in [&mut left, &mut right] {
@@ -753,6 +772,7 @@ pub fn run() -> Result<()> {
                 theme_mode,
                 &settings.lang,
                 &langs,
+                &settings.view_mode,
             ),
             m.row_h,
             m.pad_x,
@@ -765,6 +785,7 @@ pub fn run() -> Result<()> {
         launcherbar: Toolbar::new(build_launcherbar(&launcher_items), m.row_h, m.pad_x),
         launcher_visible: settings.launcher,
         launcher_items,
+        view_mode: settings.view_mode.clone(),
         statusbar: StatusBar::new(m.row_h, m.pad_x),
         panels: [left, right],
         active: active_panel,
@@ -2469,6 +2490,33 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
         }
+        CMD_VIEW_TREE | CMD_VIEW_FLAT | CMD_VIEW_TILES => {
+            // 보기 모드 라디오(07-16) — 양 패널 전 탭 즉시 적용 + 메뉴 동기 + 영속
+            let mode_str = match id {
+                CMD_VIEW_FLAT => "flat",
+                CMD_VIEW_TILES => "tiles",
+                _ => "tree",
+            };
+            if st.view_mode != mode_str {
+                st.view_mode = mode_str.into();
+                let mode = mode_of(mode_str);
+                let mut inv = Invalidations::default();
+                st.panels[0].set_view_mode(mode, &mut inv);
+                st.panels[1].set_view_mode(mode, &mut inv);
+                for (c, m2) in [
+                    (CMD_VIEW_TREE, "tree"),
+                    (CMD_VIEW_FLAT, "flat"),
+                    (CMD_VIEW_TILES, "tiles"),
+                ] {
+                    st.menubar.set_checked(c, m2 == mode_str, &mut inv);
+                }
+                let settings = current_settings(st);
+                let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+                flush_invalidations(hwnd, &mut inv);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                update_status(hwnd, st);
+            }
+        }
         CMD_TOGGLE_DOCK => {
             // 하단 도크 토글(M4-1, Ctrl+` — 원본 대원칙: 듀얼=좌↔좌·우↔우 동시)
             let on = !st.panels[0].dock_visible();
@@ -2572,6 +2620,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             st.theme_mode,
             &st.lang_setting,
             &st.langs,
+            &st.view_mode,
         ),
         inv,
     );
@@ -2982,6 +3031,16 @@ fn scope_of(s: &str) -> nexa_tree::FindScope {
     }
 }
 
+/// 설정 문자열 → 보기 모드(미지 값은 트리 — 기존 동작).
+fn mode_of(s: &str) -> nexa_gui::widgets::ViewMode {
+    use nexa_gui::widgets::ViewMode;
+    match s {
+        "flat" => ViewMode::Flat,
+        "tiles" => ViewMode::Tiles,
+        _ => ViewMode::Tree,
+    }
+}
+
 /// 설정 문자열 → 뷰 배치(Alt+↑ 자동 선택 — 미지 값은 중단).
 fn align_of(s: &str) -> nexa_gui::widgets::ScrollAlign {
     use nexa_gui::widgets::ScrollAlign;
@@ -3021,6 +3080,7 @@ fn current_session(st: &mut State) -> Session {
 fn current_settings(st: &State) -> Settings {
     Settings {
         theme: st.theme_mode.as_str().into(),
+        view_mode: st.view_mode.clone(),
         lang: st.lang_setting.clone(),
         show_hidden: st.show_hidden,
         show_dotfiles: st.show_dotfiles,
