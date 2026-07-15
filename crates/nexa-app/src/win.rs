@@ -367,6 +367,8 @@ struct State {
     /// 가시성 필터(전역 ViewOptions — 영속은 M2-5).
     show_hidden: bool,
     show_dotfiles: bool,
+    /// 폴더 우선 정렬(G-13 — 설정 영속·전 탭 전파).
+    sort_folders_first: bool,
     /// 언어 설정값("system"|코드)·발견 목록(메뉴 라디오 CMD_LANG_BASE+idx 매핑) — M2-6.
     lang_setting: String,
     langs: Vec<(String, String)>,
@@ -660,12 +662,23 @@ pub fn run() -> Result<()> {
             right.set_dock_visible(true, &mut inv);
         }
     }
-    // 퀵 런처 항목(M5-1) — 키 부재(첫 실행)면 VS Code 시드(원본 슬라이스 1 동일).
+    // 폴더 우선 정렬(G-13) — 기본(true)이 아니면 기동 시 전 탭 적용
+    if !settings.sort_folders_first {
+        let mut inv = Invalidations::default();
+        left.set_folders_first(false, &mut inv);
+        right.set_folders_first(false, &mut inv);
+        let _ = inv; // 창 생성 전 — 첫 페인트가 대체
+    }
+    // 퀵 런처 항목(M5-1) — 키 부재(첫 실행)면 시드(VS Code│pwsh·cmd — v2).
     // 다음 저장부터 launcher_count로 확정되어 "비움"이 존중된다.
-    let launcher_items = settings
+    // 시드 버전이 낮으면 신규 시드(cmd·pwsh — 사용자 요청 07-15)만 1회 추가.
+    let mut launcher_items = settings
         .launcher_items
         .clone()
         .unwrap_or_else(crate::launcher::seed);
+    if settings.launcher_seed < crate::launcher::SEED_VERSION {
+        crate::launcher::seed_missing(&mut launcher_items);
+    }
     let state = Box::new(State {
         menubar: MenuBar::new(
             build_menus(
@@ -702,6 +715,7 @@ pub fn run() -> Result<()> {
         tz,
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
+        sort_folders_first: settings.sort_folders_first,
         lang_setting: settings.lang,
         langs,
         term_font: settings.term_font,
@@ -1097,7 +1111,10 @@ fn dock_info(p: &Panel) -> Vec<String> {
 }
 
 /// WIC가 인박스로 디코드하는 이미지 확장자(원본 docs/35 이미지 공급자 대응).
-const IMAGE_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "bmp", "gif", "ico", "tif", "tiff"];
+// webp(G-12) = OS WIC 확장 코덱 의존 — 미설치면 디코드 실패로 텍스트/이진 판정 폴백(무해)
+const IMAGE_EXTS: [&str; 9] = [
+    "png", "jpg", "jpeg", "bmp", "gif", "ico", "tif", "tiff", "webp",
+];
 
 /// 단일 선택 파일의 미리보기(M4-2 — 원본 docs/35 텍스트·이미지 공급자 대응).
 /// 반환 (텍스트 라인들, 이미지 경로) — 이미지 확장자면 WIC 렌더(draw_image), 그 외 텍스트
@@ -2627,6 +2644,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 show_hidden: st.show_hidden,
                 show_dotfiles: st.show_dotfiles,
                 dock: st.panels[0].dock_visible(),
+                sort_folders_first: st.sort_folders_first,
             },
             st.dlg_font.clone(),
         )
@@ -2763,6 +2781,14 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         update_dock_info(st, &mut inv);
         flush_invalidations(hwnd, &mut inv);
     }
+    // 폴더 우선 정렬 토글(G-13) — 전 탭 즉시 재정렬
+    if v.sort_folders_first != st.sort_folders_first {
+        st.sort_folders_first = v.sort_folders_first;
+        let mut inv = Invalidations::default();
+        st.panels[0].set_folders_first(v.sort_folders_first, &mut inv);
+        st.panels[1].set_folders_first(v.sort_folders_first, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+    }
     // 즉시 영속(원본 PREF 규율 — 종료 저장과 별개로 설정만 저장)
     let settings = current_settings(st);
     let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
@@ -2779,6 +2805,7 @@ fn current_settings(st: &State) -> Settings {
         show_dotfiles: st.show_dotfiles,
         split: st.split,
         dock: st.panels[0].dock_visible(),
+        sort_folders_first: st.sort_folders_first,
         dock_ratio: st.panels[0].dock_ratio(),
         dock_split: st.dock_split,
         term_font: st.term_font.clone(),
@@ -2787,6 +2814,7 @@ fn current_settings(st: &State) -> Settings {
         dlg_font_size: st.dlg_font.size_pt,
         launcher: st.launcher_visible,
         launcher_items: Some(st.launcher_items.clone()),
+        launcher_seed: crate::launcher::SEED_VERSION,
     }
 }
 

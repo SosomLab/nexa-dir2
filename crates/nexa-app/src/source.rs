@@ -19,6 +19,10 @@ pub struct TreeSource {
     tree: Tree,
     /// 수정한 날짜 표시용 로컬 타임존 오프셋(분, UTC 기준 동쪽 양수).
     tz_offset_min: i32,
+    /// 폴더 우선 그룹핑(G-13 — 설정 `sort_folders_first`, 기본 true=탐색기 규약).
+    folders_first: bool,
+    /// 마지막 정렬 키(폴더 우선 토글 시 재적용용).
+    sort_keys: Vec<(SortKey, bool)>,
 }
 
 impl TreeSource {
@@ -26,6 +30,19 @@ impl TreeSource {
         TreeSource {
             tree,
             tz_offset_min,
+            folders_first: true,
+            sort_keys: Vec::new(),
+        }
+    }
+
+    /// 폴더 우선 그룹핑 토글(G-13) — 현재 정렬 키를 유지한 채 즉시 재정렬.
+    pub fn set_folders_first(&mut self, on: bool) {
+        if self.folders_first != on {
+            self.folders_first = on;
+            self.tree.set_sort(SortSpec {
+                keys: self.sort_keys.clone(),
+                folders_first: on,
+            });
         }
     }
 
@@ -192,10 +209,11 @@ impl RowSource for TreeSource {
                 Some((key, desc))
             })
             .collect();
-        // 빈 목록 = 열거 순서(폴더 우선은 탐색기 규약으로 유지 — 원본 docs/23 §4 "없음")
+        // 빈 목록 = 열거 순서. 폴더 우선은 설정(G-13, 기본 true=탐색기 규약)
+        self.sort_keys = mapped.clone();
         self.tree.set_sort(SortSpec {
             keys: mapped,
-            folders_first: true,
+            folders_first: self.folders_first,
         });
         true
     }

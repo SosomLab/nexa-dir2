@@ -578,10 +578,37 @@ impl Panel {
         }
     }
 
-    /// 위로(부모 폴더) — Alt+↑.
+    /// 위로(부모 폴더) — Alt+↑. **떠난 폴더를 자동 선택**(G-7 — 원본 F13-1 이식):
+    /// 부모 목록에서 방금 떠난 폴더가 캐럿+단일 선택되어 위치 감각을 보존한다.
     pub fn nav_up(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
-        if let Some(parent) = self.root_path().parent().map(Path::to_path_buf) {
+        let left = self.root_path().to_path_buf();
+        if let Some(parent) = left.parent().map(Path::to_path_buf) {
             self.navigate_to(parent, ctx, inv);
+            self.select_path(&left, inv);
+        }
+    }
+
+    /// 폴더 우선 정렬 토글(G-13) — 전 탭 소스에 전파·즉시 재정렬.
+    pub fn set_folders_first(&mut self, on: bool, inv: &mut Invalidations) {
+        for t in &mut self.tabs {
+            t.rows.source_mut().set_folders_first(on);
+            inv.push(t.rows.bounds());
+        }
+    }
+
+    /// 가시 목록에서 경로가 일치하는 행을 캐럿+단일 선택(G-7 — 최상위 자식은 항상 가시).
+    fn select_path(&mut self, path: &Path, inv: &mut Invalidations) {
+        let row = {
+            let tree = self.rows().source().tree();
+            (0..tree.visible_len()).find(|&i| {
+                tree.visible_id(i)
+                    .and_then(|id| tree.node_path(id))
+                    .is_some_and(|p| p == path)
+            })
+        };
+        if let Some(i) = row {
+            self.rows_mut()
+                .select_program(i, nexa_gui::widgets::rows::SelectOp::Single, inv);
         }
     }
 
