@@ -254,3 +254,5 @@ pref.taSpace = 공백 포함(접두사 입력 중)
 pref.taSpace.desc = 접두사가 없을 때의 공백은 선택 토글로 동작합니다.
 pref.taBackspace = Backspace로 마지막 글자 지우기
 pref.taBackspace.desc = 끄면 타입어헤드 중 Backspace를 무시합니다.
+pref.cat.listGeneral = 보기·정렬
+pref.cat.typeahead = 타입어헤드
