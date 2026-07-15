@@ -209,3 +209,5 @@ pref.dlgFontSize.desc = Dialog font size in points (7~24).
 pref.showHidden.desc = Show files and folders with the hidden attribute.
 pref.showDotfiles.desc = Show files and folders whose name starts with a dot.
 pref.dock.desc = Show the bottom dock (info, preview, terminal).
+pref.sortFoldersFirst = Sort folders first
+pref.sortFoldersFirst.desc = Group folders before files regardless of sort order.

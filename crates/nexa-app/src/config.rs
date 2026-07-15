@@ -57,12 +57,16 @@ pub struct Settings {
     /// 대화상자(확인창·진행 창) 글꼴/크기(pt — QA 07-14 "대화창용 폰트 설정").
     pub dlg_font: String,
     pub dlg_font_size: i32,
+    /// 폴더 우선 정렬(G-13 — 기본 true=탐색기 규약. false=파일·폴더 혼합 정렬).
+    pub sort_folders_first: bool,
     /// 퀵 런처 바 표시(M5-1 — 원본 LayoutState.ShowLauncher 대응, 기본 표시).
     pub launcher: bool,
     /// 퀵 런처 항목(M5-1). `None` = 키 부재(첫 실행 — 호스트가 시드 주입) ·
     /// `Some(빈 목록)` = 사용자가 비움(시드 재주입 금지). settings.cfg에서 직접 편집(α —
     /// `launcherN=라벨|exe|인자`). UI CRUD는 후속.
     pub launcher_items: Option<Vec<LauncherItem>>,
+    /// 적용된 시드 버전(launcher.rs `SEED_VERSION`) — 낮으면 기동 시 신규 시드 1회 추가.
+    pub launcher_seed: u32,
 }
 
 impl Default for Settings {
@@ -80,8 +84,10 @@ impl Default for Settings {
             term_font_size: 12,
             dlg_font: "Segoe UI".into(),
             dlg_font_size: 9,
+            sort_folders_first: true,
             launcher: true,
             launcher_items: None,
+            launcher_seed: 0,
         }
     }
 }
@@ -144,6 +150,11 @@ impl Settings {
             u8::from(self.launcher),
         );
         // 항목은 시드 주입 후 항상 Some — count를 명시해 "부재(첫 실행)"와 "비움"을 구분
+        out.push_str(&format!(
+            "sort_folders_first={}\n",
+            u8::from(self.sort_folders_first)
+        ));
+        out.push_str(&format!("launcher_seed={}\n", self.launcher_seed));
         if let Some(items) = &self.launcher_items {
             out.push_str(&format!("launcher_count={}\n", items.len()));
             for (i, it) in items.iter().enumerate() {
@@ -206,7 +217,9 @@ impl Settings {
                         }
                     }
                 }
+                "sort_folders_first" => s.sort_folders_first = v != "0",
                 "launcher" => s.launcher = v != "0",
+                "launcher_seed" => s.launcher_seed = v.parse().unwrap_or(0),
                 // count 키 존재 = 항목 목록 확정(비움 포함) — launcherN은 아래에서 채움
                 "launcher_count" => {
                     if s.launcher_items.is_none() {
@@ -385,6 +398,7 @@ mod tests {
             term_font_size: 14,
             dlg_font: "맑은 고딕".into(),
             dlg_font_size: 10,
+            sort_folders_first: false,
             launcher: false,
             launcher_items: Some(vec![
                 LauncherItem {
@@ -399,6 +413,7 @@ mod tests {
                     args: "-NoExit -Command \"echo a|b\"".into(),
                 },
             ]),
+            launcher_seed: 2,
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");

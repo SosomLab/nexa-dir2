@@ -51,6 +51,8 @@ pub struct PrefValues {
     pub show_hidden: bool,
     pub show_dotfiles: bool,
     pub dock: bool,
+    /// 폴더 우선 정렬(G-13).
+    pub sort_folders_first: bool,
 }
 
 /// 설정 항목 종류(편집 컨트롤 형태) — 레지스트리 최소 단위.
@@ -85,6 +87,7 @@ const F_DLG_SIZE: u32 = 6;
 const F_HIDDEN: u32 = 7;
 const F_DOTFILES: u32 = 8;
 const F_DOCK: u32 = 9;
+const F_FOLDERS_FIRST: u32 = 10;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -248,6 +251,13 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.showDotfiles.desc",
             kind: Kind::CheckBox,
             field: F_DOTFILES,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.sortFoldersFirst",
+            desc_key: "pref.sortFoldersFirst.desc",
+            kind: Kind::CheckBox,
+            field: F_FOLDERS_FIRST,
         },
         Entry {
             cat: "terminal",
@@ -553,6 +563,7 @@ impl PrefState {
                             F_HIDDEN => self.values.show_hidden,
                             F_DOTFILES => self.values.show_dotfiles,
                             F_DOCK => self.values.dock,
+                            F_FOLDERS_FIRST => self.values.sort_folders_first,
                             _ => false,
                         };
                         SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
@@ -717,6 +728,7 @@ impl PrefState {
             F_HIDDEN => v.show_hidden != d.show_hidden,
             F_DOTFILES => v.show_dotfiles != d.show_dotfiles,
             F_DOCK => v.dock != d.dock,
+            F_FOLDERS_FIRST => v.sort_folders_first != d.sort_folders_first,
             _ => false,
         }
     }
@@ -787,12 +799,13 @@ impl PrefState {
                 }
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),
-                F_HIDDEN | F_DOTFILES | F_DOCK => {
+                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
                         F_DOTFILES => self.values.show_dotfiles = on,
                         F_DOCK => self.values.dock = on,
+                        F_FOLDERS_FIRST => self.values.sort_folders_first = on,
                         _ => {}
                     }
                 }
