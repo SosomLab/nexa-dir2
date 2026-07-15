@@ -84,6 +84,10 @@ pub struct Panel {
     sort_case: bool,
     /// 타입어헤드 옵션(07-15): (범위, 리셋 ms, 특수문자, 공백, Backspace, HUD 위치).
     ta_opts: (nexa_tree::FindScope, u64, bool, bool, bool, u8),
+    /// 보기 모드(07-16 — 트리/일반/타일). 새 소스·새 탭에도 재적용.
+    view_mode: nexa_gui::widgets::ViewMode,
+    /// 호스트가 준 기본 컬럼(내 PC 드라이브 컬럼 전환의 복귀 원본 — X-17).
+    base_columns: Vec<Column>,
     /// 세션 저장 요청 플래그(사용자 요청 07-15 — 탭/경로 변경 시 표시만, 저장은
     /// 호스트가 디바운스 flush: 폭주해도 마지막 상태 1회만 기록).
     session_dirty: bool,
@@ -106,7 +110,7 @@ impl Panel {
         let mut inv = Invalidations::default();
         let mut rows =
             VirtualRows::new(TreeSource::new(tree, ctx.tz), m.row_h, m.pad_x, m.indent_w);
-        rows.set_columns(columns, &mut inv);
+        rows.set_columns(columns.clone(), &mut inv);
         let mut p = Panel {
             tabbar: TabBar::new(m.row_h, m.pad_x),
             navbtns: Toolbar::new(nav_buttons(), m.row_h, m.pad_x).with_button_width(nav_btn_w(&m)),
@@ -124,6 +128,8 @@ impl Panel {
                 true,
                 6,
             ),
+            view_mode: nexa_gui::widgets::ViewMode::default(),
+            base_columns: columns,
             session_dirty: false,
             dock_ratio: 0.3,
             tabs: vec![Tab {
@@ -319,6 +325,7 @@ impl Panel {
 
     pub fn set_metrics(&mut self, m: PanelMetrics, columns: Vec<Column>, inv: &mut Invalidations) {
         self.m = m;
+        self.base_columns = columns.clone();
         self.tabbar.set_metrics(m.row_h, m.pad_x, inv);
         self.navbtns.set_metrics(m.row_h, m.pad_x, inv);
         self.navbtns.set_button_width(Some(nav_btn_w(&m)), inv);
@@ -591,6 +598,26 @@ impl Panel {
         // 새 루트 밖·부모 접힘 경로는 expand_path가 무시하므로 방향 구분 불요.
         self.sync_expanded();
         self.tabs[self.active].rows.replace_source(src, inv);
+        // 내 PC(X-17): 드라이브 컬럼(이름·종류·전체·여유) ↔ 일반 컬럼 전환.
+        // 전환 시점에만 교체(평시 set_columns 재호출로 사용자 폭 리셋 방지).
+        if !self.base_columns.is_empty() {
+            use crate::source::COL_TOTAL;
+            let virt =
+                nexa_vfs::is_virtual_root(self.tabs[self.active].rows.source().tree().root_path());
+            let has_drive = self.tabs[self.active]
+                .rows
+                .columns()
+                .iter()
+                .any(|c| c.key == COL_TOTAL);
+            if virt != has_drive {
+                let cols = if virt {
+                    self.drive_columns()
+                } else {
+                    self.base_columns.clone()
+                };
+                self.tabs[self.active].rows.set_columns(cols, inv);
+            }
+        }
         self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 탐색/재로드 유지)
         self.session_dirty = true; // 경로/구성 변경 — 디바운스 세션 저장(07-15)
         let entries: Vec<PathBuf> = self.tabs[self.active].expanded.values().cloned().collect();
@@ -725,6 +752,43 @@ impl Panel {
         self.tabs[tab]
             .rows
             .set_typeahead_opts(reset, special, space, bs, hud, &mut inv);
+        self.tabs[tab].rows.set_view_mode(self.view_mode, &mut inv); // 07-16
+    }
+
+    /// 보기 모드 전환(사용자 요청 07-16 — 보기 메뉴): 전 탭 적용 + 보관(새 소스 계승).
+    /// 트리 이탈 시 펼침을 접어 목록을 현재 폴더로 평탄화(일반/타일 의미론).
+    pub fn set_view_mode(&mut self, mode: nexa_gui::widgets::ViewMode, inv: &mut Invalidations) {
+        if self.view_mode == mode {
+            return;
+        }
+        self.view_mode = mode;
+        for t in &mut self.tabs {
+            if mode != nexa_gui::widgets::ViewMode::Tree {
+                t.rows.source_mut().tree_mut().collapse_all();
+            }
+            t.rows.set_view_mode(mode, inv);
+            inv.push(t.rows.bounds());
+        }
+    }
+
+    /// 내 PC 드라이브 컬럼 세트(X-17 — 탐색기: 이름·종류·전체 크기·사용 가능한 공간).
+    /// 폭은 기본 컬럼에서 차용(이름=기본 이름 폭·나머지=크기 폭 계열).
+    fn drive_columns(&self) -> Vec<Column> {
+        use crate::i18n::tr;
+        use crate::source::{COL_FREE, COL_KIND, COL_NAME, COL_TOTAL};
+        let w_of = |key: u32, fallback: i32| {
+            self.base_columns
+                .iter()
+                .find(|c| c.key == key)
+                .map(|c| c.width)
+                .unwrap_or(fallback)
+        };
+        vec![
+            Column::new(COL_NAME, tr("col.name"), w_of(COL_NAME, 340)),
+            Column::new(COL_KIND, tr("col.kind"), w_of(COL_KIND, 110)),
+            Column::new(COL_TOTAL, tr("col.total"), 110).right_aligned(),
+            Column::new(COL_FREE, tr("col.free"), 130).right_aligned(),
+        ]
     }
 
     /// 타입어헤드 옵션 적용(설정 — 전 탭 + 새 소스용 보관, 07-15).
@@ -1028,6 +1092,31 @@ mod tests {
         // 뒤로 = 드라이브 루트 복귀(히스토리 경유)
         p.nav_back(ctx(), &mut inv);
         assert_eq!(p.root_path(), PathBuf::from("C:\\"));
+    }
+
+    #[test]
+    fn view_mode_propagates_and_flattens() {
+        // 보기 모드(07-16): 타일/일반 진입 = 펼침 평탄화·새 소스에도 모드 계승
+        use nexa_gui::widgets::ViewMode;
+        let base = fixture("viewmode");
+        fs::create_dir_all(base.join("sub").join("inner")).unwrap();
+        let (mut p, mut inv) = panel(&base);
+        p.rows_mut()
+            .source_mut()
+            .tree_mut()
+            .expand_path(&base.join("sub").to_string_lossy())
+            .unwrap();
+        let before = p.rows().source().tree().visible_len();
+        p.set_view_mode(ViewMode::Tiles, &mut inv);
+        assert!(
+            p.rows().source().tree().visible_len() < before,
+            "타일 진입 = 펼침 평탄화"
+        );
+        assert_eq!(p.rows().view_mode(), ViewMode::Tiles);
+        // 새 소스(탐색)에도 모드 계승(apply_sort_opts 경유)
+        p.navigate_to(base.join("sub"), ctx(), &mut inv);
+        assert_eq!(p.rows().view_mode(), ViewMode::Tiles, "탐색 후 모드 유지");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

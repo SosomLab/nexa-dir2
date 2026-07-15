@@ -107,6 +107,12 @@ pub trait RowSource {
         None
     }
     /// 행 아이콘 `(키, 로드 힌트)` — DrawCtx가 해석(M1-7 셸 아이콘). 기본 = 아이콘 없음.
+    /// 타일 보기 보조 정보 — (보조 줄 텍스트, 사용량 0.0~1.0[드라이브 용량 바 — X-17]).
+    /// 기본 = 없음. 소스가 종류/용량 등으로 구체화한다.
+    fn tile_info(&self, _index: usize) -> (String, Option<f32>) {
+        (String::new(), None)
+    }
+
     fn icon(&self, index: usize) -> Option<(String, String)> {
         let _ = index;
         None
@@ -138,6 +144,17 @@ struct ResizeDrag {
     /// 오른쪽 이웃 컬럼 시작 폭 — Some이면 **한 쌍 동시 조절**(총폭 보존, QA 07-15:
     /// 경계 드래그 시 좌우 컬럼이 함께 변한다). None = 마지막/고정 이웃(단독 조절).
     start_w2: Option<i32>,
+}
+
+/// 보기 모드(사용자 요청 07-16 — 원본 FR-A4 뷰 모드의 dir2 1차):
+/// Tree = 계층(인라인 펼침 마커 — 기존 기본), Flat = 일반 폴더(펼침 없음·목록 동일),
+/// Tiles = 타일(아이콘 32px + 이름/보조 줄 그리드 — 탐색기 '타일' 보기).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ViewMode {
+    #[default]
+    Tree,
+    Flat,
+    Tiles,
 }
 
 /// 러버밴드 드래그 상태(본문 빈 영역에서 시작).
@@ -191,6 +208,8 @@ pub struct VirtualRows<S> {
     press_pending: Option<usize>,
     /// 호스트 패널 포커스 — 비활성 패널의 선택 하이라이트는 무채색(`sel_bg_inactive`)으로 구분.
     focused: bool,
+    /// 보기 모드(07-16) — Tree(계층)/Flat(일반)/Tiles(타일 그리드).
+    mode: ViewMode,
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -218,7 +237,74 @@ impl<S: RowSource> VirtualRows<S> {
             rename: None,
             press_pending: None,
             focused: true,
+            mode: ViewMode::default(),
         }
+    }
+
+    /// 보기 모드 전환(07-16). 타일 진입 시 이름변경·밴드 상태는 정리.
+    pub fn set_view_mode(&mut self, mode: ViewMode, inv: &mut Invalidations) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.band = None;
+        if mode == ViewMode::Tiles && self.rename.is_some() {
+            self.cancel_rename(inv);
+        }
+        self.clamp_scroll();
+        if let Some(c) = self.caret {
+            self.scroll_into_view_idx(c);
+        }
+        inv.push(self.bounds);
+    }
+
+    pub fn view_mode(&self) -> ViewMode {
+        self.mode
+    }
+
+    // ── 타일 그리드 기하(07-16) — 리스트 모드는 열 1·행 높이 row_h로 수렴 ──
+
+    /// 타일 셀 크기(row_h 비례 = DPI 추종): 폭 12행높이·높이 3행높이.
+    fn tile_wh(&self) -> (i32, i32) {
+        (self.row_h * 12, self.row_h * 3)
+    }
+
+    /// 그리드 열 수(리스트 = 1).
+    fn grid_cols(&self) -> usize {
+        if self.mode != ViewMode::Tiles {
+            return 1;
+        }
+        let (tw, _) = self.tile_wh();
+        ((self.bounds.w / tw).max(1)) as usize
+    }
+
+    /// 그리드 단위 높이(리스트 = row_h·타일 = tile_h).
+    fn grid_h(&self) -> i32 {
+        if self.mode == ViewMode::Tiles {
+            self.tile_wh().1
+        } else {
+            self.row_h
+        }
+    }
+
+    /// 그리드 행 수 = ceil(항목 / 열).
+    fn grid_len(&self) -> usize {
+        let cols = self.grid_cols();
+        self.src.len().div_ceil(cols.max(1))
+    }
+
+    /// 항목 인덱스의 타일 rect(가시 여부 무관 — 스크롤 반영).
+    fn tile_rect(&self, index: usize) -> Rect {
+        let cols = self.grid_cols();
+        let (tw, th) = self.tile_wh();
+        let gr = index / cols;
+        let gc = index % cols;
+        Rect::new(
+            self.bounds.x + gc as i32 * tw,
+            self.body_top() + (gr as i32 - self.scroll_row as i32) * th,
+            tw,
+            th,
+        )
     }
 
     /// 컬럼 경계 리사이즈 존 히트(호스트 커서 변경용 — QA 07-15: 경계=수평 리사이즈 커서).
@@ -249,6 +335,9 @@ impl<S: RowSource> VirtualRows<S> {
     /// 인라인 이름변경 시작 — 캐럿을 그 행으로, 가시 범위로 스크롤.
     /// 초기 선택 = 파일이면 **이름부**(마지막 `.` 앞), 폴더면 전체(탐색기 관례 — QA 07-13).
     pub fn begin_rename(&mut self, row: usize, initial: &str, inv: &mut Invalidations) {
+        if self.mode == ViewMode::Tiles {
+            return; // 타일 보기 인라인 편집은 β(필드 기하가 리스트 전용)
+        }
         if row >= self.src.len() {
             return;
         }
@@ -478,8 +567,8 @@ impl<S: RowSource> VirtualRows<S> {
 
     /// 헤더 높이(컬럼 없으면 0 — M1-3 호환).
     fn header_h(&self) -> i32 {
-        if self.columns.is_empty() {
-            0
+        if self.columns.is_empty() || self.mode == ViewMode::Tiles {
+            0 // 타일 보기 = 컬럼 헤더 없음(탐색기 규약)
         } else {
             self.row_h
         }
@@ -518,15 +607,16 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
-    /// 현재 높이에서 그릴 행 수(부분 행 포함).
+    /// 현재 높이에서 그릴 그리드 행 수(부분 행 포함).
     fn visible_rows(&self) -> usize {
-        ((self.body_h() + self.row_h - 1) / self.row_h).max(0) as usize
+        let gh = self.grid_h();
+        ((self.body_h() + gh - 1) / gh).max(0) as usize
     }
 
-    /// 스크롤 상한 = 전체 - 완전 가시 행 수.
+    /// 스크롤 상한 = 전체 그리드 행 - 완전 가시 그리드 행 수.
     fn max_scroll(&self) -> usize {
-        let full = (self.body_h() / self.row_h).max(0) as usize;
-        self.src.len().saturating_sub(full)
+        let full = (self.body_h() / self.grid_h()).max(0) as usize;
+        self.grid_len().saturating_sub(full)
     }
 
     fn clamp_scroll(&mut self) {
@@ -548,12 +638,18 @@ impl<S: RowSource> VirtualRows<S> {
     }
 
     /// 행이 보이도록 세로 스크롤 조정(원본 ScrollIndexIntoView 대응).
+    /// 그리드(타일)에서는 항목의 그리드 행 기준.
     fn scroll_into_view(&mut self, row: usize) {
-        let full = ((self.body_h() / self.row_h).max(1)) as usize;
-        if row < self.scroll_row {
-            self.scroll_row = row;
-        } else if row >= self.scroll_row + full {
-            self.scroll_row = row + 1 - full;
+        self.scroll_into_view_idx(row);
+    }
+
+    fn scroll_into_view_idx(&mut self, index: usize) {
+        let grow = index / self.grid_cols().max(1);
+        let full = ((self.body_h() / self.grid_h()).max(1)) as usize;
+        if grow < self.scroll_row {
+            self.scroll_row = grow;
+        } else if grow >= self.scroll_row + full {
+            self.scroll_row = grow + 1 - full;
         }
         self.scroll_row = self.scroll_row.min(self.max_scroll());
     }
@@ -639,8 +735,20 @@ impl<S: RowSource> VirtualRows<S> {
     /// 클라이언트 좌표 → 본문 행 인덱스(범위 밖이면 `None`). 호스트의 더블클릭 진입 판정에도 사용.
     /// 마지막 컬럼 오른쪽 공간은 행이 아니라 **빈 본문**(원본 B-4 — QA 07-13).
     pub fn row_at(&self, x: i32, y: i32) -> Option<usize> {
-        if !self.bounds.contains(Point { x, y }) || y < self.body_top() || x >= self.columns_right()
-        {
+        if !self.bounds.contains(Point { x, y }) || y < self.body_top() {
+            return None;
+        }
+        if self.mode == ViewMode::Tiles {
+            let (tw, th) = self.tile_wh();
+            let gc = ((x - self.bounds.x) / tw) as usize;
+            if gc >= self.grid_cols() {
+                return None; // 마지막 열 오른쪽 잔여 = 빈 본문
+            }
+            let gr = self.scroll_row + ((y - self.body_top()) / th) as usize;
+            let idx = gr * self.grid_cols() + gc;
+            return (idx < self.src.len()).then_some(idx);
+        }
+        if x >= self.columns_right() {
             return None;
         }
         let row = self.scroll_row + ((y - self.body_top()) / self.row_h) as usize;
@@ -649,7 +757,18 @@ impl<S: RowSource> VirtualRows<S> {
 
     /// 행의 클라이언트 앵커 좌표(가시 범위 내일 때만) — 키보드 컨텍스트 메뉴 위치(M3-4 Apps 키).
     pub fn row_anchor(&self, row: usize) -> Option<Point> {
-        if row < self.scroll_row || row >= self.src.len() {
+        if row >= self.src.len() {
+            return None;
+        }
+        if self.mode == ViewMode::Tiles {
+            let rc = self.tile_rect(row);
+            let visible = rc.y >= self.body_top() && rc.bottom() <= self.bounds.bottom();
+            return visible.then_some(Point {
+                x: rc.x + self.pad_x,
+                y: rc.y + rc.h / 2,
+            });
+        }
+        if row < self.scroll_row {
             return None;
         }
         let y = self.body_top() + ((row - self.scroll_row) as i32) * self.row_h;
@@ -672,6 +791,9 @@ impl<S: RowSource> VirtualRows<S> {
 
     /// 클릭 x가 해당 행의 펼침 마커 영역인가(트리 컬럼 안 들여쓰기 자리·마커 있는 행만).
     fn in_marker_zone(&self, row: usize, x: i32) -> bool {
+        if self.mode != ViewMode::Tree {
+            return false; // 일반/타일 보기 = 인라인 펼침 없음(07-16)
+        }
         let (tc_x, tc_w) = if self.columns.is_empty() {
             (self.bounds.x, self.bounds.w)
         } else {
@@ -789,6 +911,127 @@ impl<S: RowSource> VirtualRows<S> {
         }
         s
     }
+
+    /// 타일 보기 페인트(07-16 — 탐색기 '타일'): 셀 = 아이콘(2행높이 — 32px@96dpi 라지
+    /// 아이콘) + 이름/보조 줄(종류 또는 드라이브 용량 텍스트) + 용량 바(내 PC — X-17).
+    fn paint_tiles(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let b = self.bounds;
+        ctx.fill_rect(b, theme.panel_bg);
+        let cols = self.grid_cols();
+        let first_idx = self.scroll_row * cols;
+        let last_idx = ((self.scroll_row + self.visible_rows() + 1) * cols).min(self.src.len());
+        let isz = self.row_h * 2 - 4; // 아이콘 변(행높이 20 기준 36 → 라지 32 근사 확대)
+        for idx in first_idx..last_idx {
+            let rc = self.tile_rect(idx);
+            if rc.y >= b.bottom() || rc.bottom() <= self.body_top() {
+                continue;
+            }
+            let selected = self.src.is_selected(idx);
+            let bg = if selected {
+                if self.focused {
+                    theme.sel_bg
+                } else {
+                    theme.sel_bg_inactive
+                }
+            } else {
+                theme.panel_bg
+            };
+            // 셀 배경(안쪽 1px 여백 — 타일 간 시각 분리)
+            let cell = Rect::new(rc.x + 2, rc.y + 2, rc.w - 4, rc.h - 4);
+            ctx.fill_rect(cell, bg);
+            // 아이콘(라지 32px — "L|" 키 네임스페이스, icons.rs 로더 분기)
+            let item = self.src.row(idx);
+            let ix = cell.x + self.pad_x;
+            let iy = cell.y + (cell.h - isz) / 2;
+            if let Some((key, hint)) = self.src.icon(idx) {
+                ctx.draw_icon(ix, iy, isz, &format!("L|{key}"), &hint);
+            }
+            // 텍스트 영역(아이콘 오른쪽): 이름 / 보조 줄 / (있으면) 용량 바
+            let tx = ix + isz + self.pad_x;
+            let tw_text = (cell.right() - self.pad_x - tx).max(0);
+            if tw_text > 0 {
+                let (line2, bar) = self.src.tile_info(idx);
+                let lh = self.row_h * 4 / 5; // 줄 높이(글자 높이 근사)
+                let lines = 1 + (!line2.is_empty() as i32) + (bar.is_some() as i32);
+                let mut ly = cell.y + (cell.h - lines * lh - (lines - 1) * 2).max(0) / 2;
+                let name_rc = Rect::new(tx, ly, tw_text, lh);
+                ctx.text_opaque(tx, ly, name_rc, &item.text, theme.text, bg);
+                ly += lh + 2;
+                if let Some(frac) = bar {
+                    // 드라이브 용량 바(X-17 — 탐색기 내 PC 타일): 트랙 + 사용분(>90% 경고색)
+                    let bar_h = (lh / 2).max(4);
+                    let track = Rect::new(tx, ly + (lh - bar_h) / 2, tw_text, bar_h);
+                    ctx.fill_rect(track, theme.header_bg);
+                    let used_w = ((tw_text as f32) * frac.clamp(0.0, 1.0)) as i32;
+                    if used_w > 0 {
+                        let col = if frac > 0.9 {
+                            crate::theme::Color::from_hex(0x00D3_3F3F) // 경고(탐색기 빨강)
+                        } else {
+                            theme.accent
+                        };
+                        ctx.fill_rect(Rect::new(track.x, track.y, used_w, bar_h), col);
+                    }
+                    ly += lh + 2;
+                }
+                if !line2.is_empty() {
+                    let rc2 = Rect::new(tx, ly, tw_text, lh);
+                    ctx.text_opaque(tx, ly, rc2, &line2, theme.text_dim, bg);
+                }
+            }
+            // 캐럿 테두리(1px — 리스트와 동일 규약)
+            if self.caret == Some(idx) {
+                let cc = if self.focused {
+                    theme.accent
+                } else {
+                    theme.text_dim
+                };
+                ctx.fill_rect(Rect::new(cell.x, cell.y, cell.w, 1), cc);
+                ctx.fill_rect(Rect::new(cell.x, cell.bottom() - 1, cell.w, 1), cc);
+                ctx.fill_rect(Rect::new(cell.x, cell.y, 1, cell.h), cc);
+                ctx.fill_rect(Rect::new(cell.right() - 1, cell.y, 1, cell.h), cc);
+            }
+        }
+        // 러버밴드 외곽선(리스트와 동일)
+        if let Some(band) = self.band {
+            let r = band.rect();
+            if r.w > 0 && r.h > 0 {
+                ctx.fill_rect(Rect::new(r.x, r.y, r.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), theme.accent);
+                ctx.fill_rect(Rect::new(r.x, r.y, 1, r.h), theme.accent);
+                ctx.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), theme.accent);
+            }
+        }
+        // 타입어헤드 HUD(리스트와 동일 — 위치 규약 공유)
+        if !self.typeahead.text().is_empty() {
+            let label = format!("찾기: {}", self.typeahead.text());
+            let tw_hud = ctx.text_width(&label);
+            let hw = tw_hud + self.pad_x * 2;
+            let hx = match self.ta_hud_pos % 3 {
+                0 => b.x + self.pad_x,
+                1 => b.x + (b.w - hw) / 2,
+                _ => b.right() - hw - self.pad_x,
+            };
+            let hy = match self.ta_hud_pos / 3 {
+                0 => self.body_top() + self.pad_x,
+                1 => b.y + (b.h - self.row_h) / 2,
+                _ => b.bottom() - self.row_h - self.pad_x,
+            };
+            let hud = Rect::new(hx, hy, hw, self.row_h);
+            let hty = hud.y + (self.row_h - (self.row_h * 4) / 5) / 2;
+            ctx.text_opaque(
+                hud.x + self.pad_x,
+                hty,
+                hud,
+                &label,
+                theme.text,
+                theme.header_bg,
+            );
+            ctx.fill_rect(Rect::new(hud.x, hud.y, hud.w, 1), theme.accent);
+            ctx.fill_rect(Rect::new(hud.x, hud.bottom() - 1, hud.w, 1), theme.accent);
+            ctx.fill_rect(Rect::new(hud.x, hud.y, 1, hud.h), theme.accent);
+            ctx.fill_rect(Rect::new(hud.right() - 1, hud.y, 1, hud.h), theme.accent);
+        }
+    }
 }
 
 impl<S: RowSource> Widget for VirtualRows<S> {
@@ -869,6 +1112,32 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     return;
                 }
                 let caret = self.caret.unwrap_or(self.scroll_row).min(len - 1);
+                // 타일 그리드(07-16): ↑/↓ = ±열 수, ←/→ = ∓1/+1 (탐색기 아이콘 뷰 규약)
+                if self.mode == ViewMode::Tiles {
+                    let cols = self.grid_cols() as isize;
+                    let cur = caret as isize;
+                    let target = match key {
+                        Key::Up => cur - cols,
+                        Key::Down => cur + cols,
+                        Key::Left => cur - 1,
+                        Key::Right => cur + 1,
+                        Key::PageUp => cur - page * cols,
+                        Key::PageDown => cur + page * cols,
+                        Key::Home => 0,
+                        Key::End => len as isize - 1,
+                        Key::Space => {
+                            if !self.ta_space || self.typeahead.text().is_empty() {
+                                self.caret = Some(caret);
+                                self.src.select(caret, SelectOp::Toggle);
+                                inv.push(self.bounds);
+                            }
+                            return;
+                        }
+                    }
+                    .clamp(0, len as isize - 1) as usize;
+                    self.move_caret(target, shift, ctrl, inv);
+                    return;
+                }
                 match key {
                     // 캐럿 이동(탐색기 규약: 평이동=단일 선택·Shift=범위·Ctrl=캐럿만)
                     Key::Up | Key::Down | Key::PageUp | Key::PageDown | Key::Home | Key::End => {
@@ -884,7 +1153,9 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         .clamp(0, len as isize - 1) as usize;
                         self.move_caret(target, shift, ctrl, inv);
                     }
-                    // → = 펼침, 이미 펼침이면 첫 자식으로(docs/07 §8)
+                    // → = 펼침, 이미 펼침이면 첫 자식으로(docs/07 §8) — Flat = 무동작
+                    Key::Right if self.mode == ViewMode::Flat => {}
+                    Key::Left if self.mode == ViewMode::Flat => {}
                     Key::Right => {
                         let item = self.src.row(caret);
                         match item.marker {
@@ -1050,8 +1321,25 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     if (band.cx - band.ox).abs() < 4 && (band.cy - band.oy).abs() < 4 {
                         return;
                     }
-                    // 밴드 세로 범위와 교차하는 가시 행 범위로 선택 대체
                     let r = band.rect();
+                    if self.mode == ViewMode::Tiles {
+                        // 타일 = 밴드 rect와 교차하는 타일만(사각 영역 선택 — 탐색기 규약)
+                        self.src.clear_selection();
+                        if !self.src.is_empty() {
+                            let cols = self.grid_cols();
+                            let full = self.visible_rows();
+                            let first = self.scroll_row * cols;
+                            let last = ((self.scroll_row + full + 1) * cols).min(self.src.len());
+                            for idx in first..last {
+                                if self.tile_rect(idx).intersects(&r) {
+                                    self.src.select(idx, SelectOp::Toggle);
+                                }
+                            }
+                        }
+                        inv.push(self.bounds);
+                        return;
+                    }
+                    // 밴드 세로 범위와 교차하는 가시 행 범위로 선택 대체
                     let top = r.y.max(self.body_top());
                     let bot = r.bottom().min(self.bounds.bottom());
                     if bot > top && !self.src.is_empty() {
@@ -1105,6 +1393,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
         let b = self.bounds;
+        if self.mode == ViewMode::Tiles {
+            self.paint_tiles(ctx, theme);
+            return;
+        }
         let first = self.scroll_row;
         let count = self
             .visible_rows()
@@ -1132,7 +1424,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
 
             if self.columns.is_empty() {
                 // M1-3 호환: 단일 트리 컬럼이 전체 폭
-                let item = self.src.row(row);
+                let mut item = self.src.row(row);
+                if self.mode == ViewMode::Flat {
+                    item.marker = Marker::None; // 일반 폴더 보기 = 펼침 마커 숨김(07-16)
+                }
                 let icon = self.src.icon(row);
                 let rc = Rect::new(b.x, y, b.w, self.row_h);
                 self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), rc, bg);
@@ -1144,7 +1439,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     }
                     let cell = Rect::new(cx, y, col.width, self.row_h);
                     if col.key == 0 {
-                        let item = self.src.row(row);
+                        let mut item = self.src.row(row);
+                        if self.mode == ViewMode::Flat {
+                            item.marker = Marker::None; // 일반 폴더 보기(07-16)
+                        }
                         let icon = self.src.icon(row);
                         self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), cell, bg);
                     } else {
@@ -1299,6 +1597,98 @@ mod tests {
     use super::*;
     use crate::theme::Color;
     use std::cell::RefCell;
+
+    #[test]
+    fn tiles_grid_geometry_and_keys() {
+        // 타일 보기(07-16): row_h 20 → 타일 240×60. 폭 500 → 열 2.
+        let mut v = VirtualRows::new(
+            Rows {
+                n: 7,
+                sorts: RefCell::new(Vec::new()),
+            },
+            20,
+            6,
+            16,
+        );
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 500, 130), &mut inv);
+        v.set_view_mode(ViewMode::Tiles, &mut inv);
+        assert_eq!(v.grid_cols(), 2);
+        assert_eq!(v.grid_len(), 4, "7항목/2열 = 4그리드 행");
+        // 히트: (250, 65) = 2행째(그리드 행 1)·열 1 → 인덱스 3. 헤더 없음(body_top=0).
+        assert_eq!(v.row_at(250, 65), Some(3));
+        assert_eq!(v.row_at(10, 5), Some(0));
+        assert_eq!(v.row_at(490, 5), None, "마지막 열 오른쪽 잔여 = 빈 본문");
+        // 키: ↓ = +열수(2) — 0 → 2 → 4, → = +1
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: 10,
+                y: 5,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.caret(), Some(0));
+        let down = InputEvent::Key {
+            key: Key::Down,
+            shift: false,
+            ctrl: false,
+        };
+        v.on_event(&down, &mut inv);
+        assert_eq!(v.caret(), Some(2), "↓ = +2(열 수)");
+        v.on_event(
+            &InputEvent::Key {
+                key: Key::Right,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.caret(), Some(3), "→ = +1");
+        // 스크롤 상한: 4그리드 행·가시 2행(130/60) → max 2
+        assert_eq!(v.max_scroll(), 2);
+        // 리스트 복귀 — 기하 원복
+        v.set_view_mode(ViewMode::Tree, &mut inv);
+        assert_eq!(v.grid_cols(), 1);
+        assert_eq!(v.max_scroll(), 1, "7행·가시 6행(130/20)");
+    }
+
+    #[test]
+    fn flat_mode_blocks_expansion() {
+        // 일반 폴더 보기(07-16): 마커 존·←/→ 펼침 무동작
+        let mut v = VirtualRows::new(
+            Rows {
+                n: 3,
+                sorts: RefCell::new(Vec::new()),
+            },
+            20,
+            6,
+            16,
+        );
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 300, 200), &mut inv);
+        v.set_view_mode(ViewMode::Flat, &mut inv);
+        assert!(!v.marker_hit(8, 10), "Flat = 마커 존 없음");
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: 100,
+                y: 10,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        v.on_event(
+            &InputEvent::Key {
+                key: Key::Right,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(v.caret(), Some(0), "→ 펼침 무동작(캐럿 유지)");
+    }
 
     #[test]
     fn inline_rename_flow_and_key_block() {

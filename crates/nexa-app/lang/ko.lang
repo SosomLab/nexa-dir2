@@ -17,6 +17,9 @@ menu.edit = 편집
 menu.edit.undo = 실행 취소
 menu.edit.redo = 다시 실행
 menu.view = 보기
+menu.view.modeTree = 트리 폴더 보기
+menu.view.modeFlat = 일반 폴더 보기
+menu.view.modeTiles = 타일 보기
 menu.view.hidden = 숨김 파일 표시
 menu.view.dot = 점 파일 표시
 menu.view.dock = 하단 패널
@@ -260,3 +263,6 @@ pref.cat.typeahead = 타입어헤드
 ops.close = 닫기
 # X-17 virtual top-level
 nav.mypc = 내 PC
+col.total = 전체 크기
+col.free = 사용 가능한 공간
+drive.freeOf = {0} 중 {1} 사용 가능

@@ -443,6 +443,17 @@ impl Tree {
         })
     }
 
+    /// 모든 펼침을 접는다(보기 모드 전환 07-16 — 일반/타일 보기 진입 시 목록을
+    /// 현재 폴더 항목만으로 평탄화). 최상위 펼침 노드를 순차 접으면 하위도 비가시.
+    pub fn collapse_all(&mut self) {
+        let roots: Vec<NodeId> = self.roots.clone();
+        for id in roots {
+            if self.nodes[id as usize].expanded {
+                let _ = self.collapse(id);
+            }
+        }
+    }
+
     /// 가시 인덱스의 셀 렌더용 **경량 참조 뷰**(X-16 핫패스) — `row()`와 달리 이름을
     /// 클론하지 않는다. 셀/아이콘 조회는 프레임당 가시 행×열로 호출되므로 통 [`VisibleRow`]
     /// 클론(힙 String 포함)은 행당 수 회의 낭비 할당이었다.

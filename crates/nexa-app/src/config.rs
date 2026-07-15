@@ -80,6 +80,8 @@ pub struct Settings {
     pub typeahead_special: bool,
     pub typeahead_space: bool,
     pub typeahead_backspace: bool,
+    /// 보기 모드(사용자 요청 07-16): "tree"(계층 — 기본)|"flat"(일반 폴더)|"tiles"(타일).
+    pub view_mode: String,
     /// 퀵 런처 바 표시(M5-1 — 원본 LayoutState.ShowLauncher 대응, 기본 표시).
     pub launcher: bool,
     /// 퀵 런처 항목(M5-1). `None` = 키 부재(첫 실행 — 호스트가 시드 주입) ·
@@ -117,6 +119,7 @@ impl Default for Settings {
             typeahead_special: true,
             typeahead_space: true,
             typeahead_backspace: true,
+            view_mode: "tree".into(),
             launcher: true,
             launcher_items: None,
             launcher_seed: 0,
@@ -226,11 +229,12 @@ impl Settings {
             self.term_cols
         ));
         out.push_str(&format!(
-            "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\n",
+            "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\nview_mode={}\n",
             u8::from(self.sort_folders_first),
             u8::from(self.sort_case_sensitive),
             self.nav_up_align,
-            self.tab_dblclick
+            self.tab_dblclick,
+            self.view_mode
         ));
         out.push_str(&format!(
             "typeahead_scope={}\ntypeahead_reset_ms={}\ntypeahead_pos={}\ntypeahead_special={}\ntypeahead_space={}\ntypeahead_backspace={}\n",
@@ -314,6 +318,9 @@ impl Settings {
                 "sort_case_sensitive" => s.sort_case_sensitive = v != "0",
                 "nav_up_align" if matches!(v, "top" | "center" | "bottom") => {
                     s.nav_up_align = v.into()
+                }
+                "view_mode" if matches!(v, "tree" | "flat" | "tiles") => {
+                    s.view_mode = v.into() // 미지 값 = 기본(tree) 유지
                 }
                 "tab_dblclick" if matches!(v, "close" | "pin" | "lock") => {
                     s.tab_dblclick = v.into()
@@ -539,6 +546,7 @@ mod tests {
             typeahead_special: false,
             typeahead_space: false,
             typeahead_backspace: false,
+            view_mode: "tiles".into(),
             launcher: false,
             launcher_items: Some(vec![
                 LauncherItem {
@@ -580,6 +588,12 @@ mod tests {
         assert!(parsed.sort_case_sensitive, "대소문자 정렬 왕복");
         assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
         assert_eq!(parsed.tab_dblclick, "lock", "탭 더블클릭 동작 왕복(07-15)");
+        assert_eq!(parsed.view_mode, "tiles", "보기 모드 왕복(07-16)");
+        assert_eq!(
+            Settings::parse("view_mode=grid").view_mode,
+            "tree",
+            "미지 보기 모드 = 기본"
+        );
         assert_eq!(parsed.typeahead_scope, "level", "타입어헤드 범위 왕복");
         assert_eq!(parsed.typeahead_reset_ms, 700);
         assert_eq!(parsed.typeahead_pos, 2);
