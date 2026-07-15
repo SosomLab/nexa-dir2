@@ -178,6 +178,12 @@ pub struct VirtualRows<S> {
     /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
     typeahead: TypeAhead,
+    /// 타입어헤드 옵션(원본 docs/32 §7 — 설정 노출 07-15): 특수문자/공백/Backspace 허용,
+    /// HUD 배지 위치(0..8 = 3×3, 행=pos/3 열=pos%3 — 기본 6=좌하).
+    ta_special: bool,
+    ta_space: bool,
+    ta_backspace: bool,
+    ta_hud_pos: u8,
     /// 인라인 이름변경(M3-2, 원본 B-6) — Some((행, 편집 상태)). 캐럿·선택은 edit.rs 공용 모델.
     rename: Option<(usize, crate::edit::EditState)>,
     /// 기선택 행 프레스(무수정키) — 클릭 확정(MouseUp·무드래그) 시 단일 선택으로 붕괴
@@ -205,6 +211,10 @@ impl<S: RowSource> VirtualRows<S> {
             band: None,
             caret: None,
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
+            ta_special: true,
+            ta_space: true,
+            ta_backspace: true,
+            ta_hud_pos: 6,
             rename: None,
             press_pending: None,
             focused: true,
@@ -390,6 +400,26 @@ impl<S: RowSource> VirtualRows<S> {
     /// 타입어헤드 버퍼(HUD·타이머 판단용). 빈 값 = 비활성.
     pub fn typeahead_text(&self) -> &str {
         self.typeahead.text()
+    }
+
+    /// 타입어헤드 옵션 적용(설정 — 07-15): 리셋 ms·특수문자·공백·Backspace·HUD 위치.
+    pub fn set_typeahead_opts(
+        &mut self,
+        reset_ms: u64,
+        special: bool,
+        space: bool,
+        backspace: bool,
+        hud_pos: u8,
+        inv: &mut Invalidations,
+    ) {
+        self.typeahead.set_timeout(reset_ms);
+        self.ta_special = special;
+        self.ta_space = space;
+        self.ta_backspace = backspace;
+        if self.ta_hud_pos != hud_pos.min(8) {
+            self.ta_hud_pos = hud_pos.min(8);
+            inv.push(self.bounds);
+        }
     }
 
     /// 주기 점검(WM_TIMER) — 타입어헤드 타임아웃 소거.
@@ -887,20 +917,31 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     }
                     // Space/Ctrl+Space = 캐럿 행 선택 토글(docs/32 §7 결정 1)
                     Key::Space => {
-                        self.caret = Some(caret);
-                        self.src.select(caret, SelectOp::Toggle);
-                        inv.push(self.bounds);
+                        // 접두사 입력 중 + 공백 포함 옵션이면 토글 대신 문자(Char 경로 처리)
+                        if !self.ta_space || self.typeahead.text().is_empty() {
+                            self.caret = Some(caret);
+                            self.src.select(caret, SelectOp::Toggle);
+                            inv.push(self.bounds);
+                        }
                     }
                 }
             }
             InputEvent::Char { c, now_ms } => {
                 if c == '\u{8}' {
-                    // Backspace — 접두사 축소, 비면 HUD 소거
-                    match self.typeahead.backspace(now_ms) {
-                        Some(q) => self.typeahead_find(&q.prefix, q.include_caret, inv),
-                        None => inv.push(self.bounds),
+                    // Backspace — 접두사 축소(옵션 off면 무시 — 원본 §7 체크), 비면 HUD 소거
+                    if self.ta_backspace {
+                        match self.typeahead.backspace(now_ms) {
+                            Some(q) => self.typeahead_find(&q.prefix, q.include_caret, inv),
+                            None => inv.push(self.bounds),
+                        }
                     }
-                } else if !c.is_control() && c != ' ' {
+                } else if c == ' ' {
+                    // 공백 = 접두사 입력 중일 때만 문자(원본 "Include Space while typing")
+                    if self.ta_space && !self.typeahead.text().is_empty() {
+                        let q = self.typeahead.push(c, now_ms);
+                        self.typeahead_find(&q.prefix, q.include_caret, inv);
+                    }
+                } else if !c.is_control() && (self.ta_special || c.is_alphanumeric()) {
                     let q = self.typeahead.push(c, now_ms);
                     self.typeahead_find(&q.prefix, q.include_caret, inv);
                 }
@@ -1223,12 +1264,19 @@ impl<S: RowSource> Widget for VirtualRows<S> {
         if !self.typeahead.text().is_empty() {
             let label = format!("찾기: {}", self.typeahead.text());
             let tw = ctx.text_width(&label);
-            let hud = Rect::new(
-                b.x + self.pad_x,
-                b.bottom() - self.row_h - self.pad_x,
-                tw + self.pad_x * 2,
-                self.row_h,
-            );
+            // HUD 배지 위치(원본 §7-A 3×3 피커 — 설정 07-15): 행=pos/3·열=pos%3
+            let hw = tw + self.pad_x * 2;
+            let hx = match self.ta_hud_pos % 3 {
+                0 => b.x + self.pad_x,
+                1 => b.x + (b.w - hw) / 2,
+                _ => b.right() - hw - self.pad_x,
+            };
+            let hy = match self.ta_hud_pos / 3 {
+                0 => self.body_top() + self.pad_x,
+                1 => b.y + (b.h - self.row_h) / 2,
+                _ => b.bottom() - self.row_h - self.pad_x,
+            };
+            let hud = Rect::new(hx, hy, hw, self.row_h);
             let hty = hud.y + (self.row_h - (self.row_h * 4) / 5) / 2;
             ctx.text_opaque(
                 hud.x + self.pad_x,

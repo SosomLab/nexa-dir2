@@ -531,6 +531,15 @@ impl Progress {
     pub fn cancelled(&self) -> bool {
         self.state.cancelled
     }
+
+    /// 완료 표시(원본 PROG-WIN — 성공 시 2초 카운트다운 자동 닫기): 라벨 교체 + 바 100%.
+    /// 실제 닫기는 호스트가 지연 후 drop(TIMER_TICK — 사용자 요청 07-15).
+    pub unsafe fn set_done(&mut self, label: &str) {
+        self.state.label = label.encode_utf16().collect();
+        self.state.done = 1;
+        self.state.total = 1;
+        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, false);
+    }
 }
 
 impl Drop for Progress {

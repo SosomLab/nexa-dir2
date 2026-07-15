@@ -68,6 +68,18 @@ pub struct Settings {
     pub sort_case_sensitive: bool,
     /// Alt+↑ 떠난 폴더 자동 선택의 뷰 배치(사용자 QA 07-15): "top"|"center"|"bottom".
     pub nav_up_align: String,
+    /// 탭 더블클릭 동작(사용자 요청 07-15): "close"(기본)|"pin"|"lock" — 옵션 추가 예정.
+    pub tab_dblclick: String,
+    /// 타입어헤드(원본 docs/32 §7 — 설정 07-15): 범위 "global"|"level"|"visible"(기본).
+    pub typeahead_scope: String,
+    /// 입력 리셋(ms, 200~10000 — 기본 1000).
+    pub typeahead_reset_ms: i32,
+    /// HUD 배지 위치(0..8 = 3×3 — 기본 6=좌하).
+    pub typeahead_pos: i32,
+    /// 특수문자 포함(파일명 안전) · 공백 포함(접두사 입력 중) · Backspace 지우기.
+    pub typeahead_special: bool,
+    pub typeahead_space: bool,
+    pub typeahead_backspace: bool,
     /// 퀵 런처 바 표시(M5-1 — 원본 LayoutState.ShowLauncher 대응, 기본 표시).
     pub launcher: bool,
     /// 퀵 런처 항목(M5-1). `None` = 키 부재(첫 실행 — 호스트가 시드 주입) ·
@@ -98,6 +110,13 @@ impl Default for Settings {
             sort_folders_first: true,
             sort_case_sensitive: false,
             nav_up_align: "center".into(),
+            tab_dblclick: "close".into(),
+            typeahead_scope: "visible".into(),
+            typeahead_reset_ms: 1000,
+            typeahead_pos: 6,
+            typeahead_special: true,
+            typeahead_space: true,
+            typeahead_backspace: true,
             launcher: true,
             launcher_items: None,
             launcher_seed: 0,
@@ -114,6 +133,8 @@ pub struct PanelSession {
     pub expanded: Vec<Vec<PathBuf>>,
     /// 탭별 잠금(닫기 제외 — 원본 TabSession.Locked, 편의 UX ②).
     pub locked: Vec<bool>,
+    /// 탭별 고정(📌 — 사용자 요청 07-15).
+    pub pinned: Vec<bool>,
 }
 
 /// 세션(원본 session.json 대응) — `data\session.cfg`(패널·탭·활성·펼침).
@@ -169,10 +190,20 @@ impl Settings {
             self.term_cols
         ));
         out.push_str(&format!(
-            "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\n",
+            "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\n",
             u8::from(self.sort_folders_first),
             u8::from(self.sort_case_sensitive),
-            self.nav_up_align
+            self.nav_up_align,
+            self.tab_dblclick
+        ));
+        out.push_str(&format!(
+            "typeahead_scope={}\ntypeahead_reset_ms={}\ntypeahead_pos={}\ntypeahead_special={}\ntypeahead_space={}\ntypeahead_backspace={}\n",
+            self.typeahead_scope,
+            self.typeahead_reset_ms,
+            self.typeahead_pos,
+            u8::from(self.typeahead_special),
+            u8::from(self.typeahead_space),
+            u8::from(self.typeahead_backspace)
         ));
         out.push_str(&format!("launcher_seed={}\n", self.launcher_seed));
         if let Some(items) = &self.launcher_items {
@@ -248,6 +279,25 @@ impl Settings {
                 "nav_up_align" if matches!(v, "top" | "center" | "bottom") => {
                     s.nav_up_align = v.into()
                 }
+                "tab_dblclick" if matches!(v, "close" | "pin" | "lock") => {
+                    s.tab_dblclick = v.into()
+                }
+                "typeahead_scope" if matches!(v, "global" | "level" | "visible") => {
+                    s.typeahead_scope = v.into()
+                }
+                "typeahead_reset_ms" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.typeahead_reset_ms = n.clamp(200, 10_000);
+                    }
+                }
+                "typeahead_pos" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.typeahead_pos = n.clamp(0, 8);
+                    }
+                }
+                "typeahead_special" => s.typeahead_special = v != "0",
+                "typeahead_space" => s.typeahead_space = v != "0",
+                "typeahead_backspace" => s.typeahead_backspace = v != "0",
                 "launcher" => s.launcher = v != "0",
                 "launcher_seed" => s.launcher_seed = v.parse().unwrap_or(0),
                 // count 키 존재 = 항목 목록 확정(비움 포함) — launcherN은 아래에서 채움
@@ -320,6 +370,15 @@ impl Session {
                     .collect();
                 out.push_str(&format!("panel{i}.locked={}\n", flags.join("|")));
             }
+            // 탭별 고정(07-15) — 동일 규약
+            if p.pinned.iter().any(|l| *l) {
+                let flags: Vec<&str> = p
+                    .pinned
+                    .iter()
+                    .map(|l| if *l { "1" } else { "0" })
+                    .collect();
+                out.push_str(&format!("panel{i}.pinned={}\n", flags.join("|")));
+            }
         }
         out
     }
@@ -344,6 +403,10 @@ impl Session {
                 "panel0.locked" | "panel1.locked" => {
                     let idx = usize::from(k.starts_with("panel1"));
                     s.panels[idx].locked = v.split('|').map(|f| f == "1").collect();
+                }
+                "panel0.pinned" | "panel1.pinned" => {
+                    let idx = usize::from(k.starts_with("panel1"));
+                    s.panels[idx].pinned = v.split('|').map(|f| f == "1").collect();
                 }
                 k if k.starts_with("panel0.exp") || k.starts_with("panel1.exp") => {
                     let idx = usize::from(k.starts_with("panel1"));
@@ -433,6 +496,13 @@ mod tests {
             sort_folders_first: false,
             sort_case_sensitive: true,
             nav_up_align: "top".into(),
+            tab_dblclick: "lock".into(),
+            typeahead_scope: "level".into(),
+            typeahead_reset_ms: 700,
+            typeahead_pos: 2,
+            typeahead_special: false,
+            typeahead_space: false,
+            typeahead_backspace: false,
             launcher: false,
             launcher_items: Some(vec![
                 LauncherItem {
@@ -473,6 +543,12 @@ mod tests {
         );
         assert!(parsed.sort_case_sensitive, "대소문자 정렬 왕복");
         assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
+        assert_eq!(parsed.tab_dblclick, "lock", "탭 더블클릭 동작 왕복(07-15)");
+        assert_eq!(parsed.typeahead_scope, "level", "타입어헤드 범위 왕복");
+        assert_eq!(parsed.typeahead_reset_ms, 700);
+        assert_eq!(parsed.typeahead_pos, 2);
+        assert!(!parsed.typeahead_special && !parsed.typeahead_space);
+        assert!(!parsed.typeahead_backspace);
         assert_eq!(
             Settings::parse("nav_up_align=middle").nav_up_align,
             "center",
@@ -517,12 +593,14 @@ mod tests {
                         ],
                     ],
                     locked: vec![false, true], // 탭1 잠금 — 편의 UX ② 왕복
+                    pinned: vec![true, false], // 탭0 고정 — 07-15 왕복
                 },
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\")],
                     active: 0,
                     expanded: vec![],
                     locked: vec![],
+                    pinned: vec![],
                 },
             ],
         };
@@ -535,6 +613,11 @@ mod tests {
         assert!(parsed.panels[0].expanded[0].is_empty());
         assert_eq!(parsed.panels[0].expanded[1], s.panels[0].expanded[1]);
         assert_eq!(parsed.panels[0].locked, vec![false, true], "잠금 왕복");
+        assert_eq!(
+            parsed.panels[0].pinned,
+            vec![true, false],
+            "고정 왕복(07-15)"
+        );
         // 빈/손상 → 기본
         let empty = Session::parse("");
         assert_eq!(empty.active_panel, 0);

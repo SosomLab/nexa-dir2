@@ -78,6 +78,8 @@ const TIMER_RENAME: usize = 4;
 const TIMER_TERM_SEL: usize = 5;
 /// 터미널 캐럿 깜빡임(QA 07-14) — 키 포커스 동안 GetCaretBlinkTime() 간격 토글.
 const TIMER_TERM_CARET: usize = 6;
+/// 전송 완료 진행 창 자동 닫기(원본 PROG-WIN 2초 — 사용자 요청 07-15).
+const TIMER_PROG_CLOSE: usize = 7;
 const JANITOR_TICK_MS: u32 = 10_000;
 const IDLE_TRIM_MS: u64 = 60_000;
 /// 폴더 watcher 통지(M3-6) — wparam=패널, lparam=세대(낡은 스레드 무시). 디바운스 타이머는
@@ -372,6 +374,15 @@ struct State {
     /// 대소문자 구분 정렬·Alt+↑ 자동 선택 배치(사용자 요청 07-15 — 설정 영속).
     sort_case_sensitive: bool,
     nav_up_align: String,
+    /// 탭 더블클릭 동작("close"|"pin"|"lock" — 사용자 요청 07-15).
+    tab_dblclick: String,
+    /// 타입어헤드 설정(원본 docs/32 §7 — 07-15): 범위·리셋 ms·HUD 위치·체크 3종.
+    ta_scope: String,
+    ta_reset_ms: i32,
+    ta_pos: i32,
+    ta_special: bool,
+    ta_space: bool,
+    ta_backspace: bool,
     /// 언어 설정값("system"|코드)·발견 목록(메뉴 라디오 CMD_LANG_BASE+idx 매핑) — M2-6.
     lang_setting: String,
     langs: Vec<(String, String)>,
@@ -392,6 +403,8 @@ struct State {
     uia_struct: Option<(usize, String, usize)>,
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
+    /// 완료 후 자동 닫기 대기 중인 진행 창(2초 — TIMER_PROG_CLOSE가 drop).
+    transfer_close: Option<crate::dialog::Progress>,
     transfer_gen: u64,
     /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
     drag_press: Option<(i32, i32)>,
@@ -675,6 +688,8 @@ pub fn run() -> Result<()> {
         let mut inv = Invalidations::default();
         left.seed_locked(&session.panels[0].locked, &mut inv);
         right.seed_locked(&session.panels[1].locked, &mut inv);
+        left.seed_pinned(&session.panels[0].pinned, &mut inv);
+        right.seed_pinned(&session.panels[1].pinned, &mut inv);
     }
     {
         // 하단 도크 복원(M4-1 — 원본 세션 저장 계승: 표시·비율)
@@ -700,6 +715,19 @@ pub fn run() -> Result<()> {
         let align = align_of(&settings.nav_up_align);
         left.set_nav_up_align(align);
         right.set_nav_up_align(align);
+        // 타입어헤드 옵션(07-15) — 항상 적용(리셋 ms 등 기본값 아님 가능)
+        let scope = scope_of(&settings.typeahead_scope);
+        for p in [&mut left, &mut right] {
+            p.set_typeahead_opts(
+                scope,
+                settings.typeahead_reset_ms.max(1) as u64,
+                settings.typeahead_special,
+                settings.typeahead_space,
+                settings.typeahead_backspace,
+                settings.typeahead_pos.clamp(0, 8) as u8,
+                &mut inv,
+            );
+        }
         let _ = inv; // 창 생성 전 — 첫 페인트가 대체
     }
     // 퀵 런처 항목(M5-1) — 키 부재(첫 실행)면 시드(VS Code│pwsh·cmd — v2).
@@ -751,6 +779,13 @@ pub fn run() -> Result<()> {
         sort_folders_first: settings.sort_folders_first,
         sort_case_sensitive: settings.sort_case_sensitive,
         nav_up_align: settings.nav_up_align.clone(),
+        tab_dblclick: settings.tab_dblclick.clone(),
+        ta_scope: settings.typeahead_scope.clone(),
+        ta_reset_ms: settings.typeahead_reset_ms,
+        ta_pos: settings.typeahead_pos,
+        ta_special: settings.typeahead_special,
+        ta_space: settings.typeahead_space,
+        ta_backspace: settings.typeahead_backspace,
         lang_setting: settings.lang,
         langs,
         term_font: settings.term_font,
@@ -766,6 +801,7 @@ pub fn run() -> Result<()> {
         uia_caret: None,
         uia_struct: None,
         transfer: None,
+        transfer_close: None,
         transfer_gen: 0,
         drag_press: None,
         slow_click: None,
@@ -2149,7 +2185,13 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         );
         return;
     }
-    let job = st.transfer.take().unwrap();
+    let mut job = st.transfer.take().unwrap();
+    // 진행 창 = 완료 표기 후 2초 자동 닫기(원본 PROG-WIN — 사용자 요청 07-15)
+    if let Some(mut p) = job.progress.take() {
+        p.set_done(&tr("ops.doneClosing"));
+        st.transfer_close = Some(p);
+        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, 2_000, None);
+    }
     let out = job
         .shared
         .outcome
@@ -2700,6 +2742,13 @@ unsafe fn open_prefs(hwnd: HWND) {
                 sort_folders_first: st.sort_folders_first,
                 sort_case_sensitive: st.sort_case_sensitive,
                 nav_up_align: st.nav_up_align.clone(),
+                tab_dblclick: st.tab_dblclick.clone(),
+                typeahead_scope: st.ta_scope.clone(),
+                typeahead_reset_ms: st.ta_reset_ms,
+                typeahead_pos: st.ta_pos,
+                typeahead_special: st.ta_special,
+                typeahead_space: st.ta_space,
+                typeahead_backspace: st.ta_backspace,
             },
             st.dlg_font.clone(),
         )
@@ -2858,6 +2907,39 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         st.panels[1].set_sort_case(v.sort_case_sensitive, &mut inv);
         flush_invalidations(hwnd, &mut inv);
     }
+    // 탭 더블클릭 동작(07-15)
+    if v.tab_dblclick != st.tab_dblclick {
+        st.tab_dblclick = v.tab_dblclick.clone();
+    }
+    // 타입어헤드 옵션(07-15) — 전 탭 즉시 적용
+    if v.typeahead_scope != st.ta_scope
+        || v.typeahead_reset_ms != st.ta_reset_ms
+        || v.typeahead_pos != st.ta_pos
+        || v.typeahead_special != st.ta_special
+        || v.typeahead_space != st.ta_space
+        || v.typeahead_backspace != st.ta_backspace
+    {
+        st.ta_scope = v.typeahead_scope.clone();
+        st.ta_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
+        st.ta_pos = v.typeahead_pos.clamp(0, 8);
+        st.ta_special = v.typeahead_special;
+        st.ta_space = v.typeahead_space;
+        st.ta_backspace = v.typeahead_backspace;
+        let scope = scope_of(&st.ta_scope);
+        let mut inv = Invalidations::default();
+        for i in 0..2 {
+            st.panels[i].set_typeahead_opts(
+                scope,
+                st.ta_reset_ms as u64,
+                st.ta_special,
+                st.ta_space,
+                st.ta_backspace,
+                st.ta_pos as u8,
+                &mut inv,
+            );
+        }
+        flush_invalidations(hwnd, &mut inv);
+    }
     // Alt+↑ 자동 선택 배치(07-15)
     if v.nav_up_align != st.nav_up_align {
         st.nav_up_align = v.nav_up_align.clone();
@@ -2870,6 +2952,15 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
     let _ = InvalidateRect(Some(hwnd), None, false);
     update_title(hwnd, st, "");
+}
+
+/// 설정 문자열 → 타입어헤드 검색 범위(미지 값은 가시 스트림 — 원본 docs/32 기본).
+fn scope_of(s: &str) -> nexa_tree::FindScope {
+    match s {
+        "global" => nexa_tree::FindScope::GlobalFirst,
+        "level" => nexa_tree::FindScope::CurrentLevel,
+        _ => nexa_tree::FindScope::VisibleStream,
+    }
 }
 
 /// 설정 문자열 → 뷰 배치(Alt+↑ 자동 선택 — 미지 값은 중단).
@@ -2894,6 +2985,13 @@ fn current_settings(st: &State) -> Settings {
         sort_folders_first: st.sort_folders_first,
         sort_case_sensitive: st.sort_case_sensitive,
         nav_up_align: st.nav_up_align.clone(),
+        tab_dblclick: st.tab_dblclick.clone(),
+        typeahead_scope: st.ta_scope.clone(),
+        typeahead_reset_ms: st.ta_reset_ms,
+        typeahead_pos: st.ta_pos,
+        typeahead_special: st.ta_special,
+        typeahead_space: st.ta_space,
+        typeahead_backspace: st.ta_backspace,
         dock_ratio: st.panels[0].dock_ratio(),
         dock_split: st.dock_split,
         term_font: st.term_font.clone(),
@@ -2934,9 +3032,11 @@ unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
     const CMD_LOCK: usize = 1;
     const CMD_DUP: usize = 2;
     const CMD_CLOSE: usize = 3;
-    let (locked, count) = match state_of(hwnd) {
+    const CMD_PIN: usize = 4;
+    let (locked, pinned, count) = match state_of(hwnd) {
         Some(st) if tab < st.panels[panel].tab_count() => (
             st.panels[panel].tab_locked(tab),
+            st.panels[panel].tab_pinned(tab),
             st.panels[panel].tab_count(),
         ),
         _ => return,
@@ -2960,6 +3060,15 @@ unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
         },
         true,
     );
+    append(
+        CMD_PIN,
+        &if pinned {
+            tr("tab.unpin")
+        } else {
+            tr("tab.pin")
+        },
+        true,
+    );
     append(CMD_DUP, &tr("tab.duplicate"), true);
     append(CMD_CLOSE, &tr("tab.close"), !locked && count > 1);
     let mut pt = windows::Win32::Foundation::POINT::default();
@@ -2977,6 +3086,7 @@ unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
     let mut inv = Invalidations::default();
     match cmd.0 as usize {
         CMD_LOCK => st.panels[panel].toggle_tab_lock(tab, &mut inv),
+        CMD_PIN => st.panels[panel].toggle_tab_pin(tab, &mut inv),
         CMD_DUP => {
             let ctx = st.nav_ctx();
             st.panels[panel].duplicate_tab(tab, ctx, &mut inv);
@@ -3662,6 +3772,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 if let Some(idx) = st.panel_at(x) {
                     set_active(hwnd, st, idx);
+                    // 탭 본체 더블클릭 = 설정 동작(사용자 요청 07-15 — 기본 닫기)
+                    if let Some(ti) = st.panels[idx].tabbar.tab_index_at(x, y) {
+                        let mut inv = Invalidations::default();
+                        match st.tab_dblclick.as_str() {
+                            "pin" => st.panels[idx].toggle_tab_pin(ti, &mut inv),
+                            "lock" => st.panels[idx].toggle_tab_lock(ti, &mut inv),
+                            _ => st.panels[idx].close_tab(ti, &mut inv),
+                        }
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
+                        update_status(hwnd, st);
+                        return LRESULT(0);
+                    }
                     // 탭 바 빈 공간 더블클릭 = 새 탭(원본 F20 — QA 07-14)
                     if st.panels[idx].tabbar.empty_area_at(x, y) {
                         let mut inv = Invalidations::default();
@@ -4151,6 +4274,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_TIMER => {
+            if wparam.0 == TIMER_PROG_CLOSE {
+                // 전송 완료 2초 경과 — 진행 창 닫기(drop = DestroyWindow)
+                let _ = KillTimer(Some(hwnd), TIMER_PROG_CLOSE);
+                if let Some(st) = state_of(hwnd) {
+                    st.transfer_close = None;
+                }
+                return LRESULT(0);
+            }
             if wparam.0 >= TIMER_WATCH_BASE && wparam.0 < TIMER_WATCH_BASE + 2 {
                 // watcher 디바운스 만료(M3-6) — 무간섭 재로드(펼침·선택·캐럿·스크롤 보존).
                 // 편집/전송 중엔 미루고 재무장(재로드가 편집 행 인덱스를 흔들지 않게)
@@ -4306,12 +4437,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             active: a0,
                             expanded: e0,
                             locked: st.panels[0].session_locked(),
+                            pinned: st.panels[0].session_pinned(),
                         },
                         PanelSession {
                             tabs: t1,
                             active: a1,
                             expanded: e1,
                             locked: st.panels[1].session_locked(),
+                            pinned: st.panels[1].session_pinned(),
                         },
                     ],
                 };

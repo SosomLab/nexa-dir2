@@ -29,6 +29,8 @@ pub struct Tab {
     expanded: std::collections::BTreeMap<String, PathBuf>,
     /// 탭 잠금(닫기 제외 — 원본 TAB-MENU, 편의 UX ②). 세션 영속.
     locked: bool,
+    /// 탭 고정(📌 핀 그룹 앞 정렬 — 사용자 요청 07-15). 세션 영속.
+    pinned: bool,
 }
 
 /// F18 펼침 키 — 대소문자 무시·후행 구분자 제거(원본 OrdinalIgnoreCase HashSet 대응).
@@ -77,6 +79,8 @@ pub struct Panel {
     /// 정렬 옵션(G-13·07-15) — **새 소스(탐색·재로드·새 탭)에도 재적용**하기 위해 보관.
     sort_folders_first: bool,
     sort_case: bool,
+    /// 타입어헤드 옵션(07-15): (범위, 리셋 ms, 특수문자, 공백, Backspace, HUD 위치).
+    ta_opts: (nexa_tree::FindScope, u64, bool, bool, bool, u8),
     /// 도크 높이 비율(리스트+도크 영역 대비 — S2 드래그·영속. 전역 공유 값이 양 패널에 적용).
     dock_ratio: f32,
     tabs: Vec<Tab>,
@@ -106,12 +110,21 @@ impl Panel {
             nav_up_align: nexa_gui::widgets::rows::ScrollAlign::default(),
             sort_folders_first: true,
             sort_case: false,
+            ta_opts: (
+                nexa_tree::FindScope::VisibleStream,
+                1000,
+                true,
+                true,
+                true,
+                6,
+            ),
             dock_ratio: 0.3,
             tabs: vec![Tab {
                 rows,
                 nav: History::new(root),
                 expanded: Default::default(),
                 locked: false,
+                pinned: false,
             }],
             active: 0,
             bounds: Rect::default(),
@@ -164,6 +177,7 @@ impl Panel {
                 nav: History::new(root),
                 expanded: Default::default(),
                 locked: false,
+                pinned: false,
             };
             Self::seed_expanded(&mut tab, &exp);
             p.tabs.push(tab);
@@ -339,6 +353,8 @@ impl Panel {
         self.tabbar.set_tabs(titles, self.active, inv);
         self.tabbar
             .set_locked(self.tabs.iter().map(|t| t.locked).collect(), inv);
+        self.tabbar
+            .set_pinned(self.tabs.iter().map(|t| t.pinned).collect(), inv);
         let path = self.root_path().to_string_lossy().into_owned();
         self.pathbar.set_path(path, inv);
     }
@@ -359,6 +375,7 @@ impl Panel {
             nav: History::new(path),
             expanded: Default::default(),
             locked: false,
+            pinned: false,
         });
         self.active = self.tabs.len() - 1;
         self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 새 탭 유지)
@@ -403,7 +420,8 @@ impl Panel {
             rows,
             nav: History::new(path),
             expanded: self.tabs[i].expanded.clone(),
-            locked: false, // 복제본은 잠금 해제 상태(원본 동일)
+            locked: false,
+            pinned: false, // 복제본은 잠금 해제 상태(원본 동일)
         };
         let entries: Vec<PathBuf> = tab.expanded.values().cloned().collect();
         let tree = tab.rows.source_mut().tree_mut();
@@ -426,6 +444,42 @@ impl Panel {
 
     pub fn tab_locked(&self, i: usize) -> bool {
         self.tabs.get(i).is_some_and(|t| t.locked)
+    }
+
+    /// 탭 고정 토글(사용자 요청 07-15) — 고정 시 핀 그룹 끝으로, 해제 시 그룹 밖으로 이동.
+    pub fn toggle_tab_pin(&mut self, i: usize, inv: &mut Invalidations) {
+        let Some(t) = self.tabs.get_mut(i) else {
+            return;
+        };
+        t.pinned = !t.pinned;
+        // 핀 그룹(앞쪽) 경계 = i 제외 고정 탭 수 — 고정=그룹 끝으로, 해제=그룹 직후로
+        // (둘 다 경계 위치와 일치)
+        let target = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(j, t)| *j != i && t.pinned)
+            .count();
+        if target != i {
+            self.move_tab(i, target, inv);
+        }
+        self.sync_chrome(inv);
+    }
+
+    pub fn tab_pinned(&self, i: usize) -> bool {
+        self.tabs.get(i).is_some_and(|t| t.pinned)
+    }
+
+    pub fn session_pinned(&self) -> Vec<bool> {
+        self.tabs.iter().map(|t| t.pinned).collect()
+    }
+
+    /// 세션 고정 시드(부족분 false — locked와 동일 규약).
+    pub fn seed_pinned(&mut self, pinned: &[bool], inv: &mut Invalidations) {
+        for (t, p) in self.tabs.iter_mut().zip(pinned) {
+            t.pinned = *p;
+        }
+        self.sync_chrome(inv);
     }
 
     /// 탭 우클릭 메뉴 요청 수거(1회성 — 호스트가 네이티브 팝업 표시).
@@ -621,12 +675,40 @@ impl Panel {
         }
     }
 
-    /// 새로 만든 소스에 보관된 정렬 옵션 적용(탐색·재로드·새 탭 공통 — 07-15 전파 수정).
+    /// 새로 만든 소스에 보관된 정렬·타입어헤드 옵션 적용(탐색·재로드·새 탭 공통 — 07-15).
     fn apply_sort_opts(&mut self, tab: usize) {
         let (sf, sc) = (self.sort_folders_first, self.sort_case);
-        let src = self.tabs[tab].rows.source_mut();
-        src.set_folders_first(sf);
-        src.set_case_sensitive(sc);
+        let (scope, reset, special, space, bs, hud) = self.ta_opts;
+        let mut inv = Invalidations::default();
+        {
+            let src = self.tabs[tab].rows.source_mut();
+            src.set_folders_first(sf);
+            src.set_case_sensitive(sc);
+            src.set_find_scope(scope);
+        }
+        self.tabs[tab]
+            .rows
+            .set_typeahead_opts(reset, special, space, bs, hud, &mut inv);
+    }
+
+    /// 타입어헤드 옵션 적용(설정 — 전 탭 + 새 소스용 보관, 07-15).
+    #[allow(clippy::too_many_arguments)] // 설정 6값 전달(구조체화는 후속)
+    pub fn set_typeahead_opts(
+        &mut self,
+        scope: nexa_tree::FindScope,
+        reset_ms: u64,
+        special: bool,
+        space: bool,
+        backspace: bool,
+        hud_pos: u8,
+        inv: &mut Invalidations,
+    ) {
+        self.ta_opts = (scope, reset_ms, special, space, backspace, hud_pos);
+        for t in &mut self.tabs {
+            t.rows.source_mut().set_find_scope(scope);
+            t.rows
+                .set_typeahead_opts(reset_ms, special, space, backspace, hud_pos, inv);
+        }
     }
 
     /// 가시 목록에서 경로가 일치하는 행을 캐럿+단일 선택(G-7 — 최상위 자식은 항상 가시).

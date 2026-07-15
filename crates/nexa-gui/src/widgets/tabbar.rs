@@ -31,6 +31,8 @@ pub struct TabBar {
     titles: Vec<String>,
     /// 탭별 잠금(닫기 제외 — 원본 TAB-MENU) 표시. titles와 인덱스 정렬(부족분=false).
     locked: Vec<bool>,
+    /// 탭 고정(📌 — 핀 그룹 앞 정렬은 호스트 몫, 사용자 요청 07-15).
+    pinned: Vec<bool>,
     active: usize,
     /// 활성 패널 여부 — 비활성 패널은 accent 줄을 흐리게(테두리 색).
     focused: bool,
@@ -56,6 +58,7 @@ impl TabBar {
         TabBar {
             titles: Vec::new(),
             locked: Vec::new(),
+            pinned: Vec::new(),
             active: 0,
             focused: true,
             bounds: Rect::default(),
@@ -81,6 +84,18 @@ impl TabBar {
             self.locked = locked;
             inv.push(self.bounds);
         }
+    }
+
+    pub fn set_pinned(&mut self, pinned: Vec<bool>, inv: &mut Invalidations) {
+        if self.pinned != pinned {
+            self.pinned = pinned;
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 탭 본체 히트(× 버튼 여부 무시) — 호스트의 더블클릭 동작 라우팅용(07-15).
+    pub fn tab_index_at(&self, x: i32, y: i32) -> Option<usize> {
+        self.tab_at(x, y).map(|(i, _)| i)
     }
 
     pub fn set_focused(&mut self, focused: bool, inv: &mut Invalidations) {
@@ -217,6 +232,14 @@ impl Widget for TabBar {
         let close_w = self.pad_x * CLOSE_ZONE_PADS;
         for (i, title) in self.titles.iter().enumerate() {
             let locked = self.locked.get(i).copied().unwrap_or(false);
+            let pinned = self.pinned.get(i).copied().unwrap_or(false);
+            let pin_title; // 고정 표지(원본 TAB-MENU 핀 — 사용자 요청 07-15)
+            let title = if pinned {
+                pin_title = format!("📌{title}");
+                &pin_title
+            } else {
+                title
+            };
             let shown = if locked {
                 format!("🔒{title}") // 잠금 표지(원본 TAB-MENU)
             } else {
