@@ -1508,7 +1508,7 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
     use crate::shellmenu::{self, CustomItem};
     // 1단계: State에서 요청 데이터 추출 — 모달 메뉴 펌프 전 참조 종료(ADR-0003 재진입 안전)
     let req = state_of(hwnd).map(|st| {
-        let dir = st.active_panel().root_path().to_path_buf();
+        let dir = st.active_panel().root_path();
         let undo_label = match st.history.undo_description() {
             Some(d) => trf("ctx.undoOf", &[d]),
             None => tr("menu.edit.undo"),
@@ -1756,7 +1756,7 @@ unsafe fn drop_dest_at(hwnd: HWND, sx: i32, sy: i32) -> Option<PathBuf> {
             }
         }
     }
-    Some(st.panels[idx].root_path().to_path_buf()) // 파일 행/빈 본문 = 패널 현재 폴더
+    Some(st.panels[idx].root_path()) // 파일 행/빈 본문 = 패널 현재 폴더
 }
 
 /// 외부 드롭 확정(M3-5 S3, dnd.rs 훅) — 전송 엔진 합류(진행·취소·undo 기록·양쪽 재로드).
@@ -1919,7 +1919,7 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
         // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
         st.history.push(Box::new(DeleteBatchOp {
             description: trf("del.recycleOp", &[&ok.to_string()]),
-            paths: targets.clone(),
+            paths: targets,
         }));
     } else {
         fail = targets.len();
@@ -1992,7 +1992,7 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
 
 /// 새로 만들기(M3-2, 원본 BG-N1/N2) — 생성 → 재로드 → 그 행 즉시 인라인 이름변경(RevealAndRename).
 unsafe fn create_new(hwnd: HWND, st: &mut State, folder: bool) {
-    let dir = st.active_panel().root_path().to_path_buf();
+    let dir = st.active_panel().root_path();
     let created = if folder {
         nexa_ops::create_new_dir(&dir, &tr("new.folderBase"))
     } else {
@@ -4010,7 +4010,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if op == nexa_ops::Op::Move {
                             crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
                         }
-                        let dest = st.active_panel().root_path().to_path_buf();
+                        let dest = st.active_panel().root_path();
                         start_transfer(hwnd, st, paths, dest, op);
                         return LRESULT(0);
                     }

@@ -656,7 +656,7 @@ impl Panel {
     /// 위로(부모 폴더) — Alt+↑. **떠난 폴더를 자동 선택**(G-7 — 원본 F13-1 이식):
     /// 부모 목록에서 방금 떠난 폴더가 캐럿+단일 선택되어 위치 감각을 보존한다.
     pub fn nav_up(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
-        let left = self.root_path().to_path_buf();
+        let left = self.root_path();
         if let Some(parent) = left.parent().map(Path::to_path_buf) {
             self.navigate_to(parent, ctx, inv);
             self.select_path(&left, inv);
@@ -942,7 +942,7 @@ mod tests {
         fs::write(base.join("abb.txt"), b"x").unwrap();
         fs::write(base.join("Abc.txt"), b"x").unwrap();
         let (mut p, mut inv) = panel(&base);
-        let first = |p: &Panel| p.rows().source().tree().row(0).unwrap().name.clone();
+        let first = |p: &Panel| p.rows().source().tree().row(0).unwrap().name;
         assert_eq!(first(&p), "abb.txt", "기본 = 대소문자 무시(abb < abc)");
         p.set_sort_case(true, &mut inv);
         assert_eq!(first(&p), "Abc.txt", "토글 즉시 대문자 그룹 상단");
@@ -1056,7 +1056,7 @@ mod tests {
             let id = tree.visible_id(i).unwrap();
             tree.collapse(id);
         }
-        p.navigate_to(b.clone(), ctx(), &mut inv);
+        p.navigate_to(b, ctx(), &mut inv);
         p.nav_back(ctx(), &mut inv);
         let tree = p.rows().source().tree();
         let i = tree.index_of_path(&a.to_string_lossy()).unwrap();
