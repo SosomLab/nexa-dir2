@@ -8,6 +8,7 @@
 
 ## 2026-07-16
 
+- **배포 2채널(`feat/dist-installer` — 사용자 요청·DR-3 개정)**: 포터블(exe 1개 = 배포 전부 — 최소파일 명문화) + **설치형 exe(Inno Setup — 사용자별 설치 기본·제거기·설치 파일도 exe 1개)** 병행 — release.yml이 태그 push 시 **2종 동시 첨부**. 전제 조건 **data_dir 폴백**(쓰기 프로브 실패 시 `%LOCALAPPDATA%\NexaDir2\data` — Program Files 대응) 구현+테스트. 설계 [21-distribution.md](21-distribution.md) 신설. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **최적화 패스 X-16(`refactor/optimization-pass` — 사용자 요청)**: 전체 코드 3축 점검(구조·핫패스·크레이트 경계 — 의존 그래프 깨끗·죽은 코드 없음 확인) 후 5커밋 — redundant clone 8건 · `[workspace.lints]`+widgets 파사드 · **셀/아이콘 렌더 핫패스 `Tree::row_ref`**(통 VisibleRow 클론 제거 — 행당 힙 할당 ~5회↓) · **DW 레이아웃 캐시 중첩 맵**(히트 경로 무할당) · **아이콘 틱 전창 무효화 → 목록·런처 rect**(초기 로딩 초당 ~12회 전창 재도장 제거)+mouse_xy/Invalidations 정리. 대형 구조 개편(모달 공통화·설정 매핑 단일화·win.rs 분할·중립 모듈 lib 승격 등 7건)은 X-16 백로그로 등재. 170 green. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **X-13 런처 CRUD 1/2(`feat/x13-launcher-crud` — 병합 보류)**: LauncherItem.icon + `launcherN.icon` 별도 키 직렬화(하위호환)·바 아이콘 오버라이드. 2/2 설정 편집기 잔여. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **할 일 등록(사용자 요청)**: X-15 오프라인 라이선스 인증(CNG 서명 검증 — crate 0 유지 설계) · X-17 가상 최상위 "내 PC"(드라이브 간 이동). 배포 구성(포터블 최소파일+설치형 exe CI)은 별도 브랜치 진행. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).

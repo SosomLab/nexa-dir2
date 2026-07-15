@@ -144,13 +144,49 @@ pub struct Session {
     pub panels: [PanelSession; 2],
 }
 
-/// exe 옆 `data\` (실패 시 커런트 디렉터리 기준 — 테스트/특수 환경 폴백).
+/// 영속 디렉터리(DR-3 개정 07-16 — 포터블 우선 + 설치형 폴백):
+/// **exe 옆 `data\`가 기본**(포터블 — 기존 동작 그대로). 설치형(Program Files 등
+/// **쓰기 불가 위치**)이면 `%LOCALAPPDATA%\NexaDir2\data`로 폴백.
+/// 판정은 프로세스당 1회(OnceLock — 매 저장마다 쓰기 프로브 방지).
 pub fn data_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("data")
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let exe_side = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("data");
+        choose_data_dir(exe_side)
+    })
+    .clone()
+}
+
+/// 포터블/설치형 선택 규칙(테스트 분리용): 후보에 **디렉터리 생성+쓰기 프로브**가
+/// 성공하면 그대로(포터블), 실패하면 `%LOCALAPPDATA%\NexaDir2\data`(설치형).
+/// LOCALAPPDATA조차 없으면 후보 유지(기존 폴백 동작 보존).
+fn choose_data_dir(exe_side: PathBuf) -> PathBuf {
+    if dir_writable(&exe_side) {
+        return exe_side;
+    }
+    match std::env::var_os("LOCALAPPDATA") {
+        Some(la) => PathBuf::from(la).join("NexaDir2").join("data"),
+        None => exe_side,
+    }
+}
+
+/// 쓰기 가능 프로브 — 생성 시도 후 임시 파일 1개 쓰고 지운다(ACL·읽기 전용 감지).
+fn dir_writable(dir: &Path) -> bool {
+    if fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(format!(".w{}", std::process::id()));
+    match fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 // ── 직렬화(key=value) ────────────────────────────────────────────
@@ -622,6 +658,28 @@ mod tests {
         let empty = Session::parse("");
         assert_eq!(empty.active_panel, 0);
         assert!(empty.panels[0].tabs.is_empty());
+    }
+
+    #[test]
+    fn choose_data_dir_portable_first_installed_fallback() {
+        // 쓰기 가능 후보 = 그대로(포터블 — DR-3 기본)
+        let ok = std::env::temp_dir().join(format!("nexa_dd_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&ok);
+        assert_eq!(choose_data_dir(ok.clone()), ok);
+        let _ = fs::remove_dir_all(&ok);
+        // 쓰기 불가(파일을 부모로 둔 불가능 경로) = LOCALAPPDATA 폴백(설치형)
+        let blocker = std::env::temp_dir().join(format!("nexa_ddf_{}", std::process::id()));
+        fs::write(&blocker, b"x").unwrap();
+        let bad = blocker.join("data");
+        let picked = choose_data_dir(bad.clone());
+        match std::env::var_os("LOCALAPPDATA") {
+            Some(_) => assert!(
+                picked.ends_with(Path::new("NexaDir2").join("data")),
+                "설치형 폴백: {picked:?}"
+            ),
+            None => assert_eq!(picked, bad, "LOCALAPPDATA 부재 = 후보 유지"),
+        }
+        fs::remove_file(&blocker).unwrap();
     }
 
     #[test]

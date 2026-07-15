@@ -38,13 +38,28 @@ jobs:
           if ("${{ github.ref_type }}" -ne "tag") { $ver = "dev" }
           Copy-Item target/release/nexa-app.exe "NexaDir2-$ver-win-x64.exe"
           Write-Output "산출물: NexaDir2-$ver-win-x64.exe"
+      - name: 설치형 exe 빌드 — Inno Setup (보조 채널, DR-3 개정 07-16)
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          if ("${{ github.ref_type }}" -ne "tag") { $ver = "0.0.0" }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc /DAppVersion=$ver /DExePath="$PWD\target\release\nexa-app.exe" installer\nexa.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 실패: $LASTEXITCODE" }
+          Get-Item installer\out\NexaDir2-Setup-*.exe | ForEach-Object {
+            Write-Output "설치형: $($_.Name) = $([math]::Round($_.Length / 1MB, 2)) MB"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: NexaDir2-win-x64
-          path: NexaDir2-*-win-x64.exe
-      - name: GitHub Release 생성·exe 첨부 (태그 push에서만)
+          path: |
+            NexaDir2-*-win-x64.exe
+            installer/out/NexaDir2-Setup-*.exe
+      - name: GitHub Release 생성·포터블+설치형 첨부 (태그 push에서만)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: NexaDir2-*-win-x64.exe
+          files: |
+            NexaDir2-*-win-x64.exe
+            installer/out/NexaDir2-Setup-*.exe
           generate_release_notes: true
