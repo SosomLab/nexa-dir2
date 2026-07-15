@@ -16,8 +16,11 @@ pub struct ToolButton {
     pub glyph: String,
     /// 그룹 구분선(QA 07-14 — 원본 도구 모음 그룹화 PR#10). 클릭 불가.
     pub separator: bool,
-    /// 토글 상태 표시(하단 accent 줄 — 숨김/닷파일 보기 등).
+    /// 토글 상태 표시(배경·글자색 + 하단 accent 줄 — 숨김/닷파일 보기 등).
     pub checked: bool,
+    /// 아이콘 버튼(M5-1 런처 — 원본 exe 16px 썸네일 대응): `(키, 로드 힌트)` —
+    /// DrawCtx::draw_icon이 해석(셸 아이콘 큐잉). Some이면 **정사각 버튼**(글리프 대신).
+    pub icon: Option<(String, String)>,
 }
 
 impl ToolButton {
@@ -27,6 +30,7 @@ impl ToolButton {
             glyph: glyph.into(),
             separator: false,
             checked: false,
+            icon: None,
         }
     }
 
@@ -37,11 +41,18 @@ impl ToolButton {
             glyph: String::new(),
             separator: true,
             checked: false,
+            icon: None,
         }
     }
 
     pub fn toggled(mut self, on: bool) -> Self {
         self.checked = on;
+        self
+    }
+
+    /// 아이콘 버튼(정사각) — 아이콘 미로드 동안은 글리프 텍스트가 폴백.
+    pub fn with_icon(mut self, key: impl Into<String>, hint: impl Into<String>) -> Self {
+        self.icon = Some((key.into(), hint.into()));
         self
     }
 }
@@ -170,24 +181,59 @@ impl Widget for Toolbar {
                 x += w;
                 continue;
             }
-            let w = self
-                .button_w
-                .unwrap_or_else(|| ctx.text_width(&btn.glyph) + self.pad_x * 2);
+            // 아이콘 버튼(런처 — M5-1) = 정사각(폭 = 바 높이), 그 외 = 고정/글리프 폭
+            let w = if btn.icon.is_some() {
+                b.h
+            } else {
+                self.button_w
+                    .unwrap_or_else(|| ctx.text_width(&btn.glyph) + self.pad_x * 2)
+            };
             let cell = Rect::new(x, b.y, w.min((b.right() - x).max(0)), b.h);
-            let bg = if self.hover == Some(i) {
+            // 토글 켜짐 = 배경·글자색 변화(QA 07-15 — 하단 줄만으로는 약함) + accent 줄 유지
+            let bg = if btn.checked {
+                theme.sel_bg
+            } else if self.hover == Some(i) {
                 theme.header_bg
             } else {
                 theme.chrome_bg
             };
+            let fg = if btn.checked {
+                theme.accent
+            } else {
+                theme.text
+            };
             if cell.w > 0 {
-                if self.button_w.is_some() {
+                if let Some((key, hint)) = &btn.icon {
+                    // 16×16 상당(바 높이 − 상하 4px 여백) 아이콘을 정사각 셀 중앙에.
+                    ctx.fill_rect(cell, bg);
+                    let isz = (b.h - 8).max(8);
+                    let drew = ctx.draw_icon(
+                        cell.x + (cell.w - isz) / 2,
+                        b.y + (b.h - isz) / 2,
+                        isz,
+                        key,
+                        hint,
+                    );
+                    if !drew {
+                        // 미로드/추출 실패 폴백 = 라벨 앞 2자(원본 텍스트 폴백 대응)
+                        let short = btn.glyph.chars().take(2).collect::<String>();
+                        let tw = ctx.text_width(&short);
+                        ctx.text_opaque(
+                            cell.x + (cell.w - tw).max(0) / 2,
+                            ty,
+                            cell,
+                            &short,
+                            fg,
+                            bg,
+                        );
+                    }
+                } else if self.button_w.is_some() {
                     // 고정 폭(네비 버튼) — 큰 글리프를 셀 중앙에(방향 가시성, 사용자 지시)
-                    ctx.glyph_opaque(cell, &btn.glyph, theme.text, bg);
+                    ctx.glyph_opaque(cell, &btn.glyph, fg, bg);
                 } else {
-                    ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, theme.text, bg);
+                    ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, fg, bg);
                 }
                 if btn.checked {
-                    // 토글 켜짐 = 하단 accent 줄(메뉴 체크 대응 시각화)
                     ctx.fill_rect(Rect::new(cell.x, b.bottom() - 2, cell.w, 2), theme.accent);
                 }
             }

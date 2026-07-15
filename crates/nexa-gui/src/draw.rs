@@ -44,8 +44,10 @@ pub trait DrawCtx {
 
     /// 아이콘 그리기 — `key`는 백엔드가 해석하는 불투명 식별자, `hint`는 로드 힌트(경로 등).
     /// 미로드 시 아무것도 그리지 않아도 된다(백엔드가 큐잉 후 재그리기). 기본 = no-op.
-    fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) {
+    /// 반환 = 실제로 그렸는가(M5-1 런처 — 미로드 동안 호출자가 폴백을 그릴 수 있게).
+    fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) -> bool {
         let _ = (x, y, size, key, hint);
+        false
     }
 
     /// 큰 글리프(버튼 화살표 등) — `clip` 안에 **가운데 정렬**로 본문보다 큰 크기로 그린다.

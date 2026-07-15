@@ -1,12 +1,11 @@
-//! 일괄 이름변경 다이얼로그(M5-1 — 원본 docs/25 α: 좌측 동작 폼 + 우측 실시간 미리보기).
-//! 원본은 설계만 존재(구현 0) — docs/25 스펙이 SSOT. 순수 로직은
-//! [`nexa_ops::batch_rename`](nexa-ops), 이 모듈은 네이티브 컨트롤 UI만.
+//! 일괄 이름변경 다이얼로그(M5-1 → 07-15 확장 — 원본 docs/25 §1~3 블록 스택):
+//! **순서형 파이프라인 편집기** = 동작 종류 선택 + 파라미터 폼 → [블록 추가] →
+//! 파이프라인 목록(선택·▲▼ 재배치·삭제) + 우측 실시간 미리보기(충돌 ⚠·적용 차단) +
+//! **프리셋 저장/불러오기**(`data\renames\*.cfg` — docs/25 §3 "Save Renaming Sequence").
 //!
-//! α 범위: 동작 4종(치환·대소문자·삽입·연번 — **고정 순서 파이프라인**, 블록 재배열 없음)
-//! · 충돌 4종 하이라이트·적용 차단 · 적용 = 앱 계층(MoveBatchOp 트랜잭션 1건 — §7 B-13u).
-//! 정규식·날짜·토큰 언어·프리셋은 β 이후(docs/25 §8).
-//!
-//! prefs.rs와 동일 규약: user32 네이티브 컨트롤(comctl32 비의존 — B3 게이트)·자체 모달 루프.
+//! 순수 로직·직렬화 = [`nexa_ops::batch_rename`], 이 모듈은 네이티브 컨트롤 UI만.
+//! prefs.rs와 동일 규약: user32 컨트롤(COMBOBOX/LISTBOX 포함 — comctl32 비의존·B3 게이트)·
+//! 자체 모달 루프. 블록 편집은 삭제 후 재추가(α — 제자리 편집은 후속).
 
 use std::path::{Path, PathBuf};
 
@@ -19,57 +18,100 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow, RegisterClassW,
-    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage, BS_AUTOCHECKBOX,
-    BS_AUTORADIOBUTTON, ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MSG, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MSG,
+    SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
+    WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::dialog::DlgFont;
 use crate::i18n::tr;
-use nexa_ops::batch_rename::{conflicts, preview, BatchSpec, CaseMode, Conflict, NumberSpec};
+use nexa_ops::batch_rename::{
+    conflicts, parse_ops, preview, serialize_ops, validate, CaseMode, Conflict, NumberSpec,
+    RenameOp,
+};
 
 const CLASS: PCWSTR = w!("NexaBulkRename");
 static REGISTER: std::sync::Once = std::sync::Once::new();
 
 const PAD: i32 = 12;
-const ROW: i32 = 26;
-const FORM_W: i32 = 260;
-const CLIENT_W: i32 = 760;
-const CLIENT_H: i32 = 460;
+const FORM_W: i32 = 300;
+const CLIENT_W: i32 = 880;
+const CLIENT_H: i32 = 560;
 const STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0);
 
-// 컨트롤 id
-const ID_FIND: u32 = 1;
-const ID_WITH: u32 = 2;
-const ID_MATCHCASE: u32 = 3;
-const ID_INSERT: u32 = 4;
-const ID_INS_PRE: u32 = 5;
-const ID_INS_SUF: u32 = 6;
-/// 대소문자 라디오 5종(없음·UPPER·lower·Title·Sentence) — ID_CASE_BASE + idx.
-const ID_CASE_BASE: u32 = 10;
-const ID_NUM: u32 = 20;
-const ID_START: u32 = 21;
-const ID_STEP: u32 = 22;
-const ID_PAD_D: u32 = 23;
-const ID_NUM_PRE: u32 = 24;
-const ID_NUM_SUF: u32 = 25;
-const ID_APPLY: u32 = 30;
-const ID_CANCEL: u32 = 31;
-const ID_LIST: u32 = 32;
+// 컨트롤 id — 파이프라인 편집
+const ID_KIND: u32 = 1;
+const ID_ADD: u32 = 2;
+const ID_UP: u32 = 3;
+const ID_DOWN: u32 = 4;
+const ID_DEL: u32 = 5;
+const ID_PIPE: u32 = 6;
+// 파라미터(종류별 패널)
+const ID_FIND: u32 = 10;
+const ID_WITH: u32 = 11;
+const ID_MC: u32 = 12;
+const ID_RX: u32 = 13;
+const ID_CASE_BASE: u32 = 20; // +0..3 = upper/lower/title/sentence
+const ID_INS_TEXT: u32 = 30;
+const ID_INS_PRE: u32 = 31;
+const ID_INS_SUF: u32 = 32;
+const ID_NUM_START: u32 = 40;
+const ID_NUM_STEP: u32 = 41;
+const ID_NUM_PAD: u32 = 42;
+const ID_NUM_PRE: u32 = 43;
+const ID_NUM_SUF: u32 = 44;
+const ID_MV_START: u32 = 50;
+const ID_MV_LEN: u32 = 51;
+const ID_MV_FRONT: u32 = 52;
+const ID_MV_END: u32 = 53;
+const ID_EXT_FROM: u32 = 60;
+const ID_EXT_TO: u32 = 61;
+// 프리셋·확정
+const ID_PRESET_NAME: u32 = 70;
+const ID_PRESET_SAVE: u32 = 71;
+const ID_PRESET_COMBO: u32 = 72;
+const ID_PRESET_LOAD: u32 = 73;
+const ID_APPLY: u32 = 80;
+const ID_CANCEL: u32 = 81;
 
-// LISTBOX 메시지(winuser.h)
+// user32 컨트롤 메시지(winuser.h)
 const LB_ADDSTRING: u32 = 0x0180;
 const LB_RESETCONTENT: u32 = 0x0184;
+const LB_SETCURSEL: u32 = 0x0186;
+const LB_GETCURSEL: u32 = 0x0188;
+const CB_ADDSTRING: u32 = 0x0143;
+const CB_GETCURSEL: u32 = 0x0147;
+const CB_RESETCONTENT: u32 = 0x014B;
+const CB_SETCURSEL: u32 = 0x014E;
+const CB_GETLBTEXT: u32 = 0x0148;
+const CB_GETLBTEXTLEN: u32 = 0x0149;
+const EM_SETCUEBANNER: u32 = 0x1501;
+
+/// 동작 종류(콤보 순서) — i18n 라벨 키.
+const KINDS: [&str; 6] = [
+    "bulk.kind.replace",
+    "bulk.kind.case",
+    "bulk.kind.insert",
+    "bulk.kind.number",
+    "bulk.kind.move",
+    "bulk.kind.ext",
+];
 
 struct BrState {
-    hwnd: HWND,
     font: HFONT,
     /// 대상 = (부모 경로, 현재 이름, 폴더 여부) — 선택 순서 보존(연번 기준).
     items: Vec<(String, String, bool)>,
-    list: HWND,
+    /// 파이프라인(위→아래 순차 적용) — UI의 단일 원천.
+    ops: Vec<RenameOp>,
+    /// 종류별 파라미터 컨트롤(show/hide 스왑).
+    panels: [Vec<HWND>; 6],
+    pipe: HWND,
+    prev: HWND,
+    err: HWND,
     apply: HWND,
+    preset_combo: HWND,
     /// 확정 결과 — (부모, 현재 이름, 새 이름)의 변경 항목만(적용 클릭 시 채움).
     result: Option<Vec<(String, String, String)>>,
 }
@@ -82,6 +124,11 @@ unsafe fn get_text(hwnd: HWND) -> String {
     let mut buf = vec![0u16; len as usize + 1];
     let got = GetWindowTextW(hwnd, &mut buf);
     String::from_utf16_lossy(&buf[..got.max(0) as usize])
+}
+
+unsafe fn set_text(hwnd: HWND, text: &str) {
+    let t = windows::core::HSTRING::from(text);
+    let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hwnd, PCWSTR(t.as_ptr()));
 }
 
 #[allow(clippy::too_many_arguments)] // Win32 CreateWindow 인자 전달(prefs.rs 동일)
@@ -122,6 +169,16 @@ unsafe fn mk(
     hw
 }
 
+unsafe fn cue(hwnd: HWND, text: &str) {
+    let w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    SendMessageW(
+        hwnd,
+        EM_SETCUEBANNER,
+        Some(WPARAM(1)),
+        Some(LPARAM(w.as_ptr() as isize)),
+    );
+}
+
 unsafe fn ctl(dlg: HWND, id: u32) -> HWND {
     windows::Win32::UI::WindowsAndMessaging::GetDlgItem(Some(dlg), id as i32).unwrap_or_default()
 }
@@ -139,35 +196,130 @@ unsafe fn set_check(dlg: HWND, id: u32, on: bool) {
     );
 }
 
-/// 컨트롤 → 동작 묶음(α 고정 순서). 빈 필드 = 그 동작 비활성.
-unsafe fn spec_of(dlg: HWND) -> BatchSpec {
-    let find = get_text(ctl(dlg, ID_FIND));
-    let insert = get_text(ctl(dlg, ID_INSERT));
-    let case = (1..5)
-        .find(|i| checked(dlg, ID_CASE_BASE + i))
-        .map(|i| match i {
-            1 => CaseMode::Upper,
-            2 => CaseMode::Lower,
-            3 => CaseMode::Title,
-            _ => CaseMode::Sentence,
-        });
-    let number = checked(dlg, ID_NUM).then(|| NumberSpec {
-        start: get_text(ctl(dlg, ID_START)).parse().unwrap_or(1),
-        step: get_text(ctl(dlg, ID_STEP)).parse().unwrap_or(1),
-        pad: get_text(ctl(dlg, ID_PAD_D)).parse().unwrap_or(3),
-        suffix: !checked(dlg, ID_NUM_PRE),
-    });
-    BatchSpec {
-        replace: (!find.is_empty()).then(|| {
-            (
+unsafe fn num_of(dlg: HWND, id: u32, default: i64) -> i64 {
+    get_text(ctl(dlg, id)).trim().parse().unwrap_or(default)
+}
+
+/// 프리셋 폴더(`data\renames\` — docs/25 §3, settings와 별도).
+fn preset_dir() -> PathBuf {
+    crate::config::data_dir().join("renames")
+}
+
+/// 현재 파라미터 폼 → 동작 1블록(선택된 종류 기준). 유효하지 않으면 None.
+unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
+    match kind {
+        0 => {
+            let find = get_text(ctl(dlg, ID_FIND));
+            (!find.is_empty()).then(|| RenameOp::Replace {
                 find,
-                get_text(ctl(dlg, ID_WITH)),
-                checked(dlg, ID_MATCHCASE),
-            )
-        }),
-        case,
-        insert: (!insert.is_empty()).then(|| (insert, !checked(dlg, ID_INS_PRE))),
-        number,
+                with: get_text(ctl(dlg, ID_WITH)),
+                match_case: checked(dlg, ID_MC),
+                regex: checked(dlg, ID_RX),
+            })
+        }
+        1 => {
+            let mode = (0..4).find(|i| checked(dlg, ID_CASE_BASE + i))?;
+            Some(RenameOp::Case(match mode {
+                0 => CaseMode::Upper,
+                1 => CaseMode::Lower,
+                2 => CaseMode::Title,
+                _ => CaseMode::Sentence,
+            }))
+        }
+        2 => {
+            let text = get_text(ctl(dlg, ID_INS_TEXT));
+            (!text.is_empty()).then(|| RenameOp::Insert {
+                text,
+                suffix: !checked(dlg, ID_INS_PRE),
+            })
+        }
+        3 => Some(RenameOp::Number(NumberSpec {
+            start: num_of(dlg, ID_NUM_START, 1),
+            step: num_of(dlg, ID_NUM_STEP, 1),
+            pad: num_of(dlg, ID_NUM_PAD, 3).clamp(1, 12) as usize,
+            suffix: !checked(dlg, ID_NUM_PRE),
+        })),
+        4 => {
+            let len = num_of(dlg, ID_MV_LEN, 0).max(0) as usize;
+            (len > 0).then(|| RenameOp::Move {
+                start: num_of(dlg, ID_MV_START, 1).max(1) as usize,
+                len,
+                to_front: checked(dlg, ID_MV_FRONT),
+            })
+        }
+        _ => {
+            let to = get_text(ctl(dlg, ID_EXT_TO));
+            let from = get_text(ctl(dlg, ID_EXT_FROM));
+            let strip = |s: String| s.trim().trim_start_matches('.').to_string();
+            (!to.trim().is_empty() || !from.trim().is_empty()).then(|| RenameOp::ChangeExt {
+                from: strip(from),
+                to: strip(to),
+            })
+        }
+    }
+}
+
+/// 파이프라인 목록 한 줄 표기.
+fn op_label(op: &RenameOp) -> String {
+    match op {
+        RenameOp::Replace {
+            find, with, regex, ..
+        } => format!(
+            "{}{} \"{find}\" → \"{with}\"",
+            tr("bulk.kind.replace"),
+            if *regex { " (regex)" } else { "" }
+        ),
+        RenameOp::Case(m) => format!(
+            "{}: {}",
+            tr("bulk.kind.case"),
+            tr(match m {
+                CaseMode::Upper => "bulk.case.upper",
+                CaseMode::Lower => "bulk.case.lower",
+                CaseMode::Title => "bulk.case.title",
+                CaseMode::Sentence => "bulk.case.sentence",
+            })
+        ),
+        RenameOp::Insert { text, suffix } => format!(
+            "{} \"{text}\" ({})",
+            tr("bulk.kind.insert"),
+            tr(if *suffix {
+                "bulk.posSuffix"
+            } else {
+                "bulk.posPrefix"
+            })
+        ),
+        RenameOp::Number(n) => format!(
+            "{} {}+{}×{} ({})",
+            tr("bulk.kind.number"),
+            n.start,
+            n.step,
+            n.pad,
+            tr(if n.suffix {
+                "bulk.posSuffix"
+            } else {
+                "bulk.posPrefix"
+            })
+        ),
+        RenameOp::Move {
+            start,
+            len,
+            to_front,
+        } => format!(
+            "{} {start}..{} → {}",
+            tr("bulk.kind.move"),
+            start + len.saturating_sub(1),
+            tr(if *to_front {
+                "bulk.destFront"
+            } else {
+                "bulk.destEnd"
+            })
+        ),
+        RenameOp::ChangeExt { from, to } => format!(
+            "{} .{} → .{}",
+            tr("bulk.kind.ext"),
+            if from.is_empty() { "*" } else { from },
+            to
+        ),
     }
 }
 
@@ -181,11 +333,34 @@ fn conflict_label(c: Conflict) -> String {
     }
 }
 
-/// 미리보기·충돌 재계산 → 리스트 갱신 + [적용] 활성 판정.
-unsafe fn refresh(st: &mut BrState) {
-    let spec = spec_of(st.hwnd);
+unsafe fn lb_add(list: HWND, line: &str) {
+    let w = windows::core::HSTRING::from(line);
+    SendMessageW(list, LB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
+}
+
+/// 파이프라인 목록 갱신(선택 유지).
+unsafe fn refresh_pipe(st: &BrState, select: Option<usize>) {
+    SendMessageW(st.pipe, LB_RESETCONTENT, None, None);
+    for (i, op) in st.ops.iter().enumerate() {
+        lb_add(st.pipe, &format!("{}. {}", i + 1, op_label(op)));
+    }
+    if let Some(i) = select {
+        SendMessageW(st.pipe, LB_SETCURSEL, Some(WPARAM(i)), None);
+    }
+}
+
+/// 미리보기·충돌 재계산 → 우측 목록·오류 표시·[적용] 활성 판정.
+unsafe fn refresh_preview(st: &mut BrState) {
+    // 정규식 검증 — 오류는 상단 STATIC에 (블록 순번) 메시지
+    let err = validate(&st.ops).err();
+    set_text(
+        st.err,
+        &err.as_ref()
+            .map(|(i, m)| format!("⚠ #{}: {m}", i + 1))
+            .unwrap_or_default(),
+    );
     let names: Vec<(String, bool)> = st.items.iter().map(|(_, n, d)| (n.clone(), *d)).collect();
-    let new_names = preview(&names, &spec);
+    let new_names = preview(&names, &st.ops);
     let triples: Vec<(String, String, String)> = st
         .items
         .iter()
@@ -195,7 +370,7 @@ unsafe fn refresh(st: &mut BrState) {
     let confs = conflicts(&triples, &|parent, name| {
         Path::new(parent).join(name).exists()
     });
-    SendMessageW(st.list, LB_RESETCONTENT, None, None);
+    SendMessageW(st.prev, LB_RESETCONTENT, None, None);
     let mut changed = 0usize;
     for (i, (_, old, new)) in triples.iter().enumerate() {
         let line = if confs[i] != Conflict::None {
@@ -206,16 +381,66 @@ unsafe fn refresh(st: &mut BrState) {
         } else {
             old.clone()
         };
-        let w = windows::core::HSTRING::from(line);
-        SendMessageW(
-            st.list,
-            LB_ADDSTRING,
-            None,
-            Some(LPARAM(w.as_ptr() as isize)),
-        );
+        lb_add(st.prev, &line);
     }
-    let ok = !spec.is_empty() && changed > 0 && confs.iter().all(|c| *c == Conflict::None);
+    let ok = !st.ops.is_empty()
+        && changed > 0
+        && err.is_none()
+        && confs.iter().all(|c| *c == Conflict::None);
     let _ = EnableWindow(st.apply, ok);
+}
+
+/// 종류 패널 전환(콤보 선택) — 해당 종류 컨트롤만 표시.
+unsafe fn show_kind(st: &BrState, kind: usize) {
+    for (i, panel) in st.panels.iter().enumerate() {
+        for h in panel {
+            let _ = ShowWindow(*h, if i == kind { SW_SHOW } else { SW_HIDE });
+        }
+    }
+}
+
+/// 프리셋 콤보 재적재(`data\renames\*.cfg`).
+unsafe fn refresh_presets(st: &BrState) {
+    SendMessageW(st.preset_combo, CB_RESETCONTENT, None, None);
+    if let Ok(rd) = std::fs::read_dir(preset_dir()) {
+        let mut names: Vec<String> = rd
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.strip_suffix(".cfg").map(str::to_string)
+            })
+            .collect();
+        names.sort();
+        for n in names.iter().take(64) {
+            let w = windows::core::HSTRING::from(n.as_str());
+            SendMessageW(
+                st.preset_combo,
+                CB_ADDSTRING,
+                None,
+                Some(LPARAM(w.as_ptr() as isize)),
+            );
+        }
+    }
+}
+
+unsafe fn combo_sel_text(combo: HWND) -> Option<String> {
+    let idx = SendMessageW(combo, CB_GETCURSEL, None, None).0;
+    if idx < 0 {
+        return None;
+    }
+    let len = SendMessageW(combo, CB_GETLBTEXTLEN, Some(WPARAM(idx as usize)), None).0;
+    if len <= 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; len as usize + 1];
+    let got = SendMessageW(
+        combo,
+        CB_GETLBTEXT,
+        Some(WPARAM(idx as usize)),
+        Some(LPARAM(buf.as_mut_ptr() as isize)),
+    )
+    .0;
+    (got > 0).then(|| String::from_utf16_lossy(&buf[..got as usize]))
 }
 
 unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -227,16 +452,77 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as u32;
             let notify = ((wparam.0 >> 16) & 0xFFFF) as u32;
-            match id {
-                ID_APPLY if notify == 0 => {
-                    // 확정 — 충돌 없음은 refresh가 보장([적용] 활성 조건)
-                    let spec = spec_of(hwnd);
+            let sel = || SendMessageW((*st).pipe, LB_GETCURSEL, None, None).0;
+            match (id, notify) {
+                (ID_KIND, 1 /* CBN_SELCHANGE */) => {
+                    let k = SendMessageW(ctl(hwnd, ID_KIND), CB_GETCURSEL, None, None)
+                        .0
+                        .max(0);
+                    show_kind(&*st, k as usize);
+                }
+                (ID_ADD, 0) => {
+                    let k = SendMessageW(ctl(hwnd, ID_KIND), CB_GETCURSEL, None, None)
+                        .0
+                        .max(0);
+                    if let Some(op) = op_from_form(hwnd, k as usize) {
+                        (*st).ops.push(op);
+                        refresh_pipe(&*st, Some((*st).ops.len() - 1));
+                        refresh_preview(&mut *st);
+                    }
+                }
+                (ID_DEL, 0) => {
+                    let i = sel();
+                    if i >= 0 && (i as usize) < (*st).ops.len() {
+                        (*st).ops.remove(i as usize);
+                        let n = (*st).ops.len();
+                        refresh_pipe(&*st, (n > 0).then(|| (i as usize).min(n - 1)));
+                        refresh_preview(&mut *st);
+                    }
+                }
+                (ID_UP, 0) | (ID_DOWN, 0) => {
+                    let i = sel();
+                    let j = if id == ID_UP { i - 1 } else { i + 1 };
+                    if i >= 0 && j >= 0 && (j as usize) < (*st).ops.len() {
+                        (*st).ops.swap(i as usize, j as usize);
+                        refresh_pipe(&*st, Some(j as usize));
+                        refresh_preview(&mut *st);
+                    }
+                }
+                (ID_PRESET_SAVE, 0) => {
+                    // 이름 정제(금지 문자 제거) — 빈 이름·빈 파이프라인은 무시
+                    let name: String = get_text(ctl(hwnd, ID_PRESET_NAME))
+                        .chars()
+                        .filter(|c| !"<>:\"/\\|?*".contains(*c))
+                        .collect();
+                    let name = name.trim().to_string();
+                    if !name.is_empty() && !(*st).ops.is_empty() {
+                        let _ = crate::config::save(
+                            &preset_dir(),
+                            &format!("{name}.cfg"),
+                            &serialize_ops(&(*st).ops),
+                        );
+                        refresh_presets(&*st);
+                    }
+                }
+                (ID_PRESET_LOAD, 0) => {
+                    if let Some(name) = combo_sel_text((*st).preset_combo) {
+                        if let Some(text) =
+                            crate::config::load(&preset_dir(), &format!("{name}.cfg"))
+                        {
+                            (*st).ops = parse_ops(&text);
+                            refresh_pipe(&*st, None);
+                            refresh_preview(&mut *st);
+                        }
+                    }
+                }
+                (ID_APPLY, 0) => {
+                    // 확정 — 충돌 0·검증 통과는 refresh_preview가 보장([적용] 활성 조건)
                     let names: Vec<(String, bool)> = (*st)
                         .items
                         .iter()
                         .map(|(_, n, d)| (n.clone(), *d))
                         .collect();
-                    let new_names = preview(&names, &spec);
+                    let new_names = preview(&names, &(*st).ops);
                     let out: Vec<(String, String, String)> = (*st)
                         .items
                         .iter()
@@ -247,11 +533,9 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     (*st).result = Some(out);
                     let _ = DestroyWindow(hwnd);
                 }
-                ID_CANCEL if notify == 0 => {
+                (ID_CANCEL, 0) => {
                     let _ = DestroyWindow(hwnd);
                 }
-                // 그 외 컨트롤: 체크/라디오 클릭(0)·EDIT 변경(EN_CHANGE=0x300) → 실시간 미리보기
-                _ if notify == 0 || notify == 0x0300 => refresh(&mut *st),
                 _ => {}
             }
             LRESULT(0)
@@ -348,197 +632,427 @@ pub unsafe fn show(
         return None;
     };
 
-    // ── 좌측 동작 폼(α 고정 순서: 치환 → 대소문자 → 삽입 → 연번) ──
     let x = PAD;
-    let mut y = PAD;
-    let lbl = |dlg, text: &str, y: i32| mk(dlg, font, w!("STATIC"), text, 0, x, y, FORM_W, 18, 0);
-    let half = (FORM_W - 6) / 2;
-    lbl(dlg, &tr("bulk.find"), y);
-    y += 20;
-    mk(
-        dlg,
-        font,
-        w!("EDIT"),
-        "",
-        (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
-        x,
-        y,
-        FORM_W,
-        22,
-        ID_FIND,
-    );
-    y += ROW;
-    lbl(dlg, &tr("bulk.with"), y);
-    y += 20;
-    mk(
-        dlg,
-        font,
-        w!("EDIT"),
-        "",
-        (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
-        x,
-        y,
-        FORM_W,
-        22,
-        ID_WITH,
-    );
-    y += ROW;
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.matchCase"),
-        WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
-        x,
-        y,
-        FORM_W,
-        20,
-        ID_MATCHCASE,
-    );
-    y += ROW + 4;
+    let ed = (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32;
+    let ed_num = ed | ES_NUMBER as u32;
+    let rb = WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32;
+    let cb = WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32;
 
-    lbl(dlg, &tr("bulk.case"), y);
-    y += 20;
-    let case_keys = [
-        "bulk.case.none",
-        "bulk.case.upper",
-        "bulk.case.lower",
-        "bulk.case.title",
-        "bulk.case.sentence",
-    ];
-    for (i, key) in case_keys.iter().enumerate() {
-        let style = WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32 | if i == 0 { WS_GROUP.0 } else { 0 };
-        let (cx2, cy2) = (x + (i as i32 % 3) * (FORM_W / 3), y + (i as i32 / 3) * 22);
-        mk(
-            dlg,
-            font,
-            w!("BUTTON"),
-            &tr(key),
-            style,
-            cx2,
-            cy2,
-            FORM_W / 3,
-            20,
-            ID_CASE_BASE + i as u32,
-        );
+    // ── 동작 종류 콤보 + [블록 추가] ──
+    let combo = mk(
+        dlg,
+        font,
+        w!("COMBOBOX"),
+        "",
+        (WS_TABSTOP | WS_VSCROLL).0 | 0x0003, /* CBS_DROPDOWNLIST */
+        x,
+        PAD,
+        FORM_W - 90,
+        200,
+        ID_KIND,
+    );
+    for key in KINDS {
+        let w = windows::core::HSTRING::from(tr(key));
+        SendMessageW(combo, CB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
     }
-    set_check(dlg, ID_CASE_BASE, true); // 기본 = 변경 없음
-    y += 22 * 2 + 8;
+    SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(0)), None);
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.add"),
+        WS_TABSTOP.0 | WS_GROUP.0,
+        x + FORM_W - 84,
+        PAD,
+        84,
+        24,
+        ID_ADD,
+    );
 
-    lbl(dlg, &tr("bulk.insert"), y);
-    y += 20;
-    mk(
-        dlg,
-        font,
-        w!("EDIT"),
-        "",
-        (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
-        x,
-        y,
-        FORM_W,
-        22,
-        ID_INSERT,
-    );
-    y += ROW;
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.posPrefix"),
-        WS_TABSTOP.0 | WS_GROUP.0 | BS_AUTORADIOBUTTON as u32,
-        x,
-        y,
-        half,
-        20,
-        ID_INS_PRE,
-    );
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.posSuffix"),
-        WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32,
-        x + half + 6,
-        y,
-        half,
-        20,
-        ID_INS_SUF,
-    );
-    set_check(dlg, ID_INS_SUF, true);
-    y += ROW + 4;
-
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.number"),
-        WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
-        x,
-        y,
-        FORM_W,
-        20,
-        ID_NUM,
-    );
-    y += 24;
+    // ── 종류별 파라미터 패널(겹침 배치 — 콤보 선택으로 스왑) ──
+    let py = PAD + 34;
+    let half = (FORM_W - 6) / 2;
     let third = (FORM_W - 12) / 3;
-    for (i, (key, id, init)) in [
-        ("bulk.start", ID_START, "1"),
-        ("bulk.step", ID_STEP, "1"),
-        ("bulk.pad", ID_PAD_D, "3"),
-    ]
-    .iter()
-    .enumerate()
+    let mut panels: [Vec<HWND>; 6] = Default::default();
+    // 0: 치환(찾기/바꾸기/대소문자/정규식)
     {
-        let cx2 = x + i as i32 * (third + 6);
-        mk(dlg, font, w!("STATIC"), &tr(key), 0, cx2, y, third, 16, 0);
-        mk(
+        let f = mk(
             dlg,
             font,
             w!("EDIT"),
-            init,
-            (WS_BORDER | WS_TABSTOP).0 | (ES_NUMBER | ES_AUTOHSCROLL) as u32,
-            cx2,
-            y + 18,
-            third,
+            "",
+            ed | WS_GROUP.0,
+            x,
+            py,
+            FORM_W,
             22,
-            *id,
+            ID_FIND,
         );
+        cue(f, &tr("bulk.find"));
+        let wch = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "",
+            ed,
+            x,
+            py + 26,
+            FORM_W,
+            22,
+            ID_WITH,
+        );
+        cue(wch, &tr("bulk.with"));
+        let mc = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.matchCase"),
+            cb,
+            x,
+            py + 52,
+            half,
+            20,
+            ID_MC,
+        );
+        let rx = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.regex"),
+            cb,
+            x + half + 6,
+            py + 52,
+            half,
+            20,
+            ID_RX,
+        );
+        panels[0] = vec![f, wch, mc, rx];
     }
-    y += 18 + ROW;
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.posPrefix"),
-        WS_TABSTOP.0 | WS_GROUP.0 | BS_AUTORADIOBUTTON as u32,
-        x,
-        y,
-        half,
-        20,
-        ID_NUM_PRE,
-    );
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.posSuffix"),
-        WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32,
-        x + half + 6,
-        y,
-        half,
-        20,
-        ID_NUM_SUF,
-    );
-    set_check(dlg, ID_NUM_SUF, true);
+    // 1: 대소문자(라디오 4)
+    {
+        let keys = [
+            "bulk.case.upper",
+            "bulk.case.lower",
+            "bulk.case.title",
+            "bulk.case.sentence",
+        ];
+        let mut v = Vec::new();
+        for (i, key) in keys.iter().enumerate() {
+            let style = rb | if i == 0 { WS_GROUP.0 } else { 0 };
+            let (cx2, cy2) = (x + (i as i32 % 2) * half, py + (i as i32 / 2) * 24);
+            v.push(mk(
+                dlg,
+                font,
+                w!("BUTTON"),
+                &tr(key),
+                style,
+                cx2,
+                cy2,
+                half,
+                20,
+                ID_CASE_BASE + i as u32,
+            ));
+        }
+        set_check(dlg, ID_CASE_BASE, true);
+        panels[1] = v;
+    }
+    // 2: 삽입(텍스트·앞/뒤)
+    {
+        let t = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "",
+            ed | WS_GROUP.0,
+            x,
+            py,
+            FORM_W,
+            22,
+            ID_INS_TEXT,
+        );
+        cue(t, &tr("bulk.insert"));
+        let p = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.posPrefix"),
+            rb | WS_GROUP.0,
+            x,
+            py + 26,
+            half,
+            20,
+            ID_INS_PRE,
+        );
+        let s = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.posSuffix"),
+            rb,
+            x + half + 6,
+            py + 26,
+            half,
+            20,
+            ID_INS_SUF,
+        );
+        set_check(dlg, ID_INS_SUF, true);
+        panels[2] = vec![t, p, s];
+    }
+    // 3: 연번(시작/증가/자릿수·앞/뒤)
+    {
+        let mut v = Vec::new();
+        for (i, (key, id, init)) in [
+            ("bulk.start", ID_NUM_START, "1"),
+            ("bulk.step", ID_NUM_STEP, "1"),
+            ("bulk.pad", ID_NUM_PAD, "3"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let cx2 = x + i as i32 * (third + 6);
+            let style = ed_num | if i == 0 { WS_GROUP.0 } else { 0 };
+            let e = mk(dlg, font, w!("EDIT"), init, style, cx2, py, third, 22, *id);
+            cue(e, &tr(key));
+            v.push(e);
+        }
+        let p = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.posPrefix"),
+            rb | WS_GROUP.0,
+            x,
+            py + 26,
+            half,
+            20,
+            ID_NUM_PRE,
+        );
+        let s = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.posSuffix"),
+            rb,
+            x + half + 6,
+            py + 26,
+            half,
+            20,
+            ID_NUM_SUF,
+        );
+        set_check(dlg, ID_NUM_SUF, true);
+        v.extend([p, s]);
+        panels[3] = v;
+    }
+    // 4: 구간 이동(시작 위치/길이·맨 앞/맨 뒤)
+    {
+        let st_e = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "1",
+            ed_num | WS_GROUP.0,
+            x,
+            py,
+            half,
+            22,
+            ID_MV_START,
+        );
+        cue(st_e, &tr("bulk.moveStart"));
+        let ln_e = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "2",
+            ed_num,
+            x + half + 6,
+            py,
+            half,
+            22,
+            ID_MV_LEN,
+        );
+        cue(ln_e, &tr("bulk.moveLen"));
+        let f = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.destFront"),
+            rb | WS_GROUP.0,
+            x,
+            py + 26,
+            half,
+            20,
+            ID_MV_FRONT,
+        );
+        let e = mk(
+            dlg,
+            font,
+            w!("BUTTON"),
+            &tr("bulk.destEnd"),
+            rb,
+            x + half + 6,
+            py + 26,
+            half,
+            20,
+            ID_MV_END,
+        );
+        set_check(dlg, ID_MV_END, true);
+        panels[4] = vec![st_e, ln_e, f, e];
+    }
+    // 5: 확장자 변경(기존/새)
+    {
+        let f = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "",
+            ed | WS_GROUP.0,
+            x,
+            py,
+            half,
+            22,
+            ID_EXT_FROM,
+        );
+        cue(f, &tr("bulk.extFrom"));
+        let t = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "",
+            ed,
+            x + half + 6,
+            py,
+            half,
+            22,
+            ID_EXT_TO,
+        );
+        cue(t, &tr("bulk.extTo"));
+        panels[5] = vec![f, t];
+    }
 
-    // 하단 버튼
+    // ── 파이프라인 목록 + 재배치 ──
+    let ly = py + 84;
+    mk(
+        dlg,
+        font,
+        w!("STATIC"),
+        &tr("bulk.pipeline"),
+        WS_GROUP.0,
+        x,
+        ly,
+        FORM_W,
+        18,
+        0,
+    );
+    let pipe = mk(
+        dlg,
+        font,
+        w!("LISTBOX"),
+        "",
+        (WS_BORDER | WS_VSCROLL | WS_TABSTOP).0 | 0x0001 /* LBS_NOTIFY */ | 0x0040, /* LBS_NOINTEGRALHEIGHT */
+        x,
+        ly + 20,
+        FORM_W,
+        170,
+        ID_PIPE,
+    );
+    let by1 = ly + 20 + 176;
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        "▲",
+        WS_TABSTOP.0 | WS_GROUP.0,
+        x,
+        by1,
+        third,
+        24,
+        ID_UP,
+    );
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        "▼",
+        WS_TABSTOP.0,
+        x + third + 6,
+        by1,
+        third,
+        24,
+        ID_DOWN,
+    );
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        "✕",
+        WS_TABSTOP.0,
+        x + (third + 6) * 2,
+        by1,
+        third,
+        24,
+        ID_DEL,
+    );
+
+    // ── 프리셋 저장/불러오기(docs/25 §3) ──
+    let sy = by1 + 34;
+    let pn = mk(
+        dlg,
+        font,
+        w!("EDIT"),
+        "",
+        ed | WS_GROUP.0,
+        x,
+        sy,
+        FORM_W - 90,
+        22,
+        ID_PRESET_NAME,
+    );
+    cue(pn, &tr("bulk.preset.name"));
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.preset.save"),
+        WS_TABSTOP.0,
+        x + FORM_W - 84,
+        sy,
+        84,
+        22,
+        ID_PRESET_SAVE,
+    );
+    let pc = mk(
+        dlg,
+        font,
+        w!("COMBOBOX"),
+        "",
+        (WS_TABSTOP | WS_VSCROLL).0 | 0x0003, /* CBS_DROPDOWNLIST */
+        x,
+        sy + 28,
+        FORM_W - 90,
+        200,
+        ID_PRESET_COMBO,
+    );
+    mk(
+        dlg,
+        font,
+        w!("BUTTON"),
+        &tr("bulk.preset.load"),
+        WS_TABSTOP.0,
+        x + FORM_W - 84,
+        sy + 28,
+        84,
+        22,
+        ID_PRESET_LOAD,
+    );
+
+    // ── 하단 확정 버튼 ──
     let by = CLIENT_H - PAD - 26;
     let apply = mk(
         dlg,
         font,
         w!("BUTTON"),
         &tr("bulk.apply"),
-        WS_TABSTOP.0,
+        WS_TABSTOP.0 | WS_GROUP.0,
         x,
         by,
         half,
@@ -558,31 +1072,49 @@ pub unsafe fn show(
         ID_CANCEL,
     );
 
-    // ── 우측 미리보기(원본 → 새 이름·충돌 하이라이트) ──
+    // ── 우측: 검증 오류 + 미리보기 ──
     let lx = PAD + FORM_W + PAD;
-    let list = mk(
+    let err = mk(
+        dlg,
+        font,
+        w!("STATIC"),
+        "",
+        0,
+        lx,
+        PAD,
+        CLIENT_W - lx - PAD,
+        18,
+        0,
+    );
+    let prev = mk(
         dlg,
         font,
         w!("LISTBOX"),
         "",
         (WS_BORDER | WS_VSCROLL).0 | 0x1000 /* LBS_NOSEL */ | 0x0040, /* LBS_NOINTEGRALHEIGHT */
         lx,
-        PAD,
+        PAD + 22,
         CLIENT_W - lx - PAD,
-        CLIENT_H - PAD * 2,
-        ID_LIST,
+        CLIENT_H - PAD * 2 - 22,
+        0,
     );
 
     let mut state = Box::new(BrState {
-        hwnd: dlg,
         font,
         items,
-        list,
+        ops: Vec::new(),
+        panels,
+        pipe,
+        prev,
+        err,
         apply,
+        preset_combo: pc,
         result: None,
     });
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut BrState as isize);
-    refresh(&mut state);
+    show_kind(&state, 0);
+    refresh_presets(&state);
+    refresh_preview(&mut state);
 
     let _ = EnableWindow(owner, false);
     let _ = SetForegroundWindow(dlg);

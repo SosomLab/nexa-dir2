@@ -9,11 +9,27 @@ use std::path::{Path, PathBuf};
 
 /// 퀵 런처 항목(M5-1 — 원본 docs/44 `Launcher.Items` 설계: Label/Path/Args).
 /// `args`의 `%path%` = 활성 패널의 현재 폴더로 치환(원본 ToolLauncher 규약).
+/// 그룹 구분선(도구 모음 그룹화 대응)은 `launcherN=-` — [`LauncherItem::separator`].
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LauncherItem {
     pub label: String,
     pub exe: String,
     pub args: String,
+}
+
+impl LauncherItem {
+    /// 그룹 구분선 항목(`launcherN=-`).
+    pub fn separator() -> Self {
+        LauncherItem {
+            label: "-".into(),
+            exe: String::new(),
+            args: String::new(),
+        }
+    }
+
+    pub fn is_separator(&self) -> bool {
+        self.exe.is_empty() && self.label == "-"
+    }
 }
 
 /// 설정(원본 ViewOptions·ThemeOptions 대응) — `data\settings.cfg`.
@@ -131,10 +147,14 @@ impl Settings {
         if let Some(items) = &self.launcher_items {
             out.push_str(&format!("launcher_count={}\n", items.len()));
             for (i, it) in items.iter().enumerate() {
-                out.push_str(&format!(
-                    "launcher{i}={}|{}|{}\n",
-                    it.label, it.exe, it.args
-                ));
+                if it.is_separator() {
+                    out.push_str(&format!("launcher{i}=-\n")); // 그룹 구분선
+                } else {
+                    out.push_str(&format!(
+                        "launcher{i}={}|{}|{}\n",
+                        it.label, it.exe, it.args
+                    ));
+                }
             }
         }
         out
@@ -196,14 +216,21 @@ impl Settings {
                 k if k.starts_with("launcher")
                     && k["launcher".len()..].parse::<usize>().is_ok() =>
                 {
+                    let items = s.launcher_items.get_or_insert_with(Vec::new);
+                    if items.len() >= 32 {
+                        continue;
+                    }
+                    if v.trim() == "-" {
+                        items.push(LauncherItem::separator()); // 그룹 구분선
+                        continue;
+                    }
                     let mut parts = v.splitn(3, '|');
                     let (label, exe) = (
                         parts.next().unwrap_or("").trim(),
                         parts.next().unwrap_or("").trim(),
                     );
                     let args = parts.next().unwrap_or("").to_string();
-                    let items = s.launcher_items.get_or_insert_with(Vec::new);
-                    if !label.is_empty() && !exe.is_empty() && items.len() < 32 {
+                    if !label.is_empty() && !exe.is_empty() {
                         items.push(LauncherItem {
                             label: label.into(),
                             exe: exe.into(),

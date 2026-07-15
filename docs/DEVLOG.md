@@ -8,6 +8,7 @@
 
 ## 2026-07-15
 
+- **M5-1 보완 배치(`feat/m5-ui-polish` — 사용자 요청 4건)**: ① 런처 **exe 셸 아이콘 16×16 정사각 버튼**(`ToolButton.icon`·draw_icon 반환값 폴백) ② 런처 **그룹 구분선**(`launcherN=-`) ③ 도구 모음 **토글 시각 보강**(배경 sel_bg+글자 accent+하단 줄) ④ **일괄 이름변경 순서형 파이프라인 재설계** — RenameOp 목록(치환[**정규식** regex-lite·$1 캡처]·대소문자·삽입·연번·**구간 이동**·**확장자 변경**)+블록 추가/▲▼/삭제 UI+**프리셋 저장/불러오기**(`data\renames\*.cfg` 직렬화 왕복)+정규식 사전 검증. regex-lite 원장 등재(B2 +0.11MB → 1.01MB). 테스트 166 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5 마감 게이트 → `0.6.0`**: B1 유휴 RSS(10k·정보 뷰 도크·런처 바·300s·3회) **중앙값 16.86MB ≤ 30 통과**(18/16.86/4.12 — 재상승 편차 관찰은 β arena 회수와 공동 과제) · B2 **0.90MB** · B3 인박스 15종 무변. 테스트 163 green·fmt. **M5 마감 마일스톤 완료** — `0.6.0` 태그 push = 릴리스 파이프라인 첫 실행 검증(M5-2). 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5-1 일괄 이름변경 α(`feat/m5-bulk-rename` — 원본 docs/25 스펙 최초 구현·원본도 설계만)**: **nexa-ops::batch_rename**(순수 — 치환→대소문자→삽입→연번 고정 파이프라인·이름부만·충돌 4종 검출) + **bulkrename.rs 다이얼로그**(동작 폼+실시간 미리보기 LISTBOX·충돌 ⚠ 표시·[적용]=충돌 0일 때만) + 적용=**MoveBatchOp 트랜잭션 1건**(Ctrl+Z 배치 되돌림·F18 접두사 치환). 진입 = 편집 메뉴·Ctrl+Shift+R. 테스트 163 green. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
 - **M5-1 퀵 런처 바(`feat/m5-launcher` — 원본 docs/44 이식)**: 도구 모음 아래 **상시 표시 런처 바**(Toolbar 재사용·라벨 버튼) — `%path%`→활성 패널 폴더 치환 ShellExecuteW·실패 상태바 격리·보기 메뉴 토글·settings.cfg 영속(`launcherN=라벨|exe|인자`·count로 부재/비움 구분)·첫 실행 VS Code 시드(후보 3경로). `current_settings` 헬퍼 추출. 실기 QA 대기. 상세 [journal/2026-07-15.md](journal/2026-07-15.md).
