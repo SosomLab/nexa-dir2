@@ -10,9 +10,9 @@
 > [M2-7 한계 해소]·리네임 인라인 IME 조합 창[M3-2 α 해소]) + **서명 = 무서명 유지 확정**
 > (DR-3 갱신 — 원본 PKG-4 공동 보류·SmartScreen 감수)
 > ④ **M5-2 릴리스 파이프라인**(release.yml — 태그 push→게이트→Release 자동 첨부).
-> 테스트 163 green·clippy 0·fmt. 실기 QA(런처·일괄 이름변경·스크린리더) 대기.
-> 다음: **`0.6.0` 태그 = M5-2 첫 실행 검증** · X-2 Starlark · X-3 터미널 설정 잔여 ·
-> X-1 Apps 키 QA.
+> 테스트 163 green·clippy 0·fmt. **`0.6.0` 릴리스 발행**(첫 태그 실행 검증 —
+> Release 자동 생성·exe 첨부 확인, M5-2 완결). 실기 QA(런처·일괄 이름변경·스크린리더)
+> 대기. 다음: X-2 Starlark · X-3 터미널 설정 잔여 · X-1 Apps 키 QA.
 
 ## 1. 확정된 결정 ([10](10-decision-record.md))
 
