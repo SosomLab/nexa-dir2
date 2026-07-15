@@ -43,6 +43,9 @@ fn expand_key(p: &Path) -> String {
 impl Tab {
     fn title(&self) -> String {
         let p = self.rows.source().tree().root_path();
+        if nexa_vfs::is_virtual_root(p) {
+            return crate::i18n::tr("nav.mypc"); // 가상 최상위(X-17)
+        }
         match p.file_name() {
             Some(n) => n.to_string_lossy().into_owned(),
             None => p.to_string_lossy().into_owned(), // 드라이브 루트 등
@@ -359,7 +362,13 @@ impl Panel {
             .set_locked(self.tabs.iter().map(|t| t.locked).collect(), inv);
         self.tabbar
             .set_pinned(self.tabs.iter().map(|t| t.pinned).collect(), inv);
-        let path = self.root_path().to_string_lossy().into_owned();
+        // 가상 최상위(X-17)는 사람이 읽는 라벨로 — 단일(=현재) 세그먼트라 클릭 무동작
+        let root = self.root_path();
+        let path = if nexa_vfs::is_virtual_root(&root) {
+            crate::i18n::tr("nav.mypc")
+        } else {
+            root.to_string_lossy().into_owned()
+        };
         self.pathbar.set_path(path, inv);
     }
 
@@ -655,11 +664,22 @@ impl Panel {
 
     /// 위로(부모 폴더) — Alt+↑. **떠난 폴더를 자동 선택**(G-7 — 원본 F13-1 이식):
     /// 부모 목록에서 방금 떠난 폴더가 캐럿+단일 선택되어 위치 감각을 보존한다.
+    /// 드라이브 루트(`C:\`)에서는 **가상 최상위 "내 PC"**로 올라간다(X-17 —
+    /// 드라이브 간 이동). 내 PC가 최상위(더 위 없음).
     pub fn nav_up(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
         let left = self.root_path();
-        if let Some(parent) = left.parent().map(Path::to_path_buf) {
-            self.navigate_to(parent, ctx, inv);
-            self.select_path(&left, inv);
+        if nexa_vfs::is_virtual_root(&left) {
+            return; // 내 PC = 최상위
+        }
+        match left.parent().map(Path::to_path_buf) {
+            Some(parent) if !parent.as_os_str().is_empty() => {
+                self.navigate_to(parent, ctx, inv);
+                self.select_path(&left, inv);
+            }
+            _ => {
+                self.navigate_to(PathBuf::from(nexa_vfs::MY_PC), ctx, inv);
+                self.select_path(&left, inv); // 떠난 드라이브 선택(G-7 일관)
+            }
         }
     }
 
@@ -984,6 +1004,30 @@ mod tests {
         let mut p = Panel::new(Tree::open(base).unwrap(), ctx(), metrics(), Vec::new());
         p.set_bounds(Rect::new(0, 0, 400, 400), &mut inv);
         (p, inv)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nav_up_from_drive_root_enters_my_pc() {
+        // X-17: 드라이브 루트에서 위로 = 가상 최상위 "내 PC"·떠난 드라이브 선택(G-7)
+        let (mut p, mut inv) = panel(Path::new("C:\\"));
+        p.nav_up(ctx(), &mut inv);
+        assert!(
+            nexa_vfs::is_virtual_root(p.root_path()),
+            "root = {:?}",
+            p.root_path()
+        );
+        let tree = p.rows().source().tree();
+        assert!(tree.visible_len() >= 1, "드라이브 목록");
+        let i = tree.index_of_path("C:\\").expect("C: 드라이브 행");
+        let id = tree.visible_id(i).unwrap();
+        assert!(tree.is_selected(id), "떠난 드라이브 자동 선택(G-7)");
+        // 내 PC에서 다시 위로 = 무동작(최상위)
+        p.nav_up(ctx(), &mut inv);
+        assert!(nexa_vfs::is_virtual_root(p.root_path()));
+        // 뒤로 = 드라이브 루트 복귀(히스토리 경유)
+        p.nav_back(ctx(), &mut inv);
+        assert_eq!(p.root_path(), PathBuf::from("C:\\"));
     }
 
     #[test]

@@ -233,14 +233,14 @@ impl Tree {
         depth: u32,
     ) -> io::Result<Vec<NodeId>> {
         let mut ids = Vec::new();
-        for entry in read_dir_entries(dir)? {
-            let Ok(e) = entry else { continue };
-            if !self.filter.allows(&e.name, e.attrs) {
-                continue; // 숨김/점 파일 필터(트리에 아예 생성 안 함)
+        let push = |tree: &mut Tree, e: nexa_vfs::Entry, ids: &mut Vec<NodeId>| {
+            if !tree.filter.allows(&e.name, e.attrs) {
+                return; // 숨김/점 파일 필터(트리에 아예 생성 안 함)
             }
-            let id = self.nodes.len() as NodeId;
+            let id = tree.nodes.len() as NodeId;
+            // 가상 루트의 드라이브 항목은 이름이 절대 경로(`C:\`) — join이 부모 대체
             let path = dir.join(&e.name);
-            self.nodes.push(Node {
+            tree.nodes.push(Node {
                 id,
                 parent,
                 path,
@@ -255,6 +255,17 @@ impl Tree {
                 children: Vec::new(),
             });
             ids.push(id);
+        };
+        if nexa_vfs::is_virtual_root(dir) {
+            // 가상 최상위 "내 PC"(X-17) — 드라이브 목록을 일반 항목처럼 흘려보낸다
+            for e in nexa_vfs::drive_entries() {
+                push(self, e, &mut ids);
+            }
+        } else {
+            for entry in read_dir_entries(dir)? {
+                let Ok(e) = entry else { continue };
+                push(self, e, &mut ids);
+            }
         }
         self.sort_ids(&mut ids);
         Ok(ids)
@@ -1114,6 +1125,25 @@ mod tests {
             folders_first,
             case_sensitive: false,
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn open_virtual_root_lists_drives() {
+        // X-17 내 PC: 센티널 루트 = 드라이브 목록, 노드 경로 = 실 드라이브 루트
+        let tree = Tree::open(nexa_vfs::MY_PC).unwrap();
+        assert!(tree.visible_len() >= 1);
+        let r = tree.row(0).unwrap();
+        assert!(r.name.ends_with(":\\"), "{}", r.name);
+        assert_eq!(r.kind, FileKind::Dir);
+        let id = tree.visible_id(0).unwrap();
+        assert_eq!(
+            tree.node_path(id).unwrap().to_string_lossy(),
+            r.name,
+            "join이 센티널을 대체 — 진입 경로가 실 경로"
+        );
+        // 떠난 드라이브 자동 선택(G-7)에 쓰는 경로 매칭도 동작
+        assert_eq!(tree.index_of_path(&r.name), Some(0));
     }
 
     #[test]

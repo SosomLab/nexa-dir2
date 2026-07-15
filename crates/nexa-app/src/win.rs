@@ -1016,9 +1016,16 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
     } else {
         "panel.right"
     });
+    // 가상 최상위(X-17)는 타이틀에도 사람이 읽는 라벨
+    let root = p.root_path();
+    let root_disp = if nexa_vfs::is_virtual_root(&root) {
+        tr("nav.mypc")
+    } else {
+        root.display().to_string()
+    };
     let text = format!(
         "Nexa Dir 2 — [{side}] {} [{}{} · {} · {}{}]{}\0",
-        p.root_path().display(),
+        root_disp,
         trf("status.itemCount", &[&p.rows().source().len().to_string()]),
         sel_txt,
         trf(

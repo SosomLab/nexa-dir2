@@ -38,6 +38,7 @@ col.kind = 종류
 kind.folder = 폴더
 kind.link = 바로가기
 kind.file = 파일
+kind.drive = 드라이브
 kind.extFile = {0} 파일
 
 # ── 파일 조작(M3-1 전송 · M3-2 삭제/이름변경/새로 만들기) ──
@@ -257,3 +258,5 @@ pref.taBackspace.desc = 끄면 타입어헤드 중 Backspace를 무시합니다.
 pref.cat.listGeneral = 보기·정렬
 pref.cat.typeahead = 타입어헤드
 ops.close = 닫기
+# X-17 virtual top-level
+nav.mypc = 내 PC

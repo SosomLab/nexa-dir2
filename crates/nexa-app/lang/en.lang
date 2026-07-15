@@ -39,6 +39,7 @@ col.kind = Kind
 kind.folder = Folder
 kind.link = Link
 kind.file = File
+kind.drive = Drive
 kind.extFile = {0} file
 
 # ── File ops (M3-1 transfer · M3-2 delete/rename/new) ──
@@ -258,3 +259,5 @@ pref.taBackspace.desc = Off = Backspace is ignored during type-ahead.
 pref.cat.listGeneral = View & Sort
 pref.cat.typeahead = Type-ahead
 ops.close = Close
+# X-17 virtual top-level
+nav.mypc = This PC
