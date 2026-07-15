@@ -7,7 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `fix/sort-opts-propagate` | 2026-07-15 | 2026-07-15 (main 병합) | 2026-07-15 | 1 | 정렬 옵션 전파 수정(사용자 QA "순서 불변") — replace_source 빈 정렬 덮어쓰기(열거 순서 퇴행) 차단·TreeSource 기본 키 Name asc·Panel 옵션 보관+apply_sort_opts(탐색/재로드/새 탭 재적용). 회귀 테스트 추가·168 green | [2026-07-15](journal/2026-07-15.md) |
+| `fix/sort-opts-propagate` | 2026-07-15 | 2026-07-15 (`0cbe1e5`) | 2026-07-15 | 1 | 정렬 옵션 전파 수정(사용자 QA "순서 불변") — replace_source 빈 정렬 덮어쓰기(열거 순서 퇴행) 차단·TreeSource 기본 키 Name asc·Panel 옵션 보관+apply_sort_opts(탐색/재로드/새 탭 재적용). 회귀 테스트 추가·168 green | [2026-07-15](journal/2026-07-15.md) |
 | `fix/case-sort-group` | 2026-07-15 | 2026-07-15 (`c01d629`) | 2026-07-15 | 1 | 대소문자 정렬 **대문자 그룹 상단** 확정(사용자 스크린샷 QA — 코드포인트 순·Abc.txt<a c.txt. NTFS 순서 무관 확인). 테스트 167 green | [2026-07-15](journal/2026-07-15.md) |
 | `fix/case-sort-upper` | 2026-07-15 | 2026-07-15 (`74b5f31`) | 2026-07-15 | 1 | 대소문자 정렬 규칙 보완(사용자 QA) — cmp_cs_upper_first: 알파벳 순 유지+같은 이름은 **대문자 우선**(코드포인트 그룹핑 배제). 테스트 167 green | [2026-07-15](journal/2026-07-15.md) |
 | `fix/navup-align` | 2026-07-15 | 2026-07-15 (`5999443`) | 2026-07-15 | 1 | Alt+↑ 선택 위치 설정(상단/중단/하단 — select_program_aligned·nav_up_align 기본 중단)·**대소문자 구분 정렬**(SortSpec.case_sensitive·sort_case_sensitive 체크박스·전 탭 재정렬). 실기 노출·영속 검증 | [2026-07-15](journal/2026-07-15.md) |
