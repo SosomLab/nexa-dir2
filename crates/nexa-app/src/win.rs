@@ -2978,8 +2978,8 @@ fn scope_of(s: &str) -> nexa_tree::FindScope {
 }
 
 /// 설정 문자열 → 뷰 배치(Alt+↑ 자동 선택 — 미지 값은 중단).
-fn align_of(s: &str) -> nexa_gui::widgets::rows::ScrollAlign {
-    use nexa_gui::widgets::rows::ScrollAlign;
+fn align_of(s: &str) -> nexa_gui::widgets::ScrollAlign {
+    use nexa_gui::widgets::ScrollAlign;
     match s {
         "top" => ScrollAlign::Top,
         "bottom" => ScrollAlign::Bottom,
@@ -4199,7 +4199,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let mut inv = Invalidations::default();
                 let rows = st.panels[st.active].rows_mut();
                 let selected = rows.source().is_selected(row);
-                use nexa_gui::widgets::rows::SelectOp;
+                use nexa_gui::widgets::SelectOp;
                 match lparam.0 {
                     crate::uia::SEL_SINGLE => rows.select_program(row, SelectOp::Single, &mut inv),
                     crate::uia::SEL_ADD if !selected => {

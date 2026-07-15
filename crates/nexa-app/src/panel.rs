@@ -75,7 +75,7 @@ pub struct Panel {
     pub dock: InfoDock,
     dock_visible: bool,
     /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
-    nav_up_align: nexa_gui::widgets::rows::ScrollAlign,
+    nav_up_align: nexa_gui::widgets::ScrollAlign,
     /// 정렬 옵션(G-13·07-15) — **새 소스(탐색·재로드·새 탭)에도 재적용**하기 위해 보관.
     sort_folders_first: bool,
     sort_case: bool,
@@ -110,7 +110,7 @@ impl Panel {
             pathbar: PathBar::new(root.to_string_lossy(), m.row_h, m.pad_x),
             dock: InfoDock::new("", m.row_h, m.pad_x),
             dock_visible: false,
-            nav_up_align: nexa_gui::widgets::rows::ScrollAlign::default(),
+            nav_up_align: nexa_gui::widgets::ScrollAlign::default(),
             sort_folders_first: true,
             sort_case: false,
             ta_opts: (
@@ -664,7 +664,7 @@ impl Panel {
     }
 
     /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
-    pub fn set_nav_up_align(&mut self, align: nexa_gui::widgets::rows::ScrollAlign) {
+    pub fn set_nav_up_align(&mut self, align: nexa_gui::widgets::ScrollAlign) {
         self.nav_up_align = align;
     }
 
@@ -741,7 +741,7 @@ impl Panel {
             let align = self.nav_up_align;
             self.rows_mut().select_program_aligned(
                 i,
-                nexa_gui::widgets::rows::SelectOp::Single,
+                nexa_gui::widgets::SelectOp::Single,
                 align,
                 inv,
             );
