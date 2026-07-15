@@ -689,7 +689,7 @@ impl DrawCtx for DwCtx<'_> {
         }
     }
 
-    fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) {
+    fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) -> bool {
         if let Some(icon) = self.icons.borrow_mut().get_or_request(key, hint) {
             unsafe {
                 let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
@@ -704,7 +704,9 @@ impl DrawCtx for DwCtx<'_> {
                     windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
                 );
             }
+            return true;
         }
         // 미로드 시 공백 유지 — 큐잉됐으므로 win.rs 아이콘 타이머가 로드 후 다시 그린다
+        false
     }
 }

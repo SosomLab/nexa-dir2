@@ -31,6 +31,7 @@
 | --- | --- | --- | --- | --- |
 | `windows` | Win32/COM 바인딩 | MIT/Apache-2.0 | exe +수백 KB(사용 API만 링크) | 2026-07-11 |
 | `windows-core` | `#[implement]` COM 콜백(IDWriteTextRenderer) — `windows` 매크로 전개가 요구하는 직접 의존 | MIT/Apache-2.0 | 0(이미 `windows`의 전이 의존) | 2026-07-12 |
+| `regex-lite` | 일괄 이름변경 정규식(docs/25 §2 동작 2 — 사용자 요청 07-15). `regex` 본가 대비 이진 크기·컴파일 시간 최적화 판(의존 0) | MIT/Apache-2.0 | **B2 실측 +0.11MB**(0.90→1.01MB — 게이트 여유) | 2026-07-15 |
 | `starlark` (예정) | 미리보기 플러그인 런타임(ADR-0004 S2) — 도입 시 의존 트리·B2 증가분 실측 후 본 원장에서 확정 | Apache-2.0 | exe +수 MB 예상(실측 후 판단) | 승인 대기 |
 
 ## 2. 원본과의 관계 (SSOT 분담)

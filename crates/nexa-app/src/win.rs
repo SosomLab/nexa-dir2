@@ -289,12 +289,20 @@ fn build_toolbar(show_hidden: bool, show_dotfiles: bool) -> Vec<ToolButton> {
     ]
 }
 
-/// 퀵 런처 바 버튼(M5-1) — 항목 라벨 = 버튼 텍스트(exe 아이콘 추출은 후속 α).
+/// 퀵 런처 바 버튼(M5-1) — **exe 셸 아이콘 16×16 정사각 버튼**(원본 썸네일 대응 —
+/// 미로드/실패 시 라벨 앞 2자 폴백) + 그룹 구분선(`launcherN=-` — 도구 모음 그룹화 대응).
 fn build_launcherbar(items: &[crate::config::LauncherItem]) -> Vec<ToolButton> {
     items
         .iter()
         .enumerate()
-        .map(|(i, it)| ToolButton::new(CMD_LAUNCHER_BASE + i as u32, it.label.clone()))
+        .map(|(i, it)| {
+            if it.is_separator() {
+                ToolButton::sep()
+            } else {
+                ToolButton::new(CMD_LAUNCHER_BASE + i as u32, it.label.clone())
+                    .with_icon(crate::icons::icon_key(false, &it.exe), it.exe.clone())
+            }
+        })
         .collect()
 }
 
@@ -833,8 +841,9 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         .set_bounds(GRect::new(0, 0, rc.w, menu_h.min(rc.h)), inv);
     st.toolbar
         .set_bounds(GRect::new(0, menu_h, rc.w, tool_h), inv);
-    // 퀵 런처 바(원본 Row 2) — 숨김·항목 0이면 높이 0(패널이 그만큼 넓어진다)
-    let launch_h = if st.launcher_visible && !st.launcher_items.is_empty() {
+    // 퀵 런처 바(원본 Row 2) — 숨김·실행 항목 0(구분선뿐 포함)이면 높이 0
+    let has_items = st.launcher_items.iter().any(|i| !i.is_separator());
+    let launch_h = if st.launcher_visible && has_items {
         tool_h
     } else {
         0
@@ -2343,6 +2352,9 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         {
             // 퀵 런처 항목 실행(M5-1) — %path% = 활성 패널 현재 폴더, 실패는 상태바 격리
             let item = st.launcher_items[(id - CMD_LAUNCHER_BASE) as usize].clone();
+            if item.is_separator() {
+                return; // 구분선 — 히트 불가지만 방어
+            }
             let folder = st.active_panel().root_path();
             let ok = crate::launcher::launch(hwnd, &item, &folder);
             let key = if ok {

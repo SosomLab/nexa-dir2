@@ -9,3 +9,6 @@ homepage.workspace = true
 description = "파일 조작 엔진 — 복사/이동 전송(진행률·취소·충돌), 원본 FileOps/TransferPathsInto 이식"
 
 [dependencies]
+# 일괄 이름변경 정규식(M5-1 후속 — docs/25 §2 동작 2). regex 본가 대비 이진 크기·컴파일
+# 시간 최적화 판(MIT/Apache-2.0 퍼미시브 — DR-6). DR-8 원장 = docs/10 §1-2.
+regex-lite = "0.1"
