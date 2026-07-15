@@ -112,7 +112,8 @@ impl RowSource for TreeSource {
     }
 
     fn cell(&self, index: usize, key: u32) -> String {
-        let Some(r) = self.tree.row(index) else {
+        // row_ref = 이름 클론 없는 참조 뷰(X-16 핫패스 — 프레임당 행×열 호출)
+        let Some(r) = self.tree.row_ref(index) else {
             return String::new();
         };
         let is_dir = r.kind == FileKind::Dir;
@@ -121,7 +122,7 @@ impl RowSource for TreeSource {
                 if is_dir {
                     String::new()
                 } else {
-                    ext_of(&r.name).to_string()
+                    ext_of(r.name).to_string()
                 }
             }
             COL_SIZE => {
@@ -137,7 +138,7 @@ impl RowSource for TreeSource {
                 FileKind::Dir => tr("kind.folder"),
                 FileKind::Symlink => tr("kind.link"),
                 FileKind::File => {
-                    let ext = ext_of(&r.name);
+                    let ext = ext_of(r.name);
                     if ext.is_empty() {
                         tr("kind.file")
                     } else {
@@ -214,8 +215,9 @@ impl RowSource for TreeSource {
 
     fn icon(&self, index: usize) -> Option<(String, String)> {
         let id = self.tree.visible_id(index)?;
+        // kind만 필요 — 통 VisibleRow 클론 대신 참조 뷰(X-16 핫패스)
+        let is_dir = self.tree.row_ref(index)?.kind == FileKind::Dir;
         let path = self.tree.node_path(id)?.to_string_lossy().into_owned();
-        let is_dir = self.tree.row(index)?.kind == FileKind::Dir;
         Some((crate::icons::icon_key(is_dir, &path), path))
     }
 
