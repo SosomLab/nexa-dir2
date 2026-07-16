@@ -293,9 +293,14 @@ fn build_menus(
 
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
 /// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
-fn build_toolbar(show_hidden: bool, show_dotfiles: bool) -> Vec<ToolButton> {
-    // 그룹화(QA 07-14 — 원본 PR#10): [새로고침] | [설정] | [숨김·닷파일 토글]
+fn build_toolbar(show_hidden: bool, show_dotfiles: bool, view_mode: &str) -> Vec<ToolButton> {
+    // 그룹화(QA 07-14 — 원본 PR#10): [새로고침] | [설정] | [숨김·닷파일 토글] |
+    // [보기 모드 라디오 3종 — 07-16: 트리/일반/타일, 활성 탭 기준 1개만 켜짐]
     vec![
+        ToolButton::new(CMD_VIEW_TREE, "├─").toggled(view_mode == "tree"),
+        ToolButton::new(CMD_VIEW_FLAT, "☰").toggled(view_mode == "flat"),
+        ToolButton::new(CMD_VIEW_TILES, "▦").toggled(view_mode == "tiles"),
+        ToolButton::sep(),
         ToolButton::new(CMD_REFRESH, "⟳"),
         ToolButton::sep(),
         ToolButton::new(CMD_PREFS, "⚙"),
@@ -731,12 +736,10 @@ pub fn run() -> Result<()> {
         let align = align_of(&settings.nav_up_align);
         left.set_nav_up_align(align);
         right.set_nav_up_align(align);
-        // 보기 모드 복원(07-16 — 기본 tree가 아니면 전 탭 적용)
-        if settings.view_mode != "tree" {
-            let mode = mode_of(&settings.view_mode);
-            left.set_view_mode(mode, &mut inv);
-            right.set_view_mode(mode, &mut inv);
-        }
+        // 보기 모드 복원(07-16 개정: **탭별**) — 세션 값 우선, 없으면 설정 기본
+        let fallback = mode_of(&settings.view_mode);
+        left.seed_modes(&session.panels[0].modes, fallback, &mut inv);
+        right.seed_modes(&session.panels[1].modes, fallback, &mut inv);
         // 타입어헤드 옵션(07-15) — 항상 적용(리셋 ms 등 기본값 아님 가능)
         let scope = scope_of(&settings.typeahead_scope);
         for p in [&mut left, &mut right] {
@@ -778,7 +781,11 @@ pub fn run() -> Result<()> {
             m.pad_x,
         ),
         toolbar: Toolbar::new(
-            build_toolbar(settings.show_hidden, settings.show_dotfiles),
+            build_toolbar(
+                settings.show_hidden,
+                settings.show_dotfiles,
+                &settings.view_mode,
+            ),
             m.row_h,
             m.pad_x,
         ),
@@ -2449,6 +2456,26 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
                              // 세션 자동 저장(07-15): 탭/경로 변경 플래그 → 디바운스 재무장(변경 폭주 = 타이머
                              // 연장 = 중간 상태 무효화, 조용해진 뒤 마지막 상태만 1회 flush — 원본 SESS 코얼레싱)
+                             // 보기 모드 라디오 동기(07-16 — 탭별): 활성 패널·활성 탭 기준. 탭 전환/네비/명령
+                             // 등 모든 상호작용이 이 길목을 지나므로 별도 훅 없이 항상 일치(set_checked = 무변 무시).
+    {
+        use nexa_gui::widgets::ViewMode;
+        let cur = match st.panels[st.active].active_view_mode() {
+            ViewMode::Flat => "flat",
+            ViewMode::Tiles => "tiles",
+            ViewMode::Tree => "tree",
+        };
+        let mut vinv = Invalidations::default();
+        for (c, m2) in [
+            (CMD_VIEW_TREE, "tree"),
+            (CMD_VIEW_FLAT, "flat"),
+            (CMD_VIEW_TILES, "tiles"),
+        ] {
+            st.menubar.set_checked(c, m2 == cur, &mut vinv);
+            st.toolbar.set_checked(c, m2 == cur, &mut vinv);
+        }
+        flush_invalidations(hwnd, &mut vinv);
+    }
     if st.panels[0].take_session_dirty() | st.panels[1].take_session_dirty() {
         SetTimer(
             Some(hwnd),
@@ -2491,31 +2518,19 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
         }
         CMD_VIEW_TREE | CMD_VIEW_FLAT | CMD_VIEW_TILES => {
-            // 보기 모드 라디오(07-16) — 양 패널 전 탭 즉시 적용 + 메뉴 동기 + 영속
+            // 보기 모드 라디오(07-16 개정: **탭별**) — 활성 패널의 활성 탭에만 적용.
+            // 라디오(메뉴·도구 모음) 동기는 update_status의 단일 동기 지점이 수행.
             let mode_str = match id {
                 CMD_VIEW_FLAT => "flat",
                 CMD_VIEW_TILES => "tiles",
                 _ => "tree",
             };
-            if st.view_mode != mode_str {
-                st.view_mode = mode_str.into();
-                let mode = mode_of(mode_str);
-                let mut inv = Invalidations::default();
-                st.panels[0].set_view_mode(mode, &mut inv);
-                st.panels[1].set_view_mode(mode, &mut inv);
-                for (c, m2) in [
-                    (CMD_VIEW_TREE, "tree"),
-                    (CMD_VIEW_FLAT, "flat"),
-                    (CMD_VIEW_TILES, "tiles"),
-                ] {
-                    st.menubar.set_checked(c, m2 == mode_str, &mut inv);
-                }
-                let settings = current_settings(st);
-                let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
-                flush_invalidations(hwnd, &mut inv);
-                let _ = InvalidateRect(Some(hwnd), None, false);
-                update_status(hwnd, st);
-            }
+            st.view_mode = mode_str.into(); // 마지막 선택 = 새 세션 기본(설정 영속)
+            let mode = mode_of(mode_str);
+            st.active_panel().set_view_mode(mode, &mut inv);
+            let settings = current_settings(st);
+            let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+            let _ = InvalidateRect(Some(hwnd), None, false);
         }
         CMD_TOGGLE_DOCK => {
             // 하단 도크 토글(M4-1, Ctrl+` — 원본 대원칙: 듀얼=좌↔좌·우↔우 동시)
@@ -3064,6 +3079,7 @@ fn current_session(st: &mut State) -> Session {
                 expanded: st.panels[0].session_expanded(),
                 locked: st.panels[0].session_locked(),
                 pinned: st.panels[0].session_pinned(),
+                modes: st.panels[0].session_modes(),
             },
             PanelSession {
                 tabs: t1,
@@ -3071,6 +3087,7 @@ fn current_session(st: &mut State) -> Session {
                 expanded: st.panels[1].session_expanded(),
                 locked: st.panels[1].session_locked(),
                 pinned: st.panels[1].session_pinned(),
+                modes: st.panels[1].session_modes(),
             },
         ],
     }

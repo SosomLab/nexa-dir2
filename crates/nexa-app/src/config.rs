@@ -138,6 +138,8 @@ pub struct PanelSession {
     pub locked: Vec<bool>,
     /// 탭별 고정(📌 — 사용자 요청 07-15).
     pub pinned: Vec<bool>,
+    /// 탭별 보기 모드("tree"|"flat"|"tiles" — 사용자 요청 07-16: 탭별 설정).
+    pub modes: Vec<String>,
 }
 
 /// 세션(원본 session.json 대응) — `data\session.cfg`(패널·탭·활성·펼침).
@@ -422,6 +424,10 @@ impl Session {
                     .collect();
                 out.push_str(&format!("panel{i}.pinned={}\n", flags.join("|")));
             }
+            // 탭별 보기 모드(07-16) — 전부 tree(기본)면 생략
+            if p.modes.iter().any(|m| m != "tree") {
+                out.push_str(&format!("panel{i}.modes={}\n", p.modes.join("|")));
+            }
         }
         out
     }
@@ -450,6 +456,19 @@ impl Session {
                 "panel0.pinned" | "panel1.pinned" => {
                     let idx = usize::from(k.starts_with("panel1"));
                     s.panels[idx].pinned = v.split('|').map(|f| f == "1").collect();
+                }
+                "panel0.modes" | "panel1.modes" => {
+                    let idx = usize::from(k.starts_with("panel1"));
+                    s.panels[idx].modes = v
+                        .split('|')
+                        .map(|m| {
+                            if matches!(m, "flat" | "tiles") {
+                                m.to_string()
+                            } else {
+                                "tree".to_string() // 미지 값 = 기본
+                            }
+                        })
+                        .collect();
                 }
                 k if k.starts_with("panel0.exp") || k.starts_with("panel1.exp") => {
                     let idx = usize::from(k.starts_with("panel1"));
@@ -644,6 +663,7 @@ mod tests {
                     ],
                     locked: vec![false, true], // 탭1 잠금 — 편의 UX ② 왕복
                     pinned: vec![true, false], // 탭0 고정 — 07-15 왕복
+                    modes: vec!["tiles".into(), "tree".into()], // 탭별 보기 모드 — 07-16 왕복
                 },
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\")],
@@ -651,6 +671,7 @@ mod tests {
                     expanded: vec![],
                     locked: vec![],
                     pinned: vec![],
+                    modes: vec![],
                 },
             ],
         };
@@ -667,6 +688,11 @@ mod tests {
             parsed.panels[0].pinned,
             vec![true, false],
             "고정 왕복(07-15)"
+        );
+        assert_eq!(
+            parsed.panels[0].modes,
+            vec!["tiles".to_string(), "tree".to_string()],
+            "탭별 보기 모드 왕복(07-16)"
         );
         // 빈/손상 → 기본
         let empty = Session::parse("");
