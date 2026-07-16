@@ -914,18 +914,19 @@ impl PrefState {
                         self.rows.push(cap);
                         y += 24;
                         let fam = self.font_value(e.field);
-                        let ed = mk(
+                        // 패밀리 = ctl::fontbox(사용자 요청 07-16): 클릭 = 설치 글꼴
+                        // 드롭다운(자기 글꼴 렌더)·타입어헤드 HUD·쉼표 체인 선택 규칙.
+                        // 확정(선택/포커스 이탈) = EN_KILLFOCUS 재발행 → 기존 즉시 적용.
+                        let ed = crate::ctl::fontbox::create(
                             self.hwnd,
-                            self.font,
-                            w!("EDIT"),
-                            &fam,
-                            (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
                             x0,
                             y,
                             EDIT_W,
                             24,
                             ID_FIELD_BASE + e.field,
+                            self.font,
                         );
+                        set_text(ed, &fam);
                         let sz = self.font_value(size_field);
                         // 크기 = **입력 가능한 콤보**(사용자 확정 07-16): 프리셋 + 직접 입력,
                         // 선택/Enter = 즉시 적용(CBN_SELCHANGE·모달 펌프 VK_RETURN).

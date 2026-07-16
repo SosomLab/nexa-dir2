@@ -5,4 +5,5 @@
 //! 수록: [`searchbox`] — 내장 ✕ 지우개 검색 입력(설정 창 1호 사용처).
 //! 후속 후보: 런처 편집기 목록(X-13)·모달 공통 골격(X-16 백로그 ①).
 
+pub mod fontbox;
 pub mod searchbox;
