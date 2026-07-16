@@ -84,8 +84,6 @@ pub struct Panel {
     sort_case: bool,
     /// 타입어헤드 옵션(07-15): (범위, 리셋 ms, 특수문자, 공백, Backspace, HUD 위치).
     ta_opts: (nexa_tree::FindScope, u64, bool, bool, bool, u8),
-    /// 보기 모드(07-16 — 트리/일반/타일). 새 소스·새 탭에도 재적용.
-    view_mode: nexa_gui::widgets::ViewMode,
     /// 호스트가 준 기본 컬럼(내 PC 드라이브 컬럼 전환의 복귀 원본 — X-17).
     base_columns: Vec<Column>,
     /// 세션 저장 요청 플래그(사용자 요청 07-15 — 탭/경로 변경 시 표시만, 저장은
@@ -128,7 +126,6 @@ impl Panel {
                 true,
                 6,
             ),
-            view_mode: nexa_gui::widgets::ViewMode::default(),
             base_columns: columns,
             session_dirty: false,
             dock_ratio: 0.3,
@@ -390,6 +387,8 @@ impl Panel {
         let mut rows = VirtualRows::new(src, self.m.row_h, self.m.pad_x, self.m.indent_w);
         rows.set_columns(self.rows().columns().to_vec(), inv);
         rows.set_focused(self.focused, inv);
+        // 새 탭 = 현재 탭 복제 — 보기 모드도 계승(07-16 탭별 규약)
+        rows.set_view_mode(self.active_view_mode(), inv);
         self.tabs.push(Tab {
             rows,
             nav: History::new(path),
@@ -752,22 +751,68 @@ impl Panel {
         self.tabs[tab]
             .rows
             .set_typeahead_opts(reset, special, space, bs, hud, &mut inv);
-        self.tabs[tab].rows.set_view_mode(self.view_mode, &mut inv); // 07-16
+        // 보기 모드는 재적용 불요(07-16 개정) — VirtualRows가 탭별로 보존.
     }
 
-    /// 보기 모드 전환(사용자 요청 07-16 — 보기 메뉴): 전 탭 적용 + 보관(새 소스 계승).
+    /// 보기 모드 전환(사용자 요청 07-16 개정: **탭별 설정**) — **활성 탭에만** 적용.
     /// 트리 이탈 시 펼침을 접어 목록을 현재 폴더로 평탄화(일반/타일 의미론).
+    /// 모드는 VirtualRows(탭별 위젯)에 저장 — 탐색/재로드에도 자연 유지.
     pub fn set_view_mode(&mut self, mode: nexa_gui::widgets::ViewMode, inv: &mut Invalidations) {
-        if self.view_mode == mode {
+        Self::apply_tab_view_mode(&mut self.tabs[self.active], mode, inv);
+        self.session_dirty = true; // 탭별 모드 = 세션 영속(07-16)
+    }
+
+    fn apply_tab_view_mode(
+        tab: &mut Tab,
+        mode: nexa_gui::widgets::ViewMode,
+        inv: &mut Invalidations,
+    ) {
+        if tab.rows.view_mode() == mode {
             return;
         }
-        self.view_mode = mode;
-        for t in &mut self.tabs {
-            if mode != nexa_gui::widgets::ViewMode::Tree {
-                t.rows.source_mut().tree_mut().collapse_all();
-            }
-            t.rows.set_view_mode(mode, inv);
-            inv.push(t.rows.bounds());
+        if mode != nexa_gui::widgets::ViewMode::Tree {
+            tab.rows.source_mut().tree_mut().collapse_all();
+        }
+        tab.rows.set_view_mode(mode, inv);
+        inv.push(tab.rows.bounds());
+    }
+
+    /// 활성 탭의 보기 모드(도구 모음/메뉴 라디오 동기 — 07-16).
+    pub fn active_view_mode(&self) -> nexa_gui::widgets::ViewMode {
+        self.tabs[self.active].rows.view_mode()
+    }
+
+    /// 세션 스냅샷 — 탭별 보기 모드 문자열(07-16).
+    pub fn session_modes(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .map(|t| {
+                match t.rows.view_mode() {
+                    nexa_gui::widgets::ViewMode::Flat => "flat",
+                    nexa_gui::widgets::ViewMode::Tiles => "tiles",
+                    nexa_gui::widgets::ViewMode::Tree => "tree",
+                }
+                .to_string()
+            })
+            .collect()
+    }
+
+    /// 세션 복원 — 탭 인덱스 정렬(부족분 = 기본 유지). `fallback` = 세션에 없을 때
+    /// 전 탭 기본(settings.view_mode — 구세션/신규 탭 호환).
+    pub fn seed_modes(
+        &mut self,
+        modes: &[String],
+        fallback: nexa_gui::widgets::ViewMode,
+        inv: &mut Invalidations,
+    ) {
+        for (i, t) in self.tabs.iter_mut().enumerate() {
+            let m = match modes.get(i).map(String::as_str) {
+                Some("flat") => nexa_gui::widgets::ViewMode::Flat,
+                Some("tiles") => nexa_gui::widgets::ViewMode::Tiles,
+                Some(_) => nexa_gui::widgets::ViewMode::Tree,
+                None => fallback,
+            };
+            Self::apply_tab_view_mode(t, m, inv);
         }
     }
 
@@ -1116,6 +1161,36 @@ mod tests {
         // 새 소스(탐색)에도 모드 계승(apply_sort_opts 경유)
         p.navigate_to(base.join("sub"), ctx(), &mut inv);
         assert_eq!(p.rows().view_mode(), ViewMode::Tiles, "탐색 후 모드 유지");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn view_mode_is_per_tab() {
+        // 07-16 개정: 보기 모드는 탭별 — 새 탭 계승·탭 간 독립·세션 스냅샷
+        use nexa_gui::widgets::ViewMode;
+        let base = fixture("viewmode_tab");
+        let (mut p, mut inv) = panel(&base);
+        p.set_view_mode(ViewMode::Tiles, &mut inv);
+        p.new_tab(ctx(), &mut inv); // 새 탭(활성) = 현재 탭 계승
+        assert_eq!(p.active_view_mode(), ViewMode::Tiles, "새 탭 계승");
+        p.set_view_mode(ViewMode::Flat, &mut inv); // 탭1만 변경
+        assert_eq!(p.active_view_mode(), ViewMode::Flat);
+        p.switch_tab(0, &mut inv);
+        assert_eq!(p.active_view_mode(), ViewMode::Tiles, "탭0 독립 유지");
+        assert_eq!(
+            p.session_modes(),
+            vec!["tiles".to_string(), "flat".to_string()],
+            "세션 스냅샷 = 탭별"
+        );
+        // 세션 복원 경로 — 부족분은 fallback
+        let mut q = panel(&base).0;
+        q.new_tab(ctx(), &mut inv);
+        q.seed_modes(&["flat".into()], ViewMode::Tiles, &mut inv);
+        assert_eq!(
+            q.session_modes(),
+            vec!["flat".to_string(), "tiles".to_string()],
+            "복원: 세션 값 우선·부족분 fallback"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
