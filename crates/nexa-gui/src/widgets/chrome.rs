@@ -16,7 +16,7 @@ pub struct ToolButton {
     pub glyph: String,
     /// 그룹 구분선(QA 07-14 — 원본 도구 모음 그룹화 PR#10). 클릭 불가.
     pub separator: bool,
-    /// 토글 상태 표시(배경·글자색 + 하단 accent 줄 — 숨김/닷파일 보기 등).
+    /// 토글 상태 표시(연한 강조 배경 — 숨김/닷파일 보기 등. 하단 줄 제거 QA 07-16).
     pub checked: bool,
     /// 아이콘 버튼(M5-1 런처 — 원본 exe 16px 썸네일 대응): `(키, 로드 힌트)` —
     /// DrawCtx::draw_icon이 해석(셸 아이콘 큐잉). Some이면 **정사각 버튼**(글리프 대신).
@@ -189,7 +189,8 @@ impl Widget for Toolbar {
                     .unwrap_or_else(|| ctx.text_width(&btn.glyph) + self.pad_x * 2)
             };
             let cell = Rect::new(x, b.y, w.min((b.right() - x).max(0)), b.h);
-            // 토글 켜짐 = 배경·글자색 변화(QA 07-15 — 하단 줄만으로는 약함) + accent 줄 유지
+            // 토글 켜짐 = **연한 강조 배경만**(QA 07-16 — 하단 accent 줄 제거,
+            // 배경[sel_bg = 테마 선택색]으로 충분하다는 사용자 확정)
             let bg = if btn.checked {
                 theme.sel_bg
             } else if self.hover == Some(i) {
@@ -197,11 +198,7 @@ impl Widget for Toolbar {
             } else {
                 theme.chrome_bg
             };
-            let fg = if btn.checked {
-                theme.accent
-            } else {
-                theme.text
-            };
+            let fg = theme.text;
             if cell.w > 0 {
                 if let Some((key, hint)) = &btn.icon {
                     // 16×16 상당(바 높이 − 상하 4px 여백) 아이콘을 정사각 셀 중앙에.
@@ -232,9 +229,6 @@ impl Widget for Toolbar {
                     ctx.glyph_opaque(cell, &btn.glyph, fg, bg);
                 } else {
                     ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, fg, bg);
-                }
-                if btn.checked {
-                    ctx.fill_rect(Rect::new(cell.x, b.bottom() - 2, cell.w, 2), theme.accent);
                 }
             }
             ranges.push((cell.x, cell.x + w));
