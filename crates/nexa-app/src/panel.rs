@@ -966,8 +966,12 @@ impl Panel {
     pub fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
             InputEvent::MouseDown { x, y, .. } | InputEvent::RightDown { x, y } => {
+                // 도크 라우팅은 **실제 표시 중(h>0)일 때만**(X-20 QA 07-17 진범:
+                // 싱글 정보의 우 패널 도크는 0-rect라 `y >= 0`이 항상 참 — 모든 클릭이
+                // 빈 도크로 삼켜져 파일 목록이 동작하지 않았다)
+                let dock_shown = self.dock_visible && self.dock.bounds().h > 0;
                 // 도크 밖 클릭 = 도크 텍스트 선택 해제(QA 07-15 — Ctrl+C 우선순위 복원)
-                if self.dock_visible && y < self.dock.bounds().y {
+                if dock_shown && y < self.dock.bounds().y {
                     self.dock.clear_text_selection(inv);
                 }
                 if y < self.pathbar.bounds().y {
@@ -979,7 +983,7 @@ impl Panel {
                     } else {
                         self.pathbar.on_event(ev, inv);
                     }
-                } else if self.dock_visible && y >= self.dock.bounds().y {
+                } else if dock_shown && y >= self.dock.bounds().y {
                     self.dock.on_event(ev, inv); // 종류 스트립 전환(M4-2)
                 } else {
                     self.tabs[self.active].rows.on_event(ev, inv);
