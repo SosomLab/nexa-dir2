@@ -62,6 +62,21 @@ pub struct Settings {
     /// 대화상자(확인창·진행 창) 글꼴/크기(pt — QA 07-14 "대화창용 폰트 설정").
     pub dlg_font: String,
     pub dlg_font_size: i32,
+    /// 폰트 슬롯(X-12 — 사용자 요청 07-16, 원본 Fonts 스크린샷):
+    /// 기본(메뉴·탭·경로바·도크 등 특정 슬롯 없는 전부) / 우클릭 메뉴 / 상태바 /
+    /// 파일 목록(+컬럼 헤더). 콘솔(터미널)=term_font·대화상자=dlg_font 기존 유지.
+    pub base_font: String,
+    pub base_font_size: i32,
+    pub ctx_font: String,
+    pub ctx_font_size: i32,
+    pub status_font: String,
+    pub status_font_size: i32,
+    pub list_font: String,
+    pub list_font_size: i32,
+    /// 파일 목록 장식(X-12): 폴더 이름 굵게 / 헤더 굵게·이탤릭.
+    pub list_folder_bold: bool,
+    pub header_bold: bool,
+    pub header_italic: bool,
     /// 폴더 우선 정렬(G-13 — 기본 true=탐색기 규약. false=파일·폴더 혼합 정렬).
     pub sort_folders_first: bool,
     /// 대소문자 구분 정렬(사용자 확정 07-15 — 기본 false. 코드포인트 순 = **대문자 그룹 상단**).
@@ -109,6 +124,17 @@ impl Default for Settings {
             term_cols: 240,
             dlg_font: "Segoe UI".into(),
             dlg_font_size: 9,
+            base_font: "Segoe UI".into(),
+            base_font_size: 12, // DIP — 기존 단일 UI 포맷과 동일(시각 무변)
+            ctx_font: "Segoe UI".into(),
+            ctx_font_size: 12,
+            status_font: "Segoe UI".into(),
+            status_font_size: 12,
+            list_font: "Segoe UI".into(),
+            list_font_size: 12,
+            list_folder_bold: false,
+            header_bold: false,
+            header_italic: false,
             sort_folders_first: true,
             sort_case_sensitive: false,
             nav_up_align: "center".into(),
@@ -247,6 +273,20 @@ impl Settings {
             u8::from(self.typeahead_space),
             u8::from(self.typeahead_backspace)
         ));
+        out.push_str(&format!(
+            "base_font={}\nbase_font_size={}\nctx_font={}\nctx_font_size={}\nstatus_font={}\nstatus_font_size={}\nlist_font={}\nlist_font_size={}\nlist_folder_bold={}\nheader_bold={}\nheader_italic={}\n",
+            self.base_font,
+            self.base_font_size,
+            self.ctx_font,
+            self.ctx_font_size,
+            self.status_font,
+            self.status_font_size,
+            self.list_font,
+            self.list_font_size,
+            u8::from(self.list_folder_bold),
+            u8::from(self.header_bold),
+            u8::from(self.header_italic)
+        ));
         out.push_str(&format!("launcher_seed={}\n", self.launcher_seed));
         if let Some(items) = &self.launcher_items {
             out.push_str(&format!("launcher_count={}\n", items.len()));
@@ -310,6 +350,33 @@ impl Settings {
                         }
                     }
                 }
+                "base_font" if !v.trim().is_empty() => s.base_font = v.trim().into(),
+                "base_font_size" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.base_font_size = n.clamp(8, 32);
+                    }
+                }
+                "ctx_font" if !v.trim().is_empty() => s.ctx_font = v.trim().into(),
+                "ctx_font_size" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.ctx_font_size = n.clamp(8, 32);
+                    }
+                }
+                "status_font" if !v.trim().is_empty() => s.status_font = v.trim().into(),
+                "status_font_size" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.status_font_size = n.clamp(8, 32);
+                    }
+                }
+                "list_font" if !v.trim().is_empty() => s.list_font = v.trim().into(),
+                "list_font_size" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.list_font_size = n.clamp(8, 32);
+                    }
+                }
+                "list_folder_bold" => s.list_folder_bold = v != "0",
+                "header_bold" => s.header_bold = v != "0",
+                "header_italic" => s.header_italic = v != "0",
                 "term_wrap" => s.term_wrap = v != "0",
                 "term_cols" => {
                     if let Ok(n) = v.parse::<i32>() {
@@ -555,6 +622,17 @@ mod tests {
             term_cols: 132,
             dlg_font: "맑은 고딕".into(),
             dlg_font_size: 10,
+            base_font: "본고딕".into(),
+            base_font_size: 13,
+            ctx_font: "Segoe UI".into(),
+            ctx_font_size: 12,
+            status_font: "D2Coding".into(),
+            status_font_size: 11,
+            list_font: "맑은 고딕".into(),
+            list_font_size: 14,
+            list_folder_bold: true,
+            header_bold: true,
+            header_italic: false,
             sort_folders_first: false,
             sort_case_sensitive: true,
             nav_up_align: "top".into(),
@@ -625,6 +703,19 @@ mod tests {
         );
         assert_eq!(parsed.dlg_font, "맑은 고딕", "대화상자 글꼴 왕복");
         assert_eq!(parsed.dlg_font_size, 10);
+        // 폰트 슬롯 왕복(X-12)
+        assert_eq!(parsed.base_font, "본고딕");
+        assert_eq!(parsed.base_font_size, 13);
+        assert_eq!(parsed.status_font, "D2Coding");
+        assert_eq!(parsed.list_font, "맑은 고딕");
+        assert_eq!(parsed.list_font_size, 14);
+        assert!(parsed.list_folder_bold && parsed.header_bold);
+        assert!(!parsed.header_italic);
+        assert_eq!(
+            Settings::parse("base_font_size=99").base_font_size,
+            32,
+            "크기 클램프"
+        );
         assert!((parsed.split - 0.62).abs() < 0.001);
         // 퀵 런처 왕복(M5-1) — 표시 플래그·항목(인자 안 | 보존)
         assert!(!parsed.launcher, "런처 바 표시 왕복");

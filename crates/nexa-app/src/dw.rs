@@ -124,17 +124,38 @@ type ImageKey = (String, i32, i32);
 /// 디코드 결과 — (실제 w, h, 32bpp BGRA top-down).
 type DecodedImage = (i32, i32, Vec<u8>);
 
+/// 폰트 슬롯 사양(X-12 — 사용자 요청 07-16): (패밀리, 크기 DIP).
+/// 콘솔(mono)·대화상자(GDI DlgFont)는 기존 경로 유지.
+#[derive(Clone, PartialEq, Debug)]
+pub struct FontSpec {
+    pub base: (String, f32),
+    pub list: (String, f32),
+    pub status: (String, f32),
+}
+
+/// 스타일 id = 슬롯×4 + bold + 2×italic (nexa-gui FontSlot ↔ 여기 매핑).
+fn style_id(slot: nexa_gui::FontSlot, bold: bool, italic: bool) -> u8 {
+    let s = match slot {
+        nexa_gui::FontSlot::Base => 0u8,
+        nexa_gui::FontSlot::List => 1,
+        nexa_gui::FontSlot::Status => 2,
+    };
+    s * 4 + u8::from(bold) + 2 * u8::from(italic)
+}
+
 /// DirectWrite interop 백엔드 — 창 1개 기준 수명(창 크기 변경 시 Resize).
 pub struct DwBackend {
     factory: IDWriteFactory,
     brt: IDWriteBitmapRenderTarget,
-    format: IDWriteTextFormat,
+    /// 폰트 슬롯 포맷(X-12) — 스타일 id → (포맷, 말줄임 기호). 기본/목록(굵게·이탤릭
+    /// 장식 포함)/상태바. 조회 실패 = 기본(0) 폴백.
+    formats: HashMap<u8, (IDWriteTextFormat, IDWriteInlineObject)>,
+    /// 현재 선택 스타일(DrawCtx::select_font — 위젯이 페인트 시작에 지정).
+    cur_style: std::cell::Cell<u8>,
     renderer: IDWriteTextRenderer,
     color: Rc<Cell<COLORREF>>,
     /// 큰 글리프(버튼 화살표 등) 포맷 — 15 DIP·가로 중앙 정렬.
     icon_format: IDWriteTextFormat,
-    /// 컬럼 트리밍(말줄임표) 기호 — 레이아웃마다 SetTrimming으로 부착.
-    ellipsis: IDWriteInlineObject,
     /// 터미널 모노스페이스 포맷(M4-3 — 기본 Consolas 12 DIP, 셀 그리드 정렬.
     /// 설정 `term_font`로 교체 — 미설치 글리프는 DWrite 시스템 폴백이 해석).
     mono_format: IDWriteTextFormat,
@@ -164,6 +185,7 @@ impl DwBackend {
         w: i32,
         h: i32,
         dpi: u32,
+        fonts: &FontSpec,
         mono_font: &str,
         mono_size: f32,
     ) -> Result<Self> {
@@ -173,18 +195,50 @@ impl DwBackend {
         brt.SetPixelsPerDip(dpi as f32 / 96.0)?;
         let params = factory.CreateRenderingParams()?;
 
-        let format = factory.CreateTextFormat(
-            w!("Segoe UI"),
-            None,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-            12.0, // 9pt (GDI 백엔드와 동일 크기)
-            w!("ko-kr"),
-        )?;
-        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-        // 행 rect 안 세로 중앙 정렬(레이아웃 maxheight = 행 높이)
-        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        // 폰트 슬롯 포맷(X-12): 기본·상태바 = 보통, 목록 = 보통/굵게/이탤릭/굵은이탤릭
+        // (폴더 이름 굵게·헤더 장식). 미설치 패밀리는 DWrite가 시스템 폴백으로 해석.
+        let mk = |family: &str,
+                  size: f32,
+                  bold: bool,
+                  italic: bool|
+         -> Result<(IDWriteTextFormat, IDWriteInlineObject)> {
+            use windows::Win32::Graphics::DirectWrite::{
+                DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            };
+            let name: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+            let f = factory.CreateTextFormat(
+                windows::core::PCWSTR(name.as_ptr()),
+                None,
+                if bold {
+                    DWRITE_FONT_WEIGHT_SEMI_BOLD
+                } else {
+                    DWRITE_FONT_WEIGHT_NORMAL
+                },
+                if italic {
+                    DWRITE_FONT_STYLE_ITALIC
+                } else {
+                    DWRITE_FONT_STYLE_NORMAL
+                },
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
+                size.clamp(8.0, 32.0),
+                w!("ko-kr"),
+            )?;
+            f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+            // 행 rect 안 세로 중앙 정렬(레이아웃 maxheight = 행 높이)
+            f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            let e = factory.CreateEllipsisTrimmingSign(&f)?;
+            Ok((f, e))
+        };
+        let mut formats: HashMap<u8, (IDWriteTextFormat, IDWriteInlineObject)> = HashMap::new();
+        formats.insert(0, mk(&fonts.base.0, fonts.base.1, false, false)?);
+        for (b, i) in [(false, false), (true, false), (false, true), (true, true)] {
+            formats.insert(
+                4 + u8::from(b) + 2 * u8::from(i),
+                mk(&fonts.list.0, fonts.list.1, b, i)?,
+            );
+        }
+        formats.insert(8, mk(&fonts.status.0, fonts.status.1, false, false)?);
 
         // 큰 글리프 포맷(네비 화살표 등) — 15 DIP·상하/좌우 중앙(글리프 가시성)
         let icon_format = factory.CreateTextFormat(
@@ -275,16 +329,14 @@ impl DwBackend {
             color: color.clone(),
         }
         .into();
-        let ellipsis = factory.CreateEllipsisTrimmingSign(&format)?;
-
         Ok(DwBackend {
             factory,
             brt,
-            format,
+            formats,
+            cur_style: std::cell::Cell::new(0),
             renderer,
             color,
             icon_format,
-            ellipsis,
             mono_format,
             mono_fallback,
             mono_glyphs: RefCell::new(HashMap::new()),
@@ -297,31 +349,38 @@ impl DwBackend {
         })
     }
 
+    /// 현재 스타일의 (포맷, 말줄임 기호) — 미등록 스타일은 기본(0) 폴백.
+    fn cur_format(&self) -> &(IDWriteTextFormat, IDWriteInlineObject) {
+        self.formats
+            .get(&self.cur_style.get())
+            .or_else(|| self.formats.get(&0))
+            .expect("기본 포맷은 항상 등록")
+    }
+
     /// `(text, max_w_px)`의 레이아웃(캐시 히트 시 재사용) — 폭 초과분은 말줄임표 트리밍.
-    /// `max_h_dip` = 행 높이(세로 중앙 정렬 기준).
+    /// `max_h_dip` = 행 높이(세로 중앙 정렬 기준). 캐시 외측 키 = 폭 + **스타일 상위
+    /// 비트**(X-12 — 슬롯/장식별 레이아웃 분리. |폭| < 2^20 전제·아이콘 음수 네임스페이스 보존).
     fn layout_for(&self, text: &str, max_w_px: i32, max_h_dip: f32) -> Option<IDWriteTextLayout> {
+        let style = self.cur_style.get();
+        let key_w = max_w_px + ((style as i32) << 21);
         // 히트 경로 무할당(X-16) — &str 그대로 내측 맵 조회
-        if let Some(l) = self
-            .layouts
-            .borrow()
-            .get(&max_w_px)
-            .and_then(|m| m.get(text))
-        {
+        if let Some(l) = self.layouts.borrow().get(&key_w).and_then(|m| m.get(text)) {
             return Some(l.clone());
         }
         let ppd = self.pixels_per_dip();
         let wtext: Vec<u16> = text.encode_utf16().collect();
+        let (format, ellipsis) = self.cur_format();
         let layout = unsafe {
             let layout = self
                 .factory
-                .CreateTextLayout(&wtext, &self.format, max_w_px as f32 / ppd, max_h_dip)
+                .CreateTextLayout(&wtext, format, max_w_px as f32 / ppd, max_h_dip)
                 .ok()?;
             let trim = DWRITE_TRIMMING {
                 granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
                 delimiter: 0,
                 delimiterCount: 0,
             };
-            let _ = layout.SetTrimming(&trim, &self.ellipsis);
+            let _ = layout.SetTrimming(&trim, ellipsis);
             layout
         };
         let mut cache = self.layouts.borrow_mut();
@@ -330,7 +389,7 @@ impl DwBackend {
             self.layout_count.set(0);
         }
         cache
-            .entry(max_w_px)
+            .entry(key_w)
             .or_default()
             .insert(text.to_owned(), layout.clone());
         self.layout_count.set(self.layout_count.get() + 1);
@@ -463,6 +522,11 @@ pub struct DwCtx<'a> {
 }
 
 impl DrawCtx for DwCtx<'_> {
+    fn select_font(&mut self, slot: nexa_gui::FontSlot, bold: bool, italic: bool) {
+        // 폰트 슬롯 선택(X-12) — 이후 레이아웃 생성/조회가 이 스타일 포맷을 쓴다
+        self.back.cur_style.set(style_id(slot, bold, italic));
+    }
+
     fn fill_rect(&mut self, rect: Rect, color: Color) {
         unsafe {
             let dc = self.back.memory_dc();

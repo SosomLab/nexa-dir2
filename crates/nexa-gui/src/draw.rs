@@ -5,7 +5,27 @@
 use crate::geom::Rect;
 use crate::theme::Color;
 
+/// 폰트 슬롯(X-12 — 사용자 요청 07-16): 위젯이 페인트 시작에 자신의 슬롯을 선택한다.
+/// 콘솔(term_text)·대화상자(네이티브 GDI)는 별도 경로.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FontSlot {
+    /// 특정 슬롯이 없는 전부 — 메뉴·탭·경로바·도구/런처 바·도크.
+    #[default]
+    Base,
+    /// 파일 목록 + 컬럼 헤더(굵게/이탤릭 장식은 select_font 인자).
+    List,
+    /// 하단 상태바.
+    Status,
+}
+
 pub trait DrawCtx {
+    /// 폰트 슬롯/장식 선택(X-12) — 이후의 text/text_opaque/text_width에 적용.
+    /// 위젯은 **페인트 시작에 자신의 슬롯을 선택**한다(상태 공유 — 순서 무관 보장).
+    /// 기본 = no-op(테스트 백엔드 등 단일 폰트).
+    fn select_font(&mut self, slot: FontSlot, bold: bool, italic: bool) {
+        let _ = (slot, bold, italic);
+    }
+
     /// rect를 단색으로 불투명하게 채운다.
     fn fill_rect(&mut self, rect: Rect, color: Color);
 

@@ -225,6 +225,7 @@ impl Widget for InfoDock {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        ctx.select_font(crate::FontSlot::Base, false, false); // 폰트 슬롯(X-12)
         let b = self.bounds;
         if b.h <= 0 {
             return;

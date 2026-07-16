@@ -210,6 +210,8 @@ pub struct VirtualRows<S> {
     focused: bool,
     /// 보기 모드(07-16) — Tree(계층)/Flat(일반)/Tiles(타일 그리드).
     mode: ViewMode,
+    /// 폰트 장식(X-12): (폴더 이름 굵게, 헤더 굵게, 헤더 이탤릭).
+    font_decor: (bool, bool, bool),
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -238,6 +240,22 @@ impl<S: RowSource> VirtualRows<S> {
             press_pending: None,
             focused: true,
             mode: ViewMode::default(),
+            font_decor: (false, false, false),
+        }
+    }
+
+    /// 폰트 장식 설정(X-12) — 폴더 이름 굵게 / 헤더 굵게·이탤릭.
+    pub fn set_font_decor(
+        &mut self,
+        folder_bold: bool,
+        hdr_bold: bool,
+        hdr_italic: bool,
+        inv: &mut Invalidations,
+    ) {
+        let v = (folder_bold, hdr_bold, hdr_italic);
+        if self.font_decor != v {
+            self.font_decor = v;
+            inv.push(self.bounds);
         }
     }
 
@@ -892,7 +910,15 @@ impl<S: RowSource> VirtualRows<S> {
         }
         if name_x < cell.right() {
             let name_rc = Rect::new(name_x, cell.y, cell.right() - name_x, cell.h);
+            // 폴더 이름 굵게(X-12) — 마커 있는 행 = 폴더(파일은 마커 None)
+            let folder_bold = self.font_decor.0 && item.marker != Marker::None;
+            if folder_bold {
+                ctx.select_font(crate::FontSlot::List, true, false);
+            }
             ctx.text_opaque(name_x, ty, name_rc, &item.text, theme.text, bg);
+            if folder_bold {
+                ctx.select_font(crate::FontSlot::List, false, false);
+            }
         }
     }
 
@@ -941,6 +967,7 @@ impl<S: RowSource> VirtualRows<S> {
             ctx.fill_rect(cell, bg);
             // 아이콘(라지 32px — "L|" 키 네임스페이스, icons.rs 로더 분기)
             let item = self.src.row(idx);
+            let folder_bold = self.font_decor.0 && item.marker != Marker::None; // X-12
             let ix = cell.x + self.pad_x;
             let iy = cell.y + (cell.h - isz) / 2;
             if let Some((key, hint)) = self.src.icon(idx) {
@@ -955,7 +982,13 @@ impl<S: RowSource> VirtualRows<S> {
                 let lines = 1 + (!line2.is_empty() as i32) + (bar.is_some() as i32);
                 let mut ly = cell.y + (cell.h - lines * lh - (lines - 1) * 2).max(0) / 2;
                 let name_rc = Rect::new(tx, ly, tw_text, lh);
+                if folder_bold {
+                    ctx.select_font(crate::FontSlot::List, true, false);
+                }
                 ctx.text_opaque(tx, ly, name_rc, &item.text, theme.text, bg);
+                if folder_bold {
+                    ctx.select_font(crate::FontSlot::List, false, false);
+                }
                 ly += lh + 2;
                 if let Some(frac) = bar {
                     // 드라이브 용량 바(X-17 — 탐색기 내 PC 타일): 트랙 + 사용분(>90% 경고색)
@@ -1392,6 +1425,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        ctx.select_font(crate::FontSlot::List, false, false); // 파일 목록 슬롯(X-12)
         let b = self.bounds;
         if self.mode == ViewMode::Tiles {
             self.paint_tiles(ctx, theme);
@@ -1505,6 +1539,8 @@ impl<S: RowSource> Widget for VirtualRows<S> {
 
         // ── 헤더(본문 위에 그려 스크롤과 무관하게 고정) ──
         if !self.columns.is_empty() {
+            // 헤더 장식(X-12 — 굵게/이탤릭)
+            ctx.select_font(crate::FontSlot::List, self.font_decor.1, self.font_decor.2);
             let hy = b.y;
             let hty = hy + (self.row_h - (self.row_h * 4) / 5) / 2;
             for (ci, col) in self.columns.iter().enumerate() {
@@ -1535,6 +1571,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     theme.header_bg,
                 );
             }
+            ctx.select_font(crate::FontSlot::List, false, false); // 장식 복원
         }
 
         // ── 러버밴드 외곽선(드래그 중) ──
