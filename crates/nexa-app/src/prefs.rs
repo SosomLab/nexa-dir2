@@ -14,22 +14,22 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColorBrush,
     InvalidateRect, SelectObject, SetBkMode, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, DEFAULT_CHARSET,
-    DEFAULT_QUALITY, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD,
-    HBRUSH, HFONT, OUT_DEFAULT_PRECIS, TRANSPARENT,
+    DEFAULT_QUALITY, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD, HBRUSH, HFONT,
+    OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetDlgCtrlID, GetDlgItem, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
-    IsWindow, MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON,
-    BS_OWNERDRAW, ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, SW_HIDE,
-    SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    GetDlgCtrlID, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW,
+    ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
+    WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use crate::dialog::DlgFont;
@@ -524,9 +524,7 @@ struct PrefState {
     radios: Vec<(u32, u32, String)>,
 }
 
-const ID_SEARCH: u32 = 1002;
-/// 검색어 빠른 지우개(✕ — 사용자 요청 07-15).
-const ID_SEARCH_CLEAR: u32 = 1003;
+const ID_SEARCH: u32 = 1002; // 검색박스(ctl::searchbox — 내장 ✕는 컨트롤 소관, 07-16)
 /// 수정됨 표시 바(X-10 ④ — 기본값과 다른 항목 좌측 세로 accent). 여러 컨트롤 공유 id.
 const ID_MODBAR: u32 = 1997;
 /// 설명 문장(X-10 ③ — 회색 텍스트). 여러 컨트롤 공유 id.
@@ -1330,11 +1328,6 @@ unsafe extern "system" fn prefs_proc(
                     // 입력/변경 = 선택 해제(전역 매치 페이지) · 명시적 비움 = 기본 노드 복귀.
                     let s = &mut *st;
                     s.query = get_text(HWND(lparam.0 as *mut core::ffi::c_void));
-                    // 내장 ✕ = 입력이 있을 때만 표시(커스텀 검색박스 — 07-16)
-                    let _ = ShowWindow(
-                        GetDlgItem(Some(hwnd), ID_SEARCH_CLEAR as i32).unwrap_or_default(),
-                        if s.query.is_empty() { SW_HIDE } else { SW_SHOW },
-                    );
                     s.category = if s.query.is_empty() {
                         "general".into()
                     } else {
@@ -1344,11 +1337,6 @@ unsafe extern "system" fn prefs_proc(
                     s.repopulate_tree();
                     s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
-                }
-                ID_SEARCH_CLEAR if notify == 0 => {
-                    // 내장 ✕(07-16) — 전체 지우기(EN_CHANGE 경유 상태 일원화) + 포커스 복귀
-                    set_text((*st).search, "");
-                    let _ = SetFocus(Some((*st).search));
                 }
                 ID_TREE if notify == 1 => {
                     // LBN_SELCHANGE — 트리 노드 선택(전면 개편 07-15): 그룹 = 펼침 토글 +
@@ -1459,23 +1447,6 @@ unsafe extern "system" fn prefs_proc(
             }
             if (ID_POS_BASE..ID_POS_BASE + 9).contains(&dis.CtlID) {
                 draw_pos_cell(&*st, dis);
-                return LRESULT(1);
-            }
-            if dis.CtlID == ID_SEARCH_CLEAR {
-                // 내장 ✕(07-16) — EDIT 배경(흰색)과 한 몸처럼: 배경 채움 + 회색 ✕
-                FillRect(dis.hDC, &dis.rcItem, GetSysColorBrush(COLOR_WINDOW));
-                let old = SelectObject(dis.hDC, (*st).font.into());
-                SetBkMode(dis.hDC, TRANSPARENT);
-                windows::Win32::Graphics::Gdi::SetTextColor(dis.hDC, COLORREF(0x0078_6E68));
-                let mut wide: Vec<u16> = "✕".encode_utf16().collect();
-                let mut rc = dis.rcItem;
-                DrawTextW(
-                    dis.hDC,
-                    &mut wide,
-                    &mut rc,
-                    DT_SINGLELINE | DT_CENTER | DT_VCENTER,
-                );
-                SelectObject(dis.hDC, old);
                 return LRESULT(1);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1667,42 +1638,12 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         editors: Vec::new(),
         radios: Vec::new(),
     });
-    // 검색박스 커스텀 컨트롤(사용자 확정 07-16): EDIT **안쪽** 우측에 ✕ —
-    // 입력이 있을 때만 표시·클릭 = 전체 지우기. 실시간 검색(EN_CHANGE)이라 검색 버튼 없음.
-    // 구성 = 전폭 EDIT(우측 텍스트 마진) + 그 위에 겹친 오너드로 ✕(경계 없음·초기 숨김).
-    state.search = mk(
-        dlg,
-        font,
-        w!("EDIT"),
-        "",
-        (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
-        PAD,
-        PAD,
-        CAT_W - 8,
-        SEARCH_H,
-        ID_SEARCH,
-    );
-    // EM_SETMARGINS(EC_RIGHTMARGIN=2) — 텍스트가 ✕ 아래로 흐르지 않게 우측 18px 확보
-    SendMessageW(
-        state.search,
-        0x00D3,
-        Some(WPARAM(2)),
-        Some(LPARAM((18i32 << 16) as isize)),
-    );
-    let clear = mk(
-        dlg,
-        font,
-        w!("STATIC"),
-        "✕",
-        0x010D, // SS_OWNERDRAW | SS_NOTIFY — 검증된 링크 패턴(STN_CLICKED, QA 07-16)
-        PAD + CAT_W - 8 - 22,
-        PAD + (SEARCH_H - 18) / 2,
-        18,
-        18,
-        ID_SEARCH_CLEAR,
-    );
-    let _ = ShowWindow(clear, SW_HIDE); // 입력 없을 땐 숨김(사용자 확정 07-16)
-                                        // 검색창 플레이스홀더(EM_SETCUEBANNER — 미지원 환경은 무해한 no-op)
+    // 검색박스 = **자기완결 커스텀 컨트롤**(사용자 요청 07-16 — ctl::searchbox):
+    // 내장 ✕(입력 시만·클릭 전체 지우기)·세로 중앙 정렬(한글 상단 붙음 해소)·
+    // EN_CHANGE 재발행 계약이라 기존 ID_SEARCH 배선 그대로.
+    state.search =
+        crate::ctl::searchbox::create(dlg, PAD, PAD, CAT_W - 8, SEARCH_H, ID_SEARCH, font);
+    // 검색창 플레이스홀더(EM_SETCUEBANNER — 미지원 환경은 무해한 no-op)
     {
         let cue: Vec<u16> = tr("pref.search.placeholder")
             .encode_utf16()

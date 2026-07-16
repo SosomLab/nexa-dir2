@@ -16,6 +16,9 @@ mod bulkrename;
 mod clipboard;
 #[cfg(windows)]
 mod conpty;
+/// Win32 커스텀 컨트롤 라이브러리(사용자 요청 07-16 — searchbox 등).
+#[cfg(windows)]
+mod ctl;
 #[cfg(windows)]
 mod dialog;
 #[cfg(windows)]
