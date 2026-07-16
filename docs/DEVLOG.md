@@ -8,6 +8,7 @@
 
 ## 2026-07-16
 
+- **fontbox 캐럿 마무리(`fix/fontbox-caret` — 사용자 QA)**: 선택 확정 후 캐럿을 텍스트 맨 뒤로(EM_SETSEL — `,` 체인 이어 입력 자연). 실기 Enter 경로 재검증(캐럿 14/14). 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **fontbox 교체 규칙·Enter(`fix/fontbox-enter` — 사용자 QA)**: 선택 규칙 개정(**콤마 선입력 시에만 체인** — 없으면 A→B 교체)·Enter 미확정 진범 = **모달 펌프 VK_RETURN 가로채기** → `FBM_HAS_DROP` 질의로 드롭 열림 시 컨트롤 통과. 실기: ↓↓+Enter 교체 확정. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **fontbox QA 4건(`fix/fontbox-qa` — 사용자 QA)**: 클릭 미반영 진범 2중(**컨테이너 MA_ACTIVATE + LISTBOX DOWN의 SetFocus** → 킬포커스가 클릭 전에 팝업 파괴) — NOACTIVATE·DOWN 삼킴(좌표 선택)·킬포커스 가드. 하단 회색 띠 = LBS_NOINTEGRALHEIGHT. **바깥 클릭 닫기**(60ms 감시). **HUD 제거**(사용자 확정 — 매칭 스크롤만). 실기 재검증: 항목0 클릭 → "Segoe UI, Agency FB". 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **ctl 2호 글꼴 입력 fontbox(`feat/ctl-fontbox` — 사용자 요청·WT 피커 참조)**: 클릭 = **설치 글꼴 드롭다운**(각 항목을 그 글꼴로 렌더·NOACTIVATE 팝업 — 에디트 포커스 유지)·키보드/마우스 탐색·**쉼표 체인 선택 규칙**(접두사=교체·완결=뒤에 추가 — 단위 테스트)·**커서 위치 타입어헤드 HUD**+매칭 스크롤. prefs 글꼴 6곳 교체·확정=즉시 적용 재발행. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).

@@ -357,6 +357,14 @@ unsafe fn commit_sel(hwnd: HWND, st: &mut FbState) {
     close_drop(st);
     notify_parent(hwnd, EN_KILLFOCUS); // 확정 = 즉시 적용 경로(prefs 0x0200)
     let _ = SetFocus(Some(st.edit));
+    // 캐럿을 텍스트 맨 뒤로(사용자 확정 07-16) — 이어서 ','로 체인 입력이 자연스럽게
+    let end = new_text.encode_utf16().count();
+    SendMessageW(
+        st.edit,
+        0x00B1, // EM_SETSEL
+        Some(WPARAM(end)),
+        Some(LPARAM(end as isize)),
+    );
 }
 
 // ── 내부 EDIT 서브클래스(user32 원시 — 키 라우팅) ─────────────────
