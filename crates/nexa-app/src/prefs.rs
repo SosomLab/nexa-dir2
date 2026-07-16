@@ -650,11 +650,14 @@ impl PrefState {
 
     /// 현재 카테고리/검색어에 맞는 항목만 우측에 (재)구성 — 섹션 제목 + 항목 나열(X-9).
     unsafe fn rebuild(&mut self) {
+        // 수확 목록을 **파괴 전에** 비운다(QA 07-16 진범): 포커스 EDIT의 DestroyWindow가
+        // EN_KILLFOCUS를 동기 발화 → 재진입 harvest가 파괴된 컨트롤에서 빈 문자열을
+        // 수확해 values를 덮던 결함(스크롤 시 폰트 이름 공백). 비워두면 재진입 무해.
+        self.editors.clear();
+        self.radios.clear();
         for h in self.rows.drain(..) {
             let _ = DestroyWindow(h);
         }
-        self.editors.clear();
-        self.radios.clear();
         let reg = registry();
         let x0 = self.body_x();
         let pane_w = (self.cw - x0 - PAD).max(120);
@@ -926,18 +929,34 @@ impl PrefState {
                             ID_FIELD_BASE + e.field,
                         );
                         let sz = self.font_value(size_field);
+                        // 크기 = **입력 가능한 콤보**(사용자 확정 07-16): 프리셋 + 직접 입력,
+                        // 선택/Enter = 즉시 적용(CBN_SELCHANGE·모달 펌프 VK_RETURN).
                         let ed2 = mk(
                             self.hwnd,
                             self.font,
-                            w!("EDIT"),
-                            &sz,
-                            (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32 | ES_NUMBER as u32,
+                            w!("COMBOBOX"),
+                            "",
+                            WS_TABSTOP.0 | WS_VSCROLL.0 | 0x0002, /* CBS_DROPDOWN */
                             x0 + EDIT_W + 8,
                             y,
-                            56,
-                            24,
+                            64,
+                            240, // 닫힘+드롭다운 목록 높이
                             ID_FIELD_BASE + size_field,
                         );
+                        for v in [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32] {
+                            let w16: Vec<u16> = v
+                                .to_string()
+                                .encode_utf16()
+                                .chain(std::iter::once(0))
+                                .collect();
+                            SendMessageW(
+                                ed2,
+                                0x0143, // CB_ADDSTRING
+                                None,
+                                Some(LPARAM(w16.as_ptr() as isize)),
+                            );
+                        }
+                        set_text(ed2, &sz);
                         self.rows.push(ed);
                         self.rows.push(ed2);
                         self.editors.push((e.field, ed));
@@ -1399,10 +1418,32 @@ unsafe extern "system" fn prefs_proc(
                         (*st).apply_now();
                     }
                 }
+                // 크기 콤보(X-12 QA): 드롭다운 선택 = **즉시 적용** — CBN_SELCHANGE
+                // 시점엔 에디트가 아직 이전 값이라 선택 항목 텍스트를 직접 반영.
+                i if i >= ID_FIELD_BASE && notify == 1 => {
+                    let combo = HWND(lparam.0 as *mut core::ffi::c_void);
+                    let sel = SendMessageW(combo, 0x0147 /* CB_GETCURSEL */, None, None).0;
+                    if sel >= 0 {
+                        let mut buf = [0u16; 16];
+                        let n = SendMessageW(
+                            combo,
+                            0x0148, // CB_GETLBTEXT
+                            Some(WPARAM(sel as usize)),
+                            Some(LPARAM(buf.as_mut_ptr() as isize)),
+                        )
+                        .0;
+                        if n > 0 {
+                            let t = String::from_utf16_lossy(&buf[..n as usize]);
+                            set_text(combo, &t); // 에디트부 확정 → harvest가 새 값 수확
+                        }
+                    }
+                    (*st).harvest();
+                    (*st).apply_now();
+                }
                 // VS Code식 즉시 적용(X-8): 체크박스 클릭(BN_CLICKED=0)은 즉시,
-                // EDIT(글꼴·크기)은 포커스 이탈(EN_KILLFOCUS=0x0200) 시 값 확정 후 적용
-                // (키 입력마다 백엔드 재생성 방지 — EN_CHANGE는 무시).
-                i if i >= ID_FIELD_BASE && (notify == 0 || notify == 0x0200) => {
+                // EDIT(글꼴·크기)은 포커스 이탈(EN_KILLFOCUS=0x0200 — 콤보는
+                // CBN_KILLFOCUS=4) 시 값 확정 후 적용(EN_CHANGE는 무시).
+                i if i >= ID_FIELD_BASE && (notify == 0 || notify == 0x0200 || notify == 4) => {
                     (*st).harvest();
                     (*st).apply_now();
                 }
@@ -1651,13 +1692,13 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
     let clear = mk(
         dlg,
         font,
-        w!("BUTTON"),
+        w!("STATIC"),
         "✕",
-        BS_OWNERDRAW as u32, // 탭 정지 없음(마우스 전용 지우개) — 경계 없는 오너드로
-        PAD + CAT_W - 8 - 20,
-        PAD + (SEARCH_H - 16) / 2,
-        16,
-        16,
+        0x010D, // SS_OWNERDRAW | SS_NOTIFY — 검증된 링크 패턴(STN_CLICKED, QA 07-16)
+        PAD + CAT_W - 8 - 22,
+        PAD + (SEARCH_H - 18) / 2,
+        18,
+        18,
         ID_SEARCH_CLEAR,
     );
     let _ = ShowWindow(clear, SW_HIDE); // 입력 없을 땐 숨김(사용자 확정 07-16)
@@ -1713,6 +1754,31 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
     let _ = SetForegroundWindow(dlg);
     let mut msg = MSG::default();
     while IsWindow(Some(dlg)).as_bool() && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        // Enter = 편집 중 값 **즉시 적용**(사용자 확정 07-16 — 폰트 이름 EDIT·크기 콤보).
+        // 포커스(콤보는 내부 에디트 → 부모로 승격)가 수확 대상이면 harvest+apply.
+        if msg.message == 0x0100 /* WM_KEYDOWN */ && msg.wParam.0 == 0x0D {
+            let st = GetWindowLongPtrW(dlg, GWLP_USERDATA) as *mut PrefState;
+            if !st.is_null() {
+                let focus = windows::Win32::UI::Input::KeyboardAndMouse::GetFocus();
+                let owner_ctl = if (*st).editors.iter().any(|&(_, h)| h == focus) {
+                    Some(focus)
+                } else {
+                    // 콤보 내부 EDIT — 부모(콤보)가 수확 대상인지
+                    let parent = windows::Win32::UI::WindowsAndMessaging::GetParent(focus)
+                        .unwrap_or_default();
+                    (*st)
+                        .editors
+                        .iter()
+                        .any(|&(_, h)| h == parent)
+                        .then_some(parent)
+                };
+                if owner_ctl.is_some() {
+                    (*st).harvest();
+                    (*st).apply_now();
+                    continue; // 대화상자 기본 Enter 처리(비프) 억제
+                }
+            }
+        }
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
