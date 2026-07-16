@@ -161,6 +161,7 @@ impl Widget for Toolbar {
     }
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        ctx.select_font(crate::FontSlot::Base, false, false); // 폰트 슬롯(X-12)
         let b = self.bounds;
         let ty = b.y + (b.h - (b.h * 4) / 5) / 2;
         ctx.fill_rect(b, theme.chrome_bg);
@@ -296,6 +297,7 @@ impl Widget for StatusBar {
     fn on_event(&mut self, _ev: &InputEvent, _inv: &mut Invalidations) {}
 
     fn paint(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        ctx.select_font(crate::FontSlot::Status, false, false); // 폰트 슬롯(X-12)
         let b = self.bounds;
         let ty = b.y + (b.h - (b.h * 4) / 5) / 2;
         ctx.fill_rect(b, theme.status_bar_bg);

@@ -372,6 +372,18 @@ struct State {
     launcher_items: Vec<crate::config::LauncherItem>,
     /// 보기 모드 "tree"|"flat"|"tiles"(사용자 요청 07-16 — 영속).
     view_mode: String,
+    /// 폰트 슬롯(X-12): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
+    base_font: String,
+    base_font_size: i32,
+    ctx_font: String,
+    ctx_font_size: i32,
+    status_font: String,
+    status_font_size: i32,
+    list_font: String,
+    list_font_size: i32,
+    list_folder_bold: bool,
+    header_bold: bool,
+    header_italic: bool,
     statusbar: StatusBar,
     /// 듀얼 패널(0=좌 주, 1=우 — docs/20 §2). 우 패널 숨김 토글은 후속.
     panels: [Panel; 2],
@@ -736,6 +748,21 @@ pub fn run() -> Result<()> {
         let align = align_of(&settings.nav_up_align);
         left.set_nav_up_align(align);
         right.set_nav_up_align(align);
+        // 폰트 장식 복원(X-12)
+        if settings.list_folder_bold || settings.header_bold || settings.header_italic {
+            left.set_font_decor(
+                settings.list_folder_bold,
+                settings.header_bold,
+                settings.header_italic,
+                &mut inv,
+            );
+            right.set_font_decor(
+                settings.list_folder_bold,
+                settings.header_bold,
+                settings.header_italic,
+                &mut inv,
+            );
+        }
         // 보기 모드 복원(07-16 개정: **탭별**) — 세션 값 우선, 없으면 설정 기본
         let fallback = mode_of(&settings.view_mode);
         left.seed_modes(&session.panels[0].modes, fallback, &mut inv);
@@ -793,6 +820,17 @@ pub fn run() -> Result<()> {
         launcher_visible: settings.launcher,
         launcher_items,
         view_mode: settings.view_mode.clone(),
+        base_font: settings.base_font.clone(),
+        base_font_size: settings.base_font_size,
+        ctx_font: settings.ctx_font.clone(),
+        ctx_font_size: settings.ctx_font_size,
+        status_font: settings.status_font.clone(),
+        status_font_size: settings.status_font_size,
+        list_font: settings.list_font.clone(),
+        list_font_size: settings.list_font_size,
+        list_folder_bold: settings.list_folder_bold,
+        header_bold: settings.header_bold,
+        header_italic: settings.header_italic,
         statusbar: StatusBar::new(m.row_h, m.pad_x),
         panels: [left, right],
         active: active_panel,
@@ -1072,8 +1110,21 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
 }
 
 unsafe fn ensure_dw(st: &mut State, hdc: windows::Win32::Graphics::Gdi::HDC, w: i32, h: i32) {
+    let fonts = crate::dw::FontSpec {
+        base: (st.base_font.clone(), st.base_font_size as f32),
+        list: (st.list_font.clone(), st.list_font_size as f32),
+        status: (st.status_font.clone(), st.status_font_size as f32),
+    };
     match &mut st.dw {
-        None => match DwBackend::new(hdc, w, h, st.dpi, &st.term_font, st.term_font_size as f32) {
+        None => match DwBackend::new(
+            hdc,
+            w,
+            h,
+            st.dpi,
+            &fonts,
+            &st.term_font,
+            st.term_font_size as f32,
+        ) {
             Ok(b) => st.dw = Some(b),
             Err(e) => eprintln!("DirectWrite 초기화 실패: {e}"),
         },
@@ -2829,6 +2880,17 @@ unsafe fn open_prefs(hwnd: HWND) {
                 term_cols: st.term_cols,
                 dlg_font: st.dlg_font.family.clone(),
                 dlg_font_size: st.dlg_font.size_pt,
+                base_font: st.base_font.clone(),
+                base_font_size: st.base_font_size,
+                ctx_font: st.ctx_font.clone(),
+                ctx_font_size: st.ctx_font_size,
+                status_font: st.status_font.clone(),
+                status_font_size: st.status_font_size,
+                list_font: st.list_font.clone(),
+                list_font_size: st.list_font_size,
+                list_folder_bold: st.list_folder_bold,
+                header_bold: st.header_bold,
+                header_italic: st.header_italic,
                 show_hidden: st.show_hidden,
                 show_dotfiles: st.show_dotfiles,
                 dock: st.panels[0].dock_visible(),
@@ -2933,6 +2995,41 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         st.term_font = v.term_font.clone();
         st.term_font_size = v.term_font_size;
         st.dw = None;
+    }
+    // 폰트 슬롯(X-12) — 기본/우클릭 메뉴/상태바/파일 목록: 변경 시 백엔드 재생성
+    // (슬롯 포맷·레이아웃 캐시 재구축). 우클릭 메뉴는 저장만(α — HMENU = OS 폰트 규약,
+    // 자체 그리기 메뉴 전환 시 적용).
+    if v.base_font != st.base_font
+        || v.base_font_size != st.base_font_size
+        || v.status_font != st.status_font
+        || v.status_font_size != st.status_font_size
+        || v.list_font != st.list_font
+        || v.list_font_size != st.list_font_size
+    {
+        st.base_font = v.base_font.clone();
+        st.base_font_size = v.base_font_size.clamp(8, 32);
+        st.status_font = v.status_font.clone();
+        st.status_font_size = v.status_font_size.clamp(8, 32);
+        st.list_font = v.list_font.clone();
+        st.list_font_size = v.list_font_size.clamp(8, 32);
+        st.dw = None;
+    }
+    if v.ctx_font != st.ctx_font || v.ctx_font_size != st.ctx_font_size {
+        st.ctx_font = v.ctx_font.clone();
+        st.ctx_font_size = v.ctx_font_size.clamp(8, 32);
+    }
+    // 파일 목록 장식(X-12) — 폴더 굵게·헤더 굵게/이탤릭: 전 탭 즉시
+    if v.list_folder_bold != st.list_folder_bold
+        || v.header_bold != st.header_bold
+        || v.header_italic != st.header_italic
+    {
+        st.list_folder_bold = v.list_folder_bold;
+        st.header_bold = v.header_bold;
+        st.header_italic = v.header_italic;
+        let mut inv = Invalidations::default();
+        st.panels[0].set_font_decor(v.list_folder_bold, v.header_bold, v.header_italic, &mut inv);
+        st.panels[1].set_font_decor(v.list_folder_bold, v.header_bold, v.header_italic, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
     }
     st.dlg_font = crate::dialog::DlgFont {
         family: v.dlg_font.clone(),
@@ -3098,6 +3195,17 @@ fn current_settings(st: &State) -> Settings {
     Settings {
         theme: st.theme_mode.as_str().into(),
         view_mode: st.view_mode.clone(),
+        base_font: st.base_font.clone(),
+        base_font_size: st.base_font_size,
+        ctx_font: st.ctx_font.clone(),
+        ctx_font_size: st.ctx_font_size,
+        status_font: st.status_font.clone(),
+        status_font_size: st.status_font_size,
+        list_font: st.list_font.clone(),
+        list_font_size: st.list_font_size,
+        list_folder_bold: st.list_folder_bold,
+        header_bold: st.header_bold,
+        header_italic: st.header_italic,
         lang: st.lang_setting.clone(),
         show_hidden: st.show_hidden,
         show_dotfiles: st.show_dotfiles,

@@ -15,7 +15,7 @@ pub mod widget;
 pub mod widgets;
 
 pub use columns::{Align, Column};
-pub use draw::DrawCtx;
+pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};

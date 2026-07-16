@@ -84,6 +84,8 @@ pub struct Panel {
     sort_case: bool,
     /// 타입어헤드 옵션(07-15): (범위, 리셋 ms, 특수문자, 공백, Backspace, HUD 위치).
     ta_opts: (nexa_tree::FindScope, u64, bool, bool, bool, u8),
+    /// 폰트 장식(X-12): (폴더 굵게, 헤더 굵게, 헤더 이탤릭) — 새 탭에도 재적용.
+    font_decor: (bool, bool, bool),
     /// 호스트가 준 기본 컬럼(내 PC 드라이브 컬럼 전환의 복귀 원본 — X-17).
     base_columns: Vec<Column>,
     /// 세션 저장 요청 플래그(사용자 요청 07-15 — 탭/경로 변경 시 표시만, 저장은
@@ -127,6 +129,7 @@ impl Panel {
                 6,
             ),
             base_columns: columns,
+            font_decor: (false, false, false),
             session_dirty: false,
             dock_ratio: 0.3,
             tabs: vec![Tab {
@@ -751,7 +754,24 @@ impl Panel {
         self.tabs[tab]
             .rows
             .set_typeahead_opts(reset, special, space, bs, hud, &mut inv);
-        // 보기 모드는 재적용 불요(07-16 개정) — VirtualRows가 탭별로 보존.
+        let (fb, hb, hi) = self.font_decor;
+        self.tabs[tab].rows.set_font_decor(fb, hb, hi, &mut inv); // X-12 — 새 탭 계승
+                                                                  // 보기 모드는 재적용 불요(07-16 개정) — VirtualRows가 탭별로 보존.
+    }
+
+    /// 폰트 장식 적용(X-12 — 설정): 전 탭 + 보관(새 탭 계승).
+    pub fn set_font_decor(
+        &mut self,
+        folder_bold: bool,
+        hdr_bold: bool,
+        hdr_italic: bool,
+        inv: &mut Invalidations,
+    ) {
+        self.font_decor = (folder_bold, hdr_bold, hdr_italic);
+        for t in &mut self.tabs {
+            t.rows
+                .set_font_decor(folder_bold, hdr_bold, hdr_italic, inv);
+        }
     }
 
     /// 보기 모드 전환(사용자 요청 07-16 개정: **탭별 설정**) — **활성 탭에만** 적용.

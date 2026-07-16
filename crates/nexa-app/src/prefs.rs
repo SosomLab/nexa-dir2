@@ -14,22 +14,22 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColorBrush,
     InvalidateRect, SelectObject, SetBkMode, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, DEFAULT_CHARSET,
-    DEFAULT_QUALITY, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD, HBRUSH, HFONT,
-    OUT_DEFAULT_PRECIS, TRANSPARENT,
+    DEFAULT_QUALITY, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD,
+    HBRUSH, HFONT, OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetDlgCtrlID, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
-    MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW,
-    ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
-    WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
-    WS_VSCROLL,
+    GetDlgCtrlID, GetDlgItem, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+    IsWindow, MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowTextW, ShowWindow, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON,
+    BS_OWNERDRAW, ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, SW_HIDE,
+    SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORSTATIC, WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::dialog::DlgFont;
@@ -51,6 +51,18 @@ pub struct PrefValues {
     pub term_cols: i32,
     pub dlg_font: String,
     pub dlg_font_size: i32,
+    /// 폰트 슬롯(X-12 — 07-16): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
+    pub base_font: String,
+    pub base_font_size: i32,
+    pub ctx_font: String,
+    pub ctx_font_size: i32,
+    pub status_font: String,
+    pub status_font_size: i32,
+    pub list_font: String,
+    pub list_font_size: i32,
+    pub list_folder_bold: bool,
+    pub header_bold: bool,
+    pub header_italic: bool,
     pub show_hidden: bool,
     pub show_dotfiles: bool,
     pub dock: bool,
@@ -80,8 +92,13 @@ enum Kind {
     LangRadio,
     /// 3×3 위치 피커(오너드로 이미지 버튼 — 원본 §7-A, QA 07-15).
     PosGrid,
-    Text,     // 글꼴 이름(EDIT)
-    Number,   // 글꼴 크기(EDIT ES_NUMBER)
+    /// 자유 텍스트(EDIT) — X-12에서 글꼴이 Font 행으로 이관돼 현재 미사용(향후 텍스트 설정용).
+    #[allow(dead_code)]
+    Text,
+    Number, // 숫자(EDIT ES_NUMBER — 리셋 ms·열 수 등)
+    /// 폰트 행(X-12 — 원본 스크린샷): 캡션 + [패밀리 EDIT][크기 EDIT] **한 줄**.
+    /// Entry.field = 패밀리, 인자 = 크기 필드 id.
+    Font(u32),
     CheckBox, // 불리언(라벨 일체형 — 원본 스크린샷)
 }
 
@@ -117,6 +134,18 @@ const F_TA_POS: u32 = 18;
 const F_TA_SPECIAL: u32 = 19;
 const F_TA_SPACE: u32 = 20;
 const F_TA_BS: u32 = 21;
+// 폰트 슬롯(X-12 — 07-16)
+const F_BASE_FONT: u32 = 23;
+const F_BASE_SIZE: u32 = 24;
+const F_CTX_FONT: u32 = 25;
+const F_CTX_SIZE: u32 = 26;
+const F_STATUS_FONT: u32 = 27;
+const F_STATUS_SIZE: u32 = 28;
+const F_LIST_FONT: u32 = 29;
+const F_LIST_SIZE: u32 = 30;
+const F_FOLDER_BOLD: u32 = 31;
+const F_HDR_BOLD: u32 = 32;
+const F_HDR_ITALIC: u32 = 33;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -279,17 +308,66 @@ fn registry() -> Vec<Entry> {
         },
         Entry {
             cat: "fonts",
-            label_key: "pref.dlgFont",
-            desc_key: "pref.dlgFont.desc",
-            kind: Kind::Text,
-            field: F_DLG_FONT,
+            label_key: "pref.baseFont",
+            desc_key: "pref.baseFont.desc",
+            kind: Kind::Font(F_BASE_SIZE),
+            field: F_BASE_FONT,
         },
         Entry {
             cat: "fonts",
-            label_key: "pref.dlgFontSize",
-            desc_key: "pref.dlgFontSize.desc",
-            kind: Kind::Number,
-            field: F_DLG_SIZE,
+            label_key: "pref.termFont",
+            desc_key: "pref.consoleFont.desc",
+            kind: Kind::Font(F_TERM_SIZE),
+            field: F_TERM_FONT,
+        },
+        Entry {
+            cat: "fonts",
+            label_key: "pref.ctxFont",
+            desc_key: "pref.ctxFont.desc",
+            kind: Kind::Font(F_CTX_SIZE),
+            field: F_CTX_FONT,
+        },
+        Entry {
+            cat: "fonts",
+            label_key: "pref.statusFont",
+            desc_key: "pref.statusFont.desc",
+            kind: Kind::Font(F_STATUS_SIZE),
+            field: F_STATUS_FONT,
+        },
+        Entry {
+            cat: "fonts",
+            label_key: "pref.listFont",
+            desc_key: "pref.listFont.desc",
+            kind: Kind::Font(F_LIST_SIZE),
+            field: F_LIST_FONT,
+        },
+        Entry {
+            cat: "fonts",
+            label_key: "pref.folderBold",
+            desc_key: "pref.folderBold.desc",
+            kind: Kind::CheckBox,
+            field: F_FOLDER_BOLD,
+        },
+        Entry {
+            cat: "fonts",
+            label_key: "pref.hdrBold",
+            desc_key: "pref.hdrBold.desc",
+            kind: Kind::CheckBox,
+            field: F_HDR_BOLD,
+        },
+        Entry {
+            cat: "fonts",
+            label_key: "pref.hdrItalic",
+            desc_key: "pref.hdrItalic.desc",
+            kind: Kind::CheckBox,
+            field: F_HDR_ITALIC,
+        },
+        Entry {
+            cat: "fonts",
+            label_key: "pref.dlgFont",
+            desc_key: "pref.dlgFont.desc",
+            kind: Kind::Font(F_DLG_SIZE),
+            field: F_DLG_FONT,
         },
         Entry {
             cat: "list",
@@ -374,20 +452,6 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.taPos.desc",
             kind: Kind::PosGrid,
             field: F_TA_POS,
-        },
-        Entry {
-            cat: "terminal",
-            label_key: "pref.termFont",
-            desc_key: "pref.termFont.desc",
-            kind: Kind::Text,
-            field: F_TERM_FONT,
-        },
-        Entry {
-            cat: "terminal",
-            label_key: "pref.termFontSize",
-            desc_key: "pref.termFontSize.desc",
-            kind: Kind::Number,
-            field: F_TERM_SIZE,
         },
         Entry {
             cat: "terminal",
@@ -756,6 +820,9 @@ impl PrefState {
                             F_TA_SPECIAL => self.values.typeahead_special,
                             F_TA_SPACE => self.values.typeahead_space,
                             F_TA_BS => self.values.typeahead_backspace,
+                            F_FOLDER_BOLD => self.values.list_folder_bold,
+                            F_HDR_BOLD => self.values.header_bold,
+                            F_HDR_ITALIC => self.values.header_italic,
                             _ => false,
                         };
                         SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
@@ -827,6 +894,55 @@ impl PrefState {
                             y += 28;
                         }
                         y += 8;
+                    }
+                    Kind::Font(size_field) => {
+                        // 폰트 행(X-12 — 사용자 확정: 이름+크기 **한 줄**): 캡션 →
+                        // [패밀리 EDIT 넓게][크기 EDIT 좁게(숫자)]
+                        let cap = mk(
+                            self.hwnd,
+                            self.font,
+                            w!("STATIC"),
+                            &label,
+                            0,
+                            x0,
+                            y,
+                            pane_w,
+                            20,
+                            0,
+                        );
+                        self.rows.push(cap);
+                        y += 24;
+                        let fam = self.font_value(e.field);
+                        let ed = mk(
+                            self.hwnd,
+                            self.font,
+                            w!("EDIT"),
+                            &fam,
+                            (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
+                            x0,
+                            y,
+                            EDIT_W,
+                            24,
+                            ID_FIELD_BASE + e.field,
+                        );
+                        let sz = self.font_value(size_field);
+                        let ed2 = mk(
+                            self.hwnd,
+                            self.font,
+                            w!("EDIT"),
+                            &sz,
+                            (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32 | ES_NUMBER as u32,
+                            x0 + EDIT_W + 8,
+                            y,
+                            56,
+                            24,
+                            ID_FIELD_BASE + size_field,
+                        );
+                        self.rows.push(ed);
+                        self.rows.push(ed2);
+                        self.editors.push((e.field, ed));
+                        self.editors.push((size_field, ed2));
+                        y += ROW_H + 4;
                     }
                     Kind::Text | Kind::Number => {
                         // [EDIT] [라벨] — 원본 스크린샷 "1000 ⌃⌄ Type-ahead input reset (ms)" 형식
@@ -913,6 +1029,26 @@ impl PrefState {
         let _ = InvalidateRect(Some(self.hwnd), None, true);
     }
 
+    /// 폰트 행 필드의 현재 표시값(X-12 — 패밀리/크기 공용).
+    fn font_value(&self, field: u32) -> String {
+        let v = &self.values;
+        match field {
+            F_BASE_FONT => v.base_font.clone(),
+            F_BASE_SIZE => v.base_font_size.to_string(),
+            F_CTX_FONT => v.ctx_font.clone(),
+            F_CTX_SIZE => v.ctx_font_size.to_string(),
+            F_STATUS_FONT => v.status_font.clone(),
+            F_STATUS_SIZE => v.status_font_size.to_string(),
+            F_LIST_FONT => v.list_font.clone(),
+            F_LIST_SIZE => v.list_font_size.to_string(),
+            F_TERM_FONT => v.term_font.clone(),
+            F_TERM_SIZE => v.term_font_size.to_string(),
+            F_DLG_FONT => v.dlg_font.clone(),
+            F_DLG_SIZE => v.dlg_font_size.to_string(),
+            _ => String::new(),
+        }
+    }
+
     /// 항목이 기본값과 다른가(X-10 ④ — config::Settings::default 단일 원천).
     fn is_modified(&self, field: u32) -> bool {
         let v = &self.values;
@@ -936,6 +1072,17 @@ impl PrefState {
             F_TA_SCOPE => v.typeahead_scope != d.typeahead_scope,
             F_TA_RESET => v.typeahead_reset_ms != d.typeahead_reset_ms,
             F_TA_POS => v.typeahead_pos != d.typeahead_pos,
+            F_BASE_FONT => v.base_font != d.base_font,
+            F_BASE_SIZE => v.base_font_size != d.base_font_size,
+            F_CTX_FONT => v.ctx_font != d.ctx_font,
+            F_CTX_SIZE => v.ctx_font_size != d.ctx_font_size,
+            F_STATUS_FONT => v.status_font != d.status_font,
+            F_STATUS_SIZE => v.status_font_size != d.status_font_size,
+            F_LIST_FONT => v.list_font != d.list_font,
+            F_LIST_SIZE => v.list_font_size != d.list_font_size,
+            F_FOLDER_BOLD => v.list_folder_bold != d.list_folder_bold,
+            F_HDR_BOLD => v.header_bold != d.header_bold,
+            F_HDR_ITALIC => v.header_italic != d.header_italic,
             F_TA_SPECIAL => v.typeahead_special != d.typeahead_special,
             F_TA_SPACE => v.typeahead_space != d.typeahead_space,
             F_TA_BS => v.typeahead_backspace != d.typeahead_backspace,
@@ -1013,8 +1160,23 @@ impl PrefState {
                 }
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),
+                F_BASE_FONT => self.values.base_font = get_text(hw),
+                F_BASE_SIZE => {
+                    self.values.base_font_size = get_text(hw).trim().parse().unwrap_or(12)
+                }
+                F_CTX_FONT => self.values.ctx_font = get_text(hw),
+                F_CTX_SIZE => self.values.ctx_font_size = get_text(hw).trim().parse().unwrap_or(12),
+                F_STATUS_FONT => self.values.status_font = get_text(hw),
+                F_STATUS_SIZE => {
+                    self.values.status_font_size = get_text(hw).trim().parse().unwrap_or(12)
+                }
+                F_LIST_FONT => self.values.list_font = get_text(hw),
+                F_LIST_SIZE => {
+                    self.values.list_font_size = get_text(hw).trim().parse().unwrap_or(12)
+                }
                 F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_TERM_WRAP | F_CASE_SORT
-                | F_TA_SPECIAL | F_TA_SPACE | F_TA_BS => {
+                | F_TA_SPECIAL | F_TA_SPACE | F_TA_BS | F_FOLDER_BOLD | F_HDR_BOLD
+                | F_HDR_ITALIC => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
@@ -1026,6 +1188,9 @@ impl PrefState {
                         F_TA_SPECIAL => self.values.typeahead_special = on,
                         F_TA_SPACE => self.values.typeahead_space = on,
                         F_TA_BS => self.values.typeahead_backspace = on,
+                        F_FOLDER_BOLD => self.values.list_folder_bold = on,
+                        F_HDR_BOLD => self.values.header_bold = on,
+                        F_HDR_ITALIC => self.values.header_italic = on,
                         _ => {}
                     }
                 }
@@ -1146,6 +1311,11 @@ unsafe extern "system" fn prefs_proc(
                     // 입력/변경 = 선택 해제(전역 매치 페이지) · 명시적 비움 = 기본 노드 복귀.
                     let s = &mut *st;
                     s.query = get_text(HWND(lparam.0 as *mut core::ffi::c_void));
+                    // 내장 ✕ = 입력이 있을 때만 표시(커스텀 검색박스 — 07-16)
+                    let _ = ShowWindow(
+                        GetDlgItem(Some(hwnd), ID_SEARCH_CLEAR as i32).unwrap_or_default(),
+                        if s.query.is_empty() { SW_HIDE } else { SW_SHOW },
+                    );
                     s.category = if s.query.is_empty() {
                         "general".into()
                     } else {
@@ -1157,8 +1327,9 @@ unsafe extern "system" fn prefs_proc(
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 ID_SEARCH_CLEAR if notify == 0 => {
-                    // ✕ 빠른 지우개(사용자 요청 07-15) — EN_CHANGE 경유로 상태 일원화
+                    // 내장 ✕(07-16) — 전체 지우기(EN_CHANGE 경유 상태 일원화) + 포커스 복귀
                     set_text((*st).search, "");
+                    let _ = SetFocus(Some((*st).search));
                 }
                 ID_TREE if notify == 1 => {
                     // LBN_SELCHANGE — 트리 노드 선택(전면 개편 07-15): 그룹 = 펼침 토글 +
@@ -1247,6 +1418,23 @@ unsafe extern "system" fn prefs_proc(
             }
             if (ID_POS_BASE..ID_POS_BASE + 9).contains(&dis.CtlID) {
                 draw_pos_cell(&*st, dis);
+                return LRESULT(1);
+            }
+            if dis.CtlID == ID_SEARCH_CLEAR {
+                // 내장 ✕(07-16) — EDIT 배경(흰색)과 한 몸처럼: 배경 채움 + 회색 ✕
+                FillRect(dis.hDC, &dis.rcItem, GetSysColorBrush(COLOR_WINDOW));
+                let old = SelectObject(dis.hDC, (*st).font.into());
+                SetBkMode(dis.hDC, TRANSPARENT);
+                windows::Win32::Graphics::Gdi::SetTextColor(dis.hDC, COLORREF(0x0078_6E68));
+                let mut wide: Vec<u16> = "✕".encode_utf16().collect();
+                let mut rc = dis.rcItem;
+                DrawTextW(
+                    dis.hDC,
+                    &mut wide,
+                    &mut rc,
+                    DT_SINGLELINE | DT_CENTER | DT_VCENTER,
+                );
+                SelectObject(dis.hDC, old);
                 return LRESULT(1);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1438,7 +1626,9 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         editors: Vec::new(),
         radios: Vec::new(),
     });
-    // 사이드바 상단 검색창(원본 스크린샷 위치) + 우측 끝 ✕ 빠른 지우개(사용자 요청 07-15)
+    // 검색박스 커스텀 컨트롤(사용자 확정 07-16): EDIT **안쪽** 우측에 ✕ —
+    // 입력이 있을 때만 표시·클릭 = 전체 지우기. 실시간 검색(EN_CHANGE)이라 검색 버튼 없음.
+    // 구성 = 전폭 EDIT(우측 텍스트 마진) + 그 위에 겹친 오너드로 ✕(경계 없음·초기 숨김).
     state.search = mk(
         dlg,
         font,
@@ -1447,23 +1637,31 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32,
         PAD,
         PAD,
-        CAT_W - 8 - 24,
+        CAT_W - 8,
         SEARCH_H,
         ID_SEARCH,
     );
-    mk(
+    // EM_SETMARGINS(EC_RIGHTMARGIN=2) — 텍스트가 ✕ 아래로 흐르지 않게 우측 18px 확보
+    SendMessageW(
+        state.search,
+        0x00D3,
+        Some(WPARAM(2)),
+        Some(LPARAM((18i32 << 16) as isize)),
+    );
+    let clear = mk(
         dlg,
         font,
         w!("BUTTON"),
         "✕",
-        WS_TABSTOP.0,
-        PAD + CAT_W - 8 - 22,
-        PAD,
-        22,
-        SEARCH_H,
+        BS_OWNERDRAW as u32, // 탭 정지 없음(마우스 전용 지우개) — 경계 없는 오너드로
+        PAD + CAT_W - 8 - 20,
+        PAD + (SEARCH_H - 16) / 2,
+        16,
+        16,
         ID_SEARCH_CLEAR,
     );
-    // 검색창 플레이스홀더(EM_SETCUEBANNER — 미지원 환경은 무해한 no-op)
+    let _ = ShowWindow(clear, SW_HIDE); // 입력 없을 땐 숨김(사용자 확정 07-16)
+                                        // 검색창 플레이스홀더(EM_SETCUEBANNER — 미지원 환경은 무해한 no-op)
     {
         let cue: Vec<u16> = tr("pref.search.placeholder")
             .encode_utf16()
