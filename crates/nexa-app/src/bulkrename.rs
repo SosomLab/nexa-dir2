@@ -25,11 +25,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
+use crate::ctl::droplist::{DL_GETSEL, DL_SETSEL};
+use crate::ctl::segmented::SEG_GETSEL;
+use crate::ctl::spin::SPIN_GETVAL;
+use crate::ctl::style::Style;
 use crate::dialog::DlgFont;
 use crate::i18n::tr;
 use nexa_ops::batch_rename::{
-    conflicts, parse_ops, preview, serialize_ops, validate, CaseMode, Conflict, NumberSpec,
-    RenameOp,
+    conflicts, parse_ops, preview, serialize_ops, validate, CaseMode, Conflict, DateKind, DateSpec,
+    InsertAt, NumberSpec, RenameInput, RenameOp, ReplaceMode, Scope,
 };
 
 const CLASS: PCWSTR = w!("NexaBulkRename");
@@ -38,11 +42,13 @@ static REGISTER: std::sync::Once = std::sync::Once::new();
 const PAD: i32 = 12;
 const FORM_W: i32 = 300;
 const CLIENT_W: i32 = 880;
-const CLIENT_H: i32 = 560;
+const CLIENT_H: i32 = 620; // v2 — 파라미터 4행·스코프 행 추가분
 const STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0);
 
 // 컨트롤 id — 파이프라인 편집
 const ID_KIND: u32 = 1;
+/// 적용 스코프(v2 — PF Apply to, ctl::droplist). Move/Ext 종류에선 숨김.
+const ID_SCOPE: u32 = 7;
 const ID_ADD: u32 = 2;
 const ID_UP: u32 = 3;
 const ID_DOWN: u32 = 4;
@@ -53,15 +59,28 @@ const ID_FIND: u32 = 10;
 const ID_WITH: u32 = 11;
 const ID_MC: u32 = 12;
 const ID_RX: u32 = 13;
+/// 치환 Mode(v2 — 모든/첫/마지막/전체, ctl::droplist — 정규식 체크 시 숨김).
+const ID_RX_MODE: u32 = 14;
 const ID_CASE_BASE: u32 = 20; // +0..3 = upper/lower/title/sentence
 const ID_INS_TEXT: u32 = 30;
-const ID_INS_PRE: u32 = 31;
-const ID_INS_SUF: u32 = 32;
+const ID_INS_OFF: u32 = 33; // 위치 오프셋(ctl::spin)
+const ID_INS_DIR: u32 = 34; // 앞/뒤(ctl::segmented)
 const ID_NUM_START: u32 = 40;
 const ID_NUM_STEP: u32 = 41;
 const ID_NUM_PAD: u32 = 42;
-const ID_NUM_PRE: u32 = 43;
-const ID_NUM_SUF: u32 = 44;
+const ID_NUM_OFF: u32 = 45; // 위치(ctl::spin)
+const ID_NUM_DIR: u32 = 46; // 앞/뒤(ctl::segmented)
+const ID_NUM_WPRE: u32 = 47; // 감싸기 Prefix(v2)
+const ID_NUM_WSUF: u32 = 48; // 감싸기 Suffix(v2)
+                             // 날짜(v2 신설 — PF Add Date)
+const ID_DT_KIND: u32 = 90; // 수정/생성(ctl::droplist)
+const ID_DT_FMT: u32 = 91;
+const ID_DT_OFF: u32 = 92;
+const ID_DT_DIR: u32 = 93;
+const ID_DT_PRE: u32 = 94;
+const ID_DT_SUF: u32 = 95;
+/// 변경 건수("N개 항목이 변경됩니다" — PF 카운트 대응).
+const ID_COUNT: u32 = 82;
 const ID_MV_START: u32 = 50;
 const ID_MV_LEN: u32 = 51;
 const ID_MV_FRONT: u32 = 52;
@@ -89,29 +108,38 @@ const CB_GETLBTEXT: u32 = 0x0148;
 const CB_GETLBTEXTLEN: u32 = 0x0149;
 const EM_SETCUEBANNER: u32 = 0x1501;
 
-/// 동작 종류(콤보 순서) — i18n 라벨 키.
-const KINDS: [&str; 6] = [
+/// 동작 종류(콤보 순서) — i18n 라벨 키. v2: 날짜(4) 신설(PF Add Date).
+const KINDS: [&str; 7] = [
     "bulk.kind.replace",
     "bulk.kind.case",
     "bulk.kind.insert",
     "bulk.kind.number",
+    "bulk.kind.date",
     "bulk.kind.move",
     "bulk.kind.ext",
 ];
+/// 스코프 콤보 항목 순서 ↔ [`Scope`] 매핑.
+const SCOPES: [Scope; 4] = [Scope::Name, Scope::NameExt, Scope::Ext, Scope::ExtDot];
 
 struct BrState {
     font: HFONT,
-    /// 대상 = (부모 경로, 현재 이름, 폴더 여부) — 선택 순서 보존(연번 기준).
-    items: Vec<(String, String, bool)>,
+    /// 대상 = (부모, 현재 이름, 폴더, 수정 ms, 생성 ms) — 선택 순서 보존(연번 기준).
+    /// 시각은 Date 동작용(v2 — 미상 0 = 무변경 격리).
+    items: Vec<(String, String, bool, i64, i64)>,
+    /// 날짜 표기 TZ 오프셋(분 — 호스트 전달).
+    tz_min: i32,
     /// 파이프라인(위→아래 순차 적용) — UI의 단일 원천.
     ops: Vec<RenameOp>,
     /// 종류별 파라미터 컨트롤(show/hide 스왑).
-    panels: [Vec<HWND>; 6],
+    panels: [Vec<HWND>; 7],
+    /// 공통 스코프 droplist(Move/Ext 종류에선 숨김 — show_kind).
+    scope: HWND,
     pipe: HWND,
     prev: HWND,
     err: HWND,
     apply: HWND,
     preset_combo: HWND,
+    count: HWND,
     /// 확정 결과 — (부모, 현재 이름, 새 이름)의 변경 항목만(적용 클릭 시 채움).
     result: Option<Vec<(String, String, String)>>,
 }
@@ -205,41 +233,106 @@ fn preset_dir() -> PathBuf {
     crate::config::data_dir().join("renames")
 }
 
+/// 폼의 공통 스코프(droplist 선택 → [`Scope`]).
+unsafe fn scope_of(dlg: HWND) -> Scope {
+    let i = SendMessageW(ctl(dlg, ID_SCOPE), DL_GETSEL, None, None).0 as usize;
+    SCOPES.get(i).copied().unwrap_or(Scope::Name)
+}
+
+/// 위치 폼(spin 오프셋 + segmented 방향) → [`InsertAt`].
+unsafe fn at_of(dlg: HWND, off_id: u32, dir_id: u32) -> InsertAt {
+    InsertAt {
+        offset: SendMessageW(ctl(dlg, off_id), SPIN_GETVAL, None, None)
+            .0
+            .max(0) as usize,
+        from_end: SendMessageW(ctl(dlg, dir_id), SEG_GETSEL, None, None).0 == 1,
+    }
+}
+
 /// 현재 파라미터 폼 → 동작 1블록(선택된 종류 기준). 유효하지 않으면 None.
 unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
+    let scope = scope_of(dlg);
     match kind {
         0 => {
             let find = get_text(ctl(dlg, ID_FIND));
-            (!find.is_empty()).then(|| RenameOp::Replace {
+            let regex = checked(dlg, ID_RX);
+            let mode_i = SendMessageW(ctl(dlg, ID_RX_MODE), DL_GETSEL, None, None).0;
+            let mode = if regex {
+                ReplaceMode::All // 정규식 = 항상 All(PF 규약 — 앵커로 대체)
+            } else {
+                [
+                    ReplaceMode::All,
+                    ReplaceMode::First,
+                    ReplaceMode::Last,
+                    ReplaceMode::Entire,
+                ][(mode_i.max(0) as usize).min(3)]
+            };
+            // Entire + 빈 find = 무조건 교체 허용 — 그 외 빈 find는 무효
+            (!find.is_empty() || mode == ReplaceMode::Entire).then(|| RenameOp::Replace {
+                scope,
                 find,
                 with: get_text(ctl(dlg, ID_WITH)),
                 match_case: checked(dlg, ID_MC),
-                regex: checked(dlg, ID_RX),
+                regex,
+                mode,
             })
         }
         1 => {
-            let mode = (0..4).find(|i| checked(dlg, ID_CASE_BASE + i))?;
-            Some(RenameOp::Case(match mode {
-                0 => CaseMode::Upper,
-                1 => CaseMode::Lower,
-                2 => CaseMode::Title,
-                _ => CaseMode::Sentence,
-            }))
+            let sel = SendMessageW(ctl(dlg, ID_CASE_BASE), SEG_GETSEL, None, None).0;
+            Some(RenameOp::Case {
+                scope,
+                mode: [
+                    CaseMode::Upper,
+                    CaseMode::Title,
+                    CaseMode::Sentence,
+                    CaseMode::Lower,
+                ][(sel.max(0) as usize).min(3)], // 세그 순서 = PF "AB CD|Ab Cd|Ab cd|ab cd"
+            })
         }
         2 => {
             let text = get_text(ctl(dlg, ID_INS_TEXT));
             (!text.is_empty()).then(|| RenameOp::Insert {
+                scope,
                 text,
-                suffix: !checked(dlg, ID_INS_PRE),
+                at: at_of(dlg, ID_INS_OFF, ID_INS_DIR),
             })
         }
-        3 => Some(RenameOp::Number(NumberSpec {
-            start: num_of(dlg, ID_NUM_START, 1),
-            step: num_of(dlg, ID_NUM_STEP, 1),
-            pad: num_of(dlg, ID_NUM_PAD, 3).clamp(1, 12) as usize,
-            suffix: !checked(dlg, ID_NUM_PRE),
-        })),
+        3 => Some(RenameOp::Number {
+            scope,
+            spec: NumberSpec {
+                start: SendMessageW(ctl(dlg, ID_NUM_START), SPIN_GETVAL, None, None).0 as i64,
+                step: SendMessageW(ctl(dlg, ID_NUM_STEP), SPIN_GETVAL, None, None).0 as i64,
+                pad: (SendMessageW(ctl(dlg, ID_NUM_PAD), SPIN_GETVAL, None, None).0 as i64)
+                    .clamp(1, 12) as usize,
+                at: at_of(dlg, ID_NUM_OFF, ID_NUM_DIR),
+                prefix: get_text(ctl(dlg, ID_NUM_WPRE)),
+                suffix: get_text(ctl(dlg, ID_NUM_WSUF)),
+            },
+        }),
         4 => {
+            let format = get_text(ctl(dlg, ID_DT_FMT));
+            let format = if format.trim().is_empty() {
+                "yyyy-MM-dd".to_string()
+            } else {
+                format
+            };
+            let kind_i = SendMessageW(ctl(dlg, ID_DT_KIND), DL_GETSEL, None, None).0;
+            Some(RenameOp::Date {
+                scope,
+                spec: DateSpec {
+                    kind: if kind_i == 1 {
+                        DateKind::Created
+                    } else {
+                        DateKind::Modified
+                    },
+                    format,
+                    at: at_of(dlg, ID_DT_OFF, ID_DT_DIR),
+                    prefix: get_text(ctl(dlg, ID_DT_PRE)),
+                    suffix: get_text(ctl(dlg, ID_DT_SUF)),
+                },
+            })
+        }
+        5 => {
             let len = num_of(dlg, ID_MV_LEN, 0).max(0) as usize;
             (len > 0).then(|| RenameOp::Move {
                 start: num_of(dlg, ID_MV_START, 1).max(1) as usize,
@@ -259,46 +352,93 @@ unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
     }
 }
 
+/// 스코프 표기(Name = 생략 — v1 시각과 동일).
+fn scope_tag(scope: Scope) -> String {
+    match scope {
+        Scope::Name => String::new(),
+        Scope::NameExt => format!(" [{}]", tr("bulk.scope.nameext")),
+        Scope::Ext => format!(" [{}]", tr("bulk.scope.ext")),
+        Scope::ExtDot => format!(" [{}]", tr("bulk.scope.extdot")),
+    }
+}
+
+/// 위치 표기 — "@N앞/뒤"(모서리 0은 기존 앞/뒤 라벨).
+fn at_tag(at: InsertAt) -> String {
+    let dir = tr(if at.from_end {
+        "bulk.posSuffix"
+    } else {
+        "bulk.posPrefix"
+    });
+    if at.offset == 0 {
+        format!("({dir})")
+    } else {
+        format!("(@{} {dir})", at.offset)
+    }
+}
+
 /// 파이프라인 목록 한 줄 표기.
 fn op_label(op: &RenameOp) -> String {
     match op {
         RenameOp::Replace {
-            find, with, regex, ..
+            scope,
+            find,
+            with,
+            regex,
+            mode,
+            ..
         } => format!(
-            "{}{} \"{find}\" → \"{with}\"",
+            "{}{} \"{find}\" → \"{with}\"{}{}",
             tr("bulk.kind.replace"),
-            if *regex { " (regex)" } else { "" }
+            if *regex { " (regex)" } else { "" },
+            match mode {
+                ReplaceMode::All => String::new(),
+                ReplaceMode::First => format!(" ({})", tr("bulk.mode.first")),
+                ReplaceMode::Last => format!(" ({})", tr("bulk.mode.last")),
+                ReplaceMode::Entire => format!(" ({})", tr("bulk.mode.entire")),
+            },
+            scope_tag(*scope)
         ),
-        RenameOp::Case(m) => format!(
-            "{}: {}",
+        RenameOp::Case { scope, mode } => format!(
+            "{}: {}{}",
             tr("bulk.kind.case"),
-            tr(match m {
+            tr(match mode {
                 CaseMode::Upper => "bulk.case.upper",
                 CaseMode::Lower => "bulk.case.lower",
                 CaseMode::Title => "bulk.case.title",
                 CaseMode::Sentence => "bulk.case.sentence",
-            })
+            }),
+            scope_tag(*scope)
         ),
-        RenameOp::Insert { text, suffix } => format!(
-            "{} \"{text}\" ({})",
+        RenameOp::Insert { scope, text, at } => format!(
+            "{} \"{text}\" {}{}",
             tr("bulk.kind.insert"),
-            tr(if *suffix {
-                "bulk.posSuffix"
-            } else {
-                "bulk.posPrefix"
-            })
+            at_tag(*at),
+            scope_tag(*scope)
         ),
-        RenameOp::Number(n) => format!(
-            "{} {}+{}×{} ({})",
+        RenameOp::Number { scope, spec } => format!(
+            "{} {}+{}×{} {}{}{}",
             tr("bulk.kind.number"),
-            n.start,
-            n.step,
-            n.pad,
-            tr(if n.suffix {
-                "bulk.posSuffix"
+            spec.start,
+            spec.step,
+            spec.pad,
+            at_tag(spec.at),
+            if spec.prefix.is_empty() && spec.suffix.is_empty() {
+                String::new()
             } else {
-                "bulk.posPrefix"
-            })
+                format!(" \"{}n{}\"", spec.prefix, spec.suffix)
+            },
+            scope_tag(*scope)
+        ),
+        RenameOp::Date { scope, spec } => format!(
+            "{} {} {} {}{}",
+            tr("bulk.kind.date"),
+            tr(match spec.kind {
+                DateKind::Modified => "bulk.date.modified",
+                DateKind::Created => "bulk.date.created",
+            }),
+            spec.format,
+            at_tag(spec.at),
+            scope_tag(*scope)
         ),
         RenameOp::Move {
             start,
@@ -359,13 +499,22 @@ unsafe fn refresh_preview(st: &mut BrState) {
             .map(|(i, m)| format!("⚠ #{}: {m}", i + 1))
             .unwrap_or_default(),
     );
-    let names: Vec<(String, bool)> = st.items.iter().map(|(_, n, d)| (n.clone(), *d)).collect();
-    let new_names = preview(&names, &st.ops);
+    let inputs: Vec<RenameInput> = st
+        .items
+        .iter()
+        .map(|(_, n, d, m, c)| RenameInput {
+            name: n.clone(),
+            is_dir: *d,
+            modified_ms: *m,
+            created_ms: *c,
+        })
+        .collect();
+    let new_names = preview(&inputs, &st.ops, st.tz_min);
     let triples: Vec<(String, String, String)> = st
         .items
         .iter()
         .zip(&new_names)
-        .map(|((p, o, _), n)| (p.clone(), o.clone(), n.clone()))
+        .map(|((p, o, _, _, _), n)| (p.clone(), o.clone(), n.clone()))
         .collect();
     let confs = conflicts(&triples, &|parent, name| {
         Path::new(parent).join(name).exists()
@@ -373,16 +522,22 @@ unsafe fn refresh_preview(st: &mut BrState) {
     SendMessageW(st.prev, LB_RESETCONTENT, None, None);
     let mut changed = 0usize;
     for (i, (_, old, new)) in triples.iter().enumerate() {
+        // 변경 항목 = ✓ 마커·무변경 = 들여쓰기 유지(PF 미리보기 규약 — v2)
         let line = if confs[i] != Conflict::None {
             format!("⚠ {old} → {new} ({})", conflict_label(confs[i]))
         } else if new != old {
             changed += 1;
-            format!("{old} → {new}")
+            format!("✓ {old} → {new}")
         } else {
-            old.clone()
+            format!("   {old}")
         };
         lb_add(st.prev, &line);
     }
+    // "N개 항목이 변경됩니다"(PF 카운트 — v2)
+    set_text(
+        st.count,
+        &crate::i18n::trf("bulk.count", &[&changed.to_string()]),
+    );
     let ok = !st.ops.is_empty()
         && changed > 0
         && err.is_none()
@@ -391,12 +546,14 @@ unsafe fn refresh_preview(st: &mut BrState) {
 }
 
 /// 종류 패널 전환(콤보 선택) — 해당 종류 컨트롤만 표시.
+/// 스코프 droplist는 Move/Ext(자체 대상 고정)에서 숨김(v2).
 unsafe fn show_kind(st: &BrState, kind: usize) {
     for (i, panel) in st.panels.iter().enumerate() {
         for h in panel {
             let _ = ShowWindow(*h, if i == kind { SW_SHOW } else { SW_HIDE });
         }
     }
+    let _ = ShowWindow(st.scope, if kind >= 5 { SW_HIDE } else { SW_SHOW });
 }
 
 /// 프리셋 콤보 재적재(`data\renames\*.cfg`).
@@ -454,6 +611,11 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let notify = ((wparam.0 >> 16) & 0xFFFF) as u32;
             let sel = || SendMessageW((*st).pipe, LB_GETCURSEL, None, None).0;
             match (id, notify) {
+                (ID_RX, 0) => {
+                    // 정규식 체크 = Mode 숨김(PF 규약 — 정규식은 항상 All)
+                    let rx = checked(hwnd, ID_RX);
+                    let _ = ShowWindow(ctl(hwnd, ID_RX_MODE), if rx { SW_HIDE } else { SW_SHOW });
+                }
                 (ID_KIND, 1 /* CBN_SELCHANGE */) => {
                     let k = SendMessageW(ctl(hwnd, ID_KIND), CB_GETCURSEL, None, None)
                         .0
@@ -517,18 +679,23 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 (ID_APPLY, 0) => {
                     // 확정 — 충돌 0·검증 통과는 refresh_preview가 보장([적용] 활성 조건)
-                    let names: Vec<(String, bool)> = (*st)
+                    let inputs: Vec<RenameInput> = (*st)
                         .items
                         .iter()
-                        .map(|(_, n, d)| (n.clone(), *d))
+                        .map(|(_, n, d, m, c)| RenameInput {
+                            name: n.clone(),
+                            is_dir: *d,
+                            modified_ms: *m,
+                            created_ms: *c,
+                        })
                         .collect();
-                    let new_names = preview(&names, &(*st).ops);
+                    let new_names = preview(&inputs, &(*st).ops, (*st).tz_min);
                     let out: Vec<(String, String, String)> = (*st)
                         .items
                         .iter()
                         .zip(&new_names)
-                        .filter(|((_, old, _), new)| *new != old)
-                        .map(|((p, o, _), n)| (p.clone(), o.clone(), n.clone()))
+                        .filter(|((_, old, _, _, _), new)| *new != old)
+                        .map(|((p, o, _, _, _), n)| (p.clone(), o.clone(), n.clone()))
                         .collect();
                     (*st).result = Some(out);
                     let _ = DestroyWindow(hwnd);
@@ -563,6 +730,7 @@ pub unsafe fn show(
     owner: HWND,
     targets: &[(PathBuf, bool)],
     font_spec: &DlgFont,
+    tz_min: i32,
 ) -> Option<Vec<(PathBuf, String)>> {
     if targets.is_empty() {
         return None;
@@ -585,13 +753,26 @@ pub unsafe fn show(
         };
         let _ = RegisterClassW(&wc);
     });
-    let items: Vec<(String, String, bool)> = targets
+    // 수정/생성 시각(v2 Date용 — 실패 = 0: Date 동작이 무변경으로 격리)
+    let ms_of = |t: std::io::Result<std::time::SystemTime>| -> i64 {
+        t.ok()
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    };
+    let items: Vec<(String, String, bool, i64, i64)> = targets
         .iter()
         .filter_map(|(p, d)| {
+            let meta = std::fs::metadata(p).ok();
+            let (m, c) = meta
+                .map(|md| (ms_of(md.modified()), ms_of(md.created())))
+                .unwrap_or((0, 0));
             Some((
                 p.parent()?.to_string_lossy().into_owned(),
                 p.file_name()?.to_string_lossy().into_owned(),
                 *d,
+                m,
+                c,
             ))
         })
         .collect();
@@ -669,11 +850,33 @@ pub unsafe fn show(
         ID_ADD,
     );
 
+    // ── 공통 스코프(v2 — PF Apply to): 종류 콤보 아래·패널 위 ──
+    let style2 = Style::default();
+    let scope_items = [
+        tr("bulk.scope.name"),
+        tr("bulk.scope.nameext"),
+        tr("bulk.scope.ext"),
+        tr("bulk.scope.extdot"),
+    ];
+    let scope_refs: Vec<&str> = scope_items.iter().map(String::as_str).collect();
+    let scope = crate::ctl::droplist::create(
+        dlg,
+        x,
+        PAD + 30,
+        FORM_W,
+        24,
+        ID_SCOPE,
+        font,
+        &scope_refs,
+        0,
+        style2,
+    );
+
     // ── 종류별 파라미터 패널(겹침 배치 — 콤보 선택으로 스왑) ──
-    let py = PAD + 34;
+    let py = PAD + 62;
     let half = (FORM_W - 6) / 2;
     let third = (FORM_W - 12) / 3;
-    let mut panels: [Vec<HWND>; 6] = Default::default();
+    let mut panels: [Vec<HWND>; 7] = Default::default();
     // 0: 치환(찾기/바꾸기/대소문자/정규식)
     {
         let f = mk(
@@ -726,35 +929,43 @@ pub unsafe fn show(
             20,
             ID_RX,
         );
-        panels[0] = vec![f, wch, mc, rx];
-    }
-    // 1: 대소문자(라디오 4)
-    {
-        let keys = [
-            "bulk.case.upper",
-            "bulk.case.lower",
-            "bulk.case.title",
-            "bulk.case.sentence",
+        // 치환 Mode(v2 — 모든/첫/마지막/전체. 정규식 체크 시 숨김 — PF 규약)
+        let mode_items = [
+            tr("bulk.mode.all"),
+            tr("bulk.mode.first"),
+            tr("bulk.mode.last"),
+            tr("bulk.mode.entire"),
         ];
-        let mut v = Vec::new();
-        for (i, key) in keys.iter().enumerate() {
-            let style = rb | if i == 0 { WS_GROUP.0 } else { 0 };
-            let (cx2, cy2) = (x + (i as i32 % 2) * half, py + (i as i32 / 2) * 24);
-            v.push(mk(
-                dlg,
-                font,
-                w!("BUTTON"),
-                &tr(key),
-                style,
-                cx2,
-                cy2,
-                half,
-                20,
-                ID_CASE_BASE + i as u32,
-            ));
-        }
-        set_check(dlg, ID_CASE_BASE, true);
-        panels[1] = v;
+        let mode_refs: Vec<&str> = mode_items.iter().map(String::as_str).collect();
+        let mode = crate::ctl::droplist::create(
+            dlg,
+            x,
+            py + 76,
+            FORM_W,
+            24,
+            ID_RX_MODE,
+            font,
+            &mode_refs,
+            0,
+            style2,
+        );
+        panels[0] = vec![f, wch, mc, rx, mode];
+    }
+    // 1: 대소문자 — ctl::segmented(PF 결과 표기 라벨 "AB CD|Ab Cd|Ab cd|ab cd")
+    {
+        let seg = crate::ctl::segmented::create(
+            dlg,
+            x,
+            py,
+            FORM_W,
+            26,
+            ID_CASE_BASE,
+            font,
+            &["AB CD", "Ab Cd", "Ab cd", "ab cd"],
+            0,
+            style2,
+        );
+        panels[1] = vec![seg];
     }
     // 2: 삽입(텍스트·앞/뒤)
     {
@@ -771,77 +982,177 @@ pub unsafe fn show(
             ID_INS_TEXT,
         );
         cue(t, &tr("bulk.insert"));
-        let p = mk(
+        // 위치(v2 — PF Position): 오프셋 spin + 앞/뒤 segmented(기본 뒤·초과 클램프)
+        let off = crate::ctl::spin::create(
             dlg,
-            font,
-            w!("BUTTON"),
-            &tr("bulk.posPrefix"),
-            rb | WS_GROUP.0,
             x,
             py + 26,
             half,
-            20,
-            ID_INS_PRE,
-        );
-        let s = mk(
-            dlg,
+            24,
+            ID_INS_OFF,
             font,
-            w!("BUTTON"),
-            &tr("bulk.posSuffix"),
-            rb,
+            0,
+            0,
+            999,
+            style2,
+        );
+        let dir = crate::ctl::segmented::create(
+            dlg,
             x + half + 6,
             py + 26,
             half,
-            20,
-            ID_INS_SUF,
+            24,
+            ID_INS_DIR,
+            font,
+            &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
+            1,
+            style2,
         );
-        set_check(dlg, ID_INS_SUF, true);
-        panels[2] = vec![t, p, s];
+        panels[2] = vec![t, off, dir];
     }
-    // 3: 연번(시작/증가/자릿수·앞/뒤)
+    // 3: 연번(시작/증가/자릿수 spin·위치·감싸기 — v2)
     {
         let mut v = Vec::new();
-        for (i, (key, id, init)) in [
-            ("bulk.start", ID_NUM_START, "1"),
-            ("bulk.step", ID_NUM_STEP, "1"),
-            ("bulk.pad", ID_NUM_PAD, "3"),
-        ]
-        .iter()
-        .enumerate()
+        for (i, (id, init)) in [(ID_NUM_START, 1i64), (ID_NUM_STEP, 1), (ID_NUM_PAD, 3)]
+            .iter()
+            .enumerate()
         {
             let cx2 = x + i as i32 * (third + 6);
-            let style = ed_num | if i == 0 { WS_GROUP.0 } else { 0 };
-            let e = mk(dlg, font, w!("EDIT"), init, style, cx2, py, third, 22, *id);
-            cue(e, &tr(key));
-            v.push(e);
+            let (lo, hi) = if *id == ID_NUM_PAD {
+                (1, 12)
+            } else {
+                (-9999, 9999)
+            };
+            v.push(crate::ctl::spin::create(
+                dlg, cx2, py, third, 24, *id, font, *init, lo, hi, style2,
+            ));
         }
-        let p = mk(
+        let off = crate::ctl::spin::create(
             dlg,
-            font,
-            w!("BUTTON"),
-            &tr("bulk.posPrefix"),
-            rb | WS_GROUP.0,
             x,
-            py + 26,
+            py + 28,
             half,
-            20,
-            ID_NUM_PRE,
+            24,
+            ID_NUM_OFF,
+            font,
+            0,
+            0,
+            999,
+            style2,
         );
-        let s = mk(
+        let dir = crate::ctl::segmented::create(
+            dlg,
+            x + half + 6,
+            py + 28,
+            half,
+            24,
+            ID_NUM_DIR,
+            font,
+            &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
+            1,
+            style2,
+        );
+        let wp = mk(
             dlg,
             font,
-            w!("BUTTON"),
-            &tr("bulk.posSuffix"),
-            rb,
-            x + half + 6,
-            py + 26,
+            w!("EDIT"),
+            "",
+            ed,
+            x,
+            py + 56,
             half,
-            20,
-            ID_NUM_SUF,
+            22,
+            ID_NUM_WPRE,
         );
-        set_check(dlg, ID_NUM_SUF, true);
-        v.extend([p, s]);
+        cue(wp, &tr("bulk.wrapPre"));
+        let ws2 = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "",
+            ed,
+            x + half + 6,
+            py + 56,
+            half,
+            22,
+            ID_NUM_WSUF,
+        );
+        cue(ws2, &tr("bulk.wrapSuf"));
+        v.extend([off, dir, wp, ws2]);
         panels[3] = v;
+    }
+    // 4: 날짜(v2 신설 — PF Add Date: 원천·토큰 포맷·위치·감싸기)
+    {
+        let kind_items = [tr("bulk.date.modified"), tr("bulk.date.created")];
+        let kind_refs: Vec<&str> = kind_items.iter().map(String::as_str).collect();
+        let dk = crate::ctl::droplist::create(
+            dlg, x, py, half, 24, ID_DT_KIND, font, &kind_refs, 0, style2,
+        );
+        let fmt = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "yyyy-MM-dd",
+            ed,
+            x + half + 6,
+            py,
+            half,
+            22,
+            ID_DT_FMT,
+        );
+        cue(fmt, &tr("bulk.date.fmt"));
+        let off = crate::ctl::spin::create(
+            dlg,
+            x,
+            py + 28,
+            half,
+            24,
+            ID_DT_OFF,
+            font,
+            0,
+            0,
+            999,
+            style2,
+        );
+        let dir = crate::ctl::segmented::create(
+            dlg,
+            x + half + 6,
+            py + 28,
+            half,
+            24,
+            ID_DT_DIR,
+            font,
+            &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
+            1,
+            style2,
+        );
+        let dp = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "",
+            ed,
+            x,
+            py + 56,
+            half,
+            22,
+            ID_DT_PRE,
+        );
+        cue(dp, &tr("bulk.wrapPre"));
+        let ds2 = mk(
+            dlg,
+            font,
+            w!("EDIT"),
+            "",
+            ed,
+            x + half + 6,
+            py + 56,
+            half,
+            22,
+            ID_DT_SUF,
+        );
+        cue(ds2, &tr("bulk.wrapSuf"));
+        panels[4] = vec![dk, fmt, off, dir, dp, ds2];
     }
     // 4: 구간 이동(시작 위치/길이·맨 앞/맨 뒤)
     {
@@ -896,7 +1207,7 @@ pub unsafe fn show(
             ID_MV_END,
         );
         set_check(dlg, ID_MV_END, true);
-        panels[4] = vec![st_e, ln_e, f, e];
+        panels[5] = vec![st_e, ln_e, f, e];
     }
     // 5: 확장자 변경(기존/새)
     {
@@ -926,11 +1237,11 @@ pub unsafe fn show(
             ID_EXT_TO,
         );
         cue(t, &tr("bulk.extTo"));
-        panels[5] = vec![f, t];
+        panels[6] = vec![f, t];
     }
 
     // ── 파이프라인 목록 + 재배치 ──
-    let ly = py + 84;
+    let ly = py + 110; // v2 — 파라미터 4행
     mk(
         dlg,
         font,
@@ -1095,22 +1406,39 @@ pub unsafe fn show(
         lx,
         PAD + 22,
         CLIENT_W - lx - PAD,
-        CLIENT_H - PAD * 2 - 22,
+        CLIENT_H - PAD * 2 - 22 - 24,
         0,
+    );
+    // 변경 건수(PF "N items will be renamed" — v2)
+    let count = mk(
+        dlg,
+        font,
+        w!("STATIC"),
+        "",
+        0,
+        lx,
+        CLIENT_H - PAD - 20,
+        CLIENT_W - lx - PAD,
+        18,
+        ID_COUNT,
     );
 
     let mut state = Box::new(BrState {
         font,
         items,
+        tz_min,
         ops: Vec::new(),
         panels,
+        scope,
         pipe,
         prev,
         err,
         apply,
         preset_combo: pc,
+        count,
         result: None,
     });
+    let _ = SendMessageW(scope, DL_SETSEL, Some(WPARAM(0)), None);
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut BrState as isize);
     show_kind(&state, 0);
     refresh_presets(&state);

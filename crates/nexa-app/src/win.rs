@@ -3059,7 +3059,8 @@ unsafe fn open_bulk_rename(hwnd: HWND) {
         return;
     }
     // 모달(State 차용 없음 — prefs와 동일 재진입 규약)
-    let Some(pairs) = crate::bulkrename::show(hwnd, &targets, &dfont) else {
+    let tz = tz_offset_min();
+    let Some(pairs) = crate::bulkrename::show(hwnd, &targets, &dfont, tz) else {
         return;
     };
     let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
