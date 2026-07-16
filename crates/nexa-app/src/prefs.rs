@@ -1714,10 +1714,17 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
                         .any(|&(_, h)| h == parent)
                         .then_some(parent)
                 };
-                if owner_ctl.is_some() {
-                    (*st).harvest();
-                    (*st).apply_now();
-                    continue; // 대화상자 기본 Enter 처리(비프) 억제
+                if let Some(ctl) = owner_ctl {
+                    // fontbox 드롭다운이 열려 있으면 Enter = 목록 확정(컨트롤 몫 —
+                    // QA 07-16: 펌프가 가로채 Enter 선택이 죽던 진범). 닫혀 있으면
+                    // 기존대로 즉시 적용.
+                    let drop_open =
+                        SendMessageW(ctl, crate::ctl::fontbox::FBM_HAS_DROP, None, None).0 == 1;
+                    if !drop_open {
+                        (*st).harvest();
+                        (*st).apply_now();
+                        continue; // 대화상자 기본 Enter 처리(비프) 억제
+                    }
                 }
             }
         }
