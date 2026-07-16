@@ -36,6 +36,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
+/// 드롭다운 열림 질의(WM_USER+40) — 호스트 모달 펌프가 Enter를 컨트롤에 넘길지 판단.
+/// 반환 1 = 열림(Enter는 목록 확정에 사용), 0 = 닫힘(호스트가 즉시 적용 처리).
+pub const FBM_HAS_DROP: u32 = 0x0400 + 40;
+
 const EDIT_ID: u32 = 1;
 const LIST_ID: u32 = 2;
 const PAD_X: i32 = 4;
@@ -202,25 +206,13 @@ fn segment(text: &str) -> &str {
     text.rsplit(',').next().unwrap_or("").trim()
 }
 
-/// 선택 반영(사용자 확정 규칙) — 새 전체 텍스트를 돌려준다.
+/// 선택 반영(사용자 확정 규칙 개정 07-16): **콤마를 먼저 입력한 경우에만 체인** —
+/// `,` 있으면 마지막 조각을 선택 글꼴로 교체(= 구분자 뒤에 추가), 없으면 **전체 교체**
+/// (A 선택 상태에서 B를 누르면 B로 교체).
 fn apply_pick(text: &str, pick: &str) -> String {
-    let seg = segment(text);
-    let is_prefix = !seg.is_empty() && pick.to_lowercase().starts_with(&seg.to_lowercase());
     match text.rfind(',') {
-        Some(i) => {
-            if is_prefix || seg.is_empty() {
-                format!("{}, {}", text[..i].trim_end(), pick) // 조각 교체/구분자 뒤 추가
-            } else {
-                format!("{}, {}", text.trim_end(), pick) // 완결 이름 뒤에 체인 추가
-            }
-        }
-        None => {
-            if is_prefix || seg.is_empty() {
-                pick.to_string() // 검색 중 입력 교체(빈 입력 포함)
-            } else {
-                format!("{}, {}", text.trim_end(), pick) // 구분자 없음 = 뒤에 붙이기
-            }
-        }
+        Some(i) => format!("{}, {}", text[..i].trim_end(), pick),
+        None => pick.to_string(),
     }
 }
 
@@ -528,6 +520,10 @@ unsafe extern "system" fn fb_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 None => LRESULT(0),
             }
         }
+        m if m == FBM_HAS_DROP => {
+            let open = state(hwnd).as_ref().is_some_and(|st| st.drop.is_some());
+            LRESULT(open as isize)
+        }
         WM_SETFOCUS => {
             if let Some(st) = state(hwnd).as_ref() {
                 let _ = SetFocus(Some(st.edit));
@@ -829,18 +825,17 @@ mod tests {
 
     #[test]
     fn apply_pick_segment_rules() {
-        // 검색 중 접두사 = 조각 교체
+        // 구분자 없음 = **교체**(개정 07-16 — A 선택 상태에서 B = B)
         assert_eq!(apply_pick("D2C", "D2Coding"), "D2Coding");
+        assert_eq!(apply_pick("D2Coding", "Consolas"), "Consolas");
+        assert_eq!(apply_pick("", "Consolas"), "Consolas");
+        // 콤마를 먼저 입력한 경우만 체인 — 마지막 조각 교체(= 구분자 뒤 추가)
+        assert_eq!(apply_pick("D2Coding,", "Consolas"), "D2Coding, Consolas");
+        assert_eq!(apply_pick("D2Coding, ", "Consolas"), "D2Coding, Consolas");
         assert_eq!(
             apply_pick("D2Coding, JetB", "JetBrainsMono Nerd Font"),
             "D2Coding, JetBrainsMono Nerd Font"
         );
-        // 구분자 뒤 빈 조각 = 뒤에 추가
-        assert_eq!(apply_pick("D2Coding,", "Consolas"), "D2Coding, Consolas");
-        assert_eq!(apply_pick("D2Coding, ", "Consolas"), "D2Coding, Consolas");
-        // 구분자 없음 + 완결 이름 = 뒤에 붙이기(사용자 확정)
-        assert_eq!(apply_pick("D2Coding", "Consolas"), "D2Coding, Consolas");
-        // 빈 입력 = 그대로
-        assert_eq!(apply_pick("", "Consolas"), "Consolas");
+        assert_eq!(apply_pick("A, B, C", "Consolas"), "A, B, Consolas");
     }
 }
