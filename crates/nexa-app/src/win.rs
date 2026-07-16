@@ -2433,6 +2433,11 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
         if st.panels[1].bounds().w > 0 {
             st.panels[1].paint(&mut ctx, &st.theme); // 싱글 패널이면 숨김(07-16)
         }
+        // 싱글 정보(X-20): 전폭 공유 도크(좌 위젯)를 **우 패널 뒤에 재도장** —
+        // 우 리스트의 마지막 부분 행이 도크 위를 침범하던 것(원래는 우 도크가 덮음)
+        if single_info(st) && st.panels[0].dock_visible() && st.panels[0].dock.bounds().h > 0 {
+            st.panels[0].dock.paint(&mut ctx, &st.theme);
+        }
         // 도크 터미널(M4-3) — 종류=터미널인 패널의 내용 영역에 셀 그리드 직접 렌더
         for i in 0..2 {
             if st.panels[i].dock_visible()
@@ -2460,17 +2465,21 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                 );
             }
         }
-        // 스플리터(패널 영역 한정·드래그 중 accent)
+        // 스플리터(패널 영역 한정·드래그 중 accent). 싱글 패널(X-20)은 우 패널이
+        // 0-rect라 w가 **음수** — GDI ETO_OPAQUE가 뒤집힌 rect를 정규화해 패널
+        // 전체를 border 색으로 덮어칠하던 진범(QA 07-17 공백 화면). 양수만 그린다.
         use nexa_gui::DrawCtx;
         let lx = st.panels[0].bounds().right();
         let pb = st.panels[0].bounds();
         let w = st.panels[1].bounds().x - lx;
-        let color = if st.split_drag {
-            st.theme.accent
-        } else {
-            st.theme.border
-        };
-        ctx.fill_rect(GRect::new(lx, pb.y, w, pb.h), color);
+        if w > 0 {
+            let color = if st.split_drag {
+                st.theme.accent
+            } else {
+                st.theme.border
+            };
+            ctx.fill_rect(GRect::new(lx, pb.y, w, pb.h), color);
+        }
         // 도크 밴드 스플리터 + 가로 분리선(X-6 — 통일 두께·QA 07-14)
         if st.panels[0].dock_visible() {
             let db = st.panels[0].dock.bounds();
@@ -2478,12 +2487,15 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                 let gap = ((SPLIT_TH * st.dpi as i32) / 96).max(2);
                 let dx = db.right();
                 let dw = st.panels[1].dock.bounds().x - dx;
-                let dcolor = if st.dock_split_drag {
-                    st.theme.accent
-                } else {
-                    st.theme.border
-                };
-                ctx.fill_rect(GRect::new(dx, db.y, dw, db.h), dcolor);
+                if dw > 0 {
+                    // 싱글 정보(X-20)는 dw 음수 — 동일 정규화 덮어칠 방지(QA 07-17)
+                    let dcolor = if st.dock_split_drag {
+                        st.theme.accent
+                    } else {
+                        st.theme.border
+                    };
+                    ctx.fill_rect(GRect::new(dx, db.y, dw, db.h), dcolor);
+                }
                 // 파일↔정보 가로 분리선 — 동일 두께·다크 식별(text_dim)·높이 드래그=accent
                 let hcolor = if st.dock_drag.is_some() {
                     st.theme.accent
