@@ -97,6 +97,13 @@ pub struct Settings {
     pub typeahead_backspace: bool,
     /// 보기 모드(사용자 요청 07-16): "tree"(계층 — 기본)|"flat"(일반 폴더)|"tiles"(타일).
     pub view_mode: String,
+    /// 패널 모드(사용자 요청 07-16 — 원본 FR-C1 단일↔듀얼): "dual"(기본)|"single"
+    /// (우 패널 숨김 — 상태는 보존, 복귀 시 원복).
+    pub panel_mode: String,
+    /// 정보(도크) 모드: "dual"(기본 — 좌/우 독립)|"single"(전폭 공유 — 활성 패널 추종).
+    /// **사용자 선호값** — 싱글 패널에서는 효과가 싱글로 강제되지만 이 값은 보존되어
+    /// 듀얼 패널 복귀 시 원복된다(사용자 확정 설계).
+    pub info_mode: String,
     /// 퀵 런처 바 표시(M5-1 — 원본 LayoutState.ShowLauncher 대응, 기본 표시).
     pub launcher: bool,
     /// 퀵 런처 항목(M5-1). `None` = 키 부재(첫 실행 — 호스트가 시드 주입) ·
@@ -146,6 +153,8 @@ impl Default for Settings {
             typeahead_space: true,
             typeahead_backspace: true,
             view_mode: "tree".into(),
+            panel_mode: "dual".into(),
+            info_mode: "dual".into(),
             launcher: true,
             launcher_items: None,
             launcher_seed: 0,
@@ -257,12 +266,14 @@ impl Settings {
             self.term_cols
         ));
         out.push_str(&format!(
-            "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\nview_mode={}\n",
+            "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\nview_mode={}\npanel_mode={}\ninfo_mode={}\n",
             u8::from(self.sort_folders_first),
             u8::from(self.sort_case_sensitive),
             self.nav_up_align,
             self.tab_dblclick,
-            self.view_mode
+            self.view_mode,
+            self.panel_mode,
+            self.info_mode
         ));
         out.push_str(&format!(
             "typeahead_scope={}\ntypeahead_reset_ms={}\ntypeahead_pos={}\ntypeahead_special={}\ntypeahead_space={}\ntypeahead_backspace={}\n",
@@ -391,6 +402,8 @@ impl Settings {
                 "view_mode" if matches!(v, "tree" | "flat" | "tiles") => {
                     s.view_mode = v.into() // 미지 값 = 기본(tree) 유지
                 }
+                "panel_mode" if matches!(v, "single" | "dual") => s.panel_mode = v.into(),
+                "info_mode" if matches!(v, "single" | "dual") => s.info_mode = v.into(),
                 "tab_dblclick" if matches!(v, "close" | "pin" | "lock") => {
                     s.tab_dblclick = v.into()
                 }
@@ -644,6 +657,8 @@ mod tests {
             typeahead_space: false,
             typeahead_backspace: false,
             view_mode: "tiles".into(),
+            panel_mode: "single".into(),
+            info_mode: "single".into(),
             launcher: false,
             launcher_items: Some(vec![
                 LauncherItem {
@@ -686,6 +701,13 @@ mod tests {
         assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
         assert_eq!(parsed.tab_dblclick, "lock", "탭 더블클릭 동작 왕복(07-15)");
         assert_eq!(parsed.view_mode, "tiles", "보기 모드 왕복(07-16)");
+        assert_eq!(parsed.panel_mode, "single", "패널 모드 왕복(07-16)");
+        assert_eq!(parsed.info_mode, "single", "정보 모드 왕복(07-16)");
+        assert_eq!(
+            Settings::parse("panel_mode=triple").panel_mode,
+            "dual",
+            "미지 패널 모드 = 기본"
+        );
         assert_eq!(
             Settings::parse("view_mode=grid").view_mode,
             "tree",

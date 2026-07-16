@@ -121,6 +121,11 @@ const CMD_REFRESH: u32 = 12;
 const CMD_VIEW_TREE: u32 = 13;
 const CMD_VIEW_FLAT: u32 = 14;
 const CMD_VIEW_TILES: u32 = 15;
+/// 패널/정보 모드 라디오(사용자 요청 07-16 — 원본 FR-C1 단일↔듀얼).
+const CMD_PANEL_SINGLE: u32 = 16;
+const CMD_PANEL_DUAL: u32 = 17;
+const CMD_INFO_SINGLE: u32 = 18;
+const CMD_INFO_DUAL: u32 = 19;
 const CMD_NAV_BACK: u32 = 20;
 const CMD_NAV_FORWARD: u32 = 21;
 const CMD_NAV_UP: u32 = 22;
@@ -230,12 +235,22 @@ fn build_menus(
     lang_setting: &str,
     langs: &[(String, String)],
     view_mode: &str,
+    panel_mode: &str,
+    info_single_eff: bool,
 ) -> Vec<Menu> {
     let mut view_items = vec![
         // 보기 모드 라디오(07-16 — 원본 FR-A4 1차: 계층/일반/타일)
         MenuItem::new(CMD_VIEW_TREE, tr("menu.view.modeTree"), "").checked(view_mode == "tree"),
         MenuItem::new(CMD_VIEW_FLAT, tr("menu.view.modeFlat"), "").checked(view_mode == "flat"),
         MenuItem::new(CMD_VIEW_TILES, tr("menu.view.modeTiles"), "").checked(view_mode == "tiles"),
+        MenuItem::separator(),
+        // 패널/정보 모드 라디오(07-16 — 원본 FR-C1). 정보 라디오 표시 = **효과 기준**
+        // (싱글 패널 = 싱글 고정 — 클릭 시 상태바 안내, 메뉴 비활성 미지원 α).
+        MenuItem::new(CMD_PANEL_DUAL, tr("menu.view.panelDual"), "").checked(panel_mode == "dual"),
+        MenuItem::new(CMD_PANEL_SINGLE, tr("menu.view.panelSingle"), "")
+            .checked(panel_mode == "single"),
+        MenuItem::new(CMD_INFO_DUAL, tr("menu.view.infoDual"), "").checked(!info_single_eff),
+        MenuItem::new(CMD_INFO_SINGLE, tr("menu.view.infoSingle"), "").checked(info_single_eff),
         MenuItem::separator(),
         MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
         MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
@@ -372,6 +387,10 @@ struct State {
     launcher_items: Vec<crate::config::LauncherItem>,
     /// 보기 모드 "tree"|"flat"|"tiles"(사용자 요청 07-16 — 영속).
     view_mode: String,
+    /// 패널 모드 "single"|"dual"(07-16 — 원본 FR-C1). 싱글 = 우 패널 숨김(상태 보존).
+    panel_mode: String,
+    /// 정보(도크) 모드 **선호값** "single"|"dual" — 효과는 [`single_info`](싱글 패널 강제).
+    info_mode: String,
     /// 폰트 슬롯(X-12): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
     base_font: String,
     base_font_size: i32,
@@ -803,6 +822,8 @@ pub fn run() -> Result<()> {
                 &settings.lang,
                 &langs,
                 &settings.view_mode,
+                &settings.panel_mode,
+                settings.panel_mode == "single" || settings.info_mode == "single",
             ),
             m.row_h,
             m.pad_x,
@@ -820,6 +841,8 @@ pub fn run() -> Result<()> {
         launcher_visible: settings.launcher,
         launcher_items,
         view_mode: settings.view_mode.clone(),
+        panel_mode: settings.panel_mode.clone(),
+        info_mode: settings.info_mode.clone(),
         base_font: settings.base_font.clone(),
         base_font_size: settings.base_font_size,
         ctx_font: settings.ctx_font.clone(),
@@ -1034,29 +1057,44 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         0
     };
     let ph = (area_h - band_h).max(0);
-    st.panels[0].set_bounds(GRect::new(0, top, (sx - g2).max(0), ph), inv);
-    st.panels[1].set_bounds(
-        GRect::new(sx - g2 + gap, top, (rc.w - sx + g2 - gap).max(0), ph),
-        inv,
-    );
+    if single_panel(st) {
+        // 싱글 패널(07-16): 좌 = 전폭, 우 = 0(상태 보존 — 세션/탭 그대로)
+        st.panels[0].set_bounds(GRect::new(0, top, rc.w, ph), inv);
+        st.panels[1].set_bounds(GRect::default(), inv);
+    } else {
+        st.panels[0].set_bounds(GRect::new(0, top, (sx - g2).max(0), ph), inv);
+        st.panels[1].set_bounds(
+            GRect::new(sx - g2 + gap, top, (rc.w - sx + g2 - gap).max(0), ph),
+            inv,
+        );
+    }
     if band_h > 0 {
         let band_y = top + ph;
         let dsx = ((rc.w as f32 * st.dock_split) as i32).clamp(rc.w / 8, rc.w * 7 / 8);
         // 가로 분리선도 같은 두께(gap) — 도크 내용은 그 아래부터
         let dock_y = band_y + gap;
         let dock_h = (band_h - gap).max(0);
-        st.panels[0]
-            .dock
-            .set_bounds(GRect::new(0, dock_y, (dsx - g2).max(0), dock_h), inv);
-        st.panels[1].dock.set_bounds(
-            GRect::new(
-                dsx - g2 + gap,
-                dock_y,
-                (rc.w - dsx + g2 - gap).max(0),
-                dock_h,
-            ),
-            inv,
-        );
+        if single_info(st) {
+            // 싱글 정보(07-16): 전폭 공유 도크 1개(내용 = 활성 패널 추종 —
+            // update_dock_info). 우 도크 = 0(스플리터 히트도 자연 소멸).
+            st.panels[0]
+                .dock
+                .set_bounds(GRect::new(0, dock_y, rc.w, dock_h), inv);
+            st.panels[1].dock.set_bounds(GRect::default(), inv);
+        } else {
+            st.panels[0]
+                .dock
+                .set_bounds(GRect::new(0, dock_y, (dsx - g2).max(0), dock_h), inv);
+            st.panels[1].dock.set_bounds(
+                GRect::new(
+                    dsx - g2 + gap,
+                    dock_y,
+                    (rc.w - dsx + g2 - gap).max(0),
+                    dock_h,
+                ),
+                inv,
+            );
+        }
     } else {
         st.panels[0].dock.set_bounds(GRect::default(), inv);
         st.panels[1].dock.set_bounds(GRect::default(), inv);
@@ -1331,16 +1369,23 @@ fn preview_content(p: &Panel) -> (Vec<String>, Option<String>) {
 /// 양 패널 도크 내용 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
 /// 활성 종류: 0=정보(원본 DockInfo) · 1=미리보기(M4-2).
 fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
+    let si = single_info(st);
     for i in 0..2 {
         if st.panels[i].dock_visible() {
+            if si && i == 1 {
+                continue; // 싱글 정보 — 우 도크는 숨김(bounds 0)
+            }
+            // 싱글 정보(07-16): 공유 도크(좌 위젯)의 내용 원천 = **활성 패널**
+            // (터미널 종류는 좌 세션 고정 — α 규약, paint가 인덱스 0으로 그림)
+            let src = if si { st.active } else { i };
             st.panels[i].dock.set_kinds(
                 vec![tr("dock.info"), tr("dock.preview"), tr("dock.terminal")],
                 inv,
             );
             let (lines, image) = match st.panels[i].dock.active_kind() {
-                1 => preview_content(&st.panels[i]),
+                1 => preview_content(&st.panels[src]),
                 2 => (Vec::new(), None), // 터미널은 paint에서 직접 그림(M4-3)
-                _ => (dock_info(&st.panels[i]), None),
+                _ => (dock_info(&st.panels[src]), None),
             };
             st.panels[i].dock.set_lines(lines, inv);
             st.panels[i].dock.set_image(image, inv);
@@ -2385,10 +2430,15 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
             icons: &st.icons,
         };
         st.panels[0].paint(&mut ctx, &st.theme);
-        st.panels[1].paint(&mut ctx, &st.theme);
+        if st.panels[1].bounds().w > 0 {
+            st.panels[1].paint(&mut ctx, &st.theme); // 싱글 패널이면 숨김(07-16)
+        }
         // 도크 터미널(M4-3) — 종류=터미널인 패널의 내용 영역에 셀 그리드 직접 렌더
         for i in 0..2 {
-            if st.panels[i].dock_visible() && st.panels[i].dock.active_kind() == 2 {
+            if st.panels[i].dock_visible()
+                && st.panels[i].dock.bounds().h > 0 // 싱글 정보 — 숨은 도크 PTY 기동 방지
+                && st.panels[i].dock.active_kind() == 2
+            {
                 let trc = st.panels[i].dock.content_rect();
                 let cwd = st.panels[i].root_path();
                 // 깜빡임(QA 07-14)은 키 포커스일 때만 — 비포커스는 상시 표시(원본 규약)
@@ -2583,6 +2633,61 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
             let _ = InvalidateRect(Some(hwnd), None, false);
         }
+        CMD_PANEL_SINGLE | CMD_PANEL_DUAL => {
+            // 패널 모드(07-16 — 원본 FR-C1): 싱글 = 우 패널 숨김(**상태 보존** — 탭/
+            // 세션 그대로, 복귀 시 원복). 싱글 진입 시 활성 = 좌 강제.
+            let want = if id == CMD_PANEL_SINGLE {
+                "single"
+            } else {
+                "dual"
+            };
+            if st.panel_mode != want {
+                st.panel_mode = want.into();
+                if single_panel(st) && st.active == 1 {
+                    set_active(hwnd, st, 0);
+                }
+                st.menubar
+                    .set_checked(CMD_PANEL_SINGLE, want == "single", &mut inv);
+                st.menubar
+                    .set_checked(CMD_PANEL_DUAL, want == "dual", &mut inv);
+                // 정보 라디오 = 효과 기준(싱글 패널이면 싱글 표시·선호값은 보존)
+                let ie = single_info(st);
+                st.menubar.set_checked(CMD_INFO_SINGLE, ie, &mut inv);
+                st.menubar.set_checked(CMD_INFO_DUAL, !ie, &mut inv);
+                layout(hwnd, st, &mut inv);
+                update_dock_info(st, &mut inv);
+                let settings = current_settings(st);
+                let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                update_status(hwnd, st);
+            }
+        }
+        CMD_INFO_SINGLE | CMD_INFO_DUAL => {
+            // 정보(도크) 모드(07-16): 싱글 = 전폭 공유(활성 패널 추종).
+            // **싱글 패널에서는 변경 불가**(싱글 고정 — 사용자 확정 규칙).
+            if single_panel(st) {
+                update_title(hwnd, st, &tr("status.infoLocked"));
+            } else {
+                let want = if id == CMD_INFO_SINGLE {
+                    "single"
+                } else {
+                    "dual"
+                };
+                if st.info_mode != want {
+                    st.info_mode = want.into();
+                    st.menubar
+                        .set_checked(CMD_INFO_SINGLE, want == "single", &mut inv);
+                    st.menubar
+                        .set_checked(CMD_INFO_DUAL, want == "dual", &mut inv);
+                    layout(hwnd, st, &mut inv);
+                    update_dock_info(st, &mut inv);
+                    let settings = current_settings(st);
+                    let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    update_status(hwnd, st);
+                }
+            }
+        }
         CMD_TOGGLE_DOCK => {
             // 하단 도크 토글(M4-1, Ctrl+` — 원본 대원칙: 듀얼=좌↔좌·우↔우 동시)
             let on = !st.panels[0].dock_visible();
@@ -2687,6 +2792,8 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             &st.lang_setting,
             &st.langs,
             &st.view_mode,
+            &st.panel_mode,
+            single_info(st),
         ),
         inv,
     );
@@ -2699,6 +2806,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
 
 /// 활성 패널 전환(클릭·Tab) — 탭 바 accent로 시각화.
 unsafe fn set_active(hwnd: HWND, st: &mut State, idx: usize) {
+    let idx = if single_panel(st) { 0 } else { idx }; // 싱글 패널 = 좌 고정(07-16)
     if st.active != idx {
         st.active = idx;
         let mut inv = Invalidations::default();
@@ -3143,6 +3251,17 @@ fn scope_of(s: &str) -> nexa_tree::FindScope {
     }
 }
 
+/// 싱글 패널 모드인가(07-16 — 우 패널 숨김·상태 보존).
+fn single_panel(st: &State) -> bool {
+    st.panel_mode == "single"
+}
+
+/// 정보(도크) 모드의 **효과**: 싱글 패널이면 무조건 싱글(사용자 확정 규칙 —
+/// 선호값 info_mode는 보존되어 듀얼 복귀 시 원복).
+fn single_info(st: &State) -> bool {
+    single_panel(st) || st.info_mode == "single"
+}
+
 /// 설정 문자열 → 보기 모드(미지 값은 트리 — 기존 동작).
 fn mode_of(s: &str) -> nexa_gui::widgets::ViewMode {
     use nexa_gui::widgets::ViewMode;
@@ -3195,6 +3314,8 @@ fn current_settings(st: &State) -> Settings {
     Settings {
         theme: st.theme_mode.as_str().into(),
         view_mode: st.view_mode.clone(),
+        panel_mode: st.panel_mode.clone(),
+        info_mode: st.info_mode.clone(),
         base_font: st.base_font.clone(),
         base_font_size: st.base_font_size,
         ctx_font: st.ctx_font.clone(),
@@ -3614,8 +3735,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // 도크 밴드 좌/우 스플리터(X-6 — 파일 스플리터와 독립)
                     st.dock_split_drag = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
-                } else if y < st.panels[0].bounds().bottom() && (x - sx).abs() <= half.max(1) {
-                    // 파일 영역 좌/우 스플리터(도크 밴드와 독립 — X-6)
+                } else if !single_panel(st)
+                    && y < st.panels[0].bounds().bottom()
+                    && (x - sx).abs() <= half.max(1)
+                {
+                    // 파일 영역 좌/우 스플리터(도크 밴드와 독립 — X-6·싱글 패널 무시)
                     st.split_drag = true;
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 } else if let Some(idx) = st.panel_at_pt(x, y) {
