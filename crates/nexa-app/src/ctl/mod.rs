@@ -5,5 +5,14 @@
 //! 수록: [`searchbox`] — 내장 ✕ 지우개 검색 입력(설정 창 1호 사용처).
 //! 후속 후보: 런처 편집기 목록(X-13)·모달 공통 골격(X-16 백로그 ①).
 
+//! **판매용 추상화 규약**(사용자 확정 07-17): 앱 비결합(색 = [`style::Style`] 인자·
+//! 라벨 = 복사 소유·i18n/테마 미참조) · 텍스트 API 위임(WM_SETTEXT/GETTEXT) ·
+//! 통지 = 컨트롤 id로 WM_COMMAND 재발행 · 상태 = GWLP_USERDATA Box(파괴 시 회수).
+//! searchbox/fontbox의 Style 인자화는 후속(현재 라이트 고정 — 동일 팔레트).
+
+pub mod droplist;
 pub mod fontbox;
 pub mod searchbox;
+pub mod segmented;
+pub mod spin;
+pub mod style;

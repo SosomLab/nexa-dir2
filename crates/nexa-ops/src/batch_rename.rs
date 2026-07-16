@@ -1,19 +1,116 @@
-//! 일괄 이름변경(M5-1 — 원본 docs/25 이식·**원본도 설계만 존재해 최초 구현**):
-//! **순서형 동작 파이프라인**(사용자가 블록을 순서대로 배치 — 위→아래, 각 단계 출력이
-//! 다음 입력. docs/25 §3 블록 스택) + 미리보기 + 충돌 검출 4종 + **프리셋 직렬화**
-//! (docs/25 §3 "Save Renaming Sequence" — 파일 I/O는 앱 계층).
+//! 일괄 이름변경 v2(M5-1 → X-22 — 원본 docs/25 + **Path Finder 6동작 전수 대조**
+//! [docs/22-batch-rename-v2.md] 기반 확장):
+//! **순서형 동작 파이프라인**(블록 위→아래, 각 단계 출력이 다음 입력) + 미리보기 +
+//! 충돌 검출 4종 + **프리셋 직렬화**(구 v1 프리셋 하위호환 파싱).
 //!
-//! 플랫폼 중립 순수 로직(파일시스템 접근은 `exists` 콜백 주입) — 맥 `cargo test` 대상.
-//! 적용·Undo(배치 전체 = 트랜잭션 1건, docs/25 §7 B-13u)는 앱 계층이
-//! [`history::MoveBatchOp`]로 수행한다.
+//! v2 확장(07-17): ① **적용 스코프**(이름/전체/확장자/점 포함 확장자 — PF Apply to)
+//! ② **임의 삽입 위치**(오프셋+방향·초과 클램프 — Insert/Number/Date 공용 PF Position)
+//! ③ 치환 **Mode**(모든/첫/마지막 매치·전체 교체 — 일반 텍스트 전용, 정규식은 PF도 All)
+//! ④ Number **감싸기**(Prefix/Suffix 텍스트) ⑤ **Add Date**(수정/생성일·토큰 포맷).
 //!
-//! 동작 대상: 기본 = **이름부(stem)**(확장자 보존·폴더는 전체가 이름부),
-//! [`RenameOp::ChangeExt`]만 확장자 대상(폴더는 no-op).
-//! 정규식 = `regex-lite`(이진 크기 최적화 — DR-8 원장 docs/10 §1-2).
+//! 플랫폼 중립 순수 로직(파일시스템 접근은 `exists` 콜백 주입·날짜는 입력 전달) —
+//! 맥 `cargo test` 대상. 적용·Undo(배치 = 트랜잭션 1건)는 앱 계층 `MoveBatchOp`.
+//! 정규식 = `regex-lite`(DR-8 원장 docs/10 §1-2).
 
 use regex_lite::Regex;
 
-/// 대소문자 변경(docs/25 §2 동작 4 — UPPER/lower/Title/Sentence).
+// ── 공통 타입(v2) ─────────────────────────────────────────────────
+
+/// 적용 스코프(PF Apply to — 동작별 필드, 기본 `Name` = v1과 동일).
+/// **폴더는 항상 전체가 이름부**(확장자 개념 없음)라 스코프와 무관하게 Name 취급.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Scope {
+    #[default]
+    Name,
+    /// 확장자 포함 전체(적용 후 마지막 `.` 기준 재분해 — 탐색기 규약).
+    NameExt,
+    /// 확장자만(선행 `.` 제외 텍스트).
+    Ext,
+    /// 점 포함 확장자(`.md` — `.tar.gz`류 케이스용).
+    ExtDot,
+}
+
+impl Scope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Scope::Name => "name",
+            Scope::NameExt => "nameext",
+            Scope::Ext => "ext",
+            Scope::ExtDot => "extdot",
+        }
+    }
+    fn from_str(s: &str) -> Scope {
+        match s {
+            "nameext" => Scope::NameExt,
+            "ext" => Scope::Ext,
+            "extdot" => Scope::ExtDot,
+            _ => Scope::Name, // 생략/미지 = v1 동작
+        }
+    }
+}
+
+/// 삽입 위치(PF Position — Insert/Number/Date 공용): 선택한 끝에서 `offset` 문자
+/// 지점, **범위 초과는 반대편으로 클램프**(관대 규약 — PF 미리보기로 확정, Move 동일).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct InsertAt {
+    pub offset: usize,
+    pub from_end: bool,
+}
+
+impl InsertAt {
+    /// v1 `suffix: bool` 대응(앞 = {0,false} · 뒤 = {0,true}).
+    pub fn edge(suffix: bool) -> InsertAt {
+        InsertAt {
+            offset: 0,
+            from_end: suffix,
+        }
+    }
+}
+
+/// 문자 단위 삽입(UTF-8 안전) — [`InsertAt`] 규약.
+fn insert_at(s: &str, at: InsertAt, ins: &str) -> String {
+    let cs: Vec<char> = s.chars().collect();
+    let off = at.offset.min(cs.len());
+    let idx = if at.from_end { cs.len() - off } else { off };
+    let mut out = String::new();
+    out.extend(&cs[..idx]);
+    out.push_str(ins);
+    out.extend(&cs[idx..]);
+    out
+}
+
+/// 치환 범위(PF Mode — **일반 텍스트 전용**. 정규식은 항상 All — PF 규약 동일,
+/// 위치는 앵커 `^`/`$`로 표현).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ReplaceMode {
+    #[default]
+    All,
+    First,
+    Last,
+    /// 매치가 있으면 **전체를 with로 교체**(find 빈 값 = 무조건 교체).
+    Entire,
+}
+
+impl ReplaceMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            ReplaceMode::All => "all",
+            ReplaceMode::First => "first",
+            ReplaceMode::Last => "last",
+            ReplaceMode::Entire => "entire",
+        }
+    }
+    fn from_str(s: &str) -> ReplaceMode {
+        match s {
+            "first" => ReplaceMode::First,
+            "last" => ReplaceMode::Last,
+            "entire" => ReplaceMode::Entire,
+            _ => ReplaceMode::All,
+        }
+    }
+}
+
+/// 대소문자 변경(docs/25 §2 동작 4 — PF Change Case 4모드와 1:1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CaseMode {
     Upper,
@@ -44,44 +141,108 @@ impl CaseMode {
     }
 }
 
-/// 연번 삽입(docs/25 §2 동작 5) — 시작값·증가폭·0패딩 자릿수·위치.
+/// 연번(PF Add Number Sequence) — 시작·증가·0패딩 + **위치·감싸기**(v2).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct NumberSpec {
     pub start: i64,
     pub step: i64,
     /// 0패딩 자릿수(1 = 패딩 없음).
     pub pad: usize,
-    /// true = 이름 뒤(suffix), false = 앞(prefix).
-    pub suffix: bool,
+    pub at: InsertAt,
+    /// 연번을 감싸는 텍스트(PF Prefix/Suffix — `PRE{n}SUF` 한 덩어리로 삽입).
+    pub prefix: String,
+    pub suffix: String,
+}
+
+/// 날짜 원천(PF Add Date Type).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum DateKind {
+    #[default]
+    Modified,
+    Created,
+}
+
+impl DateKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            DateKind::Modified => "modified",
+            DateKind::Created => "created",
+        }
+    }
+    fn from_str(s: &str) -> DateKind {
+        if s == "created" {
+            DateKind::Created
+        } else {
+            DateKind::Modified
+        }
+    }
+}
+
+/// 날짜 삽입(PF Add Date — v2 신설) — 포맷은 토큰 문자열(드래그 빌더 대체,
+/// [docs/22 §2-3]): `yyyy`/`yy`·`MMM`/`MM`/`M`·`ddd`·`dd`/`d`·`HH`·`mm`·`ss` + 리터럴.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DateSpec {
+    pub kind: DateKind,
+    pub format: String,
+    pub at: InsertAt,
+    pub prefix: String,
+    pub suffix: String,
 }
 
 /// 파이프라인 동작 1블록 — 사용자가 순서대로 배치(위→아래 순차 적용).
 #[derive(Clone, PartialEq, Debug)]
 pub enum RenameOp {
-    /// 텍스트/정규식 치환(docs/25 §2 동작 1·2). `regex`면 `with`에 `$1` 캡처 참조 가능,
-    /// `match_case`=false는 `(?i)` 접두(정규식)/문자 단위 비교(일반).
+    /// 텍스트/정규식 치환. `regex`면 `with`에 `$1` 캡처 참조, `mode`는 일반 텍스트 전용.
     Replace {
+        scope: Scope,
         find: String,
         with: String,
         match_case: bool,
         regex: bool,
+        mode: ReplaceMode,
     },
-    /// 대소문자 변경(동작 4).
-    Case(CaseMode),
-    /// 텍스트 삽입(동작 3 α — 접두/접미).
-    Insert { text: String, suffix: bool },
-    /// 연번(동작 5) — 항목 순서 기준.
-    Number(NumberSpec),
-    /// 구간 이동(사용자 요청 07-15 — "중간 N자리를 잘라 맨 앞/뒤로"): `start` = 1기준
-    /// 문자 위치, `len` 문자 수. 범위 밖은 가능한 만큼만(없으면 no-op).
+    /// 대소문자 변경.
+    Case { scope: Scope, mode: CaseMode },
+    /// 텍스트 삽입(임의 위치 — v2).
+    Insert {
+        scope: Scope,
+        text: String,
+        at: InsertAt,
+    },
+    /// 연번 — 항목 순서 기준.
+    Number { scope: Scope, spec: NumberSpec },
+    /// 날짜 삽입(v2 신설) — 파일별 수정/생성일.
+    Date { scope: Scope, spec: DateSpec },
+    /// 구간 이동(dir2 고유 — "중간 N자리를 잘라 맨 앞/뒤로"): `start` = 1기준.
     Move {
         start: usize,
         len: usize,
         to_front: bool,
     },
-    /// 확장자 변경(사용자 요청 07-15 — 예: cfg→config). `from` 빈 값 = 모든 확장자,
-    /// 매치는 대소문자 무시. `to` 빈 값 = 확장자 제거. 폴더는 no-op.
+    /// 확장자 변경(dir2 고유 — 예: cfg→config). `from` 빈 값 = 모든 확장자.
     ChangeExt { from: String, to: String },
+}
+
+/// 미리보기 입력 1건(v2 — Date가 파일별 메타데이터 요구, [docs/22 §2-4]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RenameInput {
+    pub name: String,
+    pub is_dir: bool,
+    /// 수정/생성 시각(unix ms — 미상 0 = Date 결과 빈 문자열로 격리).
+    pub modified_ms: i64,
+    pub created_ms: i64,
+}
+
+impl RenameInput {
+    /// 이름만으로 구성(테스트·날짜 무관 파이프라인용).
+    pub fn plain(name: &str, is_dir: bool) -> RenameInput {
+        RenameInput {
+            name: name.into(),
+            is_dir,
+            modified_ms: 0,
+            created_ms: 0,
+        }
+    }
 }
 
 /// 충돌 종류(docs/25 §7 — 미리보기 하이라이트·적용 차단).
@@ -98,29 +259,138 @@ pub enum Conflict {
     Exists,
 }
 
-/// 대소문자 무시 치환(문자 단위 — UTF-8 길이 변화 안전). `match_case`면 정확 일치.
-fn replace_plain(s: &str, find: &str, with: &str, match_case: bool) -> String {
-    if find.is_empty() {
-        return s.to_string();
+// ── 날짜 포맷(순수 — 외부 crate 0) ─────────────────────────────────
+
+/// unix ms + TZ 오프셋(분) → (연, 월, 일, 시, 분, 초, 요일 0=일).
+/// civil-from-days(Howard Hinnant 알고리즘 — fmt_datetime과 동일 계열).
+fn civil(ms: i64, tz_min: i32) -> (i64, u32, u32, u32, u32, u32, u32) {
+    let secs = ms.div_euclid(1000) + tz_min as i64 * 60;
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let (h, mi, s) = (tod / 3600, (tod % 3600) / 60, tod % 60);
+    // 1970-01-01 = 목(4). 요일 0=일요일.
+    let weekday = ((days % 7 + 7) % 7 + 4) % 7;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d, h as u32, mi as u32, s as u32, weekday as u32)
+}
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/// 날짜 토큰 포맷([docs/22 §2-3]) — 긴 토큰 우선 매칭, 그 외 문자는 리터럴.
+/// `ms == 0`(미상)이면 빈 문자열(오류 격리 — 무변경에 수렴).
+pub fn format_date(fmt: &str, ms: i64, tz_min: i32) -> String {
+    if ms == 0 {
+        return String::new();
     }
-    if match_case {
-        return s.replace(find, with);
-    }
-    let sc: Vec<char> = s.chars().collect();
-    let fc: Vec<char> = find.chars().collect();
-    let eq = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
+    let (y, mo, d, h, mi, s, wd) = civil(ms, tz_min);
     let mut out = String::new();
+    let cs: Vec<char> = fmt.chars().collect();
     let mut i = 0;
-    while i < sc.len() {
-        if i + fc.len() <= sc.len() && sc[i..i + fc.len()].iter().zip(&fc).all(|(a, b)| eq(*a, *b))
-        {
-            out.push_str(with);
-            i += fc.len();
+    let tok = |cs: &[char], i: usize, t: &str| -> bool {
+        cs[i..].iter().take(t.len()).collect::<String>() == t
+    };
+    while i < cs.len() {
+        if tok(&cs, i, "yyyy") {
+            out.push_str(&format!("{y:04}"));
+            i += 4;
+        } else if tok(&cs, i, "yy") {
+            out.push_str(&format!("{:02}", y.rem_euclid(100)));
+            i += 2;
+        } else if tok(&cs, i, "MMM") {
+            out.push_str(MONTHS[(mo - 1) as usize]);
+            i += 3;
+        } else if tok(&cs, i, "MM") {
+            out.push_str(&format!("{mo:02}"));
+            i += 2;
+        } else if tok(&cs, i, "M") {
+            out.push_str(&mo.to_string());
+            i += 1;
+        } else if tok(&cs, i, "ddd") {
+            out.push_str(WEEKDAYS[wd as usize]);
+            i += 3;
+        } else if tok(&cs, i, "dd") {
+            out.push_str(&format!("{d:02}"));
+            i += 2;
+        } else if tok(&cs, i, "d") {
+            out.push_str(&d.to_string());
+            i += 1;
+        } else if tok(&cs, i, "HH") {
+            out.push_str(&format!("{h:02}"));
+            i += 2;
+        } else if tok(&cs, i, "mm") {
+            out.push_str(&format!("{mi:02}"));
+            i += 2;
+        } else if tok(&cs, i, "ss") {
+            out.push_str(&format!("{s:02}"));
+            i += 2;
         } else {
-            out.push(sc[i]);
+            out.push(cs[i]);
             i += 1;
         }
     }
+    out
+}
+
+// ── 치환/케이스 유틸 ───────────────────────────────────────────────
+
+/// 대소문자 무시 치환(문자 단위 — UTF-8 길이 변화 안전). `limit_first`/`only_last` =
+/// Mode(First/Last — v2). `match_case`면 정확 일치.
+fn replace_plain(s: &str, find: &str, with: &str, match_case: bool, mode: ReplaceMode) -> String {
+    if find.is_empty() {
+        return match mode {
+            ReplaceMode::Entire => with.to_string(), // 빈 find + Entire = 무조건 교체
+            _ => s.to_string(),
+        };
+    }
+    let sc: Vec<char> = s.chars().collect();
+    let fc: Vec<char> = find.chars().collect();
+    let eq = |a: char, b: char| {
+        if match_case {
+            a == b
+        } else {
+            a.to_lowercase().eq(b.to_lowercase())
+        }
+    };
+    // 매치 시작 인덱스 수집(비중첩 — 왼쪽부터)
+    let mut hits = Vec::new();
+    let mut i = 0;
+    while i + fc.len() <= sc.len() {
+        if sc[i..i + fc.len()].iter().zip(&fc).all(|(a, b)| eq(*a, *b)) {
+            hits.push(i);
+            i += fc.len();
+        } else {
+            i += 1;
+        }
+    }
+    if hits.is_empty() {
+        return s.to_string();
+    }
+    match mode {
+        ReplaceMode::Entire => return with.to_string(), // 매치 존재 = 전체 교체
+        ReplaceMode::First => hits.truncate(1),
+        ReplaceMode::Last => hits = vec![*hits.last().unwrap()],
+        ReplaceMode::All => {}
+    }
+    let mut out = String::new();
+    let mut pos = 0;
+    for h in hits {
+        out.extend(&sc[pos..h]);
+        out.push_str(with);
+        pos = h + fc.len();
+    }
+    out.extend(&sc[pos..]);
     out
 }
 
@@ -168,6 +438,56 @@ fn split_stem(name: &str, is_dir: bool) -> (&str, &str) {
     }
 }
 
+/// 스코프 적용(v2 — [docs/22 §2-1]): 작업 문자열 선택 → 변환 → 재조립.
+/// 폴더(`is_dir`)는 확장자 개념이 없다 — Ext/ExtDot 스코프 = **무변경**(no-op),
+/// NameExt = 전체 이름부(Name)로 수렴.
+fn scoped(
+    stem: &mut String,
+    ext: &mut String,
+    scope: Scope,
+    is_dir: bool,
+    f: impl FnOnce(&str) -> String,
+) {
+    let scope = if is_dir {
+        match scope {
+            Scope::Ext | Scope::ExtDot => return, // 폴더 = 대상 텍스트 없음
+            _ => Scope::Name,
+        }
+    } else {
+        scope
+    };
+    match scope {
+        Scope::Name => *stem = f(stem),
+        Scope::NameExt => {
+            let joined = format!("{stem}{ext}");
+            let r = f(&joined);
+            let (s2, e2) = split_stem(&r, false); // 마지막 '.' 기준 재분해(탐색기 규약)
+            let (s2, e2) = (s2.to_string(), e2.to_string());
+            *stem = s2;
+            *ext = e2;
+        }
+        Scope::Ext => {
+            let cur = ext.strip_prefix('.').unwrap_or("");
+            let r = f(cur);
+            *ext = if r.is_empty() {
+                String::new()
+            } else {
+                format!(".{r}")
+            };
+        }
+        Scope::ExtDot => {
+            let r = f(ext);
+            *ext = if r.is_empty() {
+                String::new() // 점까지 제거 = 확장자 없음
+            } else if r.starts_with('.') {
+                r
+            } else {
+                format!(".{r}") // 점 유실 시 복원(항상 유효한 확장자 형태 유지)
+            };
+        }
+    }
+}
+
 /// 정규식 패턴 구성(`match_case`=false → `(?i)`).
 fn regex_of(find: &str, match_case: bool) -> Result<Regex, String> {
     let pat = if match_case {
@@ -197,44 +517,61 @@ pub fn validate(ops: &[RenameOp]) -> Result<(), (usize, String)> {
     Ok(())
 }
 
-/// 동작 1블록 적용 — `stem`/`ext`(선행 `.` 포함)를 제자리 갱신. `idx` = 연번용 순번.
-fn apply(op: &RenameOp, stem: &mut String, ext: &mut String, idx: usize, is_dir: bool) {
+/// 동작 1블록 적용 — `stem`/`ext`(선행 `.` 포함) 제자리 갱신. `idx` = 연번 순번.
+fn apply(
+    op: &RenameOp,
+    stem: &mut String,
+    ext: &mut String,
+    item: &RenameInput,
+    idx: usize,
+    tz_min: i32,
+) {
+    let is_dir = item.is_dir;
     match op {
         RenameOp::Replace {
+            scope,
             find,
             with,
             match_case,
             regex,
-        } => {
+            mode,
+        } => scoped(stem, ext, *scope, is_dir, |s| {
             if *regex {
-                if let Ok(re) = regex_of(find, *match_case) {
-                    *stem = re.replace_all(stem, with.as_str()).into_owned();
+                match regex_of(find, *match_case) {
+                    Ok(re) => re.replace_all(s, with.as_str()).into_owned(),
+                    Err(_) => s.to_string(), // validate가 사전 차단 — 방어적 무변경
                 }
-                // 패턴 오류는 validate가 사전 차단 — 방어적으로 무변경
             } else {
-                *stem = replace_plain(stem, find, with, *match_case);
+                replace_plain(s, find, with, *match_case, *mode)
             }
+        }),
+        RenameOp::Case { scope, mode } => {
+            scoped(stem, ext, *scope, is_dir, |s| apply_case(s, *mode))
         }
-        RenameOp::Case(mode) => *stem = apply_case(stem, *mode),
-        RenameOp::Insert { text, suffix } => {
-            if *suffix {
-                stem.push_str(text);
-            } else {
-                *stem = format!("{text}{stem}");
-            }
+        RenameOp::Insert { scope, text, at } => {
+            scoped(stem, ext, *scope, is_dir, |s| insert_at(s, *at, text))
         }
-        RenameOp::Number(n) => {
-            let val = n.start + n.step * idx as i64;
+        RenameOp::Number { scope, spec } => {
+            let val = spec.start + spec.step * idx as i64;
             let num = if val < 0 {
-                format!("-{:0width$}", -val, width = n.pad.max(1))
+                format!("-{:0width$}", -val, width = spec.pad.max(1))
             } else {
-                format!("{:0width$}", val, width = n.pad.max(1))
+                format!("{:0width$}", val, width = spec.pad.max(1))
             };
-            if n.suffix {
-                stem.push_str(&num);
-            } else {
-                *stem = format!("{num}{stem}");
+            let ins = format!("{}{}{}", spec.prefix, num, spec.suffix); // 감싸기 일체(v2)
+            scoped(stem, ext, *scope, is_dir, |s| insert_at(s, spec.at, &ins));
+        }
+        RenameOp::Date { scope, spec } => {
+            let ms = match spec.kind {
+                DateKind::Modified => item.modified_ms,
+                DateKind::Created => item.created_ms,
+            };
+            let txt = format_date(&spec.format, ms, tz_min);
+            if txt.is_empty() {
+                return; // 시각 미상 = 무변경(오류 격리)
             }
+            let ins = format!("{}{}{}", spec.prefix, txt, spec.suffix);
+            scoped(stem, ext, *scope, is_dir, |s| insert_at(s, spec.at, &ins));
         }
         RenameOp::Move {
             start,
@@ -272,18 +609,18 @@ fn apply(op: &RenameOp, stem: &mut String, ext: &mut String, idx: usize, is_dir:
     }
 }
 
-/// 미리보기 — `items` = (현재 이름, 폴더 여부), 파이프라인을 순서대로 적용한 새 이름.
-/// 연번은 목록 순서(호출자가 정렬 책임 — α: 선택 순서).
-pub fn preview(items: &[(String, bool)], ops: &[RenameOp]) -> Vec<String> {
+/// 미리보기(v2) — 파이프라인 순차 적용 결과. 연번은 목록 순서(호출자 정렬 책임).
+/// `tz_min` = 날짜 표기 TZ 오프셋(분 — 앱의 fmt_datetime과 동일 값 전달).
+pub fn preview(items: &[RenameInput], ops: &[RenameOp], tz_min: i32) -> Vec<String> {
     items
         .iter()
         .enumerate()
-        .map(|(idx, (name, is_dir))| {
-            let (stem, ext) = split_stem(name, *is_dir);
+        .map(|(idx, item)| {
+            let (stem, ext) = split_stem(&item.name, item.is_dir);
             let mut s = stem.to_string();
             let mut e = ext.to_string();
             for op in ops {
-                apply(op, &mut s, &mut e, idx, *is_dir);
+                apply(op, &mut s, &mut e, item, idx, tz_min);
             }
             format!("{}{}", s.trim(), e)
         })
@@ -320,7 +657,6 @@ pub fn conflicts(
                 return Conflict::Duplicate;
             }
             // 기존 파일 존재 — 대소문자만 변경(자기 자신)은 허용(원본 CommitRename 규약).
-            // 배치 내 다른 항목이 비켜줄 자리도 α에선 보수적으로 충돌 처리(순서 의존 회피).
             if lower(new) != lower(old) && exists(parent, new) {
                 return Conflict::Exists;
             }
@@ -329,7 +665,7 @@ pub fn conflicts(
         .collect()
 }
 
-// ── 프리셋 직렬화(docs/25 §3 — key=value 라인·관용 파싱) ─────────────────
+// ── 프리셋 직렬화(v1 하위호환 — 생략 필드 = 기본) ────────────────────
 
 /// 필드 값 이스케이프 — 구분자 `|`·`\`·개행.
 fn esc(s: &str) -> String {
@@ -384,35 +720,62 @@ fn split_fields(line: &str) -> Vec<String> {
     out
 }
 
+fn at_fields(at: InsertAt) -> String {
+    format!(
+        "off={}|dir={}",
+        at.offset,
+        if at.from_end { "end" } else { "start" }
+    )
+}
+
 /// 파이프라인 → 프리셋 텍스트(라인 순서 = 적용 순서). 파일 I/O는 앱(`data\renames\`).
 pub fn serialize_ops(ops: &[RenameOp]) -> String {
-    let mut out = String::from("# nexa-dir2 rename preset v1\n");
+    let mut out = String::from("# nexa-dir2 rename preset v2\n");
     for op in ops {
         let line = match op {
             RenameOp::Replace {
+                scope,
                 find,
                 with,
                 match_case,
                 regex,
+                mode,
             } => format!(
-                "op=replace|find={}|with={}|case={}|regex={}",
+                "op=replace|scope={}|find={}|with={}|case={}|regex={}|mode={}",
+                scope.as_str(),
                 esc(find),
                 esc(with),
                 u8::from(*match_case),
-                u8::from(*regex)
+                u8::from(*regex),
+                mode.as_str()
             ),
-            RenameOp::Case(m) => format!("op=case|mode={}", m.as_str()),
-            RenameOp::Insert { text, suffix } => format!(
-                "op=insert|text={}|pos={}",
+            RenameOp::Case { scope, mode } => {
+                format!("op=case|scope={}|mode={}", scope.as_str(), mode.as_str())
+            }
+            RenameOp::Insert { scope, text, at } => format!(
+                "op=insert|scope={}|text={}|{}",
+                scope.as_str(),
                 esc(text),
-                if *suffix { "suffix" } else { "prefix" }
+                at_fields(*at)
             ),
-            RenameOp::Number(n) => format!(
-                "op=number|start={}|step={}|pad={}|pos={}",
-                n.start,
-                n.step,
-                n.pad,
-                if n.suffix { "suffix" } else { "prefix" }
+            RenameOp::Number { scope, spec } => format!(
+                "op=number|scope={}|start={}|step={}|pad={}|{}|pre={}|suf={}",
+                scope.as_str(),
+                spec.start,
+                spec.step,
+                spec.pad,
+                at_fields(spec.at),
+                esc(&spec.prefix),
+                esc(&spec.suffix)
+            ),
+            RenameOp::Date { scope, spec } => format!(
+                "op=date|scope={}|kind={}|fmt={}|{}|pre={}|suf={}",
+                scope.as_str(),
+                spec.kind.as_str(),
+                esc(&spec.format),
+                at_fields(spec.at),
+                esc(&spec.prefix),
+                esc(&spec.suffix)
             ),
             RenameOp::Move {
                 start,
@@ -432,7 +795,9 @@ pub fn serialize_ops(ops: &[RenameOp]) -> String {
     out
 }
 
-/// 프리셋 텍스트 → 파이프라인(관용 파싱 — 손상 라인·미지 종류는 무시, 상한 64블록).
+/// 프리셋 텍스트 → 파이프라인(관용 파싱 — 손상 라인·미지 종류 무시, 상한 64블록).
+/// **v1 하위호환**: `scope`/`mode`/`off`/`dir`/`pre`/`suf` 생략 = 기본,
+/// 구 `pos=prefix|suffix`는 [`InsertAt::edge`]로 매핑.
 pub fn parse_ops(text: &str) -> Vec<RenameOp> {
     let mut ops = Vec::new();
     for line in text.lines() {
@@ -448,28 +813,58 @@ pub fn parse_ops(text: &str) -> Vec<RenameOp> {
                     .map(unesc)
             })
         };
+        let scope = Scope::from_str(get("scope").as_deref().unwrap_or(""));
+        // 위치: v2 off/dir → 없으면 v1 pos=prefix|suffix → 기본 suffix(뒤)
+        let at = || -> InsertAt {
+            if let Some(off) = get("off").and_then(|v| v.parse().ok()) {
+                InsertAt {
+                    offset: off,
+                    from_end: get("dir").as_deref() != Some("start"),
+                }
+            } else {
+                InsertAt::edge(get("pos").as_deref() != Some("prefix"))
+            }
+        };
         let Some(kind) = get("op") else { continue };
         let op = match kind.as_str() {
             "replace" => RenameOp::Replace {
+                scope,
                 find: get("find").unwrap_or_default(),
                 with: get("with").unwrap_or_default(),
                 match_case: get("case").as_deref() == Some("1"),
                 regex: get("regex").as_deref() == Some("1"),
+                mode: ReplaceMode::from_str(get("mode").as_deref().unwrap_or("")),
             },
             "case" => match get("mode").as_deref().and_then(CaseMode::from_str) {
-                Some(m) => RenameOp::Case(m),
+                Some(mode) => RenameOp::Case { scope, mode },
                 None => continue,
             },
             "insert" => RenameOp::Insert {
+                scope,
                 text: get("text").unwrap_or_default(),
-                suffix: get("pos").as_deref() != Some("prefix"),
+                at: at(),
             },
-            "number" => RenameOp::Number(NumberSpec {
-                start: get("start").and_then(|v| v.parse().ok()).unwrap_or(1),
-                step: get("step").and_then(|v| v.parse().ok()).unwrap_or(1),
-                pad: get("pad").and_then(|v| v.parse().ok()).unwrap_or(3),
-                suffix: get("pos").as_deref() != Some("prefix"),
-            }),
+            "number" => RenameOp::Number {
+                scope,
+                spec: NumberSpec {
+                    start: get("start").and_then(|v| v.parse().ok()).unwrap_or(1),
+                    step: get("step").and_then(|v| v.parse().ok()).unwrap_or(1),
+                    pad: get("pad").and_then(|v| v.parse().ok()).unwrap_or(3),
+                    at: at(),
+                    prefix: get("pre").unwrap_or_default(),
+                    suffix: get("suf").unwrap_or_default(),
+                },
+            },
+            "date" => RenameOp::Date {
+                scope,
+                spec: DateSpec {
+                    kind: DateKind::from_str(get("kind").as_deref().unwrap_or("")),
+                    format: get("fmt").unwrap_or_else(|| "yyyy-MM-dd".into()),
+                    at: at(),
+                    prefix: get("pre").unwrap_or_default(),
+                    suffix: get("suf").unwrap_or_default(),
+                },
+            },
             "move" => RenameOp::Move {
                 start: get("start").and_then(|v| v.parse().ok()).unwrap_or(1),
                 len: get("len").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -490,20 +885,29 @@ pub fn parse_ops(text: &str) -> Vec<RenameOp> {
 mod tests {
     use super::*;
 
-    fn files(names: &[&str]) -> Vec<(String, bool)> {
-        names.iter().map(|n| (n.to_string(), false)).collect()
+    fn files(names: &[&str]) -> Vec<RenameInput> {
+        names.iter().map(|n| RenameInput::plain(n, false)).collect()
+    }
+
+    fn pv(items: &[RenameInput], ops: &[RenameOp]) -> Vec<String> {
+        preview(items, ops, 0)
     }
 
     #[test]
     fn pipeline_applies_in_user_order() {
         // 사용자 예시(07-15): ① 연번 앞 ② 중간 2자 맨 뒤로 ③ 확장자 cfg→config
         let ops = vec![
-            RenameOp::Number(NumberSpec {
-                start: 1,
-                step: 1,
-                pad: 2,
-                suffix: false,
-            }),
+            RenameOp::Number {
+                scope: Scope::Name,
+                spec: NumberSpec {
+                    start: 1,
+                    step: 1,
+                    pad: 2,
+                    at: InsertAt::edge(false),
+                    prefix: String::new(),
+                    suffix: String::new(),
+                },
+            },
             RenameOp::Move {
                 start: 3,
                 len: 2,
@@ -514,49 +918,192 @@ mod tests {
                 to: "config".into(),
             },
         ];
-        let out = preview(&files(&["settings.cfg", "session.cfg"]), &ops);
-        // "settings" → "01settings" → 3번째부터 2자("se")를 맨 뒤로 → "01ttingsse" + .config
+        let out = pv(&files(&["settings.cfg", "session.cfg"]), &ops);
         assert_eq!(out, vec!["01ttingsse.config", "02ssionse.config"]);
     }
 
     #[test]
+    fn scope_variants_select_working_text() {
+        // PF Apply to(v2): Name/NameExt/Ext/ExtDot — 같은 치환의 스코프별 결과
+        let mk = |scope| RenameOp::Replace {
+            scope,
+            find: "md".into(),
+            with: "XX".into(),
+            match_case: false,
+            regex: false,
+            mode: ReplaceMode::All,
+        };
+        let f = files(&["md-file.md"]);
+        assert_eq!(pv(&f, &[mk(Scope::Name)]), vec!["XX-file.md"]);
+        assert_eq!(pv(&f, &[mk(Scope::NameExt)]), vec!["XX-file.XX"]);
+        assert_eq!(pv(&f, &[mk(Scope::Ext)]), vec!["md-file.XX"]);
+        // ExtDot — 점 포함 텍스트가 대상(".md" → 점 소실 시 복원 규약)
+        let dot = RenameOp::Replace {
+            scope: Scope::ExtDot,
+            find: ".md".into(),
+            with: "tar.gz".into(),
+            match_case: false,
+            regex: false,
+            mode: ReplaceMode::All,
+        };
+        assert_eq!(pv(&f, &[dot]), vec!["md-file.tar.gz"]);
+        // 폴더 = 스코프 무관 전체 이름부
+        assert_eq!(
+            pv(&[RenameInput::plain("md.dir", true)], &[mk(Scope::Ext)]),
+            vec!["md.dir"]
+        );
+    }
+
+    #[test]
+    fn replace_modes_first_last_entire() {
+        let m = |mode| RenameOp::Replace {
+            scope: Scope::Name,
+            find: "a".into(),
+            with: "X".into(),
+            match_case: false,
+            regex: false,
+            mode,
+        };
+        let f = files(&["banana.txt"]);
+        assert_eq!(pv(&f, &[m(ReplaceMode::All)]), vec!["bXnXnX.txt"]);
+        assert_eq!(pv(&f, &[m(ReplaceMode::First)]), vec!["bXnana.txt"]);
+        assert_eq!(pv(&f, &[m(ReplaceMode::Last)]), vec!["bananX.txt"]);
+        assert_eq!(pv(&f, &[m(ReplaceMode::Entire)]), vec!["X.txt"]);
+        // Entire + 매치 없음 = 무변경 · 빈 find + Entire = 무조건 교체
+        let none = RenameOp::Replace {
+            scope: Scope::Name,
+            find: "zz".into(),
+            with: "X".into(),
+            match_case: false,
+            regex: false,
+            mode: ReplaceMode::Entire,
+        };
+        assert_eq!(pv(&f, &[none]), vec!["banana.txt"]);
+        let always = RenameOp::Replace {
+            scope: Scope::Name,
+            find: String::new(),
+            with: "N".into(),
+            match_case: false,
+            regex: false,
+            mode: ReplaceMode::Entire,
+        };
+        assert_eq!(pv(&f, &[always]), vec!["N.txt"]);
+    }
+
+    #[test]
+    fn insert_at_arbitrary_position_with_clamp() {
+        // PF 미리보기로 확정한 시맨틱: 끝기준 2 → 2자 앞에 삽입 · 초과 = 반대편 클램프
+        let ins = |offset, from_end| RenameOp::Insert {
+            scope: Scope::Name,
+            text: "aa".into(),
+            at: InsertAt { offset, from_end },
+        };
+        assert_eq!(pv(&files(&["a.md"]), &[ins(2, true)]), vec!["aaa.md"]); // 클램프
+        assert_eq!(
+            pv(&files(&["개발순서-상세.md"]), &[ins(2, true)]),
+            vec!["개발순서-aa상세.md"]
+        );
+        assert_eq!(
+            pv(&files(&["subXY.md"]), &[ins(2, false)]),
+            vec!["suaabXY.md"]
+        );
+    }
+
+    #[test]
+    fn number_with_wrapping_and_position() {
+        // PF 예제 재현: Position 2(앞) · start 3 · step 3 · pad 2 · PRE/SUF 감싸기
+        let ops = vec![RenameOp::Number {
+            scope: Scope::Name,
+            spec: NumberSpec {
+                start: 3,
+                step: 3,
+                pad: 2,
+                at: InsertAt {
+                    offset: 2,
+                    from_end: false,
+                },
+                prefix: "PRE".into(),
+                suffix: "SUF".into(),
+            },
+        }];
+        let out = pv(&files(&["a.md", "sublime.md"]), &ops);
+        assert_eq!(out, vec!["aPRE03SUF.md", "suPRE06SUFblime.md"]);
+    }
+
+    #[test]
+    fn date_format_tokens_and_missing_time() {
+        // 2026-07-01 12:34:56 UTC = 1782909296000ms — 토큰 조합
+        let ms = 1_782_909_296_000i64;
+        assert_eq!(format_date("yyyy-MM-dd", ms, 0), "2026-07-01");
+        assert_eq!(format_date("yy.M.d", ms, 0), "26.7.1");
+        assert_eq!(format_date("MMM d ddd", ms, 0), "Jul 1 Wed");
+        assert_eq!(format_date("HHmmss", ms, 0), "123456");
+        // TZ 오프셋(+9h) — 날짜 경계 이동
+        assert_eq!(format_date("dd HH", ms, 540), "01 21");
+        // 미상(0) = 빈 문자열 → Date 동작은 무변경
+        assert_eq!(format_date("yyyy", 0, 0), "");
+        let d = RenameOp::Date {
+            scope: Scope::Name,
+            spec: DateSpec {
+                kind: DateKind::Modified,
+                format: "yyyy-MM-dd".into(),
+                at: InsertAt {
+                    offset: 2,
+                    from_end: false,
+                },
+                prefix: "PRE".into(),
+                suffix: "SUF".into(),
+            },
+        };
+        let mut item = RenameInput::plain("sublime.md", false);
+        item.modified_ms = ms;
+        assert_eq!(
+            preview(&[item], std::slice::from_ref(&d), 0),
+            vec!["suPRE2026-07-01SUFblime.md"] // PF 예제 재현
+        );
+        // 시각 미상 = 무변경(오류 격리)
+        assert_eq!(
+            preview(&[RenameInput::plain("a.md", false)], &[d], 0),
+            vec!["a.md"]
+        );
+    }
+
+    #[test]
     fn op_order_matters() {
-        let a = vec![
-            RenameOp::Insert {
-                text: "X".into(),
-                suffix: false,
-            },
-            RenameOp::Case(CaseMode::Lower),
-        ];
-        let b = vec![
-            RenameOp::Case(CaseMode::Lower),
-            RenameOp::Insert {
-                text: "X".into(),
-                suffix: false,
-            },
-        ];
-        assert_eq!(preview(&files(&["A.txt"]), &a), vec!["xa.txt"]);
-        assert_eq!(preview(&files(&["A.txt"]), &b), vec!["Xa.txt"]);
+        let ins = RenameOp::Insert {
+            scope: Scope::Name,
+            text: "X".into(),
+            at: InsertAt::edge(false),
+        };
+        let case = RenameOp::Case {
+            scope: Scope::Name,
+            mode: CaseMode::Lower,
+        };
+        assert_eq!(
+            pv(&files(&["A.txt"]), &[ins.clone(), case.clone()]),
+            vec!["xa.txt"]
+        );
+        assert_eq!(pv(&files(&["A.txt"]), &[case, ins]), vec!["Xa.txt"]);
     }
 
     #[test]
     fn regex_replace_with_captures_and_case_insensitive() {
         let ops = vec![RenameOp::Replace {
+            scope: Scope::Name,
             find: r"img_(\d+)".into(),
             with: "photo-$1".into(),
             match_case: false,
             regex: true,
+            mode: ReplaceMode::All,
         }];
-        assert_eq!(
-            preview(&files(&["IMG_042.jpg"]), &ops),
-            vec!["photo-042.jpg"]
-        );
-        // 검증 — 잘못된 패턴은 (블록 순번, 메시지)
+        assert_eq!(pv(&files(&["IMG_042.jpg"]), &ops), vec!["photo-042.jpg"]);
         let bad = vec![RenameOp::Replace {
+            scope: Scope::Name,
             find: "(".into(),
             with: "".into(),
             match_case: true,
             regex: true,
+            mode: ReplaceMode::All,
         }];
         assert!(matches!(validate(&bad), Err((0, _))));
         assert!(validate(&ops).is_ok());
@@ -564,21 +1111,19 @@ mod tests {
 
     #[test]
     fn move_and_ext_edge_cases() {
-        // 범위 밖 이동 = 가능한 만큼(없으면 no-op)
         let mv = vec![RenameOp::Move {
             start: 10,
             len: 2,
             to_front: true,
         }];
-        assert_eq!(preview(&files(&["ab.txt"]), &mv), vec!["ab.txt"]);
-        // 확장자: from 불일치 = 유지·폴더 = no-op·to 빈 값 = 제거
+        assert_eq!(pv(&files(&["ab.txt"]), &mv), vec!["ab.txt"]);
         let ext = vec![RenameOp::ChangeExt {
             from: "cfg".into(),
             to: "config".into(),
         }];
-        assert_eq!(preview(&files(&["a.txt"]), &ext), vec!["a.txt"]);
+        assert_eq!(pv(&files(&["a.txt"]), &ext), vec!["a.txt"]);
         assert_eq!(
-            preview(&[("dir.cfg".into(), true)], &ext),
+            pv(&[RenameInput::plain("dir.cfg", true)], &ext),
             vec!["dir.cfg"],
             "폴더는 확장자 변경 없음"
         );
@@ -586,47 +1131,74 @@ mod tests {
             from: String::new(),
             to: String::new(),
         }];
-        assert_eq!(preview(&files(&["a.bak"]), &strip), vec!["a"]);
+        assert_eq!(pv(&files(&["a.bak"]), &strip), vec!["a"]);
     }
 
     #[test]
     fn preview_case_modes_and_dir_whole_name() {
-        let t = vec![RenameOp::Case(CaseMode::Title)];
+        let t = vec![RenameOp::Case {
+            scope: Scope::Name,
+            mode: CaseMode::Title,
+        }];
         assert_eq!(
-            preview(&[("my file-name.txt".into(), false)], &t),
+            pv(&[RenameInput::plain("my file-name.txt", false)], &t),
             vec!["My File-Name.txt"]
         );
         assert_eq!(
-            preview(&[("archive.old".into(), true)], &t),
+            pv(&[RenameInput::plain("archive.old", true)], &t),
             vec!["Archive.Old"]
         );
-        let s = vec![RenameOp::Case(CaseMode::Sentence)];
-        assert_eq!(
-            preview(&files(&["hELLO wORLD.md"]), &s),
-            vec!["Hello world.md"]
-        );
+        let s = vec![RenameOp::Case {
+            scope: Scope::Name,
+            mode: CaseMode::Sentence,
+        }];
+        assert_eq!(pv(&files(&["hELLO wORLD.md"]), &s), vec!["Hello world.md"]);
     }
 
     #[test]
-    fn preset_round_trip_with_escapes() {
+    fn preset_round_trip_v2_and_v1_compat() {
         let ops = vec![
             RenameOp::Replace {
+                scope: Scope::NameExt,
                 find: "a|b\\c".into(),
                 with: "x".into(),
                 match_case: true,
                 regex: false,
+                mode: ReplaceMode::Last,
             },
-            RenameOp::Case(CaseMode::Title),
+            RenameOp::Case {
+                scope: Scope::Ext,
+                mode: CaseMode::Title,
+            },
             RenameOp::Insert {
+                scope: Scope::Name,
                 text: "pre|fix".into(),
-                suffix: false,
+                at: InsertAt {
+                    offset: 3,
+                    from_end: true,
+                },
             },
-            RenameOp::Number(NumberSpec {
-                start: 5,
-                step: 2,
-                pad: 4,
-                suffix: true,
-            }),
+            RenameOp::Number {
+                scope: Scope::Name,
+                spec: NumberSpec {
+                    start: 5,
+                    step: 2,
+                    pad: 4,
+                    at: InsertAt::edge(true),
+                    prefix: "P|".into(),
+                    suffix: "S".into(),
+                },
+            },
+            RenameOp::Date {
+                scope: Scope::Name,
+                spec: DateSpec {
+                    kind: DateKind::Created,
+                    format: "yyyy-MM-dd".into(),
+                    at: InsertAt::edge(false),
+                    prefix: String::new(),
+                    suffix: "_".into(),
+                },
+            },
             RenameOp::Move {
                 start: 2,
                 len: 3,
@@ -638,8 +1210,39 @@ mod tests {
             },
         ];
         let text = serialize_ops(&ops);
-        assert_eq!(parse_ops(&text), ops, "직렬화 왕복(이스케이프 포함)");
-        // 손상 라인 관용
+        assert_eq!(parse_ops(&text), ops, "v2 왕복(이스케이프 포함)");
+        // v1 프리셋 하위호환 — 생략 필드 = 기본·pos=prefix/suffix 매핑
+        let v1 = "op=replace|find=a|with=b|case=0|regex=0\n\
+                  op=case|mode=title\n\
+                  op=insert|text=X|pos=prefix\n\
+                  op=number|start=1|step=1|pad=3|pos=suffix\n";
+        let parsed = parse_ops(v1);
+        assert_eq!(
+            parsed[0],
+            RenameOp::Replace {
+                scope: Scope::Name,
+                find: "a".into(),
+                with: "b".into(),
+                match_case: false,
+                regex: false,
+                mode: ReplaceMode::All,
+            }
+        );
+        assert_eq!(
+            parsed[2],
+            RenameOp::Insert {
+                scope: Scope::Name,
+                text: "X".into(),
+                at: InsertAt::edge(false),
+            }
+        );
+        match &parsed[3] {
+            RenameOp::Number { spec, .. } => {
+                assert_eq!(spec.at, InsertAt::edge(true));
+                assert!(spec.prefix.is_empty() && spec.suffix.is_empty());
+            }
+            _ => panic!("number"),
+        }
         assert!(parse_ops("op=unknown|x=1\ngarbage\n").is_empty());
     }
 
