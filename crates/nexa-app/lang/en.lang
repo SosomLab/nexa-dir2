@@ -283,3 +283,9 @@ pref.hdrBold = Bold column headers
 pref.hdrBold.desc = Decoration only - same family/size as the file list.
 pref.hdrItalic = Italic column headers
 pref.hdrItalic.desc = Decoration only - same family/size as the file list.
+# panel/info modes (07-16)
+menu.view.panelDual = Dual panels
+menu.view.panelSingle = Single panel
+menu.view.infoDual = Dual info panes
+menu.view.infoSingle = Single info pane
+status.infoLocked = Info pane is fixed to single in single-panel mode
