@@ -8,6 +8,7 @@
 
 ## 2026-07-16
 
+- **fontbox QA 4건(`fix/fontbox-qa` — 사용자 QA)**: 클릭 미반영 진범 2중(**컨테이너 MA_ACTIVATE + LISTBOX DOWN의 SetFocus** → 킬포커스가 클릭 전에 팝업 파괴) — NOACTIVATE·DOWN 삼킴(좌표 선택)·킬포커스 가드. 하단 회색 띠 = LBS_NOINTEGRALHEIGHT. **바깥 클릭 닫기**(60ms 감시). **HUD 제거**(사용자 확정 — 매칭 스크롤만). 실기 재검증: 항목0 클릭 → "Segoe UI, Agency FB". 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **ctl 2호 글꼴 입력 fontbox(`feat/ctl-fontbox` — 사용자 요청·WT 피커 참조)**: 클릭 = **설치 글꼴 드롭다운**(각 항목을 그 글꼴로 렌더·NOACTIVATE 팝업 — 에디트 포커스 유지)·키보드/마우스 탐색·**쉼표 체인 선택 규칙**(접두사=교체·완결=뒤에 추가 — 단위 테스트)·**커서 위치 타입어헤드 HUD**+매칭 스크롤. prefs 글꼴 6곳 교체·확정=즉시 적용 재발행. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **ctl 커스텀 컨트롤 라이브러리 + 검색박스 컴포넌트(`fix/search-clear-zorder` — 사용자 요청)**: ✕ 겹친 형제 접근의 z-순서 진범을 **자기완결 컨트롤**(NexaSearchBox — 테두리·✕를 자기 영역에 그리고 자식 EDIT가 입력)로 근본 해소. **세로 중앙 정렬**(한글 상단 붙음 — EDIT를 글꼴 높이로 중앙 배치)·드롭인 계약(텍스트 위임+EN_CHANGE 재발행). `ctl/` = Win32 커스텀 컨트롤 묶음 1호. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **폰트 폼 QA 3건(`fix/font-form-qa` — 사용자 QA)**: **스크롤 공백 진범**(rebuild가 파괴 후 editors 비움 → 파괴 중 EN_KILLFOCUS 재진입 harvest가 빈 값 수확 — 순서 교정)·크기 = **입력 가능한 콤보**(프리셋+CBN_SELCHANGE 즉시 적용)·**Enter 즉시 적용**(모달 펌프 VK_RETURN — 이름/크기 공통)·검색 ✕ = SS_NOTIFY 스태틱 전환(실클릭 검증). 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
