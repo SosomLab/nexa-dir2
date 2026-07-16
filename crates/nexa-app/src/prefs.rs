@@ -631,31 +631,45 @@ impl PrefState {
         let mut opt_seq = 0u32;
         if is_group {
             // 그룹 페이지 = 하위 메뉴 링크(클릭 = 그 메뉴로 이동 — SS_NOTIFY).
-            // 검색 중엔 매치 기준(라벨/상세 — 트리 필터와 동일) 자식만.
+            // 제목보다 **작은 본문 폰트**(QA 07-16 — 제목과 위계 구분). 검색 중엔
+            // 매치 기준(라벨/상세 — 트리 필터와 동일) 자식만.
             for (key, lk) in tree_cats(node.unwrap_or_default()) {
+                if key == self.category {
+                    continue; // 그룹 자신(직속 상세는 아래 항목 목록이 담당)
+                }
                 if !tokens.is_empty() && !cat_matches(key, lk, &tokens, &reg) {
                     continue;
                 }
                 let Some(ti) = tree_index(key) else { continue };
                 let link = mk(
                     self.hwnd,
-                    self.title_font,
+                    self.font,
                     w!("STATIC"),
                     &tr(lk),
                     0x0100, // SS_NOTIFY — STN_CLICKED로 이동
                     x0,
                     y,
                     pane_w,
-                    24,
+                    20,
                     ID_NAV_BASE + ti as u32,
                 );
                 self.rows.push(link);
-                y += 34;
+                y += 28;
             }
-        } else {
-            // 항목 페이지: 검색 미선택 = 전 카테고리 매치 · leaf = 그 카테고리 항목
+            y += 6; // 링크 ↔ 직속 상세 간격(QA 07-16)
+        }
+        {
+            // 항목 목록: **그룹 = 직속 상세**(cat == 그룹 key — 있을 때만 링크 아래,
+            // QA 07-16) · 검색 미선택 = 전 카테고리 매치 · leaf = 그 카테고리 항목
             // (검색 중 = 라벨 매치만 — 메뉴명 매치로 진입해 상세 매치가 0이면 전체 표시)
-            let list: Vec<&Entry> = if node.is_none() {
+            let list: Vec<&Entry> = if is_group {
+                reg.iter()
+                    .filter(|e| {
+                        e.cat == self.category
+                            && (tokens.is_empty() || label_hits(&tr(e.label_key), &tokens))
+                    })
+                    .collect()
+            } else if node.is_none() {
                 reg.iter()
                     .filter(|e| label_hits(&tr(e.label_key), &tokens))
                     .collect()
