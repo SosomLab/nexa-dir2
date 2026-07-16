@@ -1026,6 +1026,9 @@ impl Panel {
         if let Some(p) = self.pathbar.take_navigation() {
             // 환경변수 해석(원본 PathInterpreter — %VAR%·$env:VAR·따옴표, PATH-SUG 동반)
             let p = crate::pathinput::expand_env(&p);
+            // shell: 특수 폴더(07-17 — shell:startup 등, 탐색기 동일). 비Windows = 원문.
+            #[cfg(windows)]
+            let p = crate::shellpath::resolve(&p);
             self.navigate_to(PathBuf::from(p), ctx, inv);
         }
         if let Some(btn) = self.navbtns.take_command() {
