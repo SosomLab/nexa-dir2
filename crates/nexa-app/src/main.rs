@@ -41,6 +41,9 @@ mod prefs;
 mod recycle;
 #[cfg(windows)]
 mod shellmenu;
+/// shell: 특수 폴더 스킴 해석(사용자 요청 07-17 — SHParseDisplayName 위임).
+#[cfg(windows)]
+mod shellpath;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod source;
 #[cfg(windows)]

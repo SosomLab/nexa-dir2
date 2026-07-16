@@ -8,6 +8,7 @@
 
 ## 2026-07-17
 
+- **shell: 특수 폴더(`feat/shell-folders` — 사용자 요청)**: 경로 바에서 `shell:startup`·`shell:common startup` 등 **탐색기 전체 이름 지원** — 수동 테이블 대신 `SHParseDisplayName` 위임(KnownFolders 전부+GUID 형태 자동 커버). 가상 폴더/미지 이름 = 원문 유지(기존 격리). 테스트 3건. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **X-20 우 패널 무반응 진범(`fix/panel-modes-click` — 사용자 QA)**: 도크 클릭 라우팅 `y >= dock.y`가 0-rect 도크(싱글 정보의 우 패널)에서 **항상 참** — 클릭 전부가 빈 도크로 삼켜짐. `h > 0` 가드(panel 1곳+win 2곳). 클릭 주입 검증(선택 1). 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **X-20 공백 화면 진범(`fix/panel-modes-splitter` — 사용자 QA)**: 싱글 모드에서 스플리터 폭이 음수 → GDI ETO_OPAQUE **rect 정규화**가 패널/도크 전체를 border 색으로 덮어칠 — 폭 양수 가드 + 공유 도크 재도장(우 부분 행 침범). PrintWindow 캡처 판독으로 두 모드 정상 확인. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 
