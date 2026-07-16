@@ -1,8 +1,8 @@
 //! fontbox — **글꼴 입력** 커스텀 컨트롤(사용자 요청 07-16, ctl 2호 — WT 글꼴 피커 참조).
 //!
 //! 구성: 자식 EDIT(입력) + **드롭다운 목록**(설치 글꼴 — 각 항목을 **그 글꼴로 렌더**,
-//! 스크롤·마우스 hover·키보드 ↑/↓/PgUp/PgDn/Enter/Esc) + **커서 위치 타입어헤드 HUD**
-//! (입력 중 현재 검색 조각을 마우스 커서 옆에 표시·목록은 매칭 위치로 이동).
+//! 스크롤·마우스 hover·키보드 ↑/↓/PgUp/PgDn/Enter/Esc). 입력 중 목록은 접두 매칭
+//! 위치로 자동 이동(커서 옆 HUD는 사용자 확정으로 제거 — 에디트가 곧 입력 표시).
 //!
 //! 선택 반영 규칙(사용자 확정 — 쉼표 = 폴백 체인 규약):
 //! - 마지막 `,` 뒤 조각이 선택 글꼴의 **접두사**(= 검색 중 입력)면 그 조각을 교체.
@@ -27,7 +27,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
-    GetDlgCtrlID, GetParent, GetWindowLongPtrW, IsWindow, MoveWindow, RegisterClassW, SendMessageW,
+    GetDlgCtrlID, GetParent, GetWindowLongPtrW, MoveWindow, RegisterClassW, SendMessageW,
     SetWindowLongPtrW, SetWindowPos, ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU,
     HWND_TOPMOST, IDC_ARROW, SWP_NOACTIVATE, SWP_SHOWWINDOW, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_CHAR, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_DESTROY, WM_DRAWITEM, WM_GETTEXT,
@@ -93,8 +93,6 @@ struct FbState {
     font: HFONT,
     /// 열린 드롭다운(컨테이너 popup) — 없으면 None.
     drop: Option<HWND>,
-    /// 커서 위치 타입어헤드 HUD(드롭다운 열림+입력 중에만).
-    hud: Option<HWND>,
     /// 에디트 원래 wndproc(서브클래스 복원용).
     edit_proc: isize,
 }
@@ -111,7 +109,6 @@ struct DropState {
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("NexaFontBox");
 const DROP_CLASS: PCWSTR = w!("NexaFontDrop");
-const HUD_CLASS: PCWSTR = w!("NexaFontHud");
 
 /// 글꼴 입력 컨트롤 생성 — searchbox와 동일한 드롭인 텍스트 계약.
 pub unsafe fn create(parent: HWND, x: i32, y: i32, w: i32, h: i32, id: u32, font: HFONT) -> HWND {
@@ -119,7 +116,6 @@ pub unsafe fn create(parent: HWND, x: i32, y: i32, w: i32, h: i32, id: u32, font
         for (class, p) in [
             (CLASS, fb_proc as unsafe extern "system" fn(_, _, _, _) -> _),
             (DROP_CLASS, drop_proc),
-            (HUD_CLASS, hud_proc),
         ] {
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(p),
@@ -243,10 +239,13 @@ unsafe fn notify_parent(hwnd: HWND, code: u32) {
 
 // ── 드롭다운 열기/닫기/탐색 ──────────────────────────────────────
 
+const TIMER_OUTSIDE: usize = 1;
+
 unsafe fn open_drop(hwnd: HWND, st: &mut FbState) {
     if st.drop.is_some() {
         return;
     }
+    let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(Some(hwnd), TIMER_OUTSIDE, 60, None);
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
     let mut pt = POINT { x: 0, y: rc.bottom };
@@ -305,15 +304,15 @@ unsafe fn open_drop(hwnd: HWND, st: &mut FbState) {
         SWP_SHOWWINDOW | SWP_NOACTIVATE,
     );
     st.drop = Some(drop);
-    sync_match(hwnd, st); // 현재 조각으로 초기 위치
+    sync_match(st); // 현재 조각으로 초기 위치
 }
 
 unsafe fn close_drop(st: &mut FbState) {
     if let Some(d) = st.drop.take() {
+        if let Ok(owner) = GetParent(d) {
+            let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(Some(owner), TIMER_OUTSIDE);
+        }
         let _ = DestroyWindow(d);
-    }
-    if let Some(h) = st.hud.take() {
-        let _ = DestroyWindow(h);
     }
 }
 
@@ -324,7 +323,7 @@ unsafe fn drop_list(st: &FbState) -> Option<HWND> {
 }
 
 /// 현재 조각과 **접두 매칭**되는 첫 글꼴로 목록 이동(타입어헤드) + HUD 갱신.
-unsafe fn sync_match(hwnd: HWND, st: &mut FbState) {
+unsafe fn sync_match(st: &mut FbState) {
     let Some(list) = drop_list(st) else { return };
     let seg = segment(&edit_text(st)).to_lowercase();
     if !seg.is_empty() {
@@ -341,59 +340,6 @@ unsafe fn sync_match(hwnd: HWND, st: &mut FbState) {
             );
         }
     }
-    update_hud(hwnd, st, &seg);
-}
-
-/// 마우스 커서 옆 입력값 HUD(사용자 요청) — 빈 조각이면 숨김.
-unsafe fn update_hud(hwnd: HWND, st: &mut FbState, seg: &str) {
-    if seg.is_empty() {
-        if let Some(h) = st.hud.take() {
-            let _ = DestroyWindow(h);
-        }
-        return;
-    }
-    let mut pt = POINT::default();
-    let _ = GetCursorPos(&mut pt);
-    let w = 16 + seg.chars().count() as i32 * 9 + 40;
-    let h = font_height(hwnd, st.font) + 8;
-    let hud = match st.hud {
-        Some(h) if IsWindow(Some(h)).as_bool() => h,
-        _ => {
-            let h = CreateWindowExW(
-                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-                HUD_CLASS,
-                w!(""),
-                WS_POPUP,
-                pt.x + 14,
-                pt.y + 18,
-                w,
-                h,
-                Some(hwnd),
-                None,
-                None,
-                None,
-            )
-            .unwrap_or_default();
-            SetWindowLongPtrW(h, GWLP_USERDATA, st.font.0 as isize);
-            st.hud = Some(h);
-            h
-        }
-    };
-    let w16: Vec<u16> = format!("찾기: {seg}")
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hud, PCWSTR(w16.as_ptr()));
-    let _ = SetWindowPos(
-        hud,
-        Some(HWND_TOPMOST),
-        pt.x + 14,
-        pt.y + 18,
-        w,
-        h,
-        SWP_SHOWWINDOW | SWP_NOACTIVATE,
-    );
-    let _ = InvalidateRect(Some(hud), None, true);
 }
 
 /// 목록 현재 선택을 확정 — 조각 규칙 반영 + 통지(EN_CHANGE·EN_KILLFOCUS=적용) + 닫기.
@@ -482,9 +428,15 @@ unsafe extern "system" fn edit_proc(
         }
         WM_KILLFOCUS => {
             // 포커스 이탈 = 닫기 + 적용 통지(기존 EDIT kill-focus 계약 유지).
-            // 드롭다운은 NOACTIVATE라 목록 조작 중엔 발생하지 않는다.
-            close_drop(st);
-            notify_parent(ctl, EN_KILLFOCUS);
+            // 단, 새 포커스가 **드롭다운 내부**면 유지(방어 — 목록 조작 중 오폐쇄 방지).
+            let new_focus = HWND(wparam.0 as *mut core::ffi::c_void);
+            let into_drop = st
+                .drop
+                .is_some_and(|d| new_focus == d || GetParent(new_focus).ok() == Some(d));
+            if !into_drop {
+                close_drop(st);
+                notify_parent(ctl, EN_KILLFOCUS);
+            }
         }
         WM_DESTROY => {
             let orig = st.edit_proc;
@@ -539,7 +491,6 @@ unsafe extern "system" fn fb_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 edit,
                 font: HFONT::default(),
                 drop: None,
-                hud: None,
                 edit_proc: orig,
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
@@ -589,10 +540,38 @@ unsafe extern "system" fn fb_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if src == EDIT_ID && notify == EN_CHANGE {
                 if let Some(st) = state(hwnd).as_mut() {
                     if st.drop.is_some() {
-                        sync_match(hwnd, st); // 타입어헤드 — 매칭 위치 이동 + HUD
+                        sync_match(st); // 타입어헤드 — 매칭 위치 이동 + HUD
                     }
                 }
                 notify_parent(hwnd, EN_CHANGE);
+            }
+            LRESULT(0)
+        }
+        0x0113 /* WM_TIMER */ if wparam.0 == TIMER_OUTSIDE => {
+            // 바깥 클릭 = 닫기(사용자 확정 QA 07-16) — 좌버튼이 눌린 순간 커서가
+            // 컨트롤/팝업 밖이면 닫는다(빈 영역·타이틀바·타 앱 전부 커버).
+            if let Some(st) = state(hwnd).as_mut() {
+                if let Some(drop) = st.drop {
+                    let pressed = windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
+                        0x01, // VK_LBUTTON
+                    ) < 0;
+                    if pressed {
+                        let mut pt = POINT::default();
+                        let _ = GetCursorPos(&mut pt);
+                        let inside = |w: HWND| -> bool {
+                            let mut rc = RECT::default();
+                            if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(w, &mut rc)
+                                .is_err()
+                            {
+                                return false;
+                            }
+                            pt.x >= rc.left && pt.x < rc.right && pt.y >= rc.top && pt.y < rc.bottom
+                        };
+                        if !inside(drop) && !inside(hwnd) {
+                            close_drop(st);
+                        }
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -664,8 +643,23 @@ unsafe extern "system" fn list_proc(
                 SendMessageW(hwnd, 0x0186, Some(WPARAM((r & 0xFFFF) as usize)), None);
             }
         }
+        WM_LBUTTONDOWN => {
+            // [QA 07-16 진범] LISTBOX 기본 DOWN이 **SetFocus(자신)** → 에디트
+            // WM_KILLFOCUS → 커밋 전에 팝업 파괴. DOWN을 삼키고 선택만 직접 반영
+            // (포커스는 에디트 유지 — 확정은 UP에서).
+            let r = SendMessageW(hwnd, 0x01A9, None, Some(lparam)).0;
+            if (r >> 16) == 0 {
+                SendMessageW(hwnd, 0x0186, Some(WPARAM((r & 0xFFFF) as usize)), None);
+            }
+            return LRESULT(0);
+        }
         WM_LBUTTONUP => {
-            // 클릭 = 확정(마우스 선택)
+            // 클릭 = 확정(마우스 선택) — CURSEL 의존 대신 **UP 좌표로 항목 직접 계산**
+            // (QA 07-16: 캡처/트래킹 상태에 따라 CURSEL이 비어 미반영되던 결함)
+            let r = SendMessageW(hwnd, 0x01A9 /* LB_ITEMFROMPOINT */, None, Some(lparam)).0;
+            if (r >> 16) == 0 {
+                SendMessageW(hwnd, 0x0186, Some(WPARAM((r & 0xFFFF) as usize)), None);
+            }
             if let Some(st) = state(ds.owner).as_mut() {
                 commit_sel(ds.owner, st);
             }
@@ -695,6 +689,10 @@ unsafe extern "system" fn drop_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        // [QA 07-16 진범] 클릭 활성화 차단 — 기본(MA_ACTIVATE)이면 프리페스가
+        // 비활성화되며 EDIT WM_KILLFOCUS → 팝업이 **클릭 처리 전에 파괴**돼
+        // 목록 클릭이 반영되지 않았다. NOACTIVATE = 포커스 유지 + 클릭 정상 전달.
+        0x0021 /* WM_MOUSEACTIVATE */ => LRESULT(3 /* MA_NOACTIVATE */),
         WM_CREATE => {
             let list = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -704,7 +702,9 @@ unsafe extern "system" fn drop_proc(
                     | WS_VISIBLE
                     | WS_VSCROLL
                     | WINDOW_STYLE(
-                        0x0010 /* LBS_OWNERDRAWFIXED */ | 0x0040, /* LBS_HASSTRINGS */
+                        0x0010 /* LBS_OWNERDRAWFIXED */
+                            | 0x0040 /* LBS_HASSTRINGS */
+                            | 0x0100, /* LBS_NOINTEGRALHEIGHT — 하단 회색 띠(QA) 방지 */
                     ),
                 1,
                 1,
@@ -821,54 +821,6 @@ unsafe fn draw_font_item(ds: &mut DropState, dis: &windows::Win32::UI::Controls:
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
     SelectObject(dis.hDC, old);
-}
-
-// ── HUD(커서 옆 입력값 보기) ─────────────────────────────────────
-
-unsafe extern "system" fn hud_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    if msg == WM_PAINT {
-        let mut ps = PAINTSTRUCT::default();
-        let dc = BeginPaint(hwnd, &mut ps);
-        let mut rc = RECT::default();
-        let _ = GetClientRect(hwnd, &mut rc);
-        FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
-        let border = CreateSolidBrush(COLORREF(0x00D4_7800)); // accent(찾기 HUD 규약)
-        for (l, t, r, b) in [
-            (rc.left, rc.top, rc.right, rc.top + 1),
-            (rc.left, rc.bottom - 1, rc.right, rc.bottom),
-            (rc.left, rc.top, rc.left + 1, rc.bottom),
-            (rc.right - 1, rc.top, rc.right, rc.bottom),
-        ] {
-            let e = RECT {
-                left: l,
-                top: t,
-                right: r,
-                bottom: b,
-            };
-            FillRect(dc, &e, border);
-        }
-        let _ = DeleteObject(border.into());
-        let font = HFONT(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut core::ffi::c_void);
-        let old = SelectObject(dc, font.into());
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, COLORREF(0x0020_2020));
-        let len = windows::Win32::UI::WindowsAndMessaging::GetWindowTextLengthW(hwnd);
-        let mut buf = vec![0u16; len as usize + 1];
-        let n = windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(hwnd, &mut buf);
-        let mut txt: Vec<u16> = buf[..n.max(0) as usize].to_vec();
-        let mut trc = rc;
-        trc.left += 6;
-        DrawTextW(dc, &mut txt, &mut trc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-        SelectObject(dc, old);
-        let _ = EndPaint(hwnd, &ps);
-        return LRESULT(0);
-    }
-    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 #[cfg(test)]
