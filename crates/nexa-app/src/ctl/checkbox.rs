@@ -5,7 +5,9 @@
 //! ## 계약(판매용 명세 — 클래스 `Nexa.NxCheckBox`)
 //! - 생성: [`create`] — 라벨(빈 문자열 = 박스만·복사 소유)·초기 상태·[`Style`].
 //!   **높이 규칙(콤보와 동일)**: `h <= 0` = 자동(글꼴 높이 + 상/하 최소 여백
-//!   각 [`super::combobox::PAD_Y`]px). 박스 = 높이 정사각·라벨은 우측 세로 중앙.
+//!   각 [`super::combobox::PAD_Y`]px). **박스는 컨트롤 높이와 분리**(사용자
+//!   확정 07-17 — 기본이 커 보임): 글꼴 높이 − 2 정사각을 세로 중앙에 그린다 —
+//!   클릭 영역·행 정렬은 그대로, 시각만 시안 비율. 라벨은 우측 세로 중앙.
 //! - 클릭/Space = 토글 → 부모에 `WM_COMMAND(MAKEWPARAM(id, NXCHK_CHANGED))`.
 //! - 조회/설정: [`NXCHK_GETCHECK`]/[`NXCHK_SETCHECK`](WM_USER+95/96 — SETCHECK
 //!   통지 없음). 배경 = `style.bg`(호스트 배경과 일치시킬 것 — 카드 위 = 카드 bg).
@@ -167,8 +169,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
                 fill(dc, &rc, st.style.bg);
-                // 박스 = 높이 정사각 라운드(시안: 미체크 = sel_bg·체크 = accent)
-                let side = rc.bottom - rc.top;
+                // 박스 = 글꼴 높이 기준 정사각을 세로 중앙에(컨트롤 높이와 분리 —
+                // 클릭 영역은 그대로, 시각만 시안 비율. 미체크 = sel_bg·체크 = accent)
+                let ch = rc.bottom - rc.top;
+                let side = (font_height(hwnd, st.font) - 2).clamp(10, ch);
+                let btop = rc.top + (ch - side) / 2;
                 let radius = (side / 3).max(4);
                 let box_color = if st.checked {
                     st.style.accent
@@ -182,9 +187,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let _ = RoundRect(
                     dc,
                     rc.left,
-                    rc.top,
+                    btop,
                     rc.left + side,
-                    rc.bottom,
+                    btop + side,
                     radius,
                     radius,
                 );
@@ -196,7 +201,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     // 흰 ✓ — 펜 폴리라인(시안)
                     let cpen = CreatePen(PS_SOLID, 2, st.style.bg);
                     let old = SelectObject(dc, cpen.into());
-                    let (cx, cy) = (rc.left + side / 2, rc.top + side / 2);
+                    let (cx, cy) = (rc.left + side / 2, btop + side / 2);
                     let _ = MoveToEx(dc, cx - side / 4, cy, None);
                     let _ = LineTo(dc, cx - side / 12, cy + side / 4 - 1);
                     let _ = LineTo(dc, cx + side / 4, cy - side / 5);
