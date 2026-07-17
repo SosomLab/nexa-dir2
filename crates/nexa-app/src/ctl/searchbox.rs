@@ -24,11 +24,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetWindowLongPtrW, MoveWindow,
-    RegisterClassW, SendMessageW, SetWindowLongPtrW, ES_AUTOHSCROLL, GWLP_USERDATA, HMENU,
-    IDC_ARROW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_DESTROY,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT,
-    WM_SIZE, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, MoveWindow, SendMessageW,
+    ES_AUTOHSCROLL, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT,
+    WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT,
+    WM_SETTEXT, WM_SIZE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 /// 내부 EDIT의 컨트롤-로컬 id(외부와 무관 — 통지는 컨트롤 id로 재발행).
@@ -55,16 +54,7 @@ const CLASS: PCWSTR = w!("Nexa.NxSearchBox");
 /// 검색박스 생성 — 반환 HWND에 `WM_SETTEXT`/`WM_GETTEXT`/`EM_SETCUEBANNER`를 그대로
 /// 쓸 수 있다. 내용 변경 시 부모가 `WM_COMMAND(id, EN_CHANGE)`를 받는다.
 pub unsafe fn create(parent: HWND, x: i32, y: i32, w: i32, h: i32, id: u32, font: HFONT) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         CLASS,
@@ -90,7 +80,7 @@ pub unsafe fn create(parent: HWND, x: i32, y: i32, w: i32, h: i32, id: u32, font
 }
 
 unsafe fn state(hwnd: HWND) -> *mut SbState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SbState
+    super::base::state(hwnd)
 }
 
 /// 내부 EDIT 재배치 — **세로 중앙**(사용자 확정: 위/아래 여백 동일, 높이가 커져도 유지).
@@ -160,15 +150,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 edit,
                 font: HFONT::default(),
             });
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+            super::base::attach_state(hwnd, st);
             LRESULT(0)
         }
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<SbState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {

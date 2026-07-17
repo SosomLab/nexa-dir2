@@ -24,9 +24,8 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetDlgCtrlID, GetParent, GetWindowLongPtrW, RegisterClassW,
-    SendMessageW, SetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN, WM_PAINT, WNDCLASSW, WS_CHILD,
+    CreateWindowExW, DefWindowProcW, GetDlgCtrlID, GetParent, SendMessageW, HMENU, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN, WM_PAINT, WS_CHILD,
     WS_TABSTOP, WS_VISIBLE,
 };
 
@@ -76,16 +75,7 @@ pub unsafe fn create(
     enabled: bool,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     // d<=0 = 글꼴 높이 지름(**체크박스 박스와 동일 크기** — 사용자 확정 07-17:
     // 같은 row에서 체크박스·이미지 버튼의 시각 크기가 일치)
     let d = if d <= 0 {
@@ -114,25 +104,21 @@ pub unsafe fn create(
         style,
         font,
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     // shape 투명(07-17 AA 개정): 1비트 리전 클립은 계단 가장자리의 진범 —
     // 대신 모서리를 style.behind(부모 배경색)로 칠하고 AA 원판을 얹는다.
     hwnd
 }
 
 unsafe fn state(hwnd: HWND) -> *mut IbState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut IbState
+    super::base::state(hwnd)
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<IbState>(hwnd);
             LRESULT(0)
         }
         m if m == NXIB_GETENABLE => LRESULT(state(hwnd).as_ref().map_or(0, |s| s.enabled as isize)),

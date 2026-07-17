@@ -26,8 +26,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
-    GetDlgCtrlID, GetParent, GetWindowLongPtrW, MoveWindow, RegisterClassW, SendMessageW,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, MoveWindow, RegisterClassW, SendMessageW,
     SetWindowLongPtrW, SetWindowPos, ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU,
     HWND_TOPMOST, IDC_ARROW, SWP_NOACTIVATE, SWP_SHOWWINDOW, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_CHAR, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_DESTROY, WM_DRAWITEM, WM_GETTEXT,
@@ -156,7 +155,7 @@ pub unsafe fn create(parent: HWND, x: i32, y: i32, w: i32, h: i32, id: u32, font
 }
 
 unsafe fn state(hwnd: HWND) -> *mut FbState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FbState
+    super::base::state(hwnd)
 }
 
 unsafe fn font_height(hwnd: HWND, font: HFONT) -> i32 {
@@ -218,15 +217,7 @@ fn apply_pick(text: &str, pick: &str) -> String {
 
 /// 부모에 통지 재발행(컨트롤 id 기준).
 unsafe fn notify_parent(hwnd: HWND, code: u32) {
-    if let Ok(parent) = GetParent(hwnd) {
-        let id = GetDlgCtrlID(hwnd) as u32;
-        SendMessageW(
-            parent,
-            WM_COMMAND,
-            Some(WPARAM(((code as usize) << 16) | id as usize)),
-            Some(LPARAM(hwnd.0 as isize)),
-        );
-    }
+    super::base::notify(hwnd, code);
 }
 
 // ── 드롭다운 열기/닫기/탐색 ──────────────────────────────────────

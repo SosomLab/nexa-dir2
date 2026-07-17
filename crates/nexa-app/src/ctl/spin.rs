@@ -19,12 +19,11 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, HFONT, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent,
-    GetWindowLongPtrW, MoveWindow, RegisterClassW, SendMessageW, SetWindowLongPtrW, ES_AUTOHSCROLL,
-    ES_NUMBER, ES_RIGHT, GWLP_USERDATA, GWLP_WNDPROC, HMENU, IDC_ARROW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
-    WM_KILLFOCUS, WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE,
-    WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetParent, MoveWindow,
+    SendMessageW, SetWindowLongPtrW, ES_AUTOHSCROLL, ES_NUMBER, ES_RIGHT, GWLP_WNDPROC, HMENU,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT,
+    WM_SIZE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::gdipctx::{color, GdipCtx};
@@ -75,16 +74,7 @@ pub unsafe fn create(
     max: i64,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     // h<=0 = 공통 자동 높이(전 Nx 컨트롤 동일 — 반듯한 기본 배치, 07-17)
     let h = if h <= 0 {
         super::style::auto_height(parent, font)
@@ -123,7 +113,7 @@ pub unsafe fn create(
 }
 
 unsafe fn state(hwnd: HWND) -> *mut SpinState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SpinState
+    super::base::state(hwnd)
 }
 
 unsafe fn layout(hwnd: HWND, st: &SpinState) {
@@ -178,15 +168,7 @@ unsafe fn set_val(hwnd: HWND, st: &SpinState, v: i64, fire: bool) {
 }
 
 unsafe fn notify(hwnd: HWND, code: u32) {
-    if let Ok(parent) = GetParent(hwnd) {
-        let id = GetDlgCtrlID(hwnd) as u32;
-        SendMessageW(
-            parent,
-            WM_COMMAND,
-            Some(WPARAM(((code as usize) << 16) | id as usize)),
-            Some(LPARAM(hwnd.0 as isize)),
-        );
-    }
+    super::base::notify(hwnd, code);
 }
 
 /// 내부 EDIT 서브클래스 — ↑/↓ = 증감, 포커스 이탈 = 클램프 확정+재발행.
@@ -263,18 +245,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 max: i64::MAX,
                 edit_proc: orig,
             });
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+            super::base::attach_state(hwnd, st);
             LRESULT(0)
         }
         WM_DESTROY => {
-            let p = state(hwnd);
-            if let Some(st) = p.as_ref() {
+            // 내부 EDIT 서브클래스 원복(박스 회수 전 — edit_proc 참조 필요)
+            if let Some(st) = state(hwnd).as_ref() {
                 SetWindowLongPtrW(st.edit, GWLP_WNDPROC, st.edit_proc);
             }
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<SpinState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {

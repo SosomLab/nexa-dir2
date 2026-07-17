@@ -27,6 +27,12 @@
 > E76C/E70D(9 DIP)·세그먼트 화살표 = E72A/E72B · **내비 활성 상태**
 > (이전/다음 = 히스토리·상위 = This PC 비활성, 흐린 글리프 식별).
 > 실기 왕복 QA 완료. 테스트 187 green·clippy 0.
+> ⑩ **ctl 재사용 리팩터 + 전수 검토**(`refactor/ctl-base`): **base.rs**
+> 신설로 14개 Nx 컨트롤 생명주기 보일러플레이트 통합(state/attach/drop_state/
+> notify/register_class — 순 −107줄)·GDI 자원 **RAII화**(icon_font·bg_brush =
+> Drop). **전수 검토**: GDI 누수 0·grid 더블버퍼 정상·**잠재 크래시 1건 수정**
+> (segmented 빈 텍스트→DrawTextW 댕글링)·나눗셈/캐스트/인덱스/라우팅/내비 활성
+> 안전. 후속(보류): 팝업 3종 골격 계층화(안전 우선).
 > 다음: X-23 잔여 β(카드 스크롤·재배치) · X-13 2/2 · X-16 백로그.
 >
 > (이전 07-17) — ① **X-22 일괄 이름 변경 v2**(PF 6동작 패리티 —

@@ -22,10 +22,9 @@ use windows::Win32::Graphics::Gdi::{
     TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, GetWindowLongPtrW,
-    RegisterClassW, SendMessageW, SetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_PAINT, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, SendMessageW, HMENU, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_PAINT, WM_SETFONT, WM_SIZE,
+    WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::gdipctx::{color, GdipCtx};
@@ -58,10 +57,19 @@ struct SegState {
     sel: usize,
     font: HFONT,
     /// 화살표 글리프 폰트(Segoe MDL2 Assets — 사용자 확정 07-18: 원본 내비
-    /// 버튼과 동일한 짧은 샤프트+큰 촉. 컨트롤 소유 — WM_DESTROY에서 해제).
+    /// 버튼과 동일한 짧은 샤프트+큰 촉. 컨트롤 소유 — Drop에서 RAII 해제).
     icon_font: HFONT,
     opts: SegOpts,
     style: Style,
+}
+
+impl Drop for SegState {
+    fn drop(&mut self) {
+        // MDL2 아이콘 폰트 RAII 해제(상태 박스 회수 시 — base::drop_state)
+        unsafe {
+            let _ = windows::Win32::Graphics::Gdi::DeleteObject(self.icon_font.into());
+        }
+    }
 }
 
 /// "→ "/"← " 라벨 접두 → MDL2 글리프(Forward U+E72A·Back U+E72B).
@@ -102,16 +110,7 @@ pub unsafe fn create(
     opts: SegOpts,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     // 기본 높이 = 글꼴 + 상/하 2px(사용자 확정 07-17 — 버튼과 동일 컴팩트 규칙)
     let h = if h <= 0 {
         super::style::font_height(parent, font) + 4
@@ -141,7 +140,7 @@ pub unsafe fn create(
         opts,
         style,
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     SendMessageW(
         hwnd,
         WM_SETFONT,
@@ -152,19 +151,11 @@ pub unsafe fn create(
 }
 
 unsafe fn state(hwnd: HWND) -> *mut SegState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SegState
+    super::base::state(hwnd)
 }
 
 unsafe fn notify(hwnd: HWND) {
-    if let Ok(parent) = GetParent(hwnd) {
-        let id = GetDlgCtrlID(hwnd) as u32;
-        SendMessageW(
-            parent,
-            WM_COMMAND,
-            Some(WPARAM(((SEG_CHANGED as usize) << 16) | id as usize)),
-            Some(LPARAM(hwnd.0 as isize)),
-        );
-    }
+    super::base::notify(hwnd, SEG_CHANGED);
 }
 
 unsafe fn set_sel(hwnd: HWND, st: &mut SegState, sel: usize, fire: bool) {
@@ -182,13 +173,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                let st = Box::from_raw(p);
-                let _ = windows::Win32::Graphics::Gdi::DeleteObject(st.icon_font.into());
-                drop(st);
-            }
+            super::base::drop_state::<SegState>(hwnd); // icon_font = Drop RAII
             LRESULT(0)
         }
         WM_SETFONT => {
@@ -345,9 +330,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         };
                         DrawTextW(dc, &mut g16, &mut grc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                         SelectObject(dc, prev);
-                        trc.left = x0 + gsz.cx + 5;
-                        DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                    } else {
+                        // 빈 문자열은 그리지 않는다(빈 Vec = 댕글링 → user32 AV,
+                        // 07-18 grid 크래시와 동일 클래스 — 방어 가드)
+                        if !w16.is_empty() {
+                            trc.left = x0 + gsz.cx + 5;
+                            DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                        }
+                    } else if !label.is_empty() {
                         let mut w16: Vec<u16> = label.encode_utf16().collect();
                         DrawTextW(
                             dc,

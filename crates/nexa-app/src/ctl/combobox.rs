@@ -20,10 +20,9 @@ use windows::Win32::Graphics::Gdi::{
     PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos, GetDlgCtrlID,
-    GetParent, GetWindowLongPtrW, GetWindowRect, KillTimer, RegisterClassW, SendMessageW, SetTimer,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer, RegisterClassW, SendMessageW, SetTimer,
     SetWindowLongPtrW, SetWindowPos, GWLP_USERDATA, HMENU, HWND_TOPMOST, IDC_ARROW, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
+    SWP_SHOWWINDOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFONT, WM_TIMER, WNDCLASSW,
     WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
 };
@@ -136,19 +135,11 @@ pub unsafe fn create(
 }
 
 unsafe fn state(hwnd: HWND) -> *mut CbState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut CbState
+    super::base::state(hwnd)
 }
 
 unsafe fn notify(hwnd: HWND) {
-    if let Ok(parent) = GetParent(hwnd) {
-        let id = GetDlgCtrlID(hwnd) as u32;
-        SendMessageW(
-            parent,
-            WM_COMMAND,
-            Some(WPARAM(((NXCB_CHANGED as usize) << 16) | id as usize)),
-            Some(LPARAM(hwnd.0 as isize)),
-        );
-    }
+    super::base::notify(hwnd, NXCB_CHANGED);
 }
 
 /// 팝업 행 높이 — 본체와 같은 규칙(글꼴 + 상/하 균등 여백).
@@ -249,14 +240,10 @@ unsafe extern "system" fn ctl_proc(
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if let Some(st) = p.as_mut() {
-                close_drop(hwnd, st);
+            if let Some(st) = state(hwnd).as_mut() {
+                close_drop(hwnd, st); // 팝업·타이머 정리(박스 회수 전)
             }
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<CbState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {
