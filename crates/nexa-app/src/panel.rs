@@ -1048,11 +1048,17 @@ fn nav_btn_w(m: &PanelMetrics) -> i32 {
 }
 
 /// 패널 네비 버튼 정의([←][→][↑] — 원본 docs/20 §2 네비게이션 바).
+/// 글리프 = **Segoe MDL2 Assets**(사용자 확정 07-18 — 원본 NavBtnStyle 동일:
+/// Back U+E72B·Forward U+E72A·Up U+E74A, glyph_opaque가 PUA 대역 라우팅).
 fn nav_buttons() -> Vec<ToolButton> {
-    [(BTN_BACK, "←"), (BTN_FORWARD, "→"), (BTN_UP, "↑")]
-        .into_iter()
-        .map(|(id, g)| ToolButton::new(id, g))
-        .collect()
+    [
+        (BTN_BACK, "\u{E72B}"),
+        (BTN_FORWARD, "\u{E72A}"),
+        (BTN_UP, "\u{E74A}"),
+    ]
+    .into_iter()
+    .map(|(id, g)| ToolButton::new(id, g))
+    .collect()
 }
 
 /// 현재 필터로 경로를 연다. 실패(권한 등) 시 `None`(오류 격리 — 호출자가 위치 유지).

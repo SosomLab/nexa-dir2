@@ -57,8 +57,31 @@ struct SegState {
     items: Vec<String>,
     sel: usize,
     font: HFONT,
+    /// 화살표 글리프 폰트(Segoe MDL2 Assets — 사용자 확정 07-18: 원본 내비
+    /// 버튼과 동일한 짧은 샤프트+큰 촉. 컨트롤 소유 — WM_DESTROY에서 해제).
+    icon_font: HFONT,
     opts: SegOpts,
     style: Style,
+}
+
+/// "→ "/"← " 라벨 접두 → MDL2 글리프(Forward U+E72A·Back U+E72B).
+fn arrow_glyph(label: &str) -> Option<(&'static str, &str)> {
+    label
+        .strip_prefix("→ ")
+        .map(|r| ("\u{E72A}", r))
+        .or_else(|| label.strip_prefix("← ").map(|r| ("\u{E72B}", r)))
+}
+
+/// Segoe MDL2 Assets HFONT(높이 = 본문 글꼴 기반 — 원본 11px 비율).
+unsafe fn make_icon_font(parent: HWND, font: HFONT) -> HFONT {
+    let h = super::style::font_height(parent, font).max(10) - 3;
+    let name: Vec<u16> = "Segoe MDL2 Assets\0".encode_utf16().collect();
+    let mut lf = windows::Win32::Graphics::Gdi::LOGFONTW {
+        lfHeight: -h,
+        ..Default::default()
+    };
+    lf.lfFaceName[..name.len().min(32)].copy_from_slice(&name[..name.len().min(32)]);
+    windows::Win32::Graphics::Gdi::CreateFontIndirectW(&lf)
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
@@ -114,6 +137,7 @@ pub unsafe fn create(
         items: items.iter().map(|s| s.to_string()).collect(),
         sel: selected.min(items.len().saturating_sub(1)),
         font,
+        icon_font: make_icon_font(parent, font),
         opts,
         style,
     });
@@ -161,7 +185,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             let p = state(hwnd);
             if !p.is_null() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
+                let st = Box::from_raw(p);
+                let _ = windows::Win32::Graphics::Gdi::DeleteObject(st.icon_font.into());
+                drop(st);
             }
             LRESULT(0)
         }
@@ -284,12 +310,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 } // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
                 let old = SelectObject(dc, st.font.into());
                 SetBkMode(dc, TRANSPARENT);
-                // 화살표 라벨("→ "/"← " 접두) = 벡터 화살표(머리 확대 — 사용자
-                // 시안 07-18: 글꼴 화살표보다 끝이 크다). 텍스트 후 AA로 그린다.
-                let mut arrows: Vec<(i32, i32, bool, windows::Win32::Foundation::COLORREF)> =
-                    Vec::new();
-                let fh = super::style::font_height(hwnd, st.font).max(10);
-                let aw = fh - 2; // 화살표 길이
+                // 화살표 라벨("→ "/"← " 접두) = **Segoe MDL2 글리프**(사용자 확정
+                // 07-18 — 원본 내비 버튼 규약: 짧은 샤프트+큰 촉, E72A/E72B)
                 for (i, label) in st.items.iter().enumerate() {
                     let cell = cell_of(i);
                     let fg = if i == st.sel {
@@ -298,31 +320,35 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         st.style.text
                     };
                     SetTextColor(dc, fg);
-                    let (arrow, rest) = if let Some(r) = label.strip_prefix("→ ") {
-                        (Some(false), r) // 오른쪽 화살표
-                    } else if let Some(r) = label.strip_prefix("← ") {
-                        (Some(true), r) // 왼쪽 화살표
-                    } else {
-                        (None, label.as_str())
-                    };
-                    let mut w16: Vec<u16> = rest.encode_utf16().collect();
                     // 세로 중앙 + 1px 하향(콤보/글상자와 동일 보정)
                     let mut trc = RECT {
                         top: cell.top + 1,
                         bottom: cell.bottom + 1,
                         ..cell
                     };
-                    if let Some(left_dir) = arrow {
-                        // [화살표][5px][텍스트] 묶음을 셀 중앙 정렬
+                    if let Some((glyph, rest)) = arrow_glyph(label) {
+                        // [글리프][5px][텍스트] 묶음을 셀 중앙 정렬(폭 실측)
+                        let mut w16: Vec<u16> = rest.encode_utf16().collect();
+                        let mut g16: Vec<u16> = glyph.encode_utf16().collect();
                         let mut sz = windows::Win32::Foundation::SIZE::default();
                         let _ = GetTextExtentPoint32W(dc, &w16, &mut sz);
-                        let group = aw + 5 + sz.cx;
+                        let prev = SelectObject(dc, st.icon_font.into());
+                        let mut gsz = windows::Win32::Foundation::SIZE::default();
+                        let _ = GetTextExtentPoint32W(dc, &g16, &mut gsz);
+                        let group = gsz.cx + 5 + sz.cx;
                         let x0 = cell.left + ((cell.right - cell.left) - group) / 2;
-                        trc.left = x0 + aw + 5;
+                        let mut grc = RECT {
+                            left: x0,
+                            top: cell.top + 1,
+                            right: x0 + gsz.cx,
+                            bottom: cell.bottom + 1,
+                        };
+                        DrawTextW(dc, &mut g16, &mut grc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                        SelectObject(dc, prev);
+                        trc.left = x0 + gsz.cx + 5;
                         DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                        let cy = (cell.top + cell.bottom) / 2 + 1;
-                        arrows.push((x0, cy, left_dir, fg));
                     } else {
+                        let mut w16: Vec<u16> = label.encode_utf16().collect();
                         DrawTextW(
                             dc,
                             &mut w16,
@@ -332,18 +358,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     }
                 }
                 SelectObject(dc, old);
-                if !arrows.is_empty() {
-                    // AA 화살표(DrawCtx 백엔드 — 둥근 캡): 샤프트 + 큰 머리(≈45°)
-                    let mut g = GdipCtx::new(dc);
-                    let head = (aw * 2 / 5).max(4);
-                    for (x0, cy, left_dir, fg) in arrows {
-                        let (tail, tip) = if left_dir { (x0 + aw, x0) } else { (x0, x0 + aw) };
-                        g.polyline(&[(tail, cy), (tip, cy)], color(fg), 2.0);
-                        let hx = if left_dir { tip + head } else { tip - head };
-                        g.polyline(&[(hx, cy - head), (tip, cy)], color(fg), 2.0);
-                        g.polyline(&[(hx, cy + head), (tip, cy)], color(fg), 2.0);
-                    }
-                }
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
