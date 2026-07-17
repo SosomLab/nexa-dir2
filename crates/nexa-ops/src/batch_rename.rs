@@ -529,14 +529,16 @@ fn scoped(
             };
         }
         Scope::ExtDot => {
+            // 점 포함 텍스트가 대상 = **결과를 그대로 채택**(사용자 확정 07-18 —
+            // 기존 "점 유실 시 복원"이 앞삽입 결과 "INS.txt"에 점을 또 붙여
+            // ".INS.txt" 이중 점 유발). 전체 이름 기준 재분해로 후속
+            // 파이프라인 스코프 일관성 유지(NameExt 규약 동일).
             let r = f(ext);
-            *ext = if r.is_empty() {
-                String::new() // 점까지 제거 = 확장자 없음
-            } else if r.starts_with('.') {
-                r
-            } else {
-                format!(".{r}") // 점 유실 시 복원(항상 유효한 확장자 형태 유지)
-            };
+            let joined = format!("{stem}{r}");
+            let (s2, e2) = split_stem(&joined, false);
+            let (s2, e2) = (s2.to_string(), e2.to_string());
+            *stem = s2;
+            *ext = e2;
         }
     }
 }
@@ -993,17 +995,20 @@ mod tests {
         assert_eq!(pv(&f, &[mk(Scope::Name)]), vec!["XX-file.md"]);
         assert_eq!(pv(&f, &[mk(Scope::NameExt)]), vec!["XX-file.XX"]);
         assert_eq!(pv(&f, &[mk(Scope::Ext)]), vec!["md-file.XX"]);
-        // ExtDot — 점 포함 텍스트가 대상(".md" → 점 소실 시 복원 규약)
-        let dot = RenameOp::Replace {
+        // ExtDot — 점 포함 텍스트가 대상, 결과 그대로 채택(사용자 확정 07-18 —
+        // 자동 점 복원 폐지: ".tar.gz"를 원하면 점까지 입력)
+        let dot = |with: &str| RenameOp::Replace {
             scope: Scope::ExtDot,
             find: ".md".into(),
-            with: "tar.gz".into(),
+            with: with.into(),
             match_case: false,
             regex: false,
             mode: ReplaceMode::All,
         };
-        assert_eq!(pv(&f, &[dot]), vec!["md-file.tar.gz"]);
-        // 폴더 = 스코프 무관 전체 이름부
+        assert_eq!(pv(&f, &[dot(".tar.gz")]), vec!["md-file.tar.gz"]);
+        assert_eq!(pv(&f, &[dot("tar")]), vec!["md-filetar"]); // 점 제거 = 문자 그대로
+        assert_eq!(pv(&f, &[dot("")]), vec!["md-file"]); // 점까지 제거 = 확장자 없음
+                                                         // 폴더 = 스코프 무관 전체 이름부
         assert_eq!(
             pv(&[RenameInput::plain("md.dir", true)], &[mk(Scope::Ext)]),
             vec!["md.dir"]
@@ -1044,6 +1049,43 @@ mod tests {
             mode: ReplaceMode::Entire,
         };
         assert_eq!(pv(&f, &[always]), vec!["N.txt"]);
+    }
+
+    #[test]
+    fn extdot_insert_front_no_double_dot() {
+        // 사용자 QA 07-18: Insert(ExtDot, 앞 0, "INS")가 ".INS.txt" 이중 점 —
+        // 결과 그대로 채택 규약으로 "faaa052INS.txt"가 정답. 같은 scoped 경로를
+        // 쓰는 연번/날짜 앞삽입도 전수 확인.
+        let ins = RenameOp::Insert {
+            scope: Scope::ExtDot,
+            text: "INS".into(),
+            at: InsertAt {
+                offset: 0,
+                from_end: false,
+            },
+        };
+        assert_eq!(pv(&files(&["faaa052.txt"]), &[ins]), vec!["faaa052INS.txt"]);
+        let num = RenameOp::Number {
+            scope: Scope::ExtDot,
+            spec: NumberSpec {
+                start: 7,
+                step: 1,
+                pad: 2,
+                prefix: String::new(),
+                suffix: "_".into(),
+                at: InsertAt {
+                    offset: 0,
+                    from_end: false,
+                },
+            },
+        };
+        assert_eq!(pv(&files(&["a.txt"]), &[num]), vec!["a07_.txt"]);
+        // Case는 점 보존 경로(무영향) — 회귀 가드
+        let up = RenameOp::Case {
+            scope: Scope::ExtDot,
+            mode: CaseMode::Upper,
+        };
+        assert_eq!(pv(&files(&["a.txt"]), &[up]), vec!["a.TXT"]);
     }
 
     #[test]

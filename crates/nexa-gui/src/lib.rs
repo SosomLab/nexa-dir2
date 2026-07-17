@@ -14,7 +14,7 @@ pub mod typeahead;
 pub mod widget;
 pub mod widgets;
 
-pub use columns::{Align, Column};
+pub use columns::{order_badge, Align, Column};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
 pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};

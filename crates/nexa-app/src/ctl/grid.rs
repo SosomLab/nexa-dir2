@@ -52,6 +52,10 @@ use super::style::{fill, font_height, Style};
 pub const NXGR_TOGGLE: u32 = 1;
 /// 헤더 전체 토글 표식([`NXGR_GETROW`] 반환값).
 pub const NXGR_ROW_ALL: isize = -2;
+/// 정렬 변경 통지(WM_COMMAND HIWORD — 07-18 원본 docs/23 §4 이식).
+/// 비교는 **호스트**가 수행(컨트롤 = 상태·표시·통지만 — 도메인 비종속):
+/// [`sort_spec`]으로 (컬럼, desc) 목록을 읽어 행을 재정렬해 [`set_rows`]로 반영.
+pub const NXGR_SORT: u32 = 3;
 /// 행 선택 변경 통지(WM_COMMAND HIWORD) — 조회는 [`selected_rows`].
 pub const NXGR_SELCHANGE: u32 = 2;
 /// 마지막 토글 행 인덱스 조회(없음 = -1).
@@ -138,6 +142,8 @@ struct GridState {
     anchor: Option<usize>,
     /// 컨트롤이 키보드 포커스 보유(포커스 행 테두리 표시 조건).
     has_focus: bool,
+    /// 정렬 상태(우선순위 순 (컬럼 idx, desc) — 07-18 원본 docs/23 §4 이식).
+    sort: Vec<(usize, bool)>,
     font: HFONT,
     style: Style,
 }
@@ -204,6 +210,7 @@ pub unsafe fn create(
         focus: None,
         anchor: None,
         has_focus: false,
+        sort: Vec::new(),
         font,
         style,
     });
@@ -238,6 +245,13 @@ pub unsafe fn row_check(hwnd: HWND, idx: usize) -> Option<bool> {
         .as_ref()
         .and_then(|st| st.rows.get(idx))
         .and_then(|r| r.check)
+}
+
+/// 정렬 상태 조회(우선순위 순 (컬럼 idx, desc) — [`NXGR_SORT`] 수신 시 호스트가 읽는다).
+pub unsafe fn sort_spec(hwnd: HWND) -> Vec<(usize, bool)> {
+    state(hwnd)
+        .as_ref()
+        .map_or(Vec::new(), |st| st.sort.clone())
 }
 
 /// 선택된 행 인덱스(오름차순 — 크레이트 내 직접 API).
@@ -336,6 +350,48 @@ fn header_check(st: &GridState) -> Option<u32> {
     } else {
         Some(2)
     }
+}
+
+/// 헤더 클릭 정렬(07-18 — 원본 docs/23 §4 확정 규약 이식): 단순 클릭 =
+/// 단일 정렬 3상태 순환(없음→▲오름→▼내림→없음) · Shift+클릭 & 기존 정렬 ≥1 =
+/// 키 추가/방향 순환/제거(순번 당김). 비교는 호스트([`NXGR_SORT`] 통지).
+unsafe fn apply_sort(hwnd: HWND, st: &mut GridState, ci: usize, shift: bool) {
+    let cur = st.sort.iter().find(|(k, _)| *k == ci).map(|(_, d)| *d);
+    if shift && !st.sort.is_empty() {
+        match cur {
+            None => st.sort.push((ci, false)), // 추가 = 오름
+            Some(false) => {
+                if let Some(e) = st.sort.iter_mut().find(|(k, _)| *k == ci) {
+                    e.1 = true;
+                }
+            }
+            Some(true) => st.sort.retain(|(k, _)| *k != ci), // 없음 = 제거
+        }
+    } else {
+        st.sort = match cur {
+            None => vec![(ci, false)],
+            Some(false) => vec![(ci, true)],
+            Some(true) => Vec::new(), // 없음 = 원래 순서
+        };
+    }
+    let _ = InvalidateRect(Some(hwnd), None, false);
+    notify(hwnd, NXGR_SORT);
+}
+
+/// 헤더 셀 제목: ▲/▼는 이름 앞·다중 정렬 순번(①②…)은 이름 뒤(원본 docs/23 §4).
+fn header_label(st: &GridState, i: usize, c: &GridCol) -> String {
+    let mut s = String::new();
+    if let Some(desc) = st.sort.iter().find(|(k, _)| *k == i).map(|(_, d)| *d) {
+        s.push_str(if desc { "▼ " } else { "▲ " });
+    }
+    s.push_str(&c.title);
+    if st.sort.len() > 1 {
+        if let Some(order) = st.sort.iter().position(|(k, _)| *k == i) {
+            s.push(' ');
+            s.push_str(nexa_gui::order_badge(order));
+        }
+    }
+    s
 }
 
 /// ⊖ 삭제 마크 rect(Mark::Minus — 행 우측 끝 고정, 가로 스크롤 무관).
@@ -572,6 +628,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                             st.last_toggle = NXGR_ROW_ALL;
                             let _ = InvalidateRect(Some(hwnd), None, false);
                             notify(hwnd, NXGR_TOGGLE);
+                        }
+                    } else {
+                        // 헤더 클릭 = 정렬(07-18 — 컬럼 판정 후 3상태/Shift 다중)
+                        let xx = x + st.h_off;
+                        let mut edge = 0;
+                        let mut hit = None;
+                        for (i, c) in st.cols.iter().enumerate() {
+                            if xx < edge + c.width {
+                                hit = Some(i);
+                                break;
+                            }
+                            edge += c.width;
+                        }
+                        if let Some(ci) = hit {
+                            let shift = (wparam.0 & 0x0004/* MK_SHIFT */) != 0;
+                            apply_sort(hwnd, st, ci, shift);
                         }
                     }
                 } else {
@@ -970,9 +1042,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 SetBkMode(dc, TRANSPARENT);
                 SetTextColor(dc, st.style.text);
                 let mut x0 = rc.left - ox;
-                for c in &st.cols {
-                    if hh > 0 && !c.title.is_empty() && x0 + c.width > rc.left && x0 < rc.right {
-                        let mut w16: Vec<u16> = c.title.encode_utf16().collect();
+                for (ci, c) in st.cols.iter().enumerate() {
+                    // 정렬 글리프(▲/▼ 앞·순번 뒤 — 07-18) 포함 헤더 라벨
+                    let label = header_label(st, ci, c);
+                    if hh > 0 && !label.is_empty() && x0 + c.width > rc.left && x0 < rc.right {
+                        let mut w16: Vec<u16> = label.encode_utf16().collect();
                         let mut trc = RECT {
                             left: x0 + 6,
                             top: band.top + 1,
