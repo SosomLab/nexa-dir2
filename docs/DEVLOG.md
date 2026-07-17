@@ -8,6 +8,7 @@
 
 ## 2026-07-17
 
+- **X-22 실기 QA 2건(`fix/x22-qa-droplist` — 사용자 QA)**: ① droplist 팝업 크래시 진범 = **WS_POPUP owner 승격**(자식 컨트롤 owner → 시스템이 최상위로 교체 — GetParent(팝업)이 다이얼로그를 돌려줘 BrState를 DlState로 오독·크래시) — 팝업 자신의 USERDATA에 owner 저장으로 해소 + fontbox KillTimer 동일 진범(60ms 타이머 누수) 수리 ② **메뉴 명령 설정 유실** — run_command 경로(언어·테마·토글 6곳)는 종료 저장 의존 → `persist_settings()` 즉시 영속(비정상 종료 유실 방지). 실기: 팝업 4항목 렌더·선택 반영·생존 + F6 직후 settings.cfg 생성 확인. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **X-22 일괄 이름 변경 v2 구현(`feat/x22-batch-rename-v2` — 사용자 지시: 전체 직접 개발 컴포넌트)**: 코어 전면 재작성(스코프·위치 클램프·Mode·감싸기·**Date 토큰 엔진**·v1 프리셋 하위호환 — 32 green) + **ctl 3종 신설**(segmented·spin·droplist — 판매용 추상화: Style 인자·계약 명세) + UI 재구성(적용 대상/Mode droplist·PF식 케이스 세그먼트·위치 spin+방향·날짜 패널·**✓ 미리보기+건수**). 실기 캡처+기능 왕복 검증. 186 green. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **일괄 이름 변경 v2 설계(사용자 주도 PF 분석)**: Path Finder 6동작 전수 대조 → 갭 6건(스코프·Mode·**Add Date**·임의 위치·Number 감싸기·미리보기 ✓/건수) 확정, 설계 [22-batch-rename-v2.md](22-batch-rename-v2.md) 신설·X-22 등재(S1 코어/S2 UI/S3 미리보기 슬라이스). 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **shell: 특수 폴더(`feat/shell-folders` — 사용자 요청)**: 경로 바에서 `shell:startup`·`shell:common startup` 등 **탐색기 전체 이름 지원** — 수동 테이블 대신 `SHParseDisplayName` 위임(KnownFolders 전부+GUID 형태 자동 커버). 가상 폴더/미지 이름 = 원문 유지(기존 격리). 테스트 3건. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
