@@ -1,11 +1,12 @@
-//! 일괄 이름변경 다이얼로그(M5-1 → 07-15 확장 — 원본 docs/25 §1~3 블록 스택):
-//! **순서형 파이프라인 편집기** = 동작 종류 선택 + 파라미터 폼 → [블록 추가] →
-//! 파이프라인 목록(선택·▲▼ 재배치·삭제) + 우측 실시간 미리보기(충돌 ⚠·적용 차단) +
-//! **프리셋 저장/불러오기**(`data\renames\*.cfg` — docs/25 §3 "Save Renaming Sequence").
+//! 일괄 이름변경 다이얼로그(M5-1 → X-23 카드 재편 07-17 — PF 카드 모델):
+//! **카드 스택 = 파이프라인** — NxGroupCard 1장 = 동작 1블록(타이틀 = 동작 콤보 +
+//! `±`: + = 아래에 카드 추가·− = 해당 카드 삭제·**마지막 1장 삭제 불가**), 카드
+//! 폼 편집 = **실시간 미리보기**(우측 — 충돌 ⚠·적용 차단·변경 건수) +
+//! **프리셋 저장/불러오기**(`data\renames\*.cfg` — 카드 스택 복원).
 //!
-//! 순수 로직·직렬화 = [`nexa_ops::batch_rename`], 이 모듈은 네이티브 컨트롤 UI만.
-//! prefs.rs와 동일 규약: user32 컨트롤(COMBOBOX/LISTBOX 포함 — comctl32 비의존·B3 게이트)·
-//! 자체 모달 루프. 블록 편집은 삭제 후 재추가(α — 제자리 편집은 후속).
+//! 순수 로직·직렬화 = [`nexa_ops::batch_rename`], 이 모듈은 Nx 컨트롤 UI만
+//! (콤보/체크/글상자/스핀/세그먼트 = ctl — comctl32 비의존·B3 게이트)·자체 모달
+//! 루프. 카드 스택 스크롤(카드 다수)·▲▼ 재배치는 후속.
 
 use std::path::{Path, PathBuf};
 
@@ -17,12 +18,11 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow, RegisterClassW,
-    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MSG,
-    SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
-    WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage,
+    ES_AUTOHSCROLL, GWLP_USERDATA, HMENU, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
+    WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_GROUP, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::ctl::combobox::{NXCB_GETSEL, NXCB_SETSEL};
@@ -50,17 +50,19 @@ const ID_KIND: u32 = 1;
 /// 적용 스코프(v2 — PF Apply to, ctl::combobox). Move/Ext 종류에선 숨김.
 const ID_SCOPE: u32 = 7;
 const ID_ADD: u32 = 2;
-const ID_UP: u32 = 3;
-const ID_DOWN: u32 = 4;
 const ID_DEL: u32 = 5;
-const ID_PIPE: u32 = 6;
 // 파라미터(종류별 패널)
 const ID_FIND: u32 = 10;
 const ID_WITH: u32 = 11;
 const ID_MC: u32 = 12;
-const ID_RX: u32 = 13;
-/// 치환 Mode(v2 — 모든/첫/마지막/전체, ctl::combobox — 정규식 체크 시 숨김).
+/// 치환 Mode(모든/첫/마지막/전체 — Replace Text 카드 전용, X-23 분리).
 const ID_RX_MODE: u32 = 14;
+/// Replace RegEx 카드(X-23 — 치환 텍스트/정규식 분리).
+const ID_RXF_MC: u32 = 13;
+const ID_RXF_FIND: u32 = 15;
+const ID_RXF_WITH: u32 = 16;
+/// 날짜 포맷 도움말 ? 버튼(X-23 — ${} 토큰 안내).
+const ID_DT_HELP: u32 = 96;
 const ID_CASE_BASE: u32 = 20; // +0..3 = upper/lower/title/sentence
 const ID_INS_TEXT: u32 = 30;
 const ID_INS_OFF: u32 = 33; // 위치 오프셋(ctl::spin)
@@ -84,7 +86,6 @@ const ID_COUNT: u32 = 82;
 const ID_MV_START: u32 = 50;
 const ID_MV_LEN: u32 = 51;
 const ID_MV_FRONT: u32 = 52;
-const ID_MV_END: u32 = 53;
 const ID_EXT_FROM: u32 = 60;
 const ID_EXT_TO: u32 = 61;
 // 프리셋·확정
@@ -98,21 +99,20 @@ const ID_CANCEL: u32 = 81;
 // user32 컨트롤 메시지(winuser.h)
 const LB_ADDSTRING: u32 = 0x0180;
 const LB_RESETCONTENT: u32 = 0x0184;
-const LB_SETCURSEL: u32 = 0x0186;
-const LB_GETCURSEL: u32 = 0x0188;
 const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_RESETCONTENT: u32 = 0x014B;
-const CB_SETCURSEL: u32 = 0x014E;
 const CB_GETLBTEXT: u32 = 0x0148;
 const CB_GETLBTEXTLEN: u32 = 0x0149;
 const EM_SETCUEBANNER: u32 = 0x1501;
 
-/// 동작 종류(콤보 순서) — i18n 라벨 키. v2: 날짜(4) 신설(PF Add Date).
-const KINDS: [&str; 7] = [
+/// 동작 종류(카드 타이틀 콤보 순서 — X-23 재편: PF 카드 순서·치환 텍스트/정규식 분리).
+/// 날짜(5) = 보류(사용자 07-17 — 새 시안 대기, 기존 폼 유지). 이동/확장자 = 우리 고유.
+const KINDS: [&str; 8] = [
     "bulk.kind.replace",
-    "bulk.kind.case",
+    "bulk.kind.replaceRx",
     "bulk.kind.insert",
+    "bulk.kind.case",
     "bulk.kind.number",
     "bulk.kind.date",
     "bulk.kind.move",
@@ -128,13 +128,12 @@ struct BrState {
     items: Vec<(String, String, bool, i64, i64)>,
     /// 날짜 표기 TZ 오프셋(분 — 호스트 전달).
     tz_min: i32,
-    /// 파이프라인(위→아래 순차 적용) — UI의 단일 원천.
+    /// 파이프라인 캐시(카드 스택에서 파생 — refresh_preview가 갱신).
     ops: Vec<RenameOp>,
-    /// 종류별 파라미터 컨트롤(show/hide 스왑).
-    panels: [Vec<HWND>; 7],
-    /// 공통 스코프 droplist(Move/Ext 종류에선 숨김 — show_kind).
-    scope: HWND,
-    pipe: HWND,
+    /// **카드 스택 = 파이프라인**(X-23 PF 모델 — 카드 1장 = 동작 1블록,
+    /// 위→아래 순서 적용. + = 아래에 카드 추가·− = 해당 카드 삭제,
+    /// **마지막 1장은 삭제 불가** — 사용자 확정 07-17).
+    cards: Vec<HWND>,
     prev: HWND,
     err: HWND,
     apply: HWND,
@@ -207,25 +206,32 @@ unsafe fn cue(hwnd: HWND, text: &str) {
     );
 }
 
+/// 컨트롤 조회 — 직속 자식 우선, 없으면 **카드(컨테이너) 내부까지 탐색**
+/// (X-23: 파라미터 컨트롤은 NxGroupCard의 자식 — GetDlgItem은 직속만 본다).
 unsafe fn ctl(dlg: HWND, id: u32) -> HWND {
-    windows::Win32::UI::WindowsAndMessaging::GetDlgItem(Some(dlg), id as i32).unwrap_or_default()
+    use windows::Win32::UI::WindowsAndMessaging::{GetDlgItem, GetWindow, GW_CHILD, GW_HWNDNEXT};
+    if let Ok(h) = GetDlgItem(Some(dlg), id as i32) {
+        return h;
+    }
+    let mut c = GetWindow(dlg, GW_CHILD).unwrap_or_default();
+    while !c.is_invalid() {
+        if let Ok(h) = GetDlgItem(Some(c), id as i32) {
+            return h;
+        }
+        c = GetWindow(c, GW_HWNDNEXT).unwrap_or_default();
+    }
+    HWND::default()
 }
 
-unsafe fn checked(dlg: HWND, id: u32) -> bool {
-    SendMessageW(ctl(dlg, id), 0x00F0 /* BM_GETCHECK */, None, None).0 == 1
-}
-
-unsafe fn set_check(dlg: HWND, id: u32, on: bool) {
+/// NxCheckBox 상태(X-23 — user32 BM_GETCHECK 대체).
+unsafe fn nx_checked(dlg: HWND, id: u32) -> bool {
     SendMessageW(
         ctl(dlg, id),
-        0x00F1, // BM_SETCHECK
-        Some(WPARAM(usize::from(on))),
+        crate::ctl::checkbox::NXCHK_GETCHECK,
         None,
-    );
-}
-
-unsafe fn num_of(dlg: HWND, id: u32, default: i64) -> i64 {
-    get_text(ctl(dlg, id)).trim().parse().unwrap_or(default)
+        None,
+    )
+    .0 != 0
 }
 
 /// 프리셋 폴더(`data\renames\` — docs/25 §3, settings와 별도).
@@ -249,35 +255,54 @@ unsafe fn at_of(dlg: HWND, off_id: u32, dir_id: u32) -> InsertAt {
     }
 }
 
-/// 현재 파라미터 폼 → 동작 1블록(선택된 종류 기준). 유효하지 않으면 None.
+/// 현재 파라미터 폼 → 동작 1블록(선택된 종류 기준 — X-23 카드 순서).
+/// 유효하지 않으면 None.
 unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
     let scope = scope_of(dlg);
     match kind {
+        // Replace Text(PF 카드 — Mode·대소문자)
         0 => {
             let find = get_text(ctl(dlg, ID_FIND));
-            let regex = checked(dlg, ID_RX);
             let mode_i = SendMessageW(ctl(dlg, ID_RX_MODE), NXCB_GETSEL, None, None).0;
-            let mode = if regex {
-                ReplaceMode::All // 정규식 = 항상 All(PF 규약 — 앵커로 대체)
-            } else {
-                [
-                    ReplaceMode::All,
-                    ReplaceMode::First,
-                    ReplaceMode::Last,
-                    ReplaceMode::Entire,
-                ][(mode_i.max(0) as usize).min(3)]
-            };
+            let mode = [
+                ReplaceMode::All,
+                ReplaceMode::First,
+                ReplaceMode::Last,
+                ReplaceMode::Entire,
+            ][(mode_i.max(0) as usize).min(3)];
             // Entire + 빈 find = 무조건 교체 허용 — 그 외 빈 find는 무효
             (!find.is_empty() || mode == ReplaceMode::Entire).then(|| RenameOp::Replace {
                 scope,
                 find,
                 with: get_text(ctl(dlg, ID_WITH)),
-                match_case: checked(dlg, ID_MC),
-                regex,
+                match_case: nx_checked(dlg, ID_MC),
+                regex: false,
                 mode,
             })
         }
+        // Replace RegEx(별도 카드 — 정규식 = 항상 All, PF 규약)
         1 => {
+            let find = get_text(ctl(dlg, ID_RXF_FIND));
+            (!find.is_empty()).then(|| RenameOp::Replace {
+                scope,
+                find,
+                with: get_text(ctl(dlg, ID_RXF_WITH)),
+                match_case: nx_checked(dlg, ID_RXF_MC),
+                regex: true,
+                mode: ReplaceMode::All,
+            })
+        }
+        // Insert Text
+        2 => {
+            let text = get_text(ctl(dlg, ID_INS_TEXT));
+            (!text.is_empty()).then(|| RenameOp::Insert {
+                scope,
+                text,
+                at: at_of(dlg, ID_INS_OFF, ID_INS_DIR),
+            })
+        }
+        // Change Case
+        3 => {
             let sel = SendMessageW(ctl(dlg, ID_CASE_BASE), SEG_GETSEL, None, None).0;
             Some(RenameOp::Case {
                 scope,
@@ -289,32 +314,29 @@ unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
                 ][(sel.max(0) as usize).min(3)], // 세그 순서 = PF "AB CD|Ab Cd|Ab cd|ab cd"
             })
         }
-        2 => {
-            let text = get_text(ctl(dlg, ID_INS_TEXT));
-            (!text.is_empty()).then(|| RenameOp::Insert {
-                scope,
-                text,
-                at: at_of(dlg, ID_INS_OFF, ID_INS_DIR),
-            })
-        }
-        3 => Some(RenameOp::Number {
+        // Add Number Sequence(Padding = 콤보 프리셋 — 인덱스+1 자릿수)
+        4 => Some(RenameOp::Number {
             scope,
             spec: NumberSpec {
                 start: SendMessageW(ctl(dlg, ID_NUM_START), SPIN_GETVAL, None, None).0 as i64,
                 step: SendMessageW(ctl(dlg, ID_NUM_STEP), SPIN_GETVAL, None, None).0 as i64,
-                pad: (SendMessageW(ctl(dlg, ID_NUM_PAD), SPIN_GETVAL, None, None).0 as i64)
-                    .clamp(1, 12) as usize,
+                pad: (SendMessageW(ctl(dlg, ID_NUM_PAD), NXCB_GETSEL, None, None)
+                    .0
+                    .max(0) as usize)
+                    .clamp(0, 5)
+                    + 1,
                 at: at_of(dlg, ID_NUM_OFF, ID_NUM_DIR),
                 prefix: get_text(ctl(dlg, ID_NUM_WPRE)),
                 suffix: get_text(ctl(dlg, ID_NUM_WSUF)),
             },
         }),
-        4 => {
+        // Add Date(포맷 = ${} 텍스트 문법 — 사용자 확정 07-17, 구식 입력 자동 이행)
+        5 => {
             let format = get_text(ctl(dlg, ID_DT_FMT));
             let format = if format.trim().is_empty() {
-                "yyyy-MM-dd".to_string()
+                nexa_ops::batch_rename::DEFAULT_DATE_FORMAT.to_string()
             } else {
-                format
+                nexa_ops::batch_rename::migrate_date_format(&format)
             };
             let kind_i = SendMessageW(ctl(dlg, ID_DT_KIND), NXCB_GETSEL, None, None).0;
             Some(RenameOp::Date {
@@ -332,14 +354,20 @@ unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
                 },
             })
         }
-        5 => {
-            let len = num_of(dlg, ID_MV_LEN, 0).max(0) as usize;
+        // 구간 이동(우리 고유)
+        6 => {
+            let len = SendMessageW(ctl(dlg, ID_MV_LEN), SPIN_GETVAL, None, None)
+                .0
+                .max(0) as usize;
             (len > 0).then(|| RenameOp::Move {
-                start: num_of(dlg, ID_MV_START, 1).max(1) as usize,
+                start: SendMessageW(ctl(dlg, ID_MV_START), SPIN_GETVAL, None, None)
+                    .0
+                    .max(1) as usize,
                 len,
-                to_front: checked(dlg, ID_MV_FRONT),
+                to_front: SendMessageW(ctl(dlg, ID_MV_FRONT), SEG_GETSEL, None, None).0 == 0,
             })
         }
+        // 확장자 변경(우리 고유)
         _ => {
             let to = get_text(ctl(dlg, ID_EXT_TO));
             let from = get_text(ctl(dlg, ID_EXT_FROM));
@@ -349,117 +377,6 @@ unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
                 to: strip(to),
             })
         }
-    }
-}
-
-/// 스코프 표기(Name = 생략 — v1 시각과 동일).
-fn scope_tag(scope: Scope) -> String {
-    match scope {
-        Scope::Name => String::new(),
-        Scope::NameExt => format!(" [{}]", tr("bulk.scope.nameext")),
-        Scope::Ext => format!(" [{}]", tr("bulk.scope.ext")),
-        Scope::ExtDot => format!(" [{}]", tr("bulk.scope.extdot")),
-    }
-}
-
-/// 위치 표기 — "@N앞/뒤"(모서리 0은 기존 앞/뒤 라벨).
-fn at_tag(at: InsertAt) -> String {
-    let dir = tr(if at.from_end {
-        "bulk.posSuffix"
-    } else {
-        "bulk.posPrefix"
-    });
-    if at.offset == 0 {
-        format!("({dir})")
-    } else {
-        format!("(@{} {dir})", at.offset)
-    }
-}
-
-/// 파이프라인 목록 한 줄 표기.
-fn op_label(op: &RenameOp) -> String {
-    match op {
-        RenameOp::Replace {
-            scope,
-            find,
-            with,
-            regex,
-            mode,
-            ..
-        } => format!(
-            "{}{} \"{find}\" → \"{with}\"{}{}",
-            tr("bulk.kind.replace"),
-            if *regex { " (regex)" } else { "" },
-            match mode {
-                ReplaceMode::All => String::new(),
-                ReplaceMode::First => format!(" ({})", tr("bulk.mode.first")),
-                ReplaceMode::Last => format!(" ({})", tr("bulk.mode.last")),
-                ReplaceMode::Entire => format!(" ({})", tr("bulk.mode.entire")),
-            },
-            scope_tag(*scope)
-        ),
-        RenameOp::Case { scope, mode } => format!(
-            "{}: {}{}",
-            tr("bulk.kind.case"),
-            tr(match mode {
-                CaseMode::Upper => "bulk.case.upper",
-                CaseMode::Lower => "bulk.case.lower",
-                CaseMode::Title => "bulk.case.title",
-                CaseMode::Sentence => "bulk.case.sentence",
-            }),
-            scope_tag(*scope)
-        ),
-        RenameOp::Insert { scope, text, at } => format!(
-            "{} \"{text}\" {}{}",
-            tr("bulk.kind.insert"),
-            at_tag(*at),
-            scope_tag(*scope)
-        ),
-        RenameOp::Number { scope, spec } => format!(
-            "{} {}+{}×{} {}{}{}",
-            tr("bulk.kind.number"),
-            spec.start,
-            spec.step,
-            spec.pad,
-            at_tag(spec.at),
-            if spec.prefix.is_empty() && spec.suffix.is_empty() {
-                String::new()
-            } else {
-                format!(" \"{}n{}\"", spec.prefix, spec.suffix)
-            },
-            scope_tag(*scope)
-        ),
-        RenameOp::Date { scope, spec } => format!(
-            "{} {} {} {}{}",
-            tr("bulk.kind.date"),
-            tr(match spec.kind {
-                DateKind::Modified => "bulk.date.modified",
-                DateKind::Created => "bulk.date.created",
-            }),
-            spec.format,
-            at_tag(spec.at),
-            scope_tag(*scope)
-        ),
-        RenameOp::Move {
-            start,
-            len,
-            to_front,
-        } => format!(
-            "{} {start}..{} → {}",
-            tr("bulk.kind.move"),
-            start + len.saturating_sub(1),
-            tr(if *to_front {
-                "bulk.destFront"
-            } else {
-                "bulk.destEnd"
-            })
-        ),
-        RenameOp::ChangeExt { from, to } => format!(
-            "{} .{} → .{}",
-            tr("bulk.kind.ext"),
-            if from.is_empty() { "*" } else { from },
-            to
-        ),
     }
 }
 
@@ -478,19 +395,47 @@ unsafe fn lb_add(list: HWND, line: &str) {
     SendMessageW(list, LB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
 }
 
-/// 파이프라인 목록 갱신(선택 유지).
-unsafe fn refresh_pipe(st: &BrState, select: Option<usize>) {
-    SendMessageW(st.pipe, LB_RESETCONTENT, None, None);
-    for (i, op) in st.ops.iter().enumerate() {
-        lb_add(st.pipe, &format!("{}. {}", i + 1, op_label(op)));
-    }
-    if let Some(i) = select {
-        SendMessageW(st.pipe, LB_SETCURSEL, Some(WPARAM(i)), None);
+/// 카드의 현재 kind(타이틀 콤보 선택).
+unsafe fn card_kind(card: HWND) -> usize {
+    SendMessageW(ctl(card, ID_KIND), NXCB_GETSEL, None, None)
+        .0
+        .max(0) as usize
+}
+
+/// 카드 스택 → 파이프라인(위→아래 — 무효 폼은 건너뜀).
+unsafe fn harvest(st: &BrState) -> Vec<RenameOp> {
+    st.cards
+        .iter()
+        .filter_map(|c| op_from_form(*c, card_kind(*c)))
+        .collect()
+}
+
+/// 카드 세로 재배치(추가/삭제 후) + − 버튼 활성 동기(마지막 1장 = 삭제 불가).
+unsafe fn relayout_cards(st: &BrState) {
+    use windows::Win32::UI::WindowsAndMessaging::MoveWindow;
+    let one = st.cards.len() <= 1;
+    for (i, c) in st.cards.iter().enumerate() {
+        let _ = MoveWindow(
+            *c,
+            PAD,
+            PAD + i as i32 * (CARD_H + CARD_GAP),
+            FORM_W,
+            CARD_H,
+            true,
+        );
+        SendMessageW(
+            ctl(*c, ID_DEL),
+            crate::ctl::iconbutton::NXIB_SETENABLE,
+            Some(WPARAM(usize::from(!one))),
+            None,
+        );
     }
 }
 
 /// 미리보기·충돌 재계산 → 우측 목록·오류 표시·[적용] 활성 판정.
+/// 파이프라인 = 카드 스택에서 파생(X-23 — 폼 편집 즉시 반영).
 unsafe fn refresh_preview(st: &mut BrState) {
+    st.ops = harvest(st);
     // 정규식 검증 — 오류는 상단 STATIC에 (블록 순번) 메시지
     let err = validate(&st.ops).err();
     set_text(
@@ -545,15 +490,582 @@ unsafe fn refresh_preview(st: &mut BrState) {
     let _ = EnableWindow(st.apply, ok);
 }
 
-/// 종류 패널 전환(콤보 선택) — 해당 종류 컨트롤만 표시.
-/// 스코프 droplist는 Move/Ext(자체 대상 고정)에서 숨김(v2).
-unsafe fn show_kind(st: &BrState, kind: usize) {
-    for (i, panel) in st.panels.iter().enumerate() {
-        for h in panel {
-            let _ = ShowWindow(*h, if i == kind { SW_SHOW } else { SW_HIDE });
+/// 동작 → kind 인덱스(카드 콤보 순서 — 프리셋 복원용).
+fn kind_index_of(op: &RenameOp) -> usize {
+    match op {
+        RenameOp::Replace { regex: false, .. } => 0,
+        RenameOp::Replace { regex: true, .. } => 1,
+        RenameOp::Insert { .. } => 2,
+        RenameOp::Case { .. } => 3,
+        RenameOp::Number { .. } => 4,
+        RenameOp::Date { .. } => 5,
+        RenameOp::Move { .. } => 6,
+        RenameOp::ChangeExt { .. } => 7,
+    }
+}
+
+/// 카드 크기(타이틀 34 + 본문 168)·간격.
+const CARD_H: i32 = 34 + 168;
+const CARD_GAP: i32 = 8;
+
+/// 카드 생성(X-23 PF 모델) — 타이틀 = 동작 콤보 + ±(+ = 아래 카드 추가·
+/// − = 이 카드 삭제[마지막 1장 비활성]) + kind 본문. 위치는 relayout_cards가 확정.
+unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
+    let style2 = Style::default();
+    let card = crate::ctl::groupcard::create(
+        dlg,
+        PAD,
+        PAD,
+        FORM_W,
+        0,
+        font,
+        "",
+        crate::ctl::groupcard::GroupCardOpts {
+            corner: 8,
+            title_h: 34,
+            body_h: CARD_H - 34,
+        },
+        style2,
+    );
+    let trc = crate::ctl::groupcard::title_rect(card);
+    let st_band = Style {
+        behind: style2.sel_bg,
+        ..style2
+    };
+    let ib = crate::ctl::style::font_height(dlg, font).max(10);
+    let kind_items: Vec<String> = KINDS.iter().map(|k| tr(k)).collect();
+    let kind_refs: Vec<&str> = kind_items.iter().map(String::as_str).collect();
+    let cb_h = 24;
+    crate::ctl::combobox::create(
+        card,
+        trc.left + 8,
+        trc.top + (trc.bottom - trc.top - cb_h) / 2,
+        170,
+        cb_h,
+        ID_KIND,
+        font,
+        &kind_refs,
+        kind,
+        st_band,
+    );
+    let iy = trc.top + (trc.bottom - trc.top - ib) / 2;
+    crate::ctl::iconbutton::create(
+        card,
+        trc.right - 8 - ib * 2 - 6,
+        iy,
+        ib,
+        ID_ADD,
+        font,
+        crate::ctl::iconbutton::Icon::Plus,
+        true,
+        st_band,
+    );
+    crate::ctl::iconbutton::create(
+        card,
+        trc.right - 8 - ib,
+        iy,
+        ib,
+        ID_DEL,
+        font,
+        crate::ctl::iconbutton::Icon::Minus,
+        true,
+        st_band,
+    );
+    build_card_body(card, kind, font);
+    card
+}
+
+/// 카드 본문 재구성(kind 변경·생성·프리셋 복원) — 타이틀(콤보·±) 외 자식을
+/// 파괴 후 해당 kind 컨트롤만 생성(패널 스왑 대신 동적 구성 — 카드 N장 대응).
+unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_CHILD, GW_HWNDNEXT};
+    // 기존 본문 파괴(수집 후 — 파괴 중 열거 금지)
+    let mut kill = Vec::new();
+    let mut c = GetWindow(card, GW_CHILD).unwrap_or_default();
+    while !c.is_invalid() {
+        let id = windows::Win32::UI::WindowsAndMessaging::GetDlgCtrlID(c) as u32;
+        if !matches!(id, ID_KIND | ID_ADD | ID_DEL) {
+            kill.push(c);
+        }
+        c = GetWindow(c, GW_HWNDNEXT).unwrap_or_default();
+    }
+    for k in kill {
+        let _ = DestroyWindow(k);
+    }
+    let style2 = Style::default();
+    let body = crate::ctl::groupcard::body_rect(card);
+    let bx = body.left + 10;
+    let bw = (body.right - body.left) - 20;
+    let y0 = body.top + 8;
+    let bhalf = (bw - 6) / 2;
+    let row = |k: i32| y0 + 28 * k;
+    // 공통 스코프(PF Apply to) — Move/Ext(자체 대상 고정)에선 생략
+    if kind < 6 {
+        let scope_items = [
+            tr("bulk.scope.name"),
+            tr("bulk.scope.nameext"),
+            tr("bulk.scope.ext"),
+            tr("bulk.scope.extdot"),
+        ];
+        let scope_refs: Vec<&str> = scope_items.iter().map(String::as_str).collect();
+        crate::ctl::combobox::create(
+            card,
+            bx,
+            row(0),
+            bw,
+            0,
+            ID_SCOPE,
+            font,
+            &scope_refs,
+            0,
+            style2,
+        );
+    }
+    match kind {
+        // Replace Text(PF 카드 — Mode·대소문자·찾기/바꾸기)
+        0 => {
+            let mode_items = [
+                tr("bulk.mode.all"),
+                tr("bulk.mode.first"),
+                tr("bulk.mode.last"),
+                tr("bulk.mode.entire"),
+            ];
+            let mode_refs: Vec<&str> = mode_items.iter().map(String::as_str).collect();
+            crate::ctl::combobox::create(
+                card,
+                bx,
+                row(1),
+                bw,
+                0,
+                ID_RX_MODE,
+                font,
+                &mode_refs,
+                0,
+                style2,
+            );
+            crate::ctl::checkbox::create(
+                card,
+                bx,
+                row(2),
+                bw,
+                0,
+                ID_MC,
+                font,
+                &tr("bulk.matchCase"),
+                false,
+                style2,
+            );
+            let f = crate::ctl::textbox::create(card, bx, row(3), bw, 0, ID_FIND, font, style2);
+            cue(f, &tr("bulk.find"));
+            let wch = crate::ctl::textbox::create(card, bx, row(4), bw, 0, ID_WITH, font, style2);
+            cue(wch, &tr("bulk.with"));
+        }
+        // Replace RegEx(분리 카드 — 정규식 = 항상 All, PF 규약)
+        1 => {
+            crate::ctl::checkbox::create(
+                card,
+                bx,
+                row(1),
+                bw,
+                0,
+                ID_RXF_MC,
+                font,
+                &tr("bulk.matchCase"),
+                false,
+                style2,
+            );
+            let f = crate::ctl::textbox::create(card, bx, row(2), bw, 0, ID_RXF_FIND, font, style2);
+            cue(f, &tr("bulk.regex"));
+            let wch =
+                crate::ctl::textbox::create(card, bx, row(3), bw, 0, ID_RXF_WITH, font, style2);
+            cue(wch, &tr("bulk.with"));
+        }
+        // Insert Text(Position = spin + →abc/←abc 세그먼트)
+        2 => {
+            crate::ctl::spin::create(card, bx, row(1), 90, 0, ID_INS_OFF, font, 0, 0, 999, style2);
+            crate::ctl::segmented::create(
+                card,
+                bx + 98,
+                row(1),
+                bw - 98,
+                0,
+                ID_INS_DIR,
+                font,
+                &["→ abc", "← abc"],
+                1,
+                crate::ctl::segmented::SegOpts::default(),
+                style2,
+            );
+            let t = crate::ctl::textbox::create(card, bx, row(2), bw, 0, ID_INS_TEXT, font, style2);
+            cue(t, &tr("bulk.insert"));
+        }
+        // Change Case — segmented(PF "AB CD|Ab Cd|Ab cd|ab cd")
+        3 => {
+            crate::ctl::segmented::create(
+                card,
+                bx,
+                row(1),
+                bw,
+                0,
+                ID_CASE_BASE,
+                font,
+                &["AB CD", "Ab Cd", "Ab cd", "ab cd"],
+                0,
+                crate::ctl::segmented::SegOpts::default(),
+                style2,
+            );
+        }
+        // Add Number Sequence(Padding 콤보·Position·Start/Prefix·Step/Suffix)
+        4 => {
+            let pad_items = [
+                "1, 2, 3, 4…",
+                "01, 02, 03…",
+                "001, 002, 003…",
+                "0001, 0002…",
+                "00001…",
+                "000001…",
+            ];
+            crate::ctl::combobox::create(
+                card,
+                bx,
+                row(1),
+                bw,
+                0,
+                ID_NUM_PAD,
+                font,
+                &pad_items,
+                2,
+                style2,
+            );
+            crate::ctl::spin::create(card, bx, row(2), 90, 0, ID_NUM_OFF, font, 0, 0, 999, style2);
+            crate::ctl::segmented::create(
+                card,
+                bx + 98,
+                row(2),
+                bw - 98,
+                0,
+                ID_NUM_DIR,
+                font,
+                &["→ abc", "← abc"],
+                1,
+                crate::ctl::segmented::SegOpts::default(),
+                style2,
+            );
+            crate::ctl::spin::create(
+                card,
+                bx,
+                row(3),
+                90,
+                0,
+                ID_NUM_START,
+                font,
+                1,
+                -9999,
+                9999,
+                style2,
+            );
+            let wp = crate::ctl::textbox::create(
+                card,
+                bx + 98,
+                row(3),
+                bw - 98,
+                0,
+                ID_NUM_WPRE,
+                font,
+                style2,
+            );
+            cue(wp, &tr("bulk.wrapPre"));
+            crate::ctl::spin::create(
+                card,
+                bx,
+                row(4),
+                90,
+                0,
+                ID_NUM_STEP,
+                font,
+                1,
+                -9999,
+                9999,
+                style2,
+            );
+            let ws2 = crate::ctl::textbox::create(
+                card,
+                bx + 98,
+                row(4),
+                bw - 98,
+                0,
+                ID_NUM_WSUF,
+                font,
+                style2,
+            );
+            cue(ws2, &tr("bulk.wrapSuf"));
+        }
+        // Add Date(Format = ${} 텍스트 + ? 도움말 — 사용자 확정 07-17)
+        5 => {
+            let kind_items = [tr("bulk.date.modified"), tr("bulk.date.created")];
+            let kind_refs: Vec<&str> = kind_items.iter().map(String::as_str).collect();
+            crate::ctl::combobox::create(
+                card,
+                bx,
+                row(1),
+                bw,
+                0,
+                ID_DT_KIND,
+                font,
+                &kind_refs,
+                0,
+                style2,
+            );
+            crate::ctl::spin::create(card, bx, row(2), 90, 0, ID_DT_OFF, font, 0, 0, 999, style2);
+            crate::ctl::segmented::create(
+                card,
+                bx + 98,
+                row(2),
+                bw - 98,
+                0,
+                ID_DT_DIR,
+                font,
+                &["→ abc", "← abc"],
+                1,
+                crate::ctl::segmented::SegOpts::default(),
+                style2,
+            );
+            let dp =
+                crate::ctl::textbox::create(card, bx, row(3), bhalf, 0, ID_DT_PRE, font, style2);
+            cue(dp, &tr("bulk.wrapPre"));
+            let ds2 = crate::ctl::textbox::create(
+                card,
+                bx + bhalf + 6,
+                row(3),
+                bw - bhalf - 6,
+                0,
+                ID_DT_SUF,
+                font,
+                style2,
+            );
+            cue(ds2, &tr("bulk.wrapSuf"));
+            let ib = crate::ctl::style::font_height(card, font).max(10);
+            let fmt = crate::ctl::textbox::create(
+                card,
+                bx,
+                row(4),
+                bw - ib - 8,
+                0,
+                ID_DT_FMT,
+                font,
+                style2,
+            );
+            set_text(fmt, nexa_ops::batch_rename::DEFAULT_DATE_FORMAT);
+            let auto_h = crate::ctl::style::font_height(card, font) + 8;
+            crate::ctl::iconbutton::create(
+                card,
+                bx + bw - ib,
+                row(4) + (auto_h - ib) / 2,
+                ib,
+                ID_DT_HELP,
+                font,
+                crate::ctl::iconbutton::Icon::Help,
+                true,
+                style2,
+            );
+        }
+        // 구간 이동(우리 고유)
+        6 => {
+            crate::ctl::spin::create(
+                card,
+                bx,
+                row(1),
+                90,
+                0,
+                ID_MV_START,
+                font,
+                1,
+                1,
+                999,
+                style2,
+            );
+            crate::ctl::spin::create(
+                card,
+                bx + 98,
+                row(1),
+                90,
+                0,
+                ID_MV_LEN,
+                font,
+                2,
+                0,
+                999,
+                style2,
+            );
+            crate::ctl::segmented::create(
+                card,
+                bx,
+                row(2),
+                bw,
+                0,
+                ID_MV_FRONT,
+                font,
+                &[&tr("bulk.destFront"), &tr("bulk.destEnd")],
+                1,
+                crate::ctl::segmented::SegOpts::default(),
+                style2,
+            );
+        }
+        // 확장자 변경(우리 고유)
+        _ => {
+            let f =
+                crate::ctl::textbox::create(card, bx, row(1), bhalf, 0, ID_EXT_FROM, font, style2);
+            cue(f, &tr("bulk.extFrom"));
+            let t = crate::ctl::textbox::create(
+                card,
+                bx + bhalf + 6,
+                row(1),
+                bw - bhalf - 6,
+                0,
+                ID_EXT_TO,
+                font,
+                style2,
+            );
+            cue(t, &tr("bulk.extTo"));
         }
     }
-    let _ = ShowWindow(st.scope, if kind >= 5 { SW_HIDE } else { SW_SHOW });
+}
+
+/// 프리셋 복원 — 동작 값을 카드 폼에 주입(kind 본문이 이미 구성된 상태 전제).
+unsafe fn set_form_from_op(card: HWND, op: &RenameOp) {
+    let set_cb = |id: u32, i: usize| {
+        SendMessageW(ctl(card, id), NXCB_SETSEL, Some(WPARAM(i)), None);
+    };
+    let set_seg = |id: u32, i: usize| {
+        SendMessageW(
+            ctl(card, id),
+            crate::ctl::segmented::SEG_SETSEL,
+            Some(WPARAM(i)),
+            None,
+        );
+    };
+    let set_spin = |id: u32, v: i64| {
+        SendMessageW(
+            ctl(card, id),
+            crate::ctl::spin::SPIN_SETVAL,
+            Some(WPARAM(v as usize)),
+            None,
+        );
+    };
+    let set_chk = |id: u32, on: bool| {
+        SendMessageW(
+            ctl(card, id),
+            crate::ctl::checkbox::NXCHK_SETCHECK,
+            Some(WPARAM(usize::from(on))),
+            None,
+        );
+    };
+    let scope_sel = |s: Scope| SCOPES.iter().position(|x| *x == s).unwrap_or(0);
+    match op {
+        RenameOp::Replace {
+            scope,
+            find,
+            with,
+            match_case,
+            regex,
+            mode,
+        } => {
+            set_cb(ID_SCOPE, scope_sel(*scope));
+            if *regex {
+                set_chk(ID_RXF_MC, *match_case);
+                set_text(ctl(card, ID_RXF_FIND), find);
+                set_text(ctl(card, ID_RXF_WITH), with);
+            } else {
+                set_cb(
+                    ID_RX_MODE,
+                    match mode {
+                        ReplaceMode::All => 0,
+                        ReplaceMode::First => 1,
+                        ReplaceMode::Last => 2,
+                        ReplaceMode::Entire => 3,
+                    },
+                );
+                set_chk(ID_MC, *match_case);
+                set_text(ctl(card, ID_FIND), find);
+                set_text(ctl(card, ID_WITH), with);
+            }
+        }
+        RenameOp::Insert { scope, text, at } => {
+            set_cb(ID_SCOPE, scope_sel(*scope));
+            set_spin(ID_INS_OFF, at.offset as i64);
+            set_seg(ID_INS_DIR, usize::from(at.from_end));
+            set_text(ctl(card, ID_INS_TEXT), text);
+        }
+        RenameOp::Case { scope, mode } => {
+            set_cb(ID_SCOPE, scope_sel(*scope));
+            set_seg(
+                ID_CASE_BASE,
+                match mode {
+                    CaseMode::Upper => 0,
+                    CaseMode::Title => 1,
+                    CaseMode::Sentence => 2,
+                    CaseMode::Lower => 3,
+                },
+            );
+        }
+        RenameOp::Number { scope, spec } => {
+            set_cb(ID_SCOPE, scope_sel(*scope));
+            set_cb(ID_NUM_PAD, spec.pad.clamp(1, 6) - 1);
+            set_spin(ID_NUM_OFF, spec.at.offset as i64);
+            set_seg(ID_NUM_DIR, usize::from(spec.at.from_end));
+            set_spin(ID_NUM_START, spec.start);
+            set_spin(ID_NUM_STEP, spec.step);
+            set_text(ctl(card, ID_NUM_WPRE), &spec.prefix);
+            set_text(ctl(card, ID_NUM_WSUF), &spec.suffix);
+        }
+        RenameOp::Date { scope, spec } => {
+            set_cb(ID_SCOPE, scope_sel(*scope));
+            set_cb(
+                ID_DT_KIND,
+                usize::from(matches!(spec.kind, DateKind::Created)),
+            );
+            set_spin(ID_DT_OFF, spec.at.offset as i64);
+            set_seg(ID_DT_DIR, usize::from(spec.at.from_end));
+            set_text(ctl(card, ID_DT_PRE), &spec.prefix);
+            set_text(ctl(card, ID_DT_SUF), &spec.suffix);
+            set_text(ctl(card, ID_DT_FMT), &spec.format);
+        }
+        RenameOp::Move {
+            start,
+            len,
+            to_front,
+        } => {
+            set_spin(ID_MV_START, *start as i64);
+            set_spin(ID_MV_LEN, *len as i64);
+            set_seg(ID_MV_FRONT, usize::from(!*to_front));
+        }
+        RenameOp::ChangeExt { from, to } => {
+            set_text(ctl(card, ID_EXT_FROM), from);
+            set_text(ctl(card, ID_EXT_TO), to);
+        }
+    }
+}
+
+/// 카드 스택을 파이프라인으로 재구성(프리셋 불러오기 — 기존 카드 전부 교체).
+unsafe fn rebuild_cards(dlg: HWND, st: &mut BrState, ops: &[RenameOp]) {
+    for c in st.cards.drain(..) {
+        let _ = DestroyWindow(c);
+    }
+    let ops: &[RenameOp] = if ops.is_empty() {
+        &[] // 빈 프리셋 = 기본 카드 1장
+    } else {
+        ops
+    };
+    if ops.is_empty() {
+        st.cards.push(make_card(dlg, st.font, 0));
+    } else {
+        for op in ops {
+            let card = make_card(dlg, st.font, kind_index_of(op));
+            set_form_from_op(card, op);
+            st.cards.push(card);
+        }
+    }
+    relayout_cards(st);
 }
 
 /// 프리셋 콤보 재적재(`data\renames\*.cfg`).
@@ -609,45 +1121,66 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as u32;
             let notify = ((wparam.0 >> 16) & 0xFFFF) as u32;
-            let sel = || SendMessageW((*st).pipe, LB_GETCURSEL, None, None).0;
+            // 카드 자식 통지 = lparam(컨트롤) → 부모 = 카드(X-23 — 카드별 지역 id)
+            let src = HWND(lparam.0 as *mut core::ffi::c_void);
+            let src_card = || GetParent(src).unwrap_or_default();
             match (id, notify) {
-                (ID_RX, 0) => {
-                    // 정규식 체크 = Mode 숨김(PF 규약 — 정규식은 항상 All)
-                    let rx = checked(hwnd, ID_RX);
-                    let _ = ShowWindow(ctl(hwnd, ID_RX_MODE), if rx { SW_HIDE } else { SW_SHOW });
+                (ID_KIND, 1 /* NXCB_CHANGED */) => {
+                    // 해당 카드만 본문 재구성(동적 — 패널 스왑 대신)
+                    let card = src_card();
+                    let k = SendMessageW(src, NXCB_GETSEL, None, None).0.max(0) as usize;
+                    build_card_body(card, k, (*st).font);
+                    refresh_preview(&mut *st);
                 }
-                (ID_KIND, 1 /* CBN_SELCHANGE */) => {
-                    let k = SendMessageW(ctl(hwnd, ID_KIND), CB_GETCURSEL, None, None)
-                        .0
-                        .max(0);
-                    show_kind(&*st, k as usize);
+                (ID_DT_HELP, 1 /* NXIB_CLICK */) => {
+                    // 날짜 포맷 ${} 토큰 안내(사용자 확정 07-17 — ? 버튼).
+                    // 토큰 예시는 언어 중립 — 마지막 줄만 i18n.
+                    let body = format!(
+                        "${{YYYY}} = 2026    ${{YY}} = 26\n\
+                         ${{MMMM}} = July    ${{MMM}} = Jul\n\
+                         ${{MM}} = 07    ${{M}} = 7\n\
+                         ${{DD}} = 07    ${{D}} = 7    ${{DDD}} = Tue\n\
+                         ${{HH}} = 09    ${{H}} = 9\n\
+                         ${{mm}} = 05    ${{m}} = 5\n\
+                         ${{ss}} = 07    ${{s}} = 7\n\n\
+                         {}",
+                        tr("bulk.date.fmtHelpNote")
+                    );
+                    let text = windows::core::HSTRING::from(body);
+                    let title = windows::core::HSTRING::from(tr("bulk.date.fmtHelpTitle"));
+                    let _ = windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                        Some(hwnd),
+                        PCWSTR(text.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        windows::Win32::UI::WindowsAndMessaging::MB_OK,
+                    );
                 }
-                (ID_ADD, 0) => {
-                    let k = SendMessageW(ctl(hwnd, ID_KIND), CB_GETCURSEL, None, None)
-                        .0
-                        .max(0);
-                    if let Some(op) = op_from_form(hwnd, k as usize) {
-                        (*st).ops.push(op);
-                        refresh_pipe(&*st, Some((*st).ops.len() - 1));
-                        refresh_preview(&mut *st);
-                    }
+                (
+                    ID_ADD,
+                    1, /* NXIB_CLICK — 카드 + = 아래에 새 카드(사용자 확정) */
+                ) => {
+                    let card = src_card();
+                    let at = (*st)
+                        .cards
+                        .iter()
+                        .position(|c| *c == card)
+                        .map_or((*st).cards.len(), |i| i + 1);
+                    let new_card = make_card(hwnd, (*st).font, 0);
+                    (*st).cards.insert(at, new_card);
+                    relayout_cards(&*st);
+                    refresh_preview(&mut *st);
                 }
-                (ID_DEL, 0) => {
-                    let i = sel();
-                    if i >= 0 && (i as usize) < (*st).ops.len() {
-                        (*st).ops.remove(i as usize);
-                        let n = (*st).ops.len();
-                        refresh_pipe(&*st, (n > 0).then(|| (i as usize).min(n - 1)));
-                        refresh_preview(&mut *st);
-                    }
-                }
-                (ID_UP, 0) | (ID_DOWN, 0) => {
-                    let i = sel();
-                    let j = if id == ID_UP { i - 1 } else { i + 1 };
-                    if i >= 0 && j >= 0 && (j as usize) < (*st).ops.len() {
-                        (*st).ops.swap(i as usize, j as usize);
-                        refresh_pipe(&*st, Some(j as usize));
-                        refresh_preview(&mut *st);
+                (
+                    ID_DEL,
+                    1, /* NXIB_CLICK — 카드 − = 이 카드 삭제(마지막 1장 불가) */
+                ) => {
+                    let card = src_card();
+                    if (*st).cards.len() > 1 {
+                        if let Some(i) = (*st).cards.iter().position(|c| *c == card) {
+                            let _ = DestroyWindow((*st).cards.remove(i));
+                            relayout_cards(&*st);
+                            refresh_preview(&mut *st);
+                        }
                     }
                 }
                 (ID_PRESET_SAVE, 0) => {
@@ -671,8 +1204,9 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if let Some(text) =
                             crate::config::load(&preset_dir(), &format!("{name}.cfg"))
                         {
-                            (*st).ops = parse_ops(&text);
-                            refresh_pipe(&*st, None);
+                            // 카드 스택 재구성(X-23 — 파이프라인 = 카드)
+                            let ops = parse_ops(&text);
+                            rebuild_cards(hwnd, &mut *st, &ops);
                             refresh_preview(&mut *st);
                         }
                     }
@@ -703,7 +1237,13 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 (ID_CANCEL, 0) => {
                     let _ = DestroyWindow(hwnd);
                 }
-                _ => {}
+                _ => {
+                    // 카드 폼 편집(텍스트·콤보·세그·체크·스핀) = 실시간 미리보기
+                    // (X-23 — 블록 추가 없이 카드 자체가 파이프라인)
+                    if matches!(notify, 1 | 0x0300 /* NX*_CHANGED | EN_CHANGE */) {
+                        refresh_preview(&mut *st);
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -815,501 +1355,13 @@ pub unsafe fn show(
 
     let x = PAD;
     let ed = (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32;
-    let ed_num = ed | ES_NUMBER as u32;
-    let rb = WS_TABSTOP.0 | BS_AUTORADIOBUTTON as u32;
-    let cb = WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32;
 
-    // ── 동작 종류 콤보 + [블록 추가] ──
-    let combo = mk(
-        dlg,
-        font,
-        w!("COMBOBOX"),
-        "",
-        (WS_TABSTOP | WS_VSCROLL).0 | 0x0003, /* CBS_DROPDOWNLIST */
-        x,
-        PAD,
-        FORM_W - 90,
-        200,
-        ID_KIND,
-    );
-    for key in KINDS {
-        let w = windows::core::HSTRING::from(tr(key));
-        SendMessageW(combo, CB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
-    }
-    SendMessageW(combo, CB_SETCURSEL, Some(WPARAM(0)), None);
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.add"),
-        WS_TABSTOP.0 | WS_GROUP.0,
-        x + FORM_W - 84,
-        PAD,
-        84,
-        24,
-        ID_ADD,
-    );
+    // ── 카드 스택(X-23 PF 모델): 초기 = Replace Text 카드 1장 ──
+    let card0 = make_card(dlg, font, 0);
 
-    // ── 공통 스코프(v2 — PF Apply to): 종류 콤보 아래·패널 위 ──
-    let style2 = Style::default();
-    let scope_items = [
-        tr("bulk.scope.name"),
-        tr("bulk.scope.nameext"),
-        tr("bulk.scope.ext"),
-        tr("bulk.scope.extdot"),
-    ];
-    let scope_refs: Vec<&str> = scope_items.iter().map(String::as_str).collect();
-    let scope = crate::ctl::combobox::create(
-        dlg,
-        x,
-        PAD + 30,
-        FORM_W,
-        24,
-        ID_SCOPE,
-        font,
-        &scope_refs,
-        0,
-        style2,
-    );
-
-    // ── 종류별 파라미터 패널(겹침 배치 — 콤보 선택으로 스왑) ──
-    let py = PAD + 62;
+    // ── 프리셋 저장/불러오기(docs/25 §3) — 좌측 하단 고정(카드 스택 아래) ──
     let half = (FORM_W - 6) / 2;
-    let third = (FORM_W - 12) / 3;
-    let mut panels: [Vec<HWND>; 7] = Default::default();
-    // 0: 치환(찾기/바꾸기/대소문자/정규식)
-    {
-        let f = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed | WS_GROUP.0,
-            x,
-            py,
-            FORM_W,
-            22,
-            ID_FIND,
-        );
-        cue(f, &tr("bulk.find"));
-        let wch = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed,
-            x,
-            py + 26,
-            FORM_W,
-            22,
-            ID_WITH,
-        );
-        cue(wch, &tr("bulk.with"));
-        let mc = mk(
-            dlg,
-            font,
-            w!("BUTTON"),
-            &tr("bulk.matchCase"),
-            cb,
-            x,
-            py + 52,
-            half,
-            20,
-            ID_MC,
-        );
-        let rx = mk(
-            dlg,
-            font,
-            w!("BUTTON"),
-            &tr("bulk.regex"),
-            cb,
-            x + half + 6,
-            py + 52,
-            half,
-            20,
-            ID_RX,
-        );
-        // 치환 Mode(v2 — 모든/첫/마지막/전체. 정규식 체크 시 숨김 — PF 규약)
-        let mode_items = [
-            tr("bulk.mode.all"),
-            tr("bulk.mode.first"),
-            tr("bulk.mode.last"),
-            tr("bulk.mode.entire"),
-        ];
-        let mode_refs: Vec<&str> = mode_items.iter().map(String::as_str).collect();
-        let mode = crate::ctl::combobox::create(
-            dlg,
-            x,
-            py + 76,
-            FORM_W,
-            24,
-            ID_RX_MODE,
-            font,
-            &mode_refs,
-            0,
-            style2,
-        );
-        panels[0] = vec![f, wch, mc, rx, mode];
-    }
-    // 1: 대소문자 — ctl::segmented(PF 결과 표기 라벨 "AB CD|Ab Cd|Ab cd|ab cd")
-    {
-        let seg = crate::ctl::segmented::create(
-            dlg,
-            x,
-            py,
-            FORM_W,
-            26,
-            ID_CASE_BASE,
-            font,
-            &["AB CD", "Ab Cd", "Ab cd", "ab cd"],
-            0,
-            crate::ctl::segmented::SegOpts::default(),
-            style2,
-        );
-        panels[1] = vec![seg];
-    }
-    // 2: 삽입(텍스트·앞/뒤)
-    {
-        let t = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed | WS_GROUP.0,
-            x,
-            py,
-            FORM_W,
-            22,
-            ID_INS_TEXT,
-        );
-        cue(t, &tr("bulk.insert"));
-        // 위치(v2 — PF Position): 오프셋 spin + 앞/뒤 segmented(기본 뒤·초과 클램프)
-        let off = crate::ctl::spin::create(
-            dlg,
-            x,
-            py + 26,
-            half,
-            24,
-            ID_INS_OFF,
-            font,
-            0,
-            0,
-            999,
-            style2,
-        );
-        let dir = crate::ctl::segmented::create(
-            dlg,
-            x + half + 6,
-            py + 26,
-            half,
-            24,
-            ID_INS_DIR,
-            font,
-            &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
-            1,
-            crate::ctl::segmented::SegOpts::default(),
-            style2,
-        );
-        panels[2] = vec![t, off, dir];
-    }
-    // 3: 연번(시작/증가/자릿수 spin·위치·감싸기 — v2)
-    {
-        let mut v = Vec::new();
-        for (i, (id, init)) in [(ID_NUM_START, 1i64), (ID_NUM_STEP, 1), (ID_NUM_PAD, 3)]
-            .iter()
-            .enumerate()
-        {
-            let cx2 = x + i as i32 * (third + 6);
-            let (lo, hi) = if *id == ID_NUM_PAD {
-                (1, 12)
-            } else {
-                (-9999, 9999)
-            };
-            v.push(crate::ctl::spin::create(
-                dlg, cx2, py, third, 24, *id, font, *init, lo, hi, style2,
-            ));
-        }
-        let off = crate::ctl::spin::create(
-            dlg,
-            x,
-            py + 28,
-            half,
-            24,
-            ID_NUM_OFF,
-            font,
-            0,
-            0,
-            999,
-            style2,
-        );
-        let dir = crate::ctl::segmented::create(
-            dlg,
-            x + half + 6,
-            py + 28,
-            half,
-            24,
-            ID_NUM_DIR,
-            font,
-            &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
-            1,
-            crate::ctl::segmented::SegOpts::default(),
-            style2,
-        );
-        let wp = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed,
-            x,
-            py + 56,
-            half,
-            22,
-            ID_NUM_WPRE,
-        );
-        cue(wp, &tr("bulk.wrapPre"));
-        let ws2 = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed,
-            x + half + 6,
-            py + 56,
-            half,
-            22,
-            ID_NUM_WSUF,
-        );
-        cue(ws2, &tr("bulk.wrapSuf"));
-        v.extend([off, dir, wp, ws2]);
-        panels[3] = v;
-    }
-    // 4: 날짜(v2 신설 — PF Add Date: 원천·토큰 포맷·위치·감싸기)
-    {
-        let kind_items = [tr("bulk.date.modified"), tr("bulk.date.created")];
-        let kind_refs: Vec<&str> = kind_items.iter().map(String::as_str).collect();
-        let dk = crate::ctl::combobox::create(
-            dlg, x, py, half, 24, ID_DT_KIND, font, &kind_refs, 0, style2,
-        );
-        let fmt = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "yyyy-MM-dd",
-            ed,
-            x + half + 6,
-            py,
-            half,
-            22,
-            ID_DT_FMT,
-        );
-        cue(fmt, &tr("bulk.date.fmt"));
-        let off = crate::ctl::spin::create(
-            dlg,
-            x,
-            py + 28,
-            half,
-            24,
-            ID_DT_OFF,
-            font,
-            0,
-            0,
-            999,
-            style2,
-        );
-        let dir = crate::ctl::segmented::create(
-            dlg,
-            x + half + 6,
-            py + 28,
-            half,
-            24,
-            ID_DT_DIR,
-            font,
-            &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
-            1,
-            crate::ctl::segmented::SegOpts::default(),
-            style2,
-        );
-        let dp = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed,
-            x,
-            py + 56,
-            half,
-            22,
-            ID_DT_PRE,
-        );
-        cue(dp, &tr("bulk.wrapPre"));
-        let ds2 = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed,
-            x + half + 6,
-            py + 56,
-            half,
-            22,
-            ID_DT_SUF,
-        );
-        cue(ds2, &tr("bulk.wrapSuf"));
-        panels[4] = vec![dk, fmt, off, dir, dp, ds2];
-    }
-    // 4: 구간 이동(시작 위치/길이·맨 앞/맨 뒤)
-    {
-        let st_e = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "1",
-            ed_num | WS_GROUP.0,
-            x,
-            py,
-            half,
-            22,
-            ID_MV_START,
-        );
-        cue(st_e, &tr("bulk.moveStart"));
-        let ln_e = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "2",
-            ed_num,
-            x + half + 6,
-            py,
-            half,
-            22,
-            ID_MV_LEN,
-        );
-        cue(ln_e, &tr("bulk.moveLen"));
-        let f = mk(
-            dlg,
-            font,
-            w!("BUTTON"),
-            &tr("bulk.destFront"),
-            rb | WS_GROUP.0,
-            x,
-            py + 26,
-            half,
-            20,
-            ID_MV_FRONT,
-        );
-        let e = mk(
-            dlg,
-            font,
-            w!("BUTTON"),
-            &tr("bulk.destEnd"),
-            rb,
-            x + half + 6,
-            py + 26,
-            half,
-            20,
-            ID_MV_END,
-        );
-        set_check(dlg, ID_MV_END, true);
-        panels[5] = vec![st_e, ln_e, f, e];
-    }
-    // 5: 확장자 변경(기존/새)
-    {
-        let f = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed | WS_GROUP.0,
-            x,
-            py,
-            half,
-            22,
-            ID_EXT_FROM,
-        );
-        cue(f, &tr("bulk.extFrom"));
-        let t = mk(
-            dlg,
-            font,
-            w!("EDIT"),
-            "",
-            ed,
-            x + half + 6,
-            py,
-            half,
-            22,
-            ID_EXT_TO,
-        );
-        cue(t, &tr("bulk.extTo"));
-        panels[6] = vec![f, t];
-    }
-
-    // ── 파이프라인 목록 + 재배치 ──
-    let ly = py + 110; // v2 — 파라미터 4행
-    mk(
-        dlg,
-        font,
-        w!("STATIC"),
-        &tr("bulk.pipeline"),
-        WS_GROUP.0,
-        x,
-        ly,
-        FORM_W,
-        18,
-        0,
-    );
-    let pipe = mk(
-        dlg,
-        font,
-        w!("LISTBOX"),
-        "",
-        (WS_BORDER | WS_VSCROLL | WS_TABSTOP).0 | 0x0001 /* LBS_NOTIFY */ | 0x0040, /* LBS_NOINTEGRALHEIGHT */
-        x,
-        ly + 20,
-        FORM_W,
-        170,
-        ID_PIPE,
-    );
-    let by1 = ly + 20 + 176;
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        "▲",
-        WS_TABSTOP.0 | WS_GROUP.0,
-        x,
-        by1,
-        third,
-        24,
-        ID_UP,
-    );
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        "▼",
-        WS_TABSTOP.0,
-        x + third + 6,
-        by1,
-        third,
-        24,
-        ID_DOWN,
-    );
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        "✕",
-        WS_TABSTOP.0,
-        x + (third + 6) * 2,
-        by1,
-        third,
-        24,
-        ID_DEL,
-    );
-
-    // ── 프리셋 저장/불러오기(docs/25 §3) ──
-    let sy = by1 + 34;
+    let sy = CLIENT_H - PAD - 26 - 6 - 22 - 28;
     let pn = mk(
         dlg,
         font,
@@ -1432,9 +1484,7 @@ pub unsafe fn show(
         items,
         tz_min,
         ops: Vec::new(),
-        panels,
-        scope,
-        pipe,
+        cards: vec![card0],
         prev,
         err,
         apply,
@@ -1442,9 +1492,8 @@ pub unsafe fn show(
         count,
         result: None,
     });
-    let _ = SendMessageW(scope, NXCB_SETSEL, Some(WPARAM(0)), None);
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut BrState as isize);
-    show_kind(&state, 0);
+    relayout_cards(&state); // 초기 카드 1장 = − 비활성(마지막 카드 삭제 불가)
     refresh_presets(&state);
     refresh_preview(&mut state);
 

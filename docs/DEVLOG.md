@@ -8,6 +8,7 @@
 
 ## 2026-07-17
 
+- **X-23 카드 재편 — 일괄 이름 변경 = 카드 스택(`feat/x23-card-rename` — 사용자 시안 5장·후속 확정)**: 아키텍처 전환 "폼+리스트박스" → **NxGroupCard 스택 = 파이프라인**(카드 타이틀 = 동작 콤보 8종 + ⊕⊖ — **+ = 아래 카드 추가·− = 삭제·마지막 1장 불가**), kind 본문 **동적 재구성**·지역 id·**실시간 미리보기**. Replace **Text/RegEx 분리**·Number **Padding 콤보**·Date **Format = `${토큰}` 텍스트 입력 + ? 도움말**(코어 문법 개정·구식 프리셋 자동 이행)·프리셋 = 카드 복원(전 동작 역매핑). 실기: 카드 왕복·실시간 카운트 1건. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **NxSegmented 개선 + NxButton 신설(`feat/nx-segmented-style` — 사용자 시안)**: 세그먼트 = `SegOpts`(라운드/스퀘어·**간격 기본 0px**) — 연회색 컨테이너 + **선택 accent 필**·AA·호출부 5곳 이관 · **NxButton**(ctl 11호) = 기본/Default(accent)/Disabled 3상태·라벨 자동 폭·**컴팩트 기본 높이(글꼴+상/하 2px** — 사용자 QA)·Space/Enter. 실기 3상태 렌더·통지·비활성 무통지. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **NxSpin 재배치(`fix/nx-spin-layout` — 사용자 시안 재개정)**: 독립 라운드 글상자(**숫자 우측 정렬**·1px 하향) + **우측 분리 버튼 블록**(폭 = 높이 2/3 축소·높이 = 글상자 종속·min/max 비활성 유지·behind 블렌드 전신 AA). 콤보·글상자 텍스트 1px 하향(main 직커밋)도 동일 QA 흐름. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **NxSpin 버튼 재설계 + NxDropList 은퇴(`feat/nx-spin-buttons` — 사용자 확정)**: ① 스핀 버튼 블록 = **정사각(변=높이)·개별 상/하 1/2**·**min/max 도달 방향 비활성**(연한 셰브론+클릭 무시·타이핑 도달도 재도장) — AA 셰브론(시안 범위만) ② **NxDropList 제거**(중복 보고→결정: NxComboBox 통일 — bulkrename 3곳·갤러리 1곳 이관, ✓ 팝업 스타일) ③ NxIconButton 기본 지름 = **글꼴 높이(체크박스 박스 동일** — 15px). 실기: min ⌄ 무시·⌃ +1·벌크 콤보 3개 정상. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).

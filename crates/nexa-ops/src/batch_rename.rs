@@ -286,59 +286,112 @@ fn civil(ms: i64, tz_min: i32) -> (i64, u32, u32, u32, u32, u32, u32) {
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+const MONTHS_FULL: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/// 날짜 토큰 포맷([docs/22 §2-3]) — 긴 토큰 우선 매칭, 그 외 문자는 리터럴.
+/// 기본 날짜 포맷(`${}` 문법 — 사용자 확정 07-17).
+pub const DEFAULT_DATE_FORMAT: &str = "${YYYY}-${MM}-${DD}";
+
+/// 날짜 포맷(개정 07-17 — 사용자 확정: **텍스트 `${토큰}` 문법**):
+/// 년 `${YYYY}`=2026·`${YY}`=26 · 월 `${MMMM}`=July·`${MMM}`=Jul·`${MM}`=07·
+/// `${M}`=7 · 일 `${DD}`=07·`${D}`=7 · 요일 `${DDD}`=Tue · 시 `${HH}`/`${H}` ·
+/// 분 `${mm}`/`${m}` · 초 `${ss}`/`${s}`. 미지 토큰·그 외 문자 = 리터럴 보존.
 /// `ms == 0`(미상)이면 빈 문자열(오류 격리 — 무변경에 수렴).
 pub fn format_date(fmt: &str, ms: i64, tz_min: i32) -> String {
     if ms == 0 {
         return String::new();
     }
     let (y, mo, d, h, mi, s, wd) = civil(ms, tz_min);
+    let expand = |t: &str| -> Option<String> {
+        Some(match t {
+            "YYYY" => format!("{y:04}"),
+            "YY" => format!("{:02}", y.rem_euclid(100)),
+            "MMMM" => MONTHS_FULL[(mo - 1) as usize].to_string(),
+            "MMM" => MONTHS[(mo - 1) as usize].to_string(),
+            "MM" => format!("{mo:02}"),
+            "M" => mo.to_string(),
+            "DDD" => WEEKDAYS[wd as usize].to_string(),
+            "DD" => format!("{d:02}"),
+            "D" => d.to_string(),
+            "HH" => format!("{h:02}"),
+            "H" => h.to_string(),
+            "mm" => format!("{mi:02}"),
+            "m" => mi.to_string(),
+            "ss" => format!("{s:02}"),
+            "s" => s.to_string(),
+            _ => return None,
+        })
+    };
+    let mut out = String::new();
+    let mut rest = fmt;
+    while let Some(p) = rest.find("${") {
+        out.push_str(&rest[..p]);
+        let after = &rest[p + 2..];
+        match after.find('}') {
+            Some(e) => {
+                match expand(&after[..e]) {
+                    Some(v) => out.push_str(&v),
+                    None => out.push_str(&rest[p..p + 2 + e + 1]), // 미지 토큰 = 리터럴
+                }
+                rest = &after[e + 1..];
+            }
+            None => {
+                out.push_str(&rest[p..]); // 닫힘 없음 = 리터럴
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 구식(v2 초기 — `yyyy-MM-dd` 계열) 포맷 → `${}` 문법 이행(프리셋 하위호환).
+/// `${`가 이미 있으면 그대로.
+pub fn migrate_date_format(fmt: &str) -> String {
+    if fmt.contains("${") {
+        return fmt.to_string();
+    }
     let mut out = String::new();
     let cs: Vec<char> = fmt.chars().collect();
     let mut i = 0;
-    let tok = |cs: &[char], i: usize, t: &str| -> bool {
-        cs[i..].iter().take(t.len()).collect::<String>() == t
-    };
-    while i < cs.len() {
-        if tok(&cs, i, "yyyy") {
-            out.push_str(&format!("{y:04}"));
-            i += 4;
-        } else if tok(&cs, i, "yy") {
-            out.push_str(&format!("{:02}", y.rem_euclid(100)));
-            i += 2;
-        } else if tok(&cs, i, "MMM") {
-            out.push_str(MONTHS[(mo - 1) as usize]);
-            i += 3;
-        } else if tok(&cs, i, "MM") {
-            out.push_str(&format!("{mo:02}"));
-            i += 2;
-        } else if tok(&cs, i, "M") {
-            out.push_str(&mo.to_string());
-            i += 1;
-        } else if tok(&cs, i, "ddd") {
-            out.push_str(WEEKDAYS[wd as usize]);
-            i += 3;
-        } else if tok(&cs, i, "dd") {
-            out.push_str(&format!("{d:02}"));
-            i += 2;
-        } else if tok(&cs, i, "d") {
-            out.push_str(&d.to_string());
-            i += 1;
-        } else if tok(&cs, i, "HH") {
-            out.push_str(&format!("{h:02}"));
-            i += 2;
-        } else if tok(&cs, i, "mm") {
-            out.push_str(&format!("{mi:02}"));
-            i += 2;
-        } else if tok(&cs, i, "ss") {
-            out.push_str(&format!("{s:02}"));
-            i += 2;
-        } else {
-            out.push(cs[i]);
-            i += 1;
+    let tok = |i: usize, t: &str| -> bool { cs[i..].iter().take(t.len()).collect::<String>() == t };
+    // (구식, 신식) — 긴 토큰 우선(기존 매칭 규칙 그대로)
+    const MAP: [(&str, &str); 11] = [
+        ("yyyy", "${YYYY}"),
+        ("yy", "${YY}"),
+        ("MMM", "${MMM}"),
+        ("MM", "${MM}"),
+        ("M", "${M}"),
+        ("ddd", "${DDD}"),
+        ("dd", "${DD}"),
+        ("d", "${D}"),
+        ("HH", "${HH}"),
+        ("mm", "${mm}"),
+        ("ss", "${ss}"),
+    ];
+    'outer: while i < cs.len() {
+        for (old, new) in MAP {
+            if tok(i, old) {
+                out.push_str(new);
+                i += old.len();
+                continue 'outer;
+            }
         }
+        out.push(cs[i]);
+        i += 1;
     }
     out
 }
@@ -859,7 +912,10 @@ pub fn parse_ops(text: &str) -> Vec<RenameOp> {
                 scope,
                 spec: DateSpec {
                     kind: DateKind::from_str(get("kind").as_deref().unwrap_or("")),
-                    format: get("fmt").unwrap_or_else(|| "yyyy-MM-dd".into()),
+                    // 구식(yyyy-MM-dd) 프리셋 = ${} 문법으로 자동 이행(07-17)
+                    format: migrate_date_format(
+                        &get("fmt").unwrap_or_else(|| DEFAULT_DATE_FORMAT.into()),
+                    ),
                     at: at(),
                     prefix: get("pre").unwrap_or_default(),
                     suffix: get("suf").unwrap_or_default(),
@@ -1032,21 +1088,32 @@ mod tests {
 
     #[test]
     fn date_format_tokens_and_missing_time() {
-        // 2026-07-01 12:34:56 UTC = 1782909296000ms — 토큰 조합
+        // 2026-07-01 12:34:56 UTC = 1782909296000ms — ${} 토큰 조합(개정 07-17)
         let ms = 1_782_909_296_000i64;
-        assert_eq!(format_date("yyyy-MM-dd", ms, 0), "2026-07-01");
-        assert_eq!(format_date("yy.M.d", ms, 0), "26.7.1");
-        assert_eq!(format_date("MMM d ddd", ms, 0), "Jul 1 Wed");
-        assert_eq!(format_date("HHmmss", ms, 0), "123456");
+        assert_eq!(format_date("${YYYY}-${MM}-${DD}", ms, 0), "2026-07-01");
+        assert_eq!(format_date("${YY}.${M}.${D}", ms, 0), "26.7.1");
+        assert_eq!(format_date("${MMM} ${D} ${DDD}", ms, 0), "Jul 1 Wed");
+        assert_eq!(format_date("${MMMM}", ms, 0), "July");
+        assert_eq!(format_date("${HH}${mm}${ss}", ms, 0), "123456");
+        assert_eq!(format_date("${H}:${m}:${s}", ms, 0), "12:34:56");
+        // 미지 토큰·불완전 = 리터럴 보존
+        assert_eq!(format_date("${XX}-${YYYY", ms, 0), "${XX}-${YYYY");
         // TZ 오프셋(+9h) — 날짜 경계 이동
-        assert_eq!(format_date("dd HH", ms, 540), "01 21");
+        assert_eq!(format_date("${DD} ${HH}", ms, 540), "01 21");
         // 미상(0) = 빈 문자열 → Date 동작은 무변경
-        assert_eq!(format_date("yyyy", 0, 0), "");
+        assert_eq!(format_date("${YYYY}", 0, 0), "");
+        // 구식 포맷 이행(프리셋 하위호환)
+        assert_eq!(migrate_date_format("yyyy-MM-dd"), "${YYYY}-${MM}-${DD}");
+        assert_eq!(migrate_date_format("MMM d ddd"), "${MMM} ${D} ${DDD}");
+        assert_eq!(
+            migrate_date_format("${YYYY}-${MM}"), // 신식 = 그대로
+            "${YYYY}-${MM}"
+        );
         let d = RenameOp::Date {
             scope: Scope::Name,
             spec: DateSpec {
                 kind: DateKind::Modified,
-                format: "yyyy-MM-dd".into(),
+                format: "${YYYY}-${MM}-${DD}".into(),
                 at: InsertAt {
                     offset: 2,
                     from_end: false,
@@ -1193,7 +1260,7 @@ mod tests {
                 scope: Scope::Name,
                 spec: DateSpec {
                     kind: DateKind::Created,
-                    format: "yyyy-MM-dd".into(),
+                    format: "${YYYY}-${MM}-${DD}".into(),
                     at: InsertAt::edge(false),
                     prefix: String::new(),
                     suffix: "_".into(),

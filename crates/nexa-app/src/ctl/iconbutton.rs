@@ -48,12 +48,16 @@ pub enum Icon {
     Plus,
     /// − (수평선)
     Minus,
+    /// ? (도움말 — 글자는 GDI 텍스트: 텍스트 = GDI 규약, 07-17)
+    Help,
 }
 
 struct IbState {
     icon: Icon,
     enabled: bool,
     style: Style,
+    /// Help(?) 글자 렌더용(텍스트 = GDI 규약).
+    font: windows::Win32::Graphics::Gdi::HFONT,
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
@@ -108,6 +112,7 @@ pub unsafe fn create(
         icon,
         enabled,
         style,
+        font,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
     // shape 투명(07-17 AA 개정): 1비트 리전 클립은 계단 가장자리의 진범 —
@@ -174,13 +179,39 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     Rect::new(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top),
                     color(disc),
                 );
-                // 글리프 = bg 색 AA 폴리라인 2px(흰 +/−)
+                // 글리프 = bg 색 AA 폴리라인 2px(흰 +/−) · Help = GDI 텍스트 "?"
                 let d = rc.right - rc.left;
                 let (cx, cy) = ((rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
                 let arm = (d / 4).max(3);
-                g.polyline(&[(cx - arm, cy), (cx + arm, cy)], color(st.style.bg), 2.0);
-                if st.icon == Icon::Plus {
-                    g.polyline(&[(cx, cy - arm), (cx, cy + arm)], color(st.style.bg), 2.0);
+                match st.icon {
+                    Icon::Plus => {
+                        g.polyline(&[(cx - arm, cy), (cx + arm, cy)], color(st.style.bg), 2.0);
+                        g.polyline(&[(cx, cy - arm), (cx, cy + arm)], color(st.style.bg), 2.0);
+                    }
+                    Icon::Minus => {
+                        g.polyline(&[(cx - arm, cy), (cx + arm, cy)], color(st.style.bg), 2.0);
+                    }
+                    Icon::Help => {
+                        drop(g); // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
+                        use windows::Win32::Graphics::Gdi::{
+                            DrawTextW, SelectObject, SetBkMode, SetTextColor, DT_CENTER,
+                            DT_SINGLELINE, DT_VCENTER, TRANSPARENT,
+                        };
+                        let old = SelectObject(dc, st.font.into());
+                        SetBkMode(dc, TRANSPARENT);
+                        SetTextColor(dc, st.style.bg);
+                        let mut w16: Vec<u16> = "?".encode_utf16().collect();
+                        let mut trc = rc;
+                        DrawTextW(
+                            dc,
+                            &mut w16,
+                            &mut trc,
+                            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                        );
+                        SelectObject(dc, old);
+                        let _ = EndPaint(hwnd, &ps);
+                        return LRESULT(0);
+                    }
                 }
             }
             let _ = EndPaint(hwnd, &ps);
