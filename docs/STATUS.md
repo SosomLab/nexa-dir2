@@ -7,11 +7,14 @@
 > (스플리터 음수 rect 정규화·0-rect 도크 히트) ④ **X-22 QA**: droplist **owner
 > 승격 크래시**(팝업 USERDATA로 해소·fontbox 타이머 누수 동일 수리) + 메뉴 명령
 > **설정 즉시 영속**(persist_settings — 비정상 종료 유실 방지).
-> ⑤ **ctl 확장 3종 + Nx 명명 규약**(X-23 토대 — 일괄 이름 변경 카드 재편):
-> NxGroupCard(타이틀+본문 카드·라운드/각진·타이틀 자식 배치)·NxComboBox
-> (macOS 팝업 버튼 — ✓ 팝업·자동 높이 = 글꼴+최소 여백)·NxCheckBox(라운드
-> 박스 토글) — 클래스 = `Nexa.Nx*` 통일. 검증 갤러리 ctldemo(임시 🃏 버튼).
-> 테스트 186 green·clippy 0·exe 1.18MB. 다음: X-23 카드 재편(사용자 주도
+> ⑤ **ctl Nx 컨트롤 5종 + 규약 2건**(X-23 토대 — 일괄 이름 변경 카드 재편,
+> macOS 시안): NxGroupCard(타이틀+본문 카드·타이틀 자식 배치)·NxComboBox
+> (✓ 팝업 버튼)·NxCheckBox(라운드 박스 토글 — 글꼴 정사각)·NxTextBox(포커스
+> accent 링·텍스트 API 위임)·NxIconButton(**shape 투명** 원형 리전·Icon enum
+> — PNG 알파는 확장 변형 후속). 규약 = **Nx 명명**(클래스 `Nexa.Nx*`) +
+> **공통 자동 높이**(`h<=0` 전 컨트롤 동일 — 수정 없이 반듯한 기본 배치).
+> 검증 갤러리 ctldemo(임시 🃏 버튼).
+> 테스트 186 green·clippy 0·exe 1.20MB. 다음: X-23 카드 재편(사용자 주도
 > 탐색) · X-13 2/2 · X-16 백로그.
 >
 > (이전 07-16) — 대규모 하루: 병합 브랜치 14개 + 등재 4건(X-15~X-20).
