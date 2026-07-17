@@ -132,6 +132,11 @@ unsafe fn build(win: HWND, font: HFONT) {
         st,
     );
     let t = ctl::groupcard::title_rect(a);
+    // 타이틀 밴드 위 컨트롤 = behind를 밴드 색(sel_bg)으로(AA 모서리 블렌드)
+    let st_band = Style {
+        behind: st.sel_bg,
+        ..st
+    };
     let cb_h = 24;
     ctl::combobox::create(
         a,
@@ -150,7 +155,7 @@ unsafe fn build(win: HWND, font: HFONT) {
             "Add Date",
         ],
         0,
-        st,
+        st_band,
     );
     // 타이틀 우측 +/−(shape 투명 검증 — 회색 타이틀 밴드 위 원형만 보여야 함)
     let ib = 20;
@@ -164,7 +169,7 @@ unsafe fn build(win: HWND, font: HFONT) {
         font,
         ctl::iconbutton::Icon::Plus,
         true,
-        st,
+        st_band,
     );
     ctl::iconbutton::create(
         a,
@@ -175,7 +180,7 @@ unsafe fn build(win: HWND, font: HFONT) {
         font,
         ctl::iconbutton::Icon::Minus,
         false, // 삭제 대상이 자신뿐 = 비활성(시안)
-        st,
+        st_band,
     );
     let b = ctl::groupcard::body_rect(a);
     let (bx, by) = (b.left + 12, b.top + 12);

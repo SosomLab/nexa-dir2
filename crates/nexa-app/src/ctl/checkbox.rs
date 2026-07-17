@@ -12,12 +12,12 @@
 //! - 조회/설정: [`NXCHK_GETCHECK`]/[`NXCHK_SETCHECK`](WM_USER+95/96 — SETCHECK
 //!   통지 없음). 배경 = `style.bg`(호스트 배경과 일치시킬 것 — 카드 위 = 카드 bg).
 
+use nexa_gui::{DrawCtx, Rect};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, InvalidateRect,
-    LineTo, MoveToEx, RoundRect, SelectObject, SetBkMode, SetTextColor, DT_LEFT, DT_SINGLELINE,
-    DT_VCENTER, HFONT, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
+    BeginPaint, DrawTextW, EndPaint, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
+    DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, GetWindowLongPtrW,
@@ -26,6 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_PAINT, WM_SETFONT, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
+use super::gdipctx::{color, GdipCtx};
 use super::style::{auto_height, fill, font_height, Style};
 
 /// 토글 통지(WM_COMMAND HIWORD).
@@ -179,35 +180,29 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 } else {
                     st.style.sel_bg
                 };
-                let brush = CreateSolidBrush(box_color);
-                let pen = CreatePen(PS_SOLID, 1, box_color);
-                let ob = SelectObject(dc, brush.into());
-                let op = SelectObject(dc, pen.into());
-                let _ = RoundRect(
-                    dc,
-                    rc.left,
-                    btop,
-                    rc.left + side,
-                    btop + side,
-                    radius,
-                    radius,
-                );
-                SelectObject(dc, op);
-                SelectObject(dc, ob);
-                let _ = DeleteObject(pen.into());
-                let _ = DeleteObject(brush.into());
-                if st.checked {
-                    // 흰 ✓ — 펜 폴리라인(시안)
-                    let cpen = CreatePen(PS_SOLID, 2, st.style.bg);
-                    let old = SelectObject(dc, cpen.into());
-                    let (cx, cy) = (rc.left + side / 2, btop + side / 2);
-                    let _ = MoveToEx(dc, cx - side / 4, cy, None);
-                    let _ = LineTo(dc, cx - side / 12, cy + side / 4 - 1);
-                    let _ = LineTo(dc, cx + side / 4, cy - side / 5);
-                    SelectObject(dc, old);
-                    let _ = DeleteObject(cpen.into());
-                }
-                // 라벨(우측 세로 중앙 — 빈 문자열 = 박스만)
+                {
+                    // AA 도형 = DrawCtx 백엔드만(07-17 규약 — GDI+ 직접 호출 금지)
+                    let mut g = GdipCtx::new(dc);
+                    g.fill_round_rect(
+                        Rect::new(rc.left, btop, side, side),
+                        radius,
+                        color(box_color),
+                    );
+                    if st.checked {
+                        // 흰 ✓ — AA 폴리라인(둥근 캡)
+                        let (cx, cy) = (rc.left + side / 2, btop + side / 2);
+                        g.polyline(
+                            &[
+                                (cx - side / 4, cy),
+                                (cx - side / 12, cy + side / 4 - 1),
+                                (cx + side / 4, cy - side / 5),
+                            ],
+                            color(st.style.bg),
+                            2.0,
+                        );
+                    }
+                } // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
+                  // 라벨(우측 세로 중앙 — 빈 문자열 = 박스만)
                 if !st.label.is_empty() {
                     let old = SelectObject(dc, st.font.into());
                     SetBkMode(dc, TRANSPARENT);
