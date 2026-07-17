@@ -361,11 +361,12 @@ unsafe extern "system" fn ctl_proc(
                 SetTextColor(dc, st.style.text);
                 if let Some(label) = st.items.get(st.sel) {
                     let mut w16: Vec<u16> = label.encode_utf16().collect();
+                    // 세로 중앙 + 1px 하향(사용자 QA 07-17 — 위에 붙어 보임)
                     let mut trc = RECT {
                         left: rc.left + 10,
-                        top: rc.top,
+                        top: rc.top + 1,
                         right: rc.right - 22,
-                        bottom: rc.bottom,
+                        bottom: rc.bottom + 1,
                     };
                     DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 }
@@ -469,9 +470,12 @@ unsafe extern "system" fn pop_proc(
                     let hot = idx == st.hot;
                     SetTextColor(dc, if hot { st.style.bg } else { st.style.text });
                     let mut w16: Vec<u16> = st.items[idx].encode_utf16().collect();
+                    // 본체와 동일 1px 하향(세로 중앙 보정)
                     let mut trc = RECT {
                         left: cell.left + CHECK_W,
-                        ..cell
+                        top: cell.top + 1,
+                        right: cell.right,
+                        bottom: cell.bottom + 1,
                     };
                     DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 }

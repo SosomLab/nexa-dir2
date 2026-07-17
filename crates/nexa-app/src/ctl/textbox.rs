@@ -143,7 +143,8 @@ unsafe fn layout(hwnd: HWND) {
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
     let eh = (font_height(hwnd, st.font) + 2).min(rc.bottom - rc.top - 4);
-    let ey = rc.top + ((rc.bottom - rc.top) - eh) / 2;
+    // 세로 중앙 + 1px 하향(사용자 QA 07-17 — 위에 붙어 보임)
+    let ey = rc.top + ((rc.bottom - rc.top) - eh) / 2 + 1;
     let _ = MoveWindow(
         st.edit,
         rc.left + PAD_X,
