@@ -181,8 +181,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             let _ = InvalidateRect(Some(hwnd), None, true);
             LRESULT(0)
         }
-        // 텍스트 API 위임(드롭인 계약 — searchbox 규약)
-        m if m == WM_SETTEXT || m == WM_GETTEXT || m == WM_GETTEXTLENGTH || m == EM_SETCUEBANNER => {
+        // 텍스트 API 위임(드롭인 계약 — searchbox 규약. EM_SETSEL = 저장 팝업
+        // 기본 이름 전체 선택 시안 07-18)
+        m if m == WM_SETTEXT
+            || m == WM_GETTEXT
+            || m == WM_GETTEXTLENGTH
+            || m == EM_SETCUEBANNER
+            || m == 0x00B1 /* EM_SETSEL */ =>
+        {
             match state(hwnd).as_ref() {
                 Some(st) => SendMessageW(st.edit, m, Some(wparam), Some(lparam)),
                 None => DefWindowProcW(hwnd, msg, wparam, lparam),

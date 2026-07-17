@@ -1,6 +1,20 @@
 # STATUS — Nexa Dir 2 진행 현황
 
-> **갱신: 2026-07-17 (KST)** — ① **X-22 일괄 이름 변경 v2**(PF 6동작 패리티 —
+> **갱신: 2026-07-18 (KST)** — ① **NxGrid(ctl 14호)**: 컬럼 리사이즈·체크 마크
+> 열·**오버레이 스크롤바 세로/가로**(macOS — 얇은 썸 페이드↔드래그 시 일반 바,
+> 픽셀 실측)·**행 선택 파일 목록 규약**(Shift/Ctrl/Ctrl+방향키+Space/Ctrl+A·
+> 포커스 프레임·NXGR_SELCHANGE)·**GridOpts**(무헤더·지브라·외곽선·
+> Mark::Check/⊖ — "셀 데이터화" 확장 계약) ② **user32 AV 진범 채록**(빈 셀
+> 빈 Vec→DrawTextW — 런타임 이분) ③ **X-23 2차**: 미리보기 = NxGrid(Apply
+> 행별 제외 토글+건수 연동) + **프리셋 v2 macOS 시안**([…⌄] 메뉴
+> [프리셋들/─/Save/Edit]+건수 라벨 동일 행 · Save = 무캐션 **DWM 라운드
+> 팝업**[기본 이름 전체 선택·우하단 취소/OK] · Edit = 지브라 목록 행별 빨간
+> ⊖ **스테이징 삭제**[OK 확정/취소 폐기]) ④ NxMenuButton 구분선 ·
+> NxTextBox EM_SETSEL 위임 · Style.danger. 실기 왕복 QA 완료.
+> 테스트 186 green·clippy 0. 다음: X-23 잔여 β(카드 스크롤·재배치) ·
+> X-13 2/2 · X-16 백로그.
+>
+> (이전 07-17) — ① **X-22 일괄 이름 변경 v2**(PF 6동작 패리티 —
 > 코어 재작성[스코프·Mode·임의 위치·감싸기·**Date 엔진**·v1 프리셋 호환] +
 > **ctl 3종 신설**[segmented/spin/droplist — 판매용 추상화] + UI 재구성[✓ 미리보기
 > +건수]) ② **X-21 shell: 특수 폴더**(SHParseDisplayName 위임) ③ X-20 QA 2건

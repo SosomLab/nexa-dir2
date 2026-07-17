@@ -26,6 +26,8 @@ pub struct Style {
     /// 원형/라운드 컨트롤은 리전 클립 대신 이 색으로 모서리를 칠하고 그 위에
     /// AA 도형을 얹는다. 부모 배경과 같은 값을 넘기면 어떤 배경에서도 자연스럽다.
     pub behind: COLORREF,
+    /// 파괴적 액션(삭제 ⊖ 등 — 07-18 Edit 시안).
+    pub danger: COLORREF,
 }
 
 impl Default for Style {
@@ -38,6 +40,7 @@ impl Default for Style {
             accent: COLORREF(0x00D4_7800),
             sel_bg: COLORREF(0x00EC_E7E4),
             behind: COLORREF(0x00FF_FFFF),
+            danger: COLORREF(0x0030_3BFF),
         }
     }
 }

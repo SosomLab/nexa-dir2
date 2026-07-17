@@ -21,8 +21,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage,
     GWLP_USERDATA, HMENU, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
-    WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_GROUP, WS_POPUP, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE,
 };
 
 use crate::ctl::combobox::{NXCB_GETSEL, NXCB_SETSEL};
@@ -89,16 +89,14 @@ const ID_MV_LEN: u32 = 51;
 const ID_MV_FRONT: u32 = 52;
 const ID_EXT_FROM: u32 = 60;
 const ID_EXT_TO: u32 = 61;
-// 프리셋·확정(X-23: 프리셋 = 이름 입력 + `…` 메뉴버튼 — PF 시안)
-const ID_PRESET_NAME: u32 = 70;
-/// 프리셋 메뉴(항목 0 = 현재 이름으로 저장·1.. = 저장된 프리셋 불러오기).
+/// 미리보기 그리드(NxGrid — 적용 열 토글 통지, 07-18).
+const ID_PREV: u32 = 84;
+/// 프리셋 `…` 메뉴(07-18 v2 — 프리셋들·구분선·Save/Edit. 이름은 Save 팝업).
 const ID_PRESET_MENU: u32 = 71;
 const ID_APPLY: u32 = 80;
 const ID_CANCEL: u32 = 81;
 
 // user32 컨트롤 메시지(winuser.h)
-const LB_ADDSTRING: u32 = 0x0180;
-const LB_RESETCONTENT: u32 = 0x0184;
 const EM_SETCUEBANNER: u32 = 0x1501;
 
 /// 동작 종류(카드 타이틀 콤보 순서 — X-23 재편: PF 카드 순서·치환 텍스트/정규식 분리).
@@ -129,7 +127,10 @@ struct BrState {
     /// 위→아래 순서 적용. + = 아래에 카드 추가·− = 해당 카드 삭제,
     /// **마지막 1장은 삭제 불가** — 사용자 확정 07-17).
     cards: Vec<HWND>,
+    /// 미리보기 NxGrid(적용/이전/이후 — 07-18).
     prev: HWND,
+    /// 행별 적용 제외(그리드 적용 열 체크 해제 — items와 같은 길이).
+    excluded: Vec<bool>,
     err: HWND,
     apply: HWND,
     /// 프리셋 `…` 메뉴버튼(항목 갱신 = 재생성 — X-23 PF 시안).
@@ -388,11 +389,6 @@ fn conflict_label(c: Conflict) -> String {
     }
 }
 
-unsafe fn lb_add(list: HWND, line: &str) {
-    let w = windows::core::HSTRING::from(line);
-    SendMessageW(list, LB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
-}
-
 /// 카드의 현재 kind(타이틀 콤보 선택).
 unsafe fn card_kind(card: HWND) -> usize {
     SendMessageW(ctl(card, ID_KIND), NXCB_GETSEL, None, None)
@@ -462,21 +458,29 @@ unsafe fn refresh_preview(st: &mut BrState) {
     let confs = conflicts(&triples, &|parent, name| {
         Path::new(parent).join(name).exists()
     });
-    SendMessageW(st.prev, LB_RESETCONTENT, None, None);
+    // 미리보기 그리드(NxGrid — 사용자 확정 07-18): 적용(변경 행만 체크 마크 —
+    // 클릭 = 행별 제외) / 이전 / 이후. 충돌 행 = 마크 없음 + 사유 표기.
     let mut changed = 0usize;
+    let mut rows = Vec::with_capacity(triples.len());
     for (i, (_, old, new)) in triples.iter().enumerate() {
-        // 변경 항목 = ✓ 마커·무변경 = 들여쓰기 유지(PF 미리보기 규약 — v2)
-        let line = if confs[i] != Conflict::None {
-            format!("⚠ {old} → {new} ({})", conflict_label(confs[i]))
+        let (check, after) = if confs[i] != Conflict::None {
+            (None, format!("⚠ {new} ({})", conflict_label(confs[i])))
         } else if new != old {
-            changed += 1;
-            format!("✓ {old} → {new}")
+            let on = !st.excluded.get(i).copied().unwrap_or(false);
+            if on {
+                changed += 1;
+            }
+            (Some(on), new.clone())
         } else {
-            format!("   {old}")
+            (None, String::new()) // 무변경 = 이후 빈 칸(변경 없음이 한눈에)
         };
-        lb_add(st.prev, &line);
+        rows.push(crate::ctl::grid::GridRow {
+            check,
+            cells: vec![old.clone(), after],
+        });
     }
-    // "N개 항목이 변경됩니다"(PF 카운트 — v2)
+    crate::ctl::grid::set_rows(st.prev, rows);
+    // "N개 항목이 변경됩니다"(PF 카운트 — 체크 해제 행 제외)
     set_text(
         st.count,
         &crate::i18n::trf("bulk.count", &[&changed.to_string()]),
@@ -1147,21 +1151,27 @@ fn preset_names() -> Vec<String> {
     names
 }
 
-/// 프리셋 `…` 메뉴 재구성(저장 후·초기) — NxMenuButton은 항목 불변이라 재생성.
-/// 항목 0 = "현재 이름으로 저장" · 1.. = 저장된 프리셋(클릭 = 불러오기).
+/// 프리셋 `…` 메뉴 재구성(저장/삭제 후·초기) — 순서(사용자 확정 07-18):
+/// 저장된 프리셋들 → 구분선 → Save/Edit Renaming Sequence…(NxMenuButton은
+/// 항목 불변 규약 — 재생성으로 갱신).
 unsafe fn rebuild_preset_menu(dlg: HWND, st: &mut BrState) {
     if !st.preset_menu.is_invalid() {
         let _ = DestroyWindow(st.preset_menu);
     }
     st.preset_names = preset_names();
-    let save_label = tr("bulk.preset.save");
-    let mut items: Vec<&str> = vec![save_label.as_str()];
-    items.extend(st.preset_names.iter().map(String::as_str));
-    let sy = CLIENT_H - PAD - 26 - 6 - 23;
+    let save_label = tr("bulk.preset.saveSeq");
+    let edit_label = tr("bulk.preset.editSeq");
+    let mut items: Vec<&str> = st.preset_names.iter().map(String::as_str).collect();
+    if !items.is_empty() {
+        items.push("-"); // 구분선(프리셋 위쪽·고정 액션 아래쪽)
+    }
+    items.push(save_label.as_str());
+    items.push(edit_label.as_str());
+    // 우측 컬럼 상단 [… ⌄] — 오른쪽에 변경 건수 라벨(시안 07-18)
     st.preset_menu = crate::ctl::menubutton::create(
         dlg,
-        PAD + FORM_W - 48,
-        sy,
+        PAD + FORM_W + PAD,
+        PAD - 3,
         48,
         0,
         ID_PRESET_MENU,
@@ -1169,6 +1179,377 @@ unsafe fn rebuild_preset_menu(dlg: HWND, st: &mut BrState) {
         &items,
         Style::default(),
     );
+}
+
+// ── 프리셋 이름 입력 팝업(Save Renaming Sequence… — 사용자 확정 07-18) ──
+
+const PROMPT_CLASS: PCWSTR = w!("NexaPromptName");
+static PROMPT_REGISTER: std::sync::Once = std::sync::Once::new();
+
+struct PromptState {
+    edit: HWND,
+    result: Option<String>,
+}
+
+unsafe extern "system" fn prompt_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let st = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut PromptState;
+    match msg {
+        WM_COMMAND if !st.is_null() => {
+            let id = (wparam.0 & 0xFFFF) as u32;
+            let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+            if code == 1 {
+                if id == 2 {
+                    // 확인 = 이름 확정(빈 값·금지 문자 정제)
+                    let name: String = get_text((*st).edit)
+                        .chars()
+                        .filter(|c| !"<>:\"/\\|?*".contains(*c))
+                        .collect();
+                    let name = name.trim().to_string();
+                    if !name.is_empty() {
+                        (*st).result = Some(name);
+                    }
+                    let _ = DestroyWindow(hwnd);
+                } else if id == 3 {
+                    let _ = DestroyWindow(hwnd);
+                }
+            }
+            LRESULT(0)
+        }
+        m if m == WM_CTLCOLORSTATIC || m == WM_CTLCOLORBTN => {
+            let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
+            SetBkMode(hdc, TRANSPARENT);
+            LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
+        }
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// 무캐션 라운드 팝업(macOS 시안 07-18) — Win11 DWM 라운드 코너(Win10 = 각).
+unsafe fn round_popup(hwnd: HWND) {
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    let pref = DWMWCP_ROUND;
+    let _ = DwmSetWindowAttribute(
+        hwnd,
+        DWMWA_WINDOW_CORNER_PREFERENCE,
+        &pref as *const _ as *const core::ffi::c_void,
+        std::mem::size_of_val(&pref) as u32,
+    );
+}
+
+/// 버튼 2개(취소·OK)를 우하단 정렬(w=0 자동 폭 생성 후 실측 재배치) — OK 최우측.
+unsafe fn place_buttons_br(ok: HWND, cancel: HWND, w0: i32, by: i32, pad: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOSIZE, SWP_NOZORDER};
+    let width = |h: HWND| {
+        let mut rc = RECT::default();
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut rc);
+        rc.right - rc.left
+    };
+    let (ow, cw) = (width(ok), width(cancel));
+    let ox = w0 - pad - ow;
+    let _ = SetWindowPos(ok, None, ox, by, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    let _ = SetWindowPos(
+        cancel,
+        None,
+        ox - 8 - cw,
+        by,
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOZORDER,
+    );
+}
+
+/// 이름 입력 모달(macOS 시안 07-18 — 무캐션 라운드·상단 라벨·기본 이름 전체
+/// 선택·우하단 [취소][OK]). 취소/빈 값 = None.
+unsafe fn prompt_name(owner: HWND, font: HFONT) -> Option<String> {
+    PROMPT_REGISTER.call_once(|| {
+        let wc = WNDCLASSW {
+            lpszClassName: PROMPT_CLASS,
+            lpfnWndProc: Some(prompt_proc),
+            hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as isize as *mut core::ffi::c_void),
+            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                None,
+                windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
+            )
+            .unwrap_or_default(),
+            ..Default::default()
+        };
+        let _ = RegisterClassW(&wc);
+    });
+    const PAD: i32 = 20;
+    let (w0, h0) = (360, 150);
+    let mut orc = RECT::default();
+    let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(owner, &mut orc);
+    let (cx, cy) = (
+        orc.left + ((orc.right - orc.left) - w0) / 2,
+        orc.top + ((orc.bottom - orc.top) - h0) / 2,
+    );
+    let dlg = CreateWindowExW(
+        WINDOW_EX_STYLE(0x00000001),
+        PROMPT_CLASS,
+        w!(""),
+        WINDOW_STYLE(WS_POPUP.0 | windows::Win32::UI::WindowsAndMessaging::WS_BORDER.0)
+            | WS_VISIBLE,
+        cx,
+        cy,
+        w0,
+        h0,
+        Some(owner),
+        None,
+        None,
+        None,
+    )
+    .ok()?;
+    round_popup(dlg);
+    let style2 = Style::default();
+    let default_name = tr("bulk.preset.savedSeq");
+    crate::ctl::label::create(
+        dlg,
+        PAD,
+        PAD,
+        w0 - PAD * 2,
+        0,
+        4,
+        font,
+        &default_name,
+        crate::ctl::label::LabelAlign::Left,
+        style2,
+    );
+    let edit = crate::ctl::textbox::create(dlg, PAD, PAD + 28, w0 - PAD * 2, 0, 1, font, style2);
+    set_text(edit, &default_name);
+    // 전체 선택(EM_SETSEL=0x00B1 — 시안: 기본 이름이 선택된 채 열림)
+    SendMessageW(edit, 0x00B1, Some(WPARAM(0)), Some(LPARAM(-1)));
+    let by = h0 - PAD - 24;
+    let ok = crate::ctl::button::create(
+        dlg,
+        0,
+        by,
+        0,
+        0,
+        2,
+        font,
+        &tr("bulk.preset.ok"),
+        crate::ctl::button::ButtonKind::Default,
+        true,
+        style2,
+    );
+    let cancel = crate::ctl::button::create(
+        dlg,
+        0,
+        by,
+        0,
+        0,
+        3,
+        font,
+        &tr("bulk.preset.cancel"),
+        crate::ctl::button::ButtonKind::Normal,
+        true,
+        style2,
+    );
+    place_buttons_br(ok, cancel, w0, by, PAD);
+    let mut pst = Box::new(PromptState { edit, result: None });
+    SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *pst as *mut PromptState as isize);
+    let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(edit));
+    let _ = EnableWindow(owner, false);
+    let mut msg = MSG::default();
+    while IsWindow(Some(dlg)).as_bool() && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    let _ = EnableWindow(owner, true);
+    let _ = SetForegroundWindow(owner);
+    pst.result.take()
+}
+
+// ── 프리셋 관리 팝업(Edit Renaming Sequences… — macOS 시안 07-18:
+//    무헤더 지브라 목록 + 행별 빨간 ⊖, 삭제는 OK까지 스테이징) ──
+
+const MANAGE_CLASS: PCWSTR = w!("NexaManagePresets");
+static MANAGE_REGISTER: std::sync::Once = std::sync::Once::new();
+
+struct ManageState {
+    grid: HWND,
+    /// 화면 목록(⊖ 클릭 즉시 제거 — 스테이징 반영 상태).
+    names: Vec<String>,
+    /// OK 확정 시 실제 파일 삭제 목록(취소 = 폐기).
+    deleted: Vec<String>,
+    font: HFONT,
+}
+
+unsafe fn manage_fill(st: &mut ManageState) {
+    let rows = st
+        .names
+        .iter()
+        .map(|n| crate::ctl::grid::GridRow {
+            check: Some(false), // Minus 마크 표시 조건(Some — 값은 미사용)
+            cells: vec![n.clone()],
+        })
+        .collect();
+    crate::ctl::grid::set_rows(st.grid, rows);
+}
+
+unsafe extern "system" fn manage_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let st = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ManageState;
+    match msg {
+        WM_COMMAND if !st.is_null() => {
+            let id = (wparam.0 & 0xFFFF) as u32;
+            let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+            let stm = &mut *st;
+            if id == 1 && code == crate::ctl::grid::NXGR_TOGGLE {
+                // ⊖ 클릭 = 목록에서 즉시 제거(스테이징 — 시안 동작)
+                let idx = SendMessageW(stm.grid, crate::ctl::grid::NXGR_GETROW, None, None).0;
+                if idx >= 0 && (idx as usize) < stm.names.len() {
+                    let name = stm.names.remove(idx as usize);
+                    stm.deleted.push(name);
+                    manage_fill(stm);
+                }
+            } else if code == 1 && id == 2 {
+                // OK = 스테이징된 삭제 확정(파일 제거)
+                for name in &stm.deleted {
+                    let _ = std::fs::remove_file(preset_dir().join(format!("{name}.cfg")));
+                }
+                let _ = DestroyWindow(hwnd);
+            } else if code == 1 && id == 3 {
+                let _ = DestroyWindow(hwnd); // 취소 = 스테이징 폐기
+            }
+            LRESULT(0)
+        }
+        m if m == WM_CTLCOLORSTATIC || m == WM_CTLCOLORBTN => {
+            let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut core::ffi::c_void);
+            SetBkMode(hdc, TRANSPARENT);
+            LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
+        }
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// 프리셋 관리 모달(macOS 시안 07-18) — 무헤더 지브라 목록 + 행별 ⊖,
+/// 우하단 [취소][OK]. OK = 삭제 확정, 취소 = 폐기. 닫은 뒤 호출부가 메뉴 재구성.
+unsafe fn manage_presets(owner: HWND, font: HFONT) {
+    MANAGE_REGISTER.call_once(|| {
+        let wc = WNDCLASSW {
+            lpszClassName: MANAGE_CLASS,
+            lpfnWndProc: Some(manage_proc),
+            hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as isize as *mut core::ffi::c_void),
+            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                None,
+                windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
+            )
+            .unwrap_or_default(),
+            ..Default::default()
+        };
+        let _ = RegisterClassW(&wc);
+    });
+    const PAD: i32 = 20;
+    let (w0, h0) = (340, 360);
+    let mut orc = RECT::default();
+    let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(owner, &mut orc);
+    let (cx, cy) = (
+        orc.left + ((orc.right - orc.left) - w0) / 2,
+        orc.top + ((orc.bottom - orc.top) - h0) / 2,
+    );
+    let Ok(dlg) = CreateWindowExW(
+        WINDOW_EX_STYLE(0x00000001),
+        MANAGE_CLASS,
+        w!(""),
+        WINDOW_STYLE(WS_POPUP.0 | windows::Win32::UI::WindowsAndMessaging::WS_BORDER.0)
+            | WS_VISIBLE,
+        cx,
+        cy,
+        w0,
+        h0,
+        Some(owner),
+        None,
+        None,
+        None,
+    ) else {
+        return;
+    };
+    round_popup(dlg);
+    let style2 = Style::default();
+    let by = h0 - PAD - 24;
+    let list_w = w0 - PAD * 2;
+    let cols = [("", list_w)];
+    let grid = crate::ctl::grid::create(
+        dlg,
+        PAD,
+        PAD,
+        list_w,
+        by - PAD * 2,
+        1,
+        font,
+        &cols,
+        crate::ctl::grid::GridOpts {
+            no_header: true,
+            zebra: true,
+            outline: true,
+            mark: crate::ctl::grid::Mark::Minus,
+        },
+        style2,
+    );
+    let ok = crate::ctl::button::create(
+        dlg,
+        0,
+        by,
+        0,
+        0,
+        2,
+        font,
+        &tr("bulk.preset.ok"),
+        crate::ctl::button::ButtonKind::Default,
+        true,
+        style2,
+    );
+    let cancel = crate::ctl::button::create(
+        dlg,
+        0,
+        by,
+        0,
+        0,
+        3,
+        font,
+        &tr("bulk.preset.cancel"),
+        crate::ctl::button::ButtonKind::Normal,
+        true,
+        style2,
+    );
+    place_buttons_br(ok, cancel, w0, by, PAD);
+    let mut mst = Box::new(ManageState {
+        grid,
+        names: preset_names(),
+        deleted: Vec::new(),
+        font,
+    });
+    manage_fill(&mut mst);
+    SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *mst as *mut ManageState as isize);
+    let _ = EnableWindow(owner, false);
+    let mut msg = MSG::default();
+    while IsWindow(Some(dlg)).as_bool() && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    let _ = EnableWindow(owner, true);
+    let _ = SetForegroundWindow(owner);
+    let _ = mst.font; // 수명 명시(폰트는 호출부 소유)
 }
 
 unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -1242,43 +1623,59 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     }
                 }
-                (ID_PRESET_MENU, 1 /* NXMB_PICK — … 메뉴(PF 시안) */) => {
+                (ID_PRESET_MENU, 1 /* NXMB_PICK — 프리셋 메뉴(07-18 v2) */) => {
+                    let stm = &mut *st;
                     let idx = SendMessageW(
-                        (*st).preset_menu,
+                        stm.preset_menu,
                         crate::ctl::menubutton::NXMB_GETPICK,
                         None,
                         None,
                     )
                     .0;
-                    if idx == 0 {
-                        // 항목 0 = 현재 이름으로 저장(금지 문자 제거 — 빈 이름·
-                        // 빈 파이프라인 무시) → 메뉴 재구성
-                        let name: String = get_text(ctl(hwnd, ID_PRESET_NAME))
-                            .chars()
-                            .filter(|c| !"<>:\"/\\|?*".contains(*c))
-                            .collect();
-                        let name = name.trim().to_string();
-                        if !name.is_empty() && !(*st).ops.is_empty() {
-                            let _ = crate::config::save(
-                                &preset_dir(),
-                                &format!("{name}.cfg"),
-                                &serialize_ops(&(*st).ops),
-                            );
-                            rebuild_preset_menu(hwnd, &mut *st);
+                    let n = stm.preset_names.len() as isize;
+                    let sep = if n > 0 { 1 } else { 0 };
+                    if idx >= 0 && idx < n {
+                        // 프리셋 클릭 = 불러오기(카드 스택 재구성)
+                        if let Some(name) = {
+                            let names: &Vec<String> = &stm.preset_names;
+                            names.get(idx as usize).cloned()
+                        } {
+                            if let Some(text) =
+                                crate::config::load(&preset_dir(), &format!("{name}.cfg"))
+                            {
+                                let ops = parse_ops(&text);
+                                rebuild_cards(hwnd, stm, &ops);
+                                refresh_preview(stm);
+                            }
                         }
-                    } else if let Some(name) = {
-                        // 명시 재차용(원시 포인터 암시적 autoref 금지 lint)
-                        let names: &Vec<String> = &(*st).preset_names;
-                        names.get((idx - 1) as usize).cloned()
-                    } {
-                        // 항목 1.. = 저장된 프리셋 불러오기(카드 스택 재구성)
-                        if let Some(text) =
-                            crate::config::load(&preset_dir(), &format!("{name}.cfg"))
-                        {
-                            let ops = parse_ops(&text);
-                            rebuild_cards(hwnd, &mut *st, &ops);
-                            refresh_preview(&mut *st);
+                    } else if idx == n + sep {
+                        // Save Renaming Sequence… = 이름 입력 팝업(사용자 확정)
+                        if !stm.ops.is_empty() {
+                            if let Some(name) = prompt_name(hwnd, stm.font) {
+                                let _ = crate::config::save(
+                                    &preset_dir(),
+                                    &format!("{name}.cfg"),
+                                    &serialize_ops(&stm.ops),
+                                );
+                                rebuild_preset_menu(hwnd, stm);
+                            }
                         }
+                    } else if idx == n + sep + 1 {
+                        // Edit Renaming Sequences… = 관리 팝업(체크 삭제)
+                        manage_presets(hwnd, stm.font);
+                        rebuild_preset_menu(hwnd, stm);
+                    }
+                }
+                (ID_PREV, 1 /* NXGR_TOGGLE — 적용 열 체크(행별 제외) */) => {
+                    let stm = &mut *st; // 명시 재차용(원시 포인터 autoref lint)
+                    let idx = SendMessageW(stm.prev, crate::ctl::grid::NXGR_GETROW, None, None).0;
+                    if idx >= 0 {
+                        let checked =
+                            crate::ctl::grid::row_check(stm.prev, idx as usize).unwrap_or(true);
+                        if let Some(e) = stm.excluded.get_mut(idx as usize) {
+                            *e = !checked;
+                        }
+                        refresh_preview(stm); // 카운트·[적용] 활성 재계산
                     }
                 }
                 (ID_APPLY, 0) => {
@@ -1294,12 +1691,17 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         })
                         .collect();
                     let new_names = preview(&inputs, &(*st).ops, (*st).tz_min);
+                    let excluded = &(*st).excluded;
                     let out: Vec<(String, String, String)> = (*st)
                         .items
                         .iter()
                         .zip(&new_names)
-                        .filter(|((_, old, _, _, _), new)| *new != old)
-                        .map(|((p, o, _, _, _), n)| (p.clone(), o.clone(), n.clone()))
+                        .enumerate()
+                        .filter(|(i, ((_, old, _, _, _), new))| {
+                            // 그리드 적용 열 체크 해제 행 = 제외(07-18)
+                            *new != old && !excluded.get(*i).copied().unwrap_or(false)
+                        })
+                        .map(|(_, ((p, o, _, _, _), n))| (p.clone(), o.clone(), n.clone()))
                         .collect();
                     (*st).result = Some(out);
                     let _ = DestroyWindow(hwnd);
@@ -1428,21 +1830,8 @@ pub unsafe fn show(
     // ── 카드 스택(X-23 PF 모델): 초기 = Replace Text 카드 1장 ──
     let card0 = make_card(dlg, font, 0);
 
-    // ── 프리셋(PF 시안·사용자 확정 07-17): [이름 NxTextBox][… 메뉴버튼] 한 줄
-    //    — 메뉴 = 저장 + 저장된 프리셋(클릭 = 불러오기). 메뉴는 rebuild가 생성.
+    // ── 프리셋(07-18 v2): `…` 메뉴버튼만 — 이름은 Save 팝업이 입력받는다 ──
     let half = (FORM_W - 6) / 2;
-    let sy = CLIENT_H - PAD - 26 - 6 - 23;
-    let pn = crate::ctl::textbox::create(
-        dlg,
-        x,
-        sy,
-        FORM_W - 48 - 6,
-        0,
-        ID_PRESET_NAME,
-        font,
-        Style::default(),
-    );
-    cue(pn, &tr("bulk.preset.name"));
 
     // ── 하단 확정 버튼 ──
     let by = CLIENT_H - PAD - 26;
@@ -1471,34 +1860,9 @@ pub unsafe fn show(
         ID_CANCEL,
     );
 
-    // ── 우측: 검증 오류 + 미리보기 ──
+    // ── 우측: 상단 [… ⌄]+변경 건수(시안 07-18) · 미리보기 · 하단 검증 오류 ──
     let lx = PAD + FORM_W + PAD;
     let err = mk(
-        dlg,
-        font,
-        w!("STATIC"),
-        "",
-        0,
-        lx,
-        PAD,
-        CLIENT_W - lx - PAD,
-        18,
-        0,
-    );
-    let prev = mk(
-        dlg,
-        font,
-        w!("LISTBOX"),
-        "",
-        (WS_BORDER | WS_VSCROLL).0 | 0x1000 /* LBS_NOSEL */ | 0x0040, /* LBS_NOINTEGRALHEIGHT */
-        lx,
-        PAD + 22,
-        CLIENT_W - lx - PAD,
-        CLIENT_H - PAD * 2 - 22 - 24,
-        0,
-    );
-    // 변경 건수(PF "N items will be renamed" — v2)
-    let count = mk(
         dlg,
         font,
         w!("STATIC"),
@@ -1508,14 +1872,54 @@ pub unsafe fn show(
         CLIENT_H - PAD - 20,
         CLIENT_W - lx - PAD,
         18,
+        0,
+    );
+    // 미리보기 = NxGrid(적용/이전/이후 — 컬럼 리사이즈·적용 열 체크 토글, 07-18)
+    let pw = CLIENT_W - lx - PAD;
+    let apply_w = 56;
+    let half_w = (pw - apply_w) / 2;
+    let grid_cols = [
+        (tr("bulk.grid.apply"), apply_w),
+        (tr("bulk.grid.before"), half_w),
+        (tr("bulk.grid.after"), half_w),
+    ];
+    let grid_refs: Vec<(&str, i32)> = grid_cols.iter().map(|(t, w)| (t.as_str(), *w)).collect();
+    let prev = crate::ctl::grid::create(
+        dlg,
+        lx,
+        PAD + 28,
+        pw,
+        CLIENT_H - PAD * 2 - 28 - 24,
+        ID_PREV,
+        font,
+        &grid_refs,
+        crate::ctl::grid::GridOpts {
+            mark: crate::ctl::grid::Mark::Check,
+            ..Default::default()
+        },
+        Style::default(),
+    );
+    // 변경 건수(PF "N items will be renamed") — [… ⌄] 오른쪽 동일 행(시안 07-18)
+    let count = mk(
+        dlg,
+        font,
+        w!("STATIC"),
+        "",
+        0,
+        lx + 48 + 10,
+        PAD + 1,
+        CLIENT_W - lx - 48 - 10 - PAD,
+        18,
         ID_COUNT,
     );
 
+    let items_len = items.len();
     let mut state = Box::new(BrState {
         font,
         items,
         tz_min,
         ops: Vec::new(),
+        excluded: vec![false; items_len],
         cards: vec![card0],
         prev,
         err,
