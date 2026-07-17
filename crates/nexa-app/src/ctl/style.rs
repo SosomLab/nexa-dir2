@@ -63,6 +63,18 @@ pub(crate) unsafe fn frame(dc: HDC, rc: &windows::Win32::Foundation::RECT, color
     }
 }
 
+/// 텍스트 상/하 최소 여백(px) — 공통 자동 높이 = 글꼴 높이 + 2×PAD_Y.
+pub const PAD_Y: i32 = 4;
+
+/// **공통 자동 높이**(사용자 확정 07-17): 모든 Nx 컨트롤은 `h <= 0`일 때 이 값
+/// — 수정 없이 같은 row에 배치해도 기본 세로 크기·시각 중심이 일치한다.
+pub(crate) unsafe fn auto_height(
+    hwnd: windows::Win32::Foundation::HWND,
+    font: windows::Win32::Graphics::Gdi::HFONT,
+) -> i32 {
+    font_height(hwnd, font) + PAD_Y * 2
+}
+
 /// 글꼴 픽셀 높이(tmHeight) — 세로 중앙 배치 공용.
 pub(crate) unsafe fn font_height(
     hwnd: windows::Win32::Foundation::HWND,

@@ -12,9 +12,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_BTNFACE, HBRUSH, HFONT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SendMessageW, SetWindowTextW,
-    ES_AUTOHSCROLL, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-    WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_SETFONT, WNDCLASSW,
+    WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
 use crate::ctl;
@@ -36,6 +35,9 @@ const ID_OFF: u32 = 121;
 const ID_OPKIND: u32 = 130;
 /// 대소문자 일치 NxCheckBox(macOS 시안 — 박스만).
 const ID_CASE: u32 = 113;
+/// 카드 A 타이틀 우측 +/−(PF 시안 — NxIconButton, − = 비활성 데모).
+const ID_ADD: u32 = 140;
+const ID_REMOVE: u32 = 141;
 const ID_STATUS: u32 = 900;
 
 /// 갤러리 창 열기(모달 아님 — 앱 메시지 루프가 디스패치). 반환 = 창 핸들.
@@ -150,6 +152,31 @@ unsafe fn build(win: HWND, font: HFONT) {
         0,
         st,
     );
+    // 타이틀 우측 +/−(shape 투명 검증 — 회색 타이틀 밴드 위 원형만 보여야 함)
+    let ib = 20;
+    let iy = t.top + (t.bottom - t.top - ib) / 2;
+    ctl::iconbutton::create(
+        a,
+        330 - 8 - ib * 2 - 6,
+        iy,
+        ib,
+        ID_ADD,
+        font,
+        ctl::iconbutton::Icon::Plus,
+        true,
+        st,
+    );
+    ctl::iconbutton::create(
+        a,
+        330 - 8 - ib,
+        iy,
+        ib,
+        ID_REMOVE,
+        font,
+        ctl::iconbutton::Icon::Minus,
+        false, // 삭제 대상이 자신뿐 = 비활성(시안)
+        st,
+    );
     let b = ctl::groupcard::body_rect(a);
     let (bx, by) = (b.left + 12, b.top + 12);
     mk_static(a, font, "적용 대상:", bx, by + 4, 80);
@@ -183,27 +210,8 @@ unsafe fn build(win: HWND, font: HFONT) {
     // 박스만(라벨 = 좌측 STATIC — 시안 배치)·h=0 자동
     ctl::checkbox::create(a, bx + 88, by + 72, 0, 0, ID_CASE, font, "", false, st);
     mk_static(a, font, "찾기:", bx, by + 112, 80);
-    let ed = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        w!("EDIT"),
-        w!(""),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(WS_BORDER.0 | WS_TABSTOP.0 | ES_AUTOHSCROLL as u32),
-        bx + 88,
-        by + 108,
-        200,
-        24,
-        Some(a),
-        Some(HMENU(ID_FIND as usize as *mut core::ffi::c_void)),
-        None,
-        None,
-    )
-    .unwrap_or_default();
-    SendMessageW(
-        ed,
-        WM_SETFONT,
-        Some(WPARAM(font.0 as usize)),
-        Some(LPARAM(1)),
-    );
+    // NxTextBox — h=0 자동(공통 자동 높이 — 다른 Nx와 같은 row 기본 정렬 검증)
+    ctl::textbox::create(a, bx + 88, by + 108, 200, 0, ID_FIND, font, st);
 
     // ── 카드 B: 각진 · 타이틀 26 + 본문 140(영역별 크기 상이 검증) ──
     let c = ctl::groupcard::create(

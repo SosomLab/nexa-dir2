@@ -9,7 +9,11 @@
 //! 글꼴 피커) · NxSegmented([`segmented`]) · NxSpin([`spin`]) ·
 //! NxDropList([`droplist`]) · NxGroupCard([`groupcard`] — 타이틀+본문 카드) ·
 //! NxComboBox([`combobox`] — macOS 팝업 버튼 스타일 ✓ 선택) ·
-//! NxCheckBox([`checkbox`] — 라운드 박스 토글) · 공용 [`style`].
+//! NxCheckBox([`checkbox`] — 라운드 박스 토글) · NxTextBox([`textbox`] —
+//! 라운드 입력·포커스 accent 링) · NxIconButton([`iconbutton`] — **shape 투명**
+//! 원형 버튼: 리전 클립이라 어떤 부모 배경 위에서도 도형만 보임) ·
+//! 공용 [`style`](팔레트·**공통 자동 높이** auto_height — 모든 컨트롤
+//! `h<=0` 동일 기본 높이 = 반듯한 기본 배치).
 //! 후속 후보: 런처 편집기 목록(X-13)·모달 공통 골격(X-16 백로그 ①).
 //! UI 검증 = 갤러리 창(crate::ctldemo — WM_APP_CTLDEMO 0x8009 주입 전용).
 
@@ -23,7 +27,9 @@ pub mod combobox;
 pub mod droplist;
 pub mod fontbox;
 pub mod groupcard;
+pub mod iconbutton;
 pub mod searchbox;
 pub mod segmented;
 pub mod spin;
 pub mod style;
+pub mod textbox;

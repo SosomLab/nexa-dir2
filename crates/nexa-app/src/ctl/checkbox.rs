@@ -4,8 +4,8 @@
 //!
 //! ## 계약(판매용 명세 — 클래스 `Nexa.NxCheckBox`)
 //! - 생성: [`create`] — 라벨(빈 문자열 = 박스만·복사 소유)·초기 상태·[`Style`].
-//!   **높이 규칙(콤보와 동일)**: `h <= 0` = 자동(글꼴 높이 + 상/하 최소 여백
-//!   각 [`super::combobox::PAD_Y`]px). **박스는 컨트롤 높이와 분리**(사용자
+//!   **높이 규칙(공통)**: `h <= 0` = 자동(글꼴 높이 + 상/하 최소 여백
+//!   각 [`super::style::PAD_Y`]px). **박스는 컨트롤 높이와 분리**(사용자
 //!   확정 07-17 — 기본이 커 보임): 글꼴 높이 − 2 정사각을 세로 중앙에 그린다 —
 //!   클릭 영역·행 정렬은 그대로, 시각만 시안 비율. 라벨은 우측 세로 중앙.
 //! - 클릭/Space = 토글 → 부모에 `WM_COMMAND(MAKEWPARAM(id, NXCHK_CHANGED))`.
@@ -26,8 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_PAINT, WM_SETFONT, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
-use super::combobox::PAD_Y;
-use super::style::{fill, font_height, Style};
+use super::style::{auto_height, fill, font_height, Style};
 
 /// 토글 통지(WM_COMMAND HIWORD).
 pub const NXCHK_CHANGED: u32 = 1;
@@ -70,8 +69,7 @@ pub unsafe fn create(
         };
         RegisterClassW(&wc);
     });
-    let auto_h = font_height(parent, font) + PAD_Y * 2;
-    let h = if h <= 0 { auto_h } else { h };
+    let h = if h <= 0 { auto_height(parent, font) } else { h };
     let w = if w <= 0 { h } else { w }; // 폭 생략 = 박스만(정사각)
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE(0),
