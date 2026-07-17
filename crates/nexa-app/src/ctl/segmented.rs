@@ -330,9 +330,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         };
                         DrawTextW(dc, &mut g16, &mut grc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                         SelectObject(dc, prev);
-                        trc.left = x0 + gsz.cx + 5;
-                        DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                    } else {
+                        // 빈 문자열은 그리지 않는다(빈 Vec = 댕글링 → user32 AV,
+                        // 07-18 grid 크래시와 동일 클래스 — 방어 가드)
+                        if !w16.is_empty() {
+                            trc.left = x0 + gsz.cx + 5;
+                            DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                        }
+                    } else if !label.is_empty() {
                         let mut w16: Vec<u16> = label.encode_utf16().collect();
                         DrawTextW(
                             dc,
