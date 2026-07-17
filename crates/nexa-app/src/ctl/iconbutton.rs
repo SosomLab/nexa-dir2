@@ -13,7 +13,8 @@
 //!   블렌드(07-17 개정 — 1비트 리전 클립은 계단 가장자리라 폐기).
 //!
 //! ## 계약(판매용 명세 — 클래스 `Nexa.NxIconButton`)
-//! - 생성: [`create`] — `d <= 0` = 공통 자동 높이 지름(전 Nx 기본 정렬).
+//! - 생성: [`create`] — `d <= 0` = **글꼴 높이 지름**(NxCheckBox 박스와 동일
+//!   크기 — 사용자 확정 07-17. 배치는 호스트가 세로 중앙 정렬).
 //! - 클릭(enabled일 때만) → `WM_COMMAND(MAKEWPARAM(id, NXIB_CLICK))`.
 //! - [`NXIB_GETENABLE`]/[`NXIB_SETENABLE`](WM_USER+100/101): 비활성 =
 //!   sel_bg 원 + 글리프(시안 — 삭제 대상이 자신뿐인 − 버튼), 클릭 무시.
@@ -81,9 +82,10 @@ pub unsafe fn create(
         };
         RegisterClassW(&wc);
     });
-    // d<=0 = 공통 자동 높이 지름(전 Nx 컨트롤 동일 — 반듯한 기본 배치)
+    // d<=0 = 글꼴 높이 지름(**체크박스 박스와 동일 크기** — 사용자 확정 07-17:
+    // 같은 row에서 체크박스·이미지 버튼의 시각 크기가 일치)
     let d = if d <= 0 {
-        super::style::auto_height(parent, font)
+        super::style::font_height(parent, font).max(10)
     } else {
         d
     };

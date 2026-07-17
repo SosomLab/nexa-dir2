@@ -3,18 +3,19 @@
 //!
 //! ## 계약(판매용 명세)
 //! - 생성: [`create`] — 초기값·범위(min..=max)·[`Style`]. 내부 = 숫자 EDIT(세로 중앙,
-//!   searchbox 규약) + 우측 ▲▼ 버튼 존(컨트롤 소유 영역 — z-순서 이슈 없음).
-//! - 값 변경(타이핑·▲▼·↑/↓ 키) 시 부모에 `WM_COMMAND(MAKEWPARAM(id, EN_CHANGE))`.
+//!   searchbox 규약) + 우측 ⌃⌄ 버튼 블록(컨트롤 소유 영역 — z-순서 이슈 없음).
+//! - **버튼 블록(사용자 확정 07-17 — macOS 시안)**: 두 버튼이 모여 **정사각형**
+//!   (변 = 컨트롤 높이), 개별 버튼 = 상/하 **1/2 직사각형**. `min`/`max` 도달 시
+//!   해당 방향 버튼 **비활성**(연한 셰브론 + 클릭 무시). 셰브론 = AA(DrawCtx 백엔드).
+//! - 값 변경(타이핑·⌃⌄·↑/↓ 키) 시 부모에 `WM_COMMAND(MAKEWPARAM(id, EN_CHANGE))`.
 //!   포커스 이탈 시 `EN_KILLFOCUS` 재발행(범위 클램프 확정) — 기존 EDIT 배선 호환.
 //! - 조회/설정: [`SPIN_GETVAL`]/[`SPIN_SETVAL`](WM_USER+60/61) ·
 //!   `WM_GETTEXT`/`WM_SETTEXT` 위임(드롭인).
 
+use nexa_gui::{DrawCtx, Rect};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, DrawTextW, EndPaint, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
-    DT_CENTER, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
-};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, HFONT, PAINTSTRUCT};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent,
@@ -25,6 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_TABSTOP, WS_VISIBLE,
 };
 
+use super::gdipctx::{color, GdipCtx};
 use super::style::{fill, font_height, frame, Style};
 
 /// 값 조회(반환 = 클램프된 현재 값).
@@ -35,8 +37,6 @@ pub const SPIN_SETVAL: u32 = 0x0400 + 61;
 const EDIT_ID: u32 = 1;
 const EN_CHANGE: u32 = 0x0300;
 const EN_KILLFOCUS: u32 = 0x0200;
-/// ▲▼ 버튼 존 폭.
-const BTN_W: i32 = 16;
 
 struct SpinState {
     edit: HWND,
@@ -119,11 +119,12 @@ unsafe fn layout(hwnd: HWND, st: &SpinState) {
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
     let eh = (font_height(hwnd, st.font) + 4).min((rc.bottom - 4).max(8));
+    // 버튼 블록 = 정사각(변 = 컨트롤 높이) — EDIT는 그 왼쪽까지
     let _ = MoveWindow(
         st.edit,
         4,
         (rc.bottom - eh) / 2,
-        (rc.right - 4 - BTN_W - 2).max(10),
+        (rc.right - 4 - rc.bottom - 2).max(10),
         eh,
         true,
     );
@@ -302,6 +303,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             let notify_code = (wparam.0 >> 16) as u32;
             if (wparam.0 & 0xFFFF) as u32 == EDIT_ID && notify_code == EN_CHANGE {
                 notify(hwnd, EN_CHANGE);
+                // 타이핑으로 min/max 도달 가능 — 셰브론 활성 상태 재도장
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
             LRESULT(0)
         }
@@ -311,10 +314,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
-                if x >= rc.right - BTN_W {
-                    let up = y < rc.bottom / 2; // 상단 ▲ / 하단 ▼
-                    let delta = if up { 1 } else { -1 };
-                    set_val(hwnd, st, cur_val(st) + delta, false);
+                // 버튼 블록 = 우측 정사각(변 = 높이) — 상 1/2 = ⌃, 하 1/2 = ⌄
+                if x >= rc.right - rc.bottom {
+                    let up = y < rc.bottom / 2;
+                    let v = cur_val(st);
+                    // min/max 도달 방향은 비활성(클릭 무시 — 사용자 확정)
+                    let allowed = if up { v < st.max } else { v > st.min };
+                    if allowed {
+                        set_val(hwnd, st, v + if up { 1 } else { -1 }, false);
+                    }
                 }
                 let _ = SetFocus(Some(st.edit));
             }
@@ -331,37 +339,37 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let _ = GetClientRect(hwnd, &mut rc);
                 fill(dc, &rc, st.style.bg);
                 frame(dc, &rc, st.style.border);
-                // ▲▼ 버튼 존(우측 — 컨트롤 소유 영역)
-                let bx = rc.right - BTN_W;
-                let sep = RECT {
-                    left: bx,
-                    top: rc.top + 1,
-                    right: bx + 1,
-                    bottom: rc.bottom - 1,
+                // 버튼 블록(사용자 확정): 정사각(변 = 높이)·개별 = 상/하 1/2,
+                // min/max 도달 방향 = 연한 셰브론(비활성). AA = DrawCtx 백엔드만.
+                let h = rc.bottom - rc.top;
+                let v = cur_val(st).clamp(st.min, st.max);
+                let block = Rect::new(rc.right - h + 2, rc.top + 2, h - 4, h - 4);
+                let mut g = GdipCtx::new(dc);
+                g.fill_round_rect(block, 4, color(st.style.sel_bg));
+                let cx = block.x + block.w / 2;
+                let hw = 4;
+                let up_c = if v < st.max {
+                    st.style.text
+                } else {
+                    st.style.border
                 };
-                fill(dc, &sep, st.style.border);
-                let old = SelectObject(dc, st.font.into());
-                SetBkMode(dc, TRANSPARENT);
-                SetTextColor(dc, st.style.text_dim);
-                for (glyph, top, bottom) in [
-                    ("▲", rc.top, rc.bottom / 2),
-                    ("▼", rc.bottom / 2, rc.bottom),
-                ] {
-                    let mut w16: Vec<u16> = glyph.encode_utf16().collect();
-                    let mut zone = RECT {
-                        left: bx + 1,
-                        top,
-                        right: rc.right - 1,
-                        bottom,
-                    };
-                    DrawTextW(
-                        dc,
-                        &mut w16,
-                        &mut zone,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                    );
-                }
-                SelectObject(dc, old);
+                let dn_c = if v > st.min {
+                    st.style.text
+                } else {
+                    st.style.border
+                };
+                let upy = block.y + block.h / 4; // 상단 1/2 중심
+                let dny = block.y + (block.h * 3) / 4; // 하단 1/2 중심
+                g.polyline(
+                    &[(cx - hw, upy + 2), (cx, upy - 2), (cx + hw, upy + 2)],
+                    color(up_c),
+                    1.6,
+                );
+                g.polyline(
+                    &[(cx - hw, dny - 2), (cx, dny + 2), (cx + hw, dny - 2)],
+                    color(dn_c),
+                    1.6,
+                );
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)

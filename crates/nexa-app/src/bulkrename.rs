@@ -25,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
-use crate::ctl::droplist::{DL_GETSEL, DL_SETSEL};
+use crate::ctl::combobox::{NXCB_GETSEL, NXCB_SETSEL};
 use crate::ctl::segmented::SEG_GETSEL;
 use crate::ctl::spin::SPIN_GETVAL;
 use crate::ctl::style::Style;
@@ -47,7 +47,7 @@ const STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.
 
 // 컨트롤 id — 파이프라인 편집
 const ID_KIND: u32 = 1;
-/// 적용 스코프(v2 — PF Apply to, ctl::droplist). Move/Ext 종류에선 숨김.
+/// 적용 스코프(v2 — PF Apply to, ctl::combobox). Move/Ext 종류에선 숨김.
 const ID_SCOPE: u32 = 7;
 const ID_ADD: u32 = 2;
 const ID_UP: u32 = 3;
@@ -59,7 +59,7 @@ const ID_FIND: u32 = 10;
 const ID_WITH: u32 = 11;
 const ID_MC: u32 = 12;
 const ID_RX: u32 = 13;
-/// 치환 Mode(v2 — 모든/첫/마지막/전체, ctl::droplist — 정규식 체크 시 숨김).
+/// 치환 Mode(v2 — 모든/첫/마지막/전체, ctl::combobox — 정규식 체크 시 숨김).
 const ID_RX_MODE: u32 = 14;
 const ID_CASE_BASE: u32 = 20; // +0..3 = upper/lower/title/sentence
 const ID_INS_TEXT: u32 = 30;
@@ -73,7 +73,7 @@ const ID_NUM_DIR: u32 = 46; // 앞/뒤(ctl::segmented)
 const ID_NUM_WPRE: u32 = 47; // 감싸기 Prefix(v2)
 const ID_NUM_WSUF: u32 = 48; // 감싸기 Suffix(v2)
                              // 날짜(v2 신설 — PF Add Date)
-const ID_DT_KIND: u32 = 90; // 수정/생성(ctl::droplist)
+const ID_DT_KIND: u32 = 90; // 수정/생성(ctl::combobox)
 const ID_DT_FMT: u32 = 91;
 const ID_DT_OFF: u32 = 92;
 const ID_DT_DIR: u32 = 93;
@@ -235,7 +235,7 @@ fn preset_dir() -> PathBuf {
 
 /// 폼의 공통 스코프(droplist 선택 → [`Scope`]).
 unsafe fn scope_of(dlg: HWND) -> Scope {
-    let i = SendMessageW(ctl(dlg, ID_SCOPE), DL_GETSEL, None, None).0 as usize;
+    let i = SendMessageW(ctl(dlg, ID_SCOPE), NXCB_GETSEL, None, None).0 as usize;
     SCOPES.get(i).copied().unwrap_or(Scope::Name)
 }
 
@@ -256,7 +256,7 @@ unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
         0 => {
             let find = get_text(ctl(dlg, ID_FIND));
             let regex = checked(dlg, ID_RX);
-            let mode_i = SendMessageW(ctl(dlg, ID_RX_MODE), DL_GETSEL, None, None).0;
+            let mode_i = SendMessageW(ctl(dlg, ID_RX_MODE), NXCB_GETSEL, None, None).0;
             let mode = if regex {
                 ReplaceMode::All // 정규식 = 항상 All(PF 규약 — 앵커로 대체)
             } else {
@@ -316,7 +316,7 @@ unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
             } else {
                 format
             };
-            let kind_i = SendMessageW(ctl(dlg, ID_DT_KIND), DL_GETSEL, None, None).0;
+            let kind_i = SendMessageW(ctl(dlg, ID_DT_KIND), NXCB_GETSEL, None, None).0;
             Some(RenameOp::Date {
                 scope,
                 spec: DateSpec {
@@ -859,7 +859,7 @@ pub unsafe fn show(
         tr("bulk.scope.extdot"),
     ];
     let scope_refs: Vec<&str> = scope_items.iter().map(String::as_str).collect();
-    let scope = crate::ctl::droplist::create(
+    let scope = crate::ctl::combobox::create(
         dlg,
         x,
         PAD + 30,
@@ -937,7 +937,7 @@ pub unsafe fn show(
             tr("bulk.mode.entire"),
         ];
         let mode_refs: Vec<&str> = mode_items.iter().map(String::as_str).collect();
-        let mode = crate::ctl::droplist::create(
+        let mode = crate::ctl::combobox::create(
             dlg,
             x,
             py + 76,
@@ -1085,7 +1085,7 @@ pub unsafe fn show(
     {
         let kind_items = [tr("bulk.date.modified"), tr("bulk.date.created")];
         let kind_refs: Vec<&str> = kind_items.iter().map(String::as_str).collect();
-        let dk = crate::ctl::droplist::create(
+        let dk = crate::ctl::combobox::create(
             dlg, x, py, half, 24, ID_DT_KIND, font, &kind_refs, 0, style2,
         );
         let fmt = mk(
@@ -1438,7 +1438,7 @@ pub unsafe fn show(
         count,
         result: None,
     });
-    let _ = SendMessageW(scope, DL_SETSEL, Some(WPARAM(0)), None);
+    let _ = SendMessageW(scope, NXCB_SETSEL, Some(WPARAM(0)), None);
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut BrState as isize);
     show_kind(&state, 0);
     refresh_presets(&state);
