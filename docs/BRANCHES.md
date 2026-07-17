@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/ctl-groupcard` | 2026-07-17 | 2026-07-17 (`1dd552d`) | 2026-07-17 | 2 | **ctl 6호 GroupCard**(사용자 요청 — PF 카드 UI): 타이틀 밴드+본문 컨테이너 — 라운드/각진 선택(창 리전 클립)·**영역별 높이 각각 지정**·타이틀 = 윈도우 텍스트 위임·**자식 통지 투과**(WM_COMMAND/CTLCOLOR* → 카드 부모 — 중첩 투명성). 검증 = **별도 갤러리 창 ctldemo**(0x8009 주입 전용 — 기존 기능 무변경): 카드 2종·중첩 droplist·투과 상태줄·캡처+픽셀 판독. X-23(일괄 이름 변경 카드 재편) 토대. 186 green | [2026-07-17](journal/2026-07-17.md) |
 | `fix/x22-qa-droplist` | 2026-07-17 | 2026-07-17 (`c763ae3`) | 2026-07-17 | 3 | **X-22 실기 QA 2건**(사용자 QA) — droplist 팝업 크래시 **진범 = WS_POPUP owner 승격**(GetParent가 다이얼로그 반환 → BrState를 DlState로 오독) → 팝업 USERDATA에 owner 저장 + fontbox KillTimer 동일 진범(타이머 누수) 수리 · **메뉴 명령 설정 즉시 영속** persist_settings(언어/테마/토글 6곳 — 비정상 종료 유실 방지). 실기: 팝업 4항목 렌더·선택 반영·생존·F6 직후 settings.cfg 생성. 186 green | [2026-07-17](journal/2026-07-17.md) |
 | `feat/x22-batch-rename-v2` | 2026-07-17 | 2026-07-17 (`merge`) | 2026-07-17 | 1 | **X-22 일괄 이름 변경 v2**(PF 6동작 패리티 — 사용자 지시: 전체 직접 개발): 코어 재작성(스코프·위치 클램프·Mode·감싸기·**Date 토큰 엔진**·v1 프리셋 호환 — 32 green)·**ctl 3종 신설**(segmented/spin/droplist — 판매용 추상화)·UI 재구성(✓ 미리보기+건수). 실기 캡처+기능 왕복 검증·186 green | [2026-07-16](journal/2026-07-16.md) |
 | `feat/shell-folders` | 2026-07-17 | 2026-07-17 (`merge`) | 2026-07-17 | 1 | **X-21 shell: 특수 폴더**(사용자 요청) — SHParseDisplayName 위임으로 KnownFolders 전체 이름+GUID 자동 커버(`shell:startup`·`common startup` 등)·가상 폴더 원문 격리·경로 바 파이프라인 배선. 테스트 3건·181 green | [2026-07-16](journal/2026-07-16.md) |
