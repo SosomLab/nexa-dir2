@@ -35,7 +35,14 @@ const ID_OFF: u32 = 121;
 const ID_STATUS: u32 = 900;
 
 /// 갤러리 창 열기(모달 아님 — 앱 메시지 루프가 디스패치). 반환 = 창 핸들.
+/// 이미 열려 있으면 그 창을 앞으로(중복 생성 가드 — 도구 모음 버튼 연타).
 pub unsafe fn show(owner: HWND, font_spec: &DlgFont) -> HWND {
+    if let Ok(existing) = windows::Win32::UI::WindowsAndMessaging::FindWindowW(CLASS, None) {
+        if !existing.is_invalid() {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(existing);
+            return existing;
+        }
+    }
     REGISTER.call_once(|| {
         let wc = WNDCLASSW {
             lpszClassName: CLASS,
