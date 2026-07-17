@@ -7,6 +7,8 @@
 //! - 타이틀 = **윈도우 텍스트 표준 위임**(WM_SETTEXT/WM_GETTEXT — 변경 시 재도장).
 //! - 본문 = 호스트가 자식 컨트롤을 카드의 자식으로 배치 — [`body_rect`]가
 //!   본문 클라이언트 좌표를 돌려준다(제목 밴드 아래 전체).
+//! - **타이틀 영역도 자식 배치 가능**(사용자 확정 07-17 — PF처럼 타이틀 자리에
+//!   콤보 선택기): [`title_rect`] 기준 배치, 창 텍스트를 비우면 라벨 생략.
 //! - **자식 통지 투과**: WM_COMMAND·WM_NOTIFY·WM_DRAWITEM·WM_MEASUREITEM·
 //!   WM_CTLCOLOR* 를 카드 부모로 그대로 전달 — 호스트는 카드 유무와 무관하게
 //!   자식 컨트롤 id로 처리한다(중첩 투명성).
@@ -53,7 +55,7 @@ struct GcState {
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
-const CLASS: PCWSTR = w!("NexaGroupCard");
+const CLASS: PCWSTR = w!("Nexa.NxGroupCard");
 
 /// 그룹 카드 생성 — 타이틀은 윈도우 텍스트로 위임(복사 소유).
 #[allow(clippy::too_many_arguments)] // Win32 create 계열 관례
@@ -110,6 +112,18 @@ pub unsafe fn create(
         Some(LPARAM(1)),
     );
     hwnd
+}
+
+/// 타이틀 밴드 영역(클라이언트 좌표) — 타이틀 자리에 자식(콤보 등)을 배치할 때
+/// 기준. 창 텍스트를 비우면("" — WM_SETTEXT) 텍스트 라벨은 그리지 않는다.
+pub unsafe fn title_rect(hwnd: HWND) -> RECT {
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+    let th = SendMessageW(hwnd, GC_GETTITLEH, None, None).0 as i32;
+    RECT {
+        bottom: rc.top + th,
+        ..rc
+    }
 }
 
 /// 본문 영역(클라이언트 좌표) — 호스트의 자식 배치 기준.

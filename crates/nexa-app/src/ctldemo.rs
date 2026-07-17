@@ -32,6 +32,10 @@ const ID_MODE: u32 = 111;
 const ID_FIND: u32 = 112;
 const ID_DIR: u32 = 120;
 const ID_OFF: u32 = 121;
+/// 카드 A 타이틀의 동작 선택 NxComboBox(PF 시안 — 타이틀 영역 자식 배치 검증).
+const ID_OPKIND: u32 = 130;
+/// 대소문자 일치 NxCheckBox(macOS 시안 — 박스만).
+const ID_CASE: u32 = 113;
 const ID_STATUS: u32 = 900;
 
 /// 갤러리 창 열기(모달 아님 — 앱 메시지 루프가 디스패치). 반환 = 창 핸들.
@@ -109,6 +113,7 @@ unsafe fn build(win: HWND, font: HFONT) {
     let st = Style::default();
 
     // ── 카드 A: 라운드(반경 10) · 타이틀 34 + 본문 240 ──
+    // 타이틀 = 텍스트 대신 **동작 선택 NxComboBox**(PF 시안 — 타이틀 자식 배치)
     let a = ctl::groupcard::create(
         win,
         16,
@@ -116,7 +121,7 @@ unsafe fn build(win: HWND, font: HFONT) {
         330,
         CARD_A,
         font,
-        "Replace Text",
+        "",
         GroupCardOpts {
             corner: 10,
             title_h: 34,
@@ -124,15 +129,37 @@ unsafe fn build(win: HWND, font: HFONT) {
         },
         st,
     );
+    let t = ctl::groupcard::title_rect(a);
+    let cb_h = 24;
+    ctl::combobox::create(
+        a,
+        t.left + 8,
+        t.top + (t.bottom - t.top - cb_h) / 2,
+        170,
+        cb_h,
+        ID_OPKIND,
+        font,
+        &[
+            "Replace Text",
+            "Replace RegEx",
+            "Insert Text",
+            "Change Case",
+            "Add Number Sequence",
+            "Add Date",
+        ],
+        0,
+        st,
+    );
     let b = ctl::groupcard::body_rect(a);
     let (bx, by) = (b.left + 12, b.top + 12);
     mk_static(a, font, "적용 대상:", bx, by + 4, 80);
-    ctl::droplist::create(
+    // 적용 대상 = NxComboBox(h=0 → 자동 높이: 글꼴+최소 여백 — 높이 규칙 검증)
+    ctl::combobox::create(
         a,
         bx + 88,
         by,
         200,
-        26,
+        0,
         ID_SCOPE,
         font,
         &["이름", "이름+확장자", "확장자", "확장자(점 포함)"],
@@ -152,14 +179,17 @@ unsafe fn build(win: HWND, font: HFONT) {
         0,
         st,
     );
-    mk_static(a, font, "찾기:", bx, by + 76, 80);
+    mk_static(a, font, "대소문자 일치:", bx, by + 76, 84);
+    // 박스만(라벨 = 좌측 STATIC — 시안 배치)·h=0 자동
+    ctl::checkbox::create(a, bx + 88, by + 72, 0, 0, ID_CASE, font, "", false, st);
+    mk_static(a, font, "찾기:", bx, by + 112, 80);
     let ed = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         w!("EDIT"),
         w!(""),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(WS_BORDER.0 | WS_TABSTOP.0 | ES_AUTOHSCROLL as u32),
         bx + 88,
-        by + 72,
+        by + 108,
         200,
         24,
         Some(a),
@@ -250,7 +280,7 @@ unsafe extern "system" fn demo_proc(
                     let mut cls = [0u16; 32];
                     let n = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(p, &mut cls)
                         as usize;
-                    String::from_utf16_lossy(&cls[..n]) == "NexaGroupCard"
+                    String::from_utf16_lossy(&cls[..n]) == "Nexa.NxGroupCard"
                 })
                 .unwrap_or(false);
             if on_card {

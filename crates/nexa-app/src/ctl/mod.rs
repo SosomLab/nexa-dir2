@@ -2,9 +2,14 @@
 //! 네이티브 대화상자(설정·일괄 이름변경 등)에서 재사용하는 자기완결 컨트롤 묶음.
 //! comctl32 비의존 규율(B3)은 그대로 — user32 창 클래스 + 자체 그리기.
 //!
-//! 수록: [`searchbox`](내장 ✕ 검색 입력) · [`fontbox`](글꼴 피커) ·
-//! [`segmented`](세그먼트 라디오) · [`spin`](숫자 스피너) · [`droplist`](드롭다운
-//! 선택) · [`groupcard`](타이틀+본문 그룹 카드 — 07-17) · 공용 [`style`].
+//! **명명 규약**(사용자 확정 07-17): 컨트롤 이름 = **Nx 접두어**(Nexa) ·
+//! 네임스페이스 = **Nexa** — Win32 클래스명 `Nexa.Nx<이름>`(팝업 = `...Pop`).
+//!
+//! 수록: NxSearchBox([`searchbox`] — 내장 ✕ 검색 입력) · NxFontBox([`fontbox`] —
+//! 글꼴 피커) · NxSegmented([`segmented`]) · NxSpin([`spin`]) ·
+//! NxDropList([`droplist`]) · NxGroupCard([`groupcard`] — 타이틀+본문 카드) ·
+//! NxComboBox([`combobox`] — macOS 팝업 버튼 스타일 ✓ 선택) ·
+//! NxCheckBox([`checkbox`] — 라운드 박스 토글) · 공용 [`style`].
 //! 후속 후보: 런처 편집기 목록(X-13)·모달 공통 골격(X-16 백로그 ①).
 //! UI 검증 = 갤러리 창(crate::ctldemo — WM_APP_CTLDEMO 0x8009 주입 전용).
 
@@ -13,6 +18,8 @@
 //! 통지 = 컨트롤 id로 WM_COMMAND 재발행 · 상태 = GWLP_USERDATA Box(파괴 시 회수).
 //! searchbox/fontbox의 Style 인자화는 후속(현재 라이트 고정 — 동일 팔레트).
 
+pub mod checkbox;
+pub mod combobox;
 pub mod droplist;
 pub mod fontbox;
 pub mod groupcard;

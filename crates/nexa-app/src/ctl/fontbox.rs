@@ -111,8 +111,8 @@ struct DropState {
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
-const CLASS: PCWSTR = w!("NexaFontBox");
-const DROP_CLASS: PCWSTR = w!("NexaFontDrop");
+const CLASS: PCWSTR = w!("Nexa.NxFontBox");
+const DROP_CLASS: PCWSTR = w!("Nexa.NxFontBoxPop");
 
 /// 글꼴 입력 컨트롤 생성 — searchbox와 동일한 드롭인 텍스트 계약.
 pub unsafe fn create(parent: HWND, x: i32, y: i32, w: i32, h: i32, id: u32, font: HFONT) -> HWND {

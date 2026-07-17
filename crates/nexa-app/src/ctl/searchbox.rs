@@ -50,7 +50,7 @@ struct SbState {
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
-const CLASS: PCWSTR = w!("NexaSearchBox");
+const CLASS: PCWSTR = w!("Nexa.NxSearchBox");
 
 /// 검색박스 생성 — 반환 HWND에 `WM_SETTEXT`/`WM_GETTEXT`/`EM_SETCUEBANNER`를 그대로
 /// 쓸 수 있다. 내용 변경 시 부모가 `WM_COMMAND(id, EN_CHANGE)`를 받는다.
