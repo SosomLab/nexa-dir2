@@ -30,8 +30,9 @@ use nexa_gui::{DrawCtx, Rect};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, DrawTextW, EndPaint, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
-    DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+    DrawTextW, EndPaint, InvalidateRect, SelectObject, SetBkMode, SetTextColor, DT_END_ELLIPSIS,
+    DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -224,7 +225,7 @@ pub unsafe fn set_rows(hwnd: HWND, rows: Vec<GridRow>) {
         st.anchor = last.and_then(|l| st.anchor.map(|a| a.min(l)));
         let vis = visible_rows(hwnd, st);
         st.top = st.top.min(st.rows.len().saturating_sub(vis));
-        let _ = InvalidateRect(Some(hwnd), None, true);
+        let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
@@ -401,7 +402,7 @@ unsafe fn h_thumb(hwnd: HWND, st: &GridState) -> Option<RECT> {
 unsafe fn flash_bars(hwnd: HWND, st: &mut GridState) {
     st.bars_visible = true;
     let _ = SetTimer(Some(hwnd), TIMER_FADE, FADE_MS, None);
-    let _ = InvalidateRect(Some(hwnd), None, true);
+    let _ = InvalidateRect(Some(hwnd), None, false);
 }
 
 unsafe fn scroll_to(hwnd: HWND, st: &mut GridState, top: isize) {
@@ -448,7 +449,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             if let Some(st) = state(hwnd).as_mut() {
                 st.font = HFONT(wparam.0 as *mut core::ffi::c_void);
             }
-            let _ = InvalidateRect(Some(hwnd), None, true);
+            let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
         m if m == NXGR_GETROW => LRESULT(state(hwnd).as_ref().map_or(-1, |s| s.last_toggle)),
@@ -458,7 +459,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 st.top = st.top.min(st.rows.len().saturating_sub(vis));
                 st.h_off = st.h_off.clamp(0, max_h_off(hwnd, st));
             }
-            let _ = InvalidateRect(Some(hwnd), None, true);
+            let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_FADE => {
@@ -466,7 +467,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let _ = KillTimer(Some(hwnd), TIMER_FADE);
                 if st.bar_drag.is_none() {
                     st.bars_visible = false; // 페이드아웃(오버레이 소등)
-                    let _ = InvalidateRect(Some(hwnd), None, true);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
             }
             LRESULT(0)
@@ -542,7 +543,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         // 빈 영역 클릭 = 선택 해제(탐색기 규약)
                         if st.sel.iter().any(|s| *s) {
                             st.sel.iter_mut().for_each(|s| *s = false);
-                            let _ = InvalidateRect(Some(hwnd), None, true);
+                            let _ = InvalidateRect(Some(hwnd), None, false);
                             notify(hwnd, NXGR_SELCHANGE);
                         }
                         return LRESULT(0);
@@ -563,7 +564,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         if let Some(on) = st.rows[idx].check {
                             st.rows[idx].check = Some(!on);
                             st.last_toggle = idx as isize;
-                            let _ = InvalidateRect(Some(hwnd), None, true);
+                            let _ = InvalidateRect(Some(hwnd), None, false);
                             notify(hwnd, NXGR_TOGGLE);
                         }
                     } else {
@@ -581,7 +582,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         } else {
                             sel_single(st, idx);
                         }
-                        let _ = InvalidateRect(Some(hwnd), None, true);
+                        let _ = InvalidateRect(Some(hwnd), None, false);
                         notify(hwnd, NXGR_SELCHANGE);
                     }
                 }
@@ -592,7 +593,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_SETFOCUS | WM_KILLFOCUS => {
             if let Some(st) = state(hwnd).as_mut() {
                 st.has_focus = msg == WM_SETFOCUS;
-                let _ = InvalidateRect(Some(hwnd), None, true);
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
             LRESULT(0)
         }
@@ -627,7 +628,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         notify(hwnd, NXGR_SELCHANGE);
                     }
                     ensure_visible(hwnd, st, i);
-                    let _ = InvalidateRect(Some(hwnd), None, true);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 } else if wparam.0 == 0x20 {
                     // Space: Ctrl = 포커스 행 토글(비연속 누적), 그 외 = 단일 선택
                     if ctrl {
@@ -639,12 +640,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         sel_single(st, cur);
                     }
                     st.focus = Some(cur);
-                    let _ = InvalidateRect(Some(hwnd), None, true);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                     notify(hwnd, NXGR_SELCHANGE);
                 } else if wparam.0 == 0x41 && ctrl {
                     // Ctrl+A = 전체 선택
                     st.sel.iter_mut().for_each(|s| *s = true);
-                    let _ = InvalidateRect(Some(hwnd), None, true);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                     notify(hwnd, NXGR_SELCHANGE);
                 }
             }
@@ -657,7 +658,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 if let Some((ci, sx, sw)) = st.drag {
                     st.cols[ci].width = (sw + (x - sx)).max(COL_MIN);
                     st.h_off = st.h_off.clamp(0, max_h_off(hwnd, st));
-                    let _ = InvalidateRect(Some(hwnd), None, true);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 } else {
                     match st.bar_drag {
                         Some(BarDrag::V(sy, stop)) => {
@@ -698,9 +699,21 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             }
             LRESULT(0)
         }
+        // 배경 지우기 생략(WM_PAINT 더블버퍼가 전면 도장 — blink 방지 07-18)
+        0x0014 /* WM_ERASEBKGND */ => LRESULT(1),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
-            let dc = BeginPaint(hwnd, &mut ps);
+            let dc0 = BeginPaint(hwnd, &mut ps);
+            // 더블버퍼(blink QA 07-18): 메모리 DC에 전부 그린 뒤 1회 BitBlt
+            let rcw = client(hwnd);
+            let (bw, bh) = (
+                (rcw.right - rcw.left).max(1),
+                (rcw.bottom - rcw.top).max(1),
+            );
+            let mem = CreateCompatibleDC(Some(dc0));
+            let bmp = CreateCompatibleBitmap(dc0, bw, bh);
+            let old_bmp = SelectObject(mem, bmp.into());
+            let dc = mem;
             if let Some(st) = state(hwnd).as_ref() {
                 let rc = client(hwnd);
                 fill(dc, &rc, st.style.bg);
@@ -916,6 +929,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     super::style::frame(dc, &rc, st.style.border); // 목록 모드 외곽선
                 }
             }
+            let _ = BitBlt(dc0, 0, 0, bw, bh, Some(mem), 0, 0, SRCCOPY);
+            SelectObject(mem, old_bmp);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
