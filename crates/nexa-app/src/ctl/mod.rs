@@ -21,11 +21,18 @@
 //! 라벨 = 복사 소유·i18n/테마 미참조) · 텍스트 API 위임(WM_SETTEXT/GETTEXT) ·
 //! 통지 = 컨트롤 id로 WM_COMMAND 재발행 · 상태 = GWLP_USERDATA Box(파괴 시 회수).
 //! searchbox/fontbox의 Style 인자화는 후속(현재 라이트 고정 — 동일 팔레트).
+//!
+//! **AA 렌더 규약(개정 07-17 — 사용자 지시)**: 곡선·사선 도형은
+//! `nexa_gui::DrawCtx`의 AA 프리미티브로만 그린다 — **GDI+ 직접 호출 금지**,
+//! 유일한 접점 = [`gdipctx`](DrawCtx 백엔드 — 래스터라이저 교체 시 이 모듈만).
+//! 텍스트는 GDI/DirectWrite 유지. 판매 단위 = ctl + DrawCtx 트레이트 + 백엔드
+//! (기존 "nexa-gui 미참조" 문구는 **트레이트 참조 허용**으로 개정 — 사용자 승인).
 
 pub mod checkbox;
 pub mod combobox;
 pub mod droplist;
 pub mod fontbox;
+pub mod gdipctx;
 pub mod groupcard;
 pub mod iconbutton;
 pub mod searchbox;

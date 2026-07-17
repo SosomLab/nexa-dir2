@@ -77,4 +77,28 @@ pub trait DrawCtx {
         let tx = clip.x + (clip.w - self.text_width(text)).max(0) / 2;
         self.text_opaque(tx, ty, clip, text, fg, bg);
     }
+
+    // ── AA 도형 프리미티브(07-17 — ctl raster QA: 곡선·사선은 AA 백엔드가 그린다.
+    //    규약: GDI+ 등 래스터라이저 호출은 **DrawCtx 구현체에만** 존재 — 위젯/컨트롤은
+    //    이 인터페이스만 사용. 기본 = no-op(텍스트·테스트 백엔드 비구현 허용). ──
+
+    /// 원/타원을 `rect`에 안티앨리어스로 채운다.
+    fn fill_ellipse(&mut self, rect: Rect, color: Color) {
+        let _ = (rect, color);
+    }
+
+    /// 라운드 사각형을 반경 `radius`(px)로 안티앨리어스 채움.
+    fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
+        let _ = (rect, radius, color);
+    }
+
+    /// 라운드 사각형 외곽선(폭 `width`px — 1.0/2.0 등) 안티앨리어스 스트로크.
+    fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
+        let _ = (rect, radius, color, width);
+    }
+
+    /// 꺾은선(✓·셰브론·+/− 글리프 등) — 둥근 캡/조인, 폭 `width`px AA 스트로크.
+    fn polyline(&mut self, pts: &[(i32, i32)], color: Color, width: f32) {
+        let _ = (pts, color, width);
+    }
 }

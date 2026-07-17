@@ -11,13 +11,13 @@
 //! - 선택 확정 시 부모에 `WM_COMMAND(MAKEWPARAM(id, NXCB_CHANGED))`(lparam = 컨트롤).
 //! - 조회/설정: [`NXCB_GETSEL`]/[`NXCB_SETSEL`](WM_USER+90/91 — SETSEL 통지 없음).
 
+use nexa_gui::DrawCtx;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, ClientToScreen, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject,
-    DrawTextW, EndPaint, GetStockObject, InvalidateRect, LineTo, MoveToEx, RoundRect, SelectObject,
-    SetBkMode, SetTextColor, SetWindowRgn, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HDC, HFONT,
-    NULL_BRUSH, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
+    BeginPaint, ClientToScreen, CreateRoundRectRgn, DrawTextW, EndPaint, InvalidateRect,
+    SelectObject, SetBkMode, SetTextColor, SetWindowRgn, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT,
+    PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos, GetDlgCtrlID,
@@ -28,6 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
 };
 
+use super::gdipctx::{color, rect as gc_rect, GdipCtx};
 use super::style::{fill, font_height, Style};
 
 /// 선택 확정 통지(WM_COMMAND HIWORD).
@@ -124,9 +125,7 @@ pub unsafe fn create(
         drop: None,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
-    // 본체 = 라운드 필 — 창 리전 클립(모서리 밖은 부모 배경 그대로 — 배경색 비의존)
-    let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, RADIUS * 2, RADIUS * 2);
-    let _ = SetWindowRgn(hwnd, Some(rgn), false);
+    // 본체 라운드 = behind 칠 + AA 필(07-17 개정 — 1비트 리전 클립 폐기)
     SendMessageW(
         hwnd,
         WM_SETFONT,
@@ -220,33 +219,25 @@ unsafe fn commit(hwnd: HWND, st: &mut CbState) {
     }
 }
 
-/// 이중 셰브론(⌃/⌄) — 우측 존에 펜으로 그린다(글리프 폰트 의존 제거).
-unsafe fn draw_chevrons(dc: HDC, zone: &RECT, color: COLORREF) {
-    let pen = CreatePen(PS_SOLID, 1, color);
-    let old = SelectObject(dc, pen.into());
+/// 이중 셰브론(⌃/⌄) — AA 폴리라인(DrawCtx 백엔드 경유 — GDI+ 직접 호출 금지).
+unsafe fn draw_chevrons(g: &mut GdipCtx, zone: &RECT, c: COLORREF) {
     let cx = (zone.left + zone.right) / 2;
     let cy = (zone.top + zone.bottom) / 2;
     let (hw, hh, gap) = (3, 3, 2); // 셰브론 반폭·높이·중심 간격
     for (dir, base) in [(-1, cy - gap), (1, cy + gap)] {
         // dir=-1: ⌃(꼭짓점 위), dir=1: ⌄(꼭짓점 아래)
         let tip = base + dir * hh;
-        let _ = MoveToEx(dc, cx - hw, base, None);
-        let _ = LineTo(dc, cx, tip);
-        let _ = LineTo(dc, cx + hw + 1, base - dir);
+        g.polyline(
+            &[(cx - hw, base), (cx, tip), (cx + hw, base)],
+            color(c),
+            1.4,
+        );
     }
-    SelectObject(dc, old);
-    let _ = DeleteObject(pen.into());
 }
 
-/// ✓ 마크 — 펜 폴리라인(팝업 선택 표기).
-unsafe fn draw_check(dc: HDC, x: i32, cy: i32, color: COLORREF) {
-    let pen = CreatePen(PS_SOLID, 2, color);
-    let old = SelectObject(dc, pen.into());
-    let _ = MoveToEx(dc, x, cy, None);
-    let _ = LineTo(dc, x + 3, cy + 3);
-    let _ = LineTo(dc, x + 9, cy - 4);
-    SelectObject(dc, old);
-    let _ = DeleteObject(pen.into());
+/// ✓ 마크 — AA 폴리라인(팝업 선택 표기).
+unsafe fn draw_check(g: &mut GdipCtx, x: i32, cy: i32, c: COLORREF) {
+    g.polyline(&[(x, cy), (x + 3, cy + 3), (x + 9, cy - 4)], color(c), 2.0);
 }
 
 unsafe extern "system" fn ctl_proc(
@@ -351,9 +342,20 @@ unsafe extern "system" fn ctl_proc(
             if let Some(st) = state(hwnd).as_ref() {
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
-                // 본체 필 — 리전이 라운드 클립하므로 전체 채움이면 충분
-                fill(dc, &rc, st.style.sel_bg);
-                // 현재 항목 라벨(세로 중앙 — 상/하 균등 여백)
+                // 모서리 = behind(부모 배경) → AA 라운드 필 + 셰브론(DrawCtx 백엔드)
+                fill(dc, &rc, st.style.behind);
+                {
+                    let mut g = GdipCtx::new(dc);
+                    g.fill_round_rect(gc_rect(&rc), RADIUS, color(st.style.sel_bg));
+                    let zone = RECT {
+                        left: rc.right - 20,
+                        top: rc.top,
+                        right: rc.right - 6,
+                        bottom: rc.bottom,
+                    };
+                    draw_chevrons(&mut g, &zone, st.style.text);
+                } // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
+                  // 현재 항목 라벨(세로 중앙 — 상/하 균등 여백)
                 let old = SelectObject(dc, st.font.into());
                 SetBkMode(dc, TRANSPARENT);
                 SetTextColor(dc, st.style.text);
@@ -368,14 +370,6 @@ unsafe extern "system" fn ctl_proc(
                     DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 }
                 SelectObject(dc, old);
-                // 우측 이중 셰브론
-                let zone = RECT {
-                    left: rc.right - 20,
-                    top: rc.top,
-                    right: rc.right - 6,
-                    bottom: rc.bottom,
-                };
-                draw_chevrons(dc, &zone, st.style.text);
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
@@ -430,63 +424,50 @@ unsafe extern "system" fn pop_proc(
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
                 fill(dc, &rc, st.style.bg);
-                // 라운드 외곽선
-                let pen = CreatePen(PS_SOLID, 1, st.style.border);
-                let old_p = SelectObject(dc, pen.into());
-                let old_b = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                let _ = RoundRect(
-                    dc,
-                    rc.left,
-                    rc.top,
-                    rc.right,
-                    rc.bottom,
-                    RADIUS * 2,
-                    RADIUS * 2,
-                );
-                SelectObject(dc, old_b);
-                SelectObject(dc, old_p);
-                let _ = DeleteObject(pen.into());
                 let rh = row_h(owner, st);
                 let first = first_visible(st);
-                let old = SelectObject(dc, st.font.into());
-                SetBkMode(dc, TRANSPARENT);
-                for (row, idx) in (first..st.items.len()).enumerate() {
+                // 팝업 행 rect(도형 패스·텍스트 패스 공용)
+                let cell_of = |row: usize| -> Option<RECT> {
                     let top = rc.top + 3 + row as i32 * rh;
                     if top >= rc.bottom - 3 {
-                        break;
+                        return None;
                     }
-                    let cell = RECT {
+                    Some(RECT {
                         left: rc.left + 3,
                         top,
                         right: rc.right - 3,
                         bottom: (top + rh).min(rc.bottom - 3),
-                    };
+                    })
+                };
+                {
+                    // 도형 패스(AA — DrawCtx 백엔드): 외곽선·hover 필·✓
+                    let mut g = GdipCtx::new(dc);
+                    g.stroke_round_rect(gc_rect(&rc), RADIUS, color(st.style.border), 1.0);
+                    for (row, idx) in (first..st.items.len()).enumerate() {
+                        let Some(cell) = cell_of(row) else { break };
+                        let hot = idx == st.hot;
+                        if hot {
+                            // hover = accent 라운드 필 + bg 글자(시안)
+                            g.fill_round_rect(gc_rect(&cell), RADIUS - 2, color(st.style.accent));
+                        }
+                        if idx == st.sel {
+                            let fg = if hot { st.style.bg } else { st.style.text };
+                            draw_check(
+                                &mut g,
+                                cell.left + 6,
+                                (cell.top + cell.bottom) / 2,
+                                fg,
+                            );
+                        }
+                    }
+                } // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
+                // 텍스트 패스(GDI — ClearType 유지)
+                let old = SelectObject(dc, st.font.into());
+                SetBkMode(dc, TRANSPARENT);
+                for (row, idx) in (first..st.items.len()).enumerate() {
+                    let Some(cell) = cell_of(row) else { break };
                     let hot = idx == st.hot;
-                    if hot {
-                        // hover = accent 라운드 필 + bg 글자(시안)
-                        let brush = CreateSolidBrush(st.style.accent);
-                        let hpen = CreatePen(PS_SOLID, 1, st.style.accent);
-                        let ob = SelectObject(dc, brush.into());
-                        let op = SelectObject(dc, hpen.into());
-                        let _ = RoundRect(
-                            dc,
-                            cell.left,
-                            cell.top,
-                            cell.right,
-                            cell.bottom,
-                            RADIUS,
-                            RADIUS,
-                        );
-                        SelectObject(dc, op);
-                        SelectObject(dc, ob);
-                        let _ = DeleteObject(hpen.into());
-                        let _ = DeleteObject(brush.into());
-                    }
-                    let fg = if hot { st.style.bg } else { st.style.text };
-                    if idx == st.sel {
-                        draw_check(dc, cell.left + 6, (cell.top + cell.bottom) / 2, fg);
-                    }
-                    SetTextColor(dc, fg);
+                    SetTextColor(dc, if hot { st.style.bg } else { st.style.text });
                     let mut w16: Vec<u16> = st.items[idx].encode_utf16().collect();
                     let mut trc = RECT {
                         left: cell.left + CHECK_W,

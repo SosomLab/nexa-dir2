@@ -5,18 +5,18 @@
 //! - 생성: [`create`] — [`Style`] 인자. **높이 규칙(공통)**: `h <= 0` =
 //!   [`super::style::auto_height`](글꼴 + 상/하 [`super::style::PAD_Y`]px) —
 //!   전 Nx 컨트롤과 동일해 수정 없이 같은 row 배치가 반듯하다.
-//! - 본체 = 라운드 사각(창 리전 클립) + 1px border · **포커스 = accent 2px 링**.
+//! - 본체 = **AA 라운드 사각**(모서리 = `style.behind` 블렌드 — DrawCtx 백엔드
+//!   경유, 07-17 규약) + 평시 1px border · **포커스 = accent 2px 링**.
 //!   입력은 내부 무테두리 EDIT(글꼴 높이로 **세로 중앙** — searchbox 검증 규약).
 //! - 텍스트 API 위임: `WM_SETTEXT`/`WM_GETTEXT`/`WM_GETTEXTLENGTH`/
 //!   `EM_SETCUEBANNER` → 내부 EDIT. 내용 변경 = 부모에
 //!   `WM_COMMAND(MAKEWPARAM(id, EN_CHANGE))` 재발행(포커스 in/out도 재발행).
 
+use nexa_gui::DrawCtx;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreatePen, CreateRoundRectRgn, DeleteObject, EndPaint, GetStockObject,
-    InvalidateRect, RoundRect, SelectObject, SetWindowRgn, HFONT, NULL_BRUSH, PAINTSTRUCT,
-    PS_SOLID,
+    BeginPaint, DeleteObject, EndPaint, InvalidateRect, HFONT, PAINTSTRUCT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -27,6 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
+use super::gdipctx::{color, rect as gc_rect, GdipCtx};
 use super::style::{fill, font_height, Style};
 
 /// 내용 변경 재발행 코드(EDIT EN_CHANGE 그대로).
@@ -119,8 +120,7 @@ pub unsafe fn create(
         bg_brush: windows::Win32::Graphics::Gdi::CreateSolidBrush(style.bg),
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
-    let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, RADIUS * 2, RADIUS * 2);
-    let _ = SetWindowRgn(hwnd, Some(rgn), false);
+    // 라운드 모서리 = behind 칠 + AA 도형(07-17 개정 — 리전 클립 폐기)
     SendMessageW(
         hwnd,
         WM_SETFONT,
@@ -176,11 +176,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_SIZE => {
-            let w = (lparam.0 & 0xFFFF) as i16 as i32;
-            let h = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, RADIUS * 2, RADIUS * 2);
-            let _ = SetWindowRgn(hwnd, Some(rgn), true);
             layout(hwnd);
+            let _ = InvalidateRect(Some(hwnd), None, true);
             LRESULT(0)
         }
         // 텍스트 API 위임(드롭인 계약 — searchbox 규약)
@@ -234,29 +231,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             if let Some(st) = state(hwnd).as_ref() {
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
-                fill(dc, &rc, st.style.bg);
-                // 테두리: 포커스 = accent 2px 링(시안) · 평시 = border 1px
+                // 모서리 = behind(부모 배경) → AA 라운드 본체 + 테두리 블렌드
+                fill(dc, &rc, st.style.behind);
                 let focused = GetFocus() == st.edit;
-                let (color, width) = if focused {
-                    (st.style.accent, 2)
+                let (ring, width) = if focused {
+                    (st.style.accent, 2.0)
                 } else {
-                    (st.style.border, 1)
+                    (st.style.border, 1.0)
                 };
-                let pen = CreatePen(PS_SOLID, width, color);
-                let old_p = SelectObject(dc, pen.into());
-                let old_b = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                let _ = RoundRect(
-                    dc,
-                    rc.left,
-                    rc.top,
-                    rc.right,
-                    rc.bottom,
-                    RADIUS * 2,
-                    RADIUS * 2,
-                );
-                SelectObject(dc, old_b);
-                SelectObject(dc, old_p);
-                let _ = DeleteObject(pen.into());
+                // AA 도형 = DrawCtx 백엔드만(07-17 규약 — GDI+ 직접 호출 금지)
+                let mut g = GdipCtx::new(dc);
+                g.fill_round_rect(gc_rect(&rc), RADIUS, color(st.style.bg));
+                g.stroke_round_rect(gc_rect(&rc), RADIUS, color(ring), width);
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)

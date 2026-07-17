@@ -22,6 +22,10 @@ pub struct Style {
     pub accent: COLORREF,
     /// 선택/hover 배경.
     pub sel_bg: COLORREF,
+    /// **도형 밖 배후색**(= 부모 배경 — AA 가장자리 블렌드 기준, 07-17 raster QA):
+    /// 원형/라운드 컨트롤은 리전 클립 대신 이 색으로 모서리를 칠하고 그 위에
+    /// AA 도형을 얹는다. 부모 배경과 같은 값을 넘기면 어떤 배경에서도 자연스럽다.
+    pub behind: COLORREF,
 }
 
 impl Default for Style {
@@ -33,6 +37,7 @@ impl Default for Style {
             text_dim: COLORREF(0x0078_6E68),
             accent: COLORREF(0x00D4_7800),
             sel_bg: COLORREF(0x00EC_E7E4),
+            behind: COLORREF(0x00FF_FFFF),
         }
     }
 }

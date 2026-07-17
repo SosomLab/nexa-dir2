@@ -9,7 +9,8 @@
 //!   **PNG 등 알파 이미지는 같은 enum의 확장 변형**(`Icon::Image(HBITMAP)` —
 //!   32bpp premultiplied + msimg32 AlphaBlend[OS 인박스])으로 추가한다. 호스트
 //!   API는 불변.
-//! - **shape 투명** = 원형 창 리전 클립(모서리 밖 = 부모 배경 그대로).
+//! - **shape 투명** = 모서리를 `style.behind`(부모 배경색)로 칠하고 AA 원판을
+//!   블렌드(07-17 개정 — 1비트 리전 클립은 계단 가장자리라 폐기).
 //!
 //! ## 계약(판매용 명세 — 클래스 `Nexa.NxIconButton`)
 //! - 생성: [`create`] — `d <= 0` = 공통 자동 높이 지름(전 Nx 기본 정렬).
@@ -17,12 +18,10 @@
 //! - [`NXIB_GETENABLE`]/[`NXIB_SETENABLE`](WM_USER+100/101): 비활성 =
 //!   sel_bg 원 + 글리프(시안 — 삭제 대상이 자신뿐인 − 버튼), 클릭 무시.
 
+use nexa_gui::{DrawCtx, Rect};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateEllipticRgn, CreatePen, CreateSolidBrush, DeleteObject, Ellipse, EndPaint,
-    InvalidateRect, LineTo, MoveToEx, SelectObject, SetWindowRgn, PAINTSTRUCT, PS_SOLID,
-};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetDlgCtrlID, GetParent, GetWindowLongPtrW, RegisterClassW,
     SendMessageW, SetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW, WINDOW_EX_STYLE,
@@ -30,7 +29,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_TABSTOP, WS_VISIBLE,
 };
 
-use super::style::Style;
+use super::gdipctx::{color, GdipCtx};
+use super::style::{fill, Style};
 
 /// 클릭 통지(WM_COMMAND HIWORD — enabled일 때만).
 pub const NXIB_CLICK: u32 = 1;
@@ -108,9 +108,8 @@ pub unsafe fn create(
         style,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
-    // shape 투명 — 원형 리전 클립(밖은 부모 배경)
-    let rgn = CreateEllipticRgn(0, 0, d + 1, d + 1);
-    let _ = SetWindowRgn(hwnd, Some(rgn), false);
+    // shape 투명(07-17 AA 개정): 1비트 리전 클립은 계단 가장자리의 진범 —
+    // 대신 모서리를 style.behind(부모 배경색)로 칠하고 AA 원판을 얹는다.
     hwnd
 }
 
@@ -159,35 +158,28 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             if let Some(st) = state(hwnd).as_ref() {
                 let mut rc = RECT::default();
                 let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
+                // 모서리 = behind(부모 배경색) → AA 원판이 자연스럽게 블렌드
+                fill(dc, &rc, st.style.behind);
                 // 원판: 활성 = text_dim(진회색)·비활성 = sel_bg(연회색) — 시안
                 let disc = if st.enabled {
                     st.style.text_dim
                 } else {
                     st.style.sel_bg
                 };
-                let brush = CreateSolidBrush(disc);
-                let pen = CreatePen(PS_SOLID, 1, disc);
-                let ob = SelectObject(dc, brush.into());
-                let op = SelectObject(dc, pen.into());
-                let _ = Ellipse(dc, rc.left, rc.top, rc.right, rc.bottom);
-                SelectObject(dc, op);
-                SelectObject(dc, ob);
-                let _ = DeleteObject(pen.into());
-                let _ = DeleteObject(brush.into());
-                // 글리프 = bg 색 펜 2px(흰 +/−)
+                // AA 도형 = DrawCtx 백엔드만(07-17 규약 — GDI+ 직접 호출 금지)
+                let mut g = GdipCtx::new(dc);
+                g.fill_ellipse(
+                    Rect::new(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top),
+                    color(disc),
+                );
+                // 글리프 = bg 색 AA 폴리라인 2px(흰 +/−)
                 let d = rc.right - rc.left;
                 let (cx, cy) = ((rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
                 let arm = (d / 4).max(3);
-                let gpen = CreatePen(PS_SOLID, 2, st.style.bg);
-                let old = SelectObject(dc, gpen.into());
-                let _ = MoveToEx(dc, cx - arm, cy, None);
-                let _ = LineTo(dc, cx + arm + 1, cy);
+                g.polyline(&[(cx - arm, cy), (cx + arm, cy)], color(st.style.bg), 2.0);
                 if st.icon == Icon::Plus {
-                    let _ = MoveToEx(dc, cx, cy - arm, None);
-                    let _ = LineTo(dc, cx, cy + arm + 1);
+                    g.polyline(&[(cx, cy - arm), (cx, cy + arm)], color(st.style.bg), 2.0);
                 }
-                SelectObject(dc, old);
-                let _ = DeleteObject(gpen.into());
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
