@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/nxgrid-sort` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 5 | **다중열 정렬·6종 확정·ExtDot 픽스·화살표**(사용자 요청 5건) — ① NxGrid 다중열 정렬 = **원본 docs/23 §4 규약 이식**(3상태·Shift 다중·▲▼ 앞/①② 뒤·비교 = 호스트[NXGR_SORT]·bulkrename order 맵) — 메인 파일 목록은 기이식 확인 ② **ExtDot 이중 점 진범 픽스**(결과 그대로 채택+재분해 — 연번/날짜/치환 전수 점검) ③ 동작 **6종 확정**(이동/확장자 카드 제거·구 프리셋 스킵·en 명칭 정확화) ④ NxSegmented **AA 벡터 화살표**(긴 샤프트+큰 머리). 187 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/bulk-tab-tristate` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 2 | **Tab 내비 + 3단 체크·헤더 전체 토글**(사용자 요청 3건) — ① IsDialogMessageW(모달 3곳)+**CONTROLPARENT**(카드·텍스트박스·스핀 래퍼)+WANTARROWS(콤보/세그/메뉴) = Tab 배치 순서 이동·방향키 보존 ② **NxCheckBox CheckMode 2단/3단**(0/1/2·부분 = 흐릿한 ✓ 블렌드) ③ **그리드 헤더 체크** = 전 행 집계 표시·클릭 전체 토글(NXGR_ROW_ALL 통지→excluded 재동기) ④ 체크 열 폭 = 필요 폭만. 실기 24↔0·3단 순환 검증·186 green | [2026-07-18](journal/2026-07-18.md) |
 | `fix/grid-flicker` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 1 | **NxGrid 깜빡임 제거**(사용자 QA — 입력·방향키 blink) — WM_PAINT **더블버퍼**(메모리 DC 전면 도장→1회 BitBlt)+WM_ERASEBKGND=1+InvalidateRect erase=false 전환. 렌더 회귀 없음·186 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/bulk-bottom-bar` | 2026-07-18 | 2026-07-18 (`1c5e8eb`) | 2026-07-18 | 1 | **하단 행 재편**(사용자 요청 5건) — Apply → **"이름 변경(Rename)" NxButton Default**(NXBTN_SETENABLE 활성 제어) · 우하단 [취소][이름 변경] 실측 정렬 · 프리셋 [… ⌄]+건수 = 구 Apply 자리(하단 좌측) · 미리보기 그리드 전고 확장 · **GridOpts.row_h**(파일 목록 20px 동일 산식). 실기 24건 실변경 왕복·186 green | [2026-07-18](journal/2026-07-18.md) |
