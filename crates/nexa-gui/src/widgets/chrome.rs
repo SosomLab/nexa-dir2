@@ -21,6 +21,9 @@ pub struct ToolButton {
     /// 아이콘 버튼(M5-1 런처 — 원본 exe 16px 썸네일 대응): `(키, 로드 힌트)` —
     /// DrawCtx::draw_icon이 해석(셸 아이콘 큐잉). Some이면 **정사각 버튼**(글리프 대신).
     pub icon: Option<(String, String)>,
+    /// 활성 여부(사용자 확정 07-18 — 내비 이전/다음/상위): 비활성 = 흐린
+    /// 글리프(text_dim)·hover/클릭 무시.
+    pub enabled: bool,
 }
 
 impl ToolButton {
@@ -31,6 +34,7 @@ impl ToolButton {
             separator: false,
             checked: false,
             icon: None,
+            enabled: true,
         }
     }
 
@@ -42,6 +46,7 @@ impl ToolButton {
             separator: true,
             checked: false,
             icon: None,
+            enabled: true,
         }
     }
 
@@ -109,6 +114,16 @@ impl Toolbar {
         }
     }
 
+    /// 활성 상태 동기(사용자 확정 07-18 — 내비 이전/다음/상위 사용 가능 시만).
+    pub fn set_enabled(&mut self, id: u32, on: bool, inv: &mut Invalidations) {
+        for b in &mut self.buttons {
+            if !b.separator && b.id == id && b.enabled != on {
+                b.enabled = on;
+                inv.push(self.bounds);
+            }
+        }
+    }
+
     pub fn set_metrics(&mut self, row_h: i32, pad_x: i32, inv: &mut Invalidations) {
         self.row_h = row_h.max(1);
         self.pad_x = pad_x;
@@ -143,14 +158,18 @@ impl Widget for Toolbar {
         match *ev {
             InputEvent::MouseDown { x, y, .. } => {
                 if let Some(i) = self.button_at(x, y) {
-                    if !self.buttons[i].separator {
+                    // 비활성 = 클릭 무시(사용자 확정 07-18)
+                    if !self.buttons[i].separator && self.buttons[i].enabled {
                         self.pending = Some(self.buttons[i].id);
                         inv.push(self.bounds);
                     }
                 }
             }
             InputEvent::MouseMove { x, y } => {
-                let hover = self.button_at(x, y);
+                // 비활성 버튼은 hover 강조도 없음(식별 — 07-18)
+                let hover = self
+                    .button_at(x, y)
+                    .filter(|&i| self.buttons[i].enabled && !self.buttons[i].separator);
                 if hover != self.hover {
                     self.hover = hover;
                     inv.push(self.bounds);
@@ -194,12 +213,17 @@ impl Widget for Toolbar {
             // 배경[sel_bg = 테마 선택색]으로 충분하다는 사용자 확정)
             let bg = if btn.checked {
                 theme.sel_bg
-            } else if self.hover == Some(i) {
+            } else if self.hover == Some(i) && btn.enabled {
                 theme.header_bg
             } else {
                 theme.chrome_bg
             };
-            let fg = theme.text;
+            // 비활성 = 흐린 글리프(text_dim — 사용자 확정 07-18 식별 규약)
+            let fg = if btn.enabled {
+                theme.text
+            } else {
+                theme.text_dim
+            };
             if cell.w > 0 {
                 if let Some((key, hint)) = &btn.icon {
                     // 16×16 상당(바 높이 − 상하 4px 여백) 아이콘을 정사각 셀 중앙에.

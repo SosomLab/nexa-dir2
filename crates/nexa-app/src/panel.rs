@@ -371,12 +371,20 @@ impl Panel {
             .set_pinned(self.tabs.iter().map(|t| t.pinned).collect(), inv);
         // 가상 최상위(X-17)는 사람이 읽는 라벨로 — 단일(=현재) 세그먼트라 클릭 무동작
         let root = self.root_path();
-        let path = if nexa_vfs::is_virtual_root(&root) {
+        let at_mypc = nexa_vfs::is_virtual_root(&root);
+        let path = if at_mypc {
             crate::i18n::tr("nav.mypc")
         } else {
             root.to_string_lossy().into_owned()
         };
         self.pathbar.set_path(path, inv);
+        // 내비 활성 동기(사용자 확정 07-18): 이전/다음 = 히스토리 가능 시만,
+        // 상위 = 가상 최상위(This PC)에서 비활성 — 흐린 글리프로 식별
+        let nav = &self.tabs[self.active].nav;
+        let (cb, cf) = (nav.can_back(), nav.can_forward());
+        self.navbtns.set_enabled(BTN_BACK, cb, inv);
+        self.navbtns.set_enabled(BTN_FORWARD, cf, inv);
+        self.navbtns.set_enabled(BTN_UP, !at_mypc, inv);
     }
 
     // ── 탭 관리(원본 F20: 패널별 탭) ───────────────────────────
