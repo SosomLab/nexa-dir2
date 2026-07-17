@@ -710,7 +710,19 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 style2,
             );
             lbl("bulk.lbl.matchCase", bx, lbl_w, 2);
-            crate::ctl::checkbox::create(card, cx, row(2), 0, 0, ID_MC, font, "", false, style2);
+            crate::ctl::checkbox::create(
+                card,
+                cx,
+                row(2),
+                0,
+                0,
+                ID_MC,
+                font,
+                "",
+                0,
+                crate::ctl::checkbox::CheckMode::Two,
+                style2,
+            );
             lbl("bulk.lbl.find", bx, lbl_w, 3);
             crate::ctl::textbox::create(card, cx, row(3), cw, 0, ID_FIND, font, style2);
             lbl("bulk.lbl.with", bx, lbl_w, 4);
@@ -728,7 +740,8 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 ID_RXF_MC,
                 font,
                 "",
-                false,
+                0,
+                crate::ctl::checkbox::CheckMode::Two,
                 style2,
             );
             lbl("bulk.lbl.findRx", bx, lbl_w, 2);
@@ -1376,6 +1389,10 @@ unsafe fn prompt_name(owner: HWND, font: HFONT) -> Option<String> {
     let _ = EnableWindow(owner, false);
     let mut msg = MSG::default();
     while IsWindow(Some(dlg)).as_bool() && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        // Tab = 배치(생성) 순서 포커스 이동(사용자 확정 07-18 — IsDialogMessage)
+        if windows::Win32::UI::WindowsAndMessaging::IsDialogMessageW(dlg, &msg).as_bool() {
+            continue;
+        }
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
@@ -1558,6 +1575,10 @@ unsafe fn manage_presets(owner: HWND, font: HFONT) {
     let _ = EnableWindow(owner, false);
     let mut msg = MSG::default();
     while IsWindow(Some(dlg)).as_bool() && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        // Tab = 배치(생성) 순서 포커스 이동(사용자 확정 07-18 — IsDialogMessage)
+        if windows::Win32::UI::WindowsAndMessaging::IsDialogMessageW(dlg, &msg).as_bool() {
+            continue;
+        }
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
@@ -1683,7 +1704,15 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 (ID_PREV, 1 /* NXGR_TOGGLE — 적용 열 체크(행별 제외) */) => {
                     let stm = &mut *st; // 명시 재차용(원시 포인터 autoref lint)
                     let idx = SendMessageW(stm.prev, crate::ctl::grid::NXGR_GETROW, None, None).0;
-                    if idx >= 0 {
+                    if idx == crate::ctl::grid::NXGR_ROW_ALL {
+                        // 헤더 전체 토글(07-18) — 그리드 행 상태로 전 항목 재동기
+                        for i in 0..stm.excluded.len() {
+                            if let Some(on) = crate::ctl::grid::row_check(stm.prev, i) {
+                                stm.excluded[i] = !on;
+                            }
+                        }
+                        refresh_preview(stm);
+                    } else if idx >= 0 {
                         let checked =
                             crate::ctl::grid::row_check(stm.prev, idx as usize).unwrap_or(true);
                         if let Some(e) = stm.excluded.get_mut(idx as usize) {
@@ -1889,10 +1918,11 @@ pub unsafe fn show(
     );
     // 미리보기 = NxGrid(적용/이전/이후 — 컬럼 리사이즈·적용 열 체크 토글, 07-18)
     let pw = CLIENT_W - lx - PAD;
-    let apply_w = 56;
+    // 체크 열 = 필요 폭만(체크 정사각+여백 — 07-18)·타이틀 대신 헤더 체크박스
+    let apply_w = crate::ctl::style::font_height(dlg, font).max(10) + 14;
     let half_w = (pw - apply_w) / 2;
     let grid_cols = [
-        (tr("bulk.grid.apply"), apply_w),
+        (String::new(), apply_w),
         (tr("bulk.grid.before"), half_w),
         (tr("bulk.grid.after"), half_w),
     ];
@@ -1952,6 +1982,10 @@ pub unsafe fn show(
     let _ = SetForegroundWindow(dlg);
     let mut msg = MSG::default();
     while IsWindow(Some(dlg)).as_bool() && GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        // Tab = 배치(생성) 순서 포커스 이동(사용자 확정 07-18 — IsDialogMessage)
+        if windows::Win32::UI::WindowsAndMessaging::IsDialogMessageW(dlg, &msg).as_bool() {
+            continue;
+        }
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

@@ -9,8 +9,11 @@
 //!   확정 07-17 — 기본이 커 보임): 글꼴 높이 − 2 정사각을 세로 중앙에 그린다 —
 //!   클릭 영역·행 정렬은 그대로, 시각만 시안 비율. 라벨은 우측 세로 중앙.
 //! - 클릭/Space = 토글 → 부모에 `WM_COMMAND(MAKEWPARAM(id, NXCHK_CHANGED))`.
+//! - **체크 단수**(사용자 확정 07-18): [`CheckMode::Two`] = 체크/해제 ·
+//!   [`CheckMode::Three`] = 체크/부분(**흐릿한 ✓** — accent 박스 + 반투명 톤)/
+//!   해제, 클릭 순환 = 해제→체크→부분→해제. 상태값 = 0 해제·1 체크·2 부분.
 //! - 조회/설정: [`NXCHK_GETCHECK`]/[`NXCHK_SETCHECK`](WM_USER+95/96 — SETCHECK
-//!   통지 없음). 배경 = `style.bg`(호스트 배경과 일치시킬 것 — 카드 위 = 카드 bg).
+//!   통지 없음, 값 0/1/2). 배경 = `style.bg`(호스트 배경과 일치시킬 것 — 카드 위 = 카드 bg).
 
 use nexa_gui::{DrawCtx, Rect};
 use windows::core::{w, PCWSTR};
@@ -31,14 +34,24 @@ use super::style::{auto_height, fill, font_height, Style};
 
 /// 토글 통지(WM_COMMAND HIWORD).
 pub const NXCHK_CHANGED: u32 = 1;
-/// 체크 상태 조회(반환 = 0/1).
+/// 체크 상태 조회(반환 = 0 해제·1 체크·2 부분).
 pub const NXCHK_GETCHECK: u32 = 0x0400 + 95;
-/// 체크 상태 설정(wparam = 0/1 — 통지 없음).
+/// 체크 상태 설정(wparam = 0/1/2 — 통지 없음. 2는 Three 모드만).
 pub const NXCHK_SETCHECK: u32 = 0x0400 + 96;
+
+/// 체크 단수(사용자 확정 07-18) — 2단 = 체크/해제 · 3단 = 체크/부분/해제.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum CheckMode {
+    #[default]
+    Two,
+    Three,
+}
 
 struct ChkState {
     label: String,
-    checked: bool,
+    /// 0 해제 · 1 체크 · 2 부분(Three 모드).
+    check: u32,
+    mode: CheckMode,
     font: HFONT,
     style: Style,
 }
@@ -47,6 +60,7 @@ static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("Nexa.NxCheckBox");
 
 /// NxCheckBox 생성 — `label` 빈 문자열 = 박스만. `h <= 0` = 자동 높이.
+/// `check` = 0/1/2(2는 `CheckMode::Three`만).
 #[allow(clippy::too_many_arguments)] // Win32 create 계열 관례
 pub unsafe fn create(
     parent: HWND,
@@ -57,7 +71,8 @@ pub unsafe fn create(
     id: u32,
     font: HFONT,
     label: &str,
-    checked: bool,
+    check: u32,
+    mode: CheckMode,
     style: Style,
 ) -> HWND {
     REGISTER.call_once(|| {
@@ -87,9 +102,11 @@ pub unsafe fn create(
         None,
     )
     .unwrap_or_default();
+    let max = if mode == CheckMode::Three { 2 } else { 1 };
     let st = Box::new(ChkState {
         label: label.to_string(),
-        checked,
+        check: check.min(max),
+        mode,
         font,
         style,
     });
@@ -108,7 +125,9 @@ unsafe fn state(hwnd: HWND) -> *mut ChkState {
 }
 
 unsafe fn toggle(hwnd: HWND, st: &mut ChkState) {
-    st.checked = !st.checked;
+    // 순환: 2단 = 0↔1 · 3단 = 0→1→2→0(사용자 확정 07-18)
+    let states = if st.mode == CheckMode::Three { 3 } else { 2 };
+    st.check = (st.check + 1) % states;
     let _ = InvalidateRect(Some(hwnd), None, true);
     if let Ok(parent) = GetParent(hwnd) {
         let id = GetDlgCtrlID(hwnd) as u32;
@@ -139,10 +158,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             let _ = InvalidateRect(Some(hwnd), None, true);
             LRESULT(0)
         }
-        m if m == NXCHK_GETCHECK => LRESULT(state(hwnd).as_ref().map_or(0, |s| s.checked as isize)),
+        m if m == NXCHK_GETCHECK => LRESULT(state(hwnd).as_ref().map_or(0, |s| s.check as isize)),
         m if m == NXCHK_SETCHECK => {
             if let Some(st) = state(hwnd).as_mut() {
-                st.checked = wparam.0 != 0;
+                let max = if st.mode == CheckMode::Three { 2 } else { 1 };
+                st.check = (wparam.0 as u32).min(max);
                 let _ = InvalidateRect(Some(hwnd), None, true);
             }
             LRESULT(0)
@@ -175,7 +195,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let side = font_height(hwnd, st.font).clamp(10, ch);
                 let btop = rc.top + (ch - side) / 2;
                 let radius = (side / 3).max(4);
-                let box_color = if st.checked {
+                let box_color = if st.check > 0 {
                     st.style.accent
                 } else {
                     st.style.sel_bg
@@ -188,7 +208,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         radius,
                         color(box_color),
                     );
-                    if !st.checked {
+                    if st.check == 0 {
                         // 미체크 = 1px 외곽선(QA 07-17 — 배경 위 구별·정의감)
                         g.stroke_round_rect(
                             Rect::new(rc.left, btop, side, side),
@@ -196,9 +216,16 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                             color(st.style.border),
                             1.0,
                         );
-                    }
-                    if st.checked {
-                        // 흰 ✓ — AA 폴리라인(둥근 캡)
+                    } else {
+                        // ✓ — AA 폴리라인(둥근 캡). 부분(2) = 흐릿한 ✓
+                        // (accent 위 반투명 톤 = bg·accent 50% 블렌드 — 07-18 시안)
+                        let vc = if st.check == 2 {
+                            let (b, a) = (st.style.bg.0, st.style.accent.0);
+                            let half = |sh: u32| (((b >> sh & 0xFF) + (a >> sh & 0xFF)) / 2) << sh;
+                            windows::Win32::Foundation::COLORREF(half(0) | half(8) | half(16))
+                        } else {
+                            st.style.bg
+                        };
                         let (cx, cy) = (rc.left + side / 2, btop + side / 2);
                         g.polyline(
                             &[
@@ -206,7 +233,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                                 (cx - side / 12, cy + side / 4 - 1),
                                 (cx + side / 4, cy - side / 5),
                             ],
-                            color(st.style.bg),
+                            color(vc),
                             2.0,
                         );
                     }
