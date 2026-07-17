@@ -80,6 +80,24 @@ pub(crate) unsafe fn auto_height(
     font_height(hwnd, font) + PAD_Y * 2
 }
 
+/// 텍스트 렌더 폭(px) — 라벨 열 폭 실측(i18n 언어 변경에도 정렬 유지, 07-17).
+pub(crate) unsafe fn text_width(
+    hwnd: windows::Win32::Foundation::HWND,
+    font: windows::Win32::Graphics::Gdi::HFONT,
+    text: &str,
+) -> i32 {
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{GetDC, GetTextExtentPoint32W, ReleaseDC, SelectObject};
+    let dc = GetDC(Some(hwnd));
+    let old = SelectObject(dc, font.into());
+    let w16: Vec<u16> = text.encode_utf16().collect();
+    let mut sz = SIZE::default();
+    let _ = GetTextExtentPoint32W(dc, &w16, &mut sz);
+    SelectObject(dc, old);
+    ReleaseDC(Some(hwnd), dc);
+    sz.cx
+}
+
 /// 글꼴 픽셀 높이(tmHeight) — 세로 중앙 배치 공용.
 pub(crate) unsafe fn font_height(
     hwnd: windows::Win32::Foundation::HWND,
