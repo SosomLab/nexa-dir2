@@ -17,8 +17,9 @@ use nexa_gui::{DrawCtx, Rect};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, DrawTextW, EndPaint, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
-    DT_CENTER, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, DrawTextW, EndPaint, GetTextExtentPoint32W, InvalidateRect, SelectObject,
+    SetBkMode, SetTextColor, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT,
+    TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, GetWindowLongPtrW,
@@ -283,31 +284,66 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 } // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
                 let old = SelectObject(dc, st.font.into());
                 SetBkMode(dc, TRANSPARENT);
+                // 화살표 라벨("→ "/"← " 접두) = 벡터 화살표(머리 확대 — 사용자
+                // 시안 07-18: 글꼴 화살표보다 끝이 크다). 텍스트 후 AA로 그린다.
+                let mut arrows: Vec<(i32, i32, bool, windows::Win32::Foundation::COLORREF)> =
+                    Vec::new();
+                let fh = super::style::font_height(hwnd, st.font).max(10);
+                let aw = fh - 2; // 화살표 길이
                 for (i, label) in st.items.iter().enumerate() {
                     let cell = cell_of(i);
-                    SetTextColor(
-                        dc,
-                        if i == st.sel {
-                            st.style.bg
-                        } else {
-                            st.style.text
-                        },
-                    );
-                    let mut w16: Vec<u16> = label.encode_utf16().collect();
+                    let fg = if i == st.sel {
+                        st.style.bg
+                    } else {
+                        st.style.text
+                    };
+                    SetTextColor(dc, fg);
+                    let (arrow, rest) = if let Some(r) = label.strip_prefix("→ ") {
+                        (Some(false), r) // 오른쪽 화살표
+                    } else if let Some(r) = label.strip_prefix("← ") {
+                        (Some(true), r) // 왼쪽 화살표
+                    } else {
+                        (None, label.as_str())
+                    };
+                    let mut w16: Vec<u16> = rest.encode_utf16().collect();
                     // 세로 중앙 + 1px 하향(콤보/글상자와 동일 보정)
                     let mut trc = RECT {
                         top: cell.top + 1,
                         bottom: cell.bottom + 1,
                         ..cell
                     };
-                    DrawTextW(
-                        dc,
-                        &mut w16,
-                        &mut trc,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-                    );
+                    if let Some(left_dir) = arrow {
+                        // [화살표][5px][텍스트] 묶음을 셀 중앙 정렬
+                        let mut sz = windows::Win32::Foundation::SIZE::default();
+                        let _ = GetTextExtentPoint32W(dc, &w16, &mut sz);
+                        let group = aw + 5 + sz.cx;
+                        let x0 = cell.left + ((cell.right - cell.left) - group) / 2;
+                        trc.left = x0 + aw + 5;
+                        DrawTextW(dc, &mut w16, &mut trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                        let cy = (cell.top + cell.bottom) / 2 + 1;
+                        arrows.push((x0, cy, left_dir, fg));
+                    } else {
+                        DrawTextW(
+                            dc,
+                            &mut w16,
+                            &mut trc,
+                            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+                        );
+                    }
                 }
                 SelectObject(dc, old);
+                if !arrows.is_empty() {
+                    // AA 화살표(DrawCtx 백엔드 — 둥근 캡): 샤프트 + 큰 머리(≈45°)
+                    let mut g = GdipCtx::new(dc);
+                    let head = (aw * 2 / 5).max(4);
+                    for (x0, cy, left_dir, fg) in arrows {
+                        let (tail, tip) = if left_dir { (x0 + aw, x0) } else { (x0, x0 + aw) };
+                        g.polyline(&[(tail, cy), (tip, cy)], color(fg), 2.0);
+                        let hx = if left_dir { tip + head } else { tip - head };
+                        g.polyline(&[(hx, cy - head), (tip, cy)], color(fg), 2.0);
+                        g.polyline(&[(hx, cy + head), (tip, cy)], color(fg), 2.0);
+                    }
+                }
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
