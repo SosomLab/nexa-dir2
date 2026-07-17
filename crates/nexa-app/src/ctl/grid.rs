@@ -106,6 +106,8 @@ pub struct GridOpts {
     pub zebra: bool,
     /// 1px 외곽선(목록 모드 — Edit 시안).
     pub outline: bool,
+    /// 행 높이(≤0 = 자동: 글꼴+상/하 4px — 호스트가 파일 목록 등과 정렬 시 지정).
+    pub row_h: i32,
     pub mark: Mark,
 }
 
@@ -251,7 +253,11 @@ unsafe fn state(hwnd: HWND) -> *mut GridState {
 }
 
 unsafe fn row_h(hwnd: HWND, st: &GridState) -> i32 {
-    font_height(hwnd, st.font) + super::style::PAD_Y * 2
+    if st.opts.row_h > 0 {
+        st.opts.row_h
+    } else {
+        font_height(hwnd, st.font) + super::style::PAD_Y * 2
+    }
 }
 
 unsafe fn header_h(hwnd: HWND, st: &GridState) -> i32 {

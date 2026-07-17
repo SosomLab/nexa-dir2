@@ -21,8 +21,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage,
     GWLP_USERDATA, HMENU, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
-    WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_GROUP, WS_POPUP, WS_SYSMENU,
-    WS_TABSTOP, WS_VISIBLE,
+    WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU,
+    WS_VISIBLE,
 };
 
 use crate::ctl::combobox::{NXCB_GETSEL, NXCB_SETSEL};
@@ -489,7 +489,13 @@ unsafe fn refresh_preview(st: &mut BrState) {
         && changed > 0
         && err.is_none()
         && confs.iter().all(|c| *c == Conflict::None);
-    let _ = EnableWindow(st.apply, ok);
+    // NxButton 활성은 내부 상태(NXBTN_SETENABLE) — EnableWindow는 그리기 미반영
+    SendMessageW(
+        st.apply,
+        crate::ctl::button::NXBTN_SETENABLE,
+        Some(WPARAM(usize::from(ok))),
+        None,
+    );
 }
 
 /// 동작 → kind 인덱스(카드 콤보 순서 — 프리셋 복원용).
@@ -1167,11 +1173,11 @@ unsafe fn rebuild_preset_menu(dlg: HWND, st: &mut BrState) {
     }
     items.push(save_label.as_str());
     items.push(edit_label.as_str());
-    // 우측 컬럼 상단 [… ⌄] — 오른쪽에 변경 건수 라벨(시안 07-18)
+    // 하단 좌측(구 [적용] 자리 — 사용자 확정 07-18) [… ⌄] + 오른쪽 건수 라벨
     st.preset_menu = crate::ctl::menubutton::create(
         dlg,
-        PAD + FORM_W + PAD,
-        PAD - 3,
+        PAD,
+        CLIENT_H - PAD - 26 + 2,
         48,
         0,
         ID_PRESET_MENU,
@@ -1231,6 +1237,13 @@ unsafe extern "system" fn prompt_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+/// 파일 목록 그리드 행 높이 동일화(사용자 확정 07-18 — win.rs panel_metrics
+/// 고밀도 규약 20px @96dpi와 같은 산식).
+unsafe fn file_row_h(hwnd: HWND) -> i32 {
+    let dpi = windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as i32;
+    (20 * dpi.max(96) / 96).max(14)
 }
 
 /// 무캐션 라운드 팝업(macOS 시안 07-18) — Win11 DWM 라운드 코너(Win10 = 각).
@@ -1502,6 +1515,7 @@ unsafe fn manage_presets(owner: HWND, font: HFONT) {
             no_header: true,
             zebra: true,
             outline: true,
+            row_h: file_row_h(dlg),
             mark: crate::ctl::grid::Mark::Minus,
         },
         style2,
@@ -1678,7 +1692,7 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         refresh_preview(stm); // 카운트·[적용] 활성 재계산
                     }
                 }
-                (ID_APPLY, 0) => {
+                (ID_APPLY, 1 /* NXBTN_CLICK — Rename NxButton */) => {
                     // 확정 — 충돌 0·검증 통과는 refresh_preview가 보장([적용] 활성 조건)
                     let inputs: Vec<RenameInput> = (*st)
                         .items
@@ -1706,7 +1720,7 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     (*st).result = Some(out);
                     let _ = DestroyWindow(hwnd);
                 }
-                (ID_CANCEL, 0) => {
+                (ID_CANCEL, 1 /* NXBTN_CLICK */) => {
                     let _ = DestroyWindow(hwnd);
                 }
                 _ => {
@@ -1825,42 +1839,41 @@ pub unsafe fn show(
         return None;
     };
 
-    let x = PAD;
-
     // ── 카드 스택(X-23 PF 모델): 초기 = Replace Text 카드 1장 ──
     let card0 = make_card(dlg, font, 0);
 
-    // ── 프리셋(07-18 v2): `…` 메뉴버튼만 — 이름은 Save 팝업이 입력받는다 ──
-    let half = (FORM_W - 6) / 2;
-
-    // ── 하단 확정 버튼 ──
+    // ── 하단 행(사용자 확정 07-18): 좌 [… ⌄]+건수 · 중 검증 오류 ·
+    //    우 [취소][Rename NxButton Default] ──
     let by = CLIENT_H - PAD - 26;
-    let apply = mk(
+    let apply = crate::ctl::button::create(
         dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.apply"),
-        WS_TABSTOP.0 | WS_GROUP.0,
-        x,
-        by,
-        half,
-        26,
+        0,
+        by + 2,
+        0,
+        0,
         ID_APPLY,
-    );
-    mk(
-        dlg,
         font,
-        w!("BUTTON"),
-        &tr("bulk.cancel"),
-        WS_TABSTOP.0,
-        x + half + 6,
-        by,
-        half,
-        26,
-        ID_CANCEL,
+        &tr("bulk.rename"),
+        crate::ctl::button::ButtonKind::Default,
+        true,
+        Style::default(),
     );
+    let cancel_btn = crate::ctl::button::create(
+        dlg,
+        0,
+        by + 2,
+        0,
+        0,
+        ID_CANCEL,
+        font,
+        &tr("bulk.cancel"),
+        crate::ctl::button::ButtonKind::Normal,
+        true,
+        Style::default(),
+    );
+    place_buttons_br(apply, cancel_btn, CLIENT_W, by + 2, PAD);
 
-    // ── 우측: 상단 [… ⌄]+변경 건수(시안 07-18) · 미리보기 · 하단 검증 오류 ──
+    // ── 우측: 미리보기(전고 — 프리셋 행 제거분 확장) · 하단 검증 오류 ──
     let lx = PAD + FORM_W + PAD;
     let err = mk(
         dlg,
@@ -1869,8 +1882,8 @@ pub unsafe fn show(
         "",
         0,
         lx,
-        CLIENT_H - PAD - 20,
-        CLIENT_W - lx - PAD,
+        by + 6,
+        CLIENT_W - lx - PAD - 220,
         18,
         0,
     );
@@ -1887,28 +1900,29 @@ pub unsafe fn show(
     let prev = crate::ctl::grid::create(
         dlg,
         lx,
-        PAD + 28,
+        PAD,
         pw,
-        CLIENT_H - PAD * 2 - 28 - 24,
+        by - 8 - PAD,
         ID_PREV,
         font,
         &grid_refs,
         crate::ctl::grid::GridOpts {
             mark: crate::ctl::grid::Mark::Check,
+            row_h: file_row_h(dlg),
             ..Default::default()
         },
         Style::default(),
     );
-    // 변경 건수(PF "N items will be renamed") — [… ⌄] 오른쪽 동일 행(시안 07-18)
+    // 변경 건수(PF "N items will be renamed") — 하단 [… ⌄] 오른쪽 동일 행
     let count = mk(
         dlg,
         font,
         w!("STATIC"),
         "",
         0,
-        lx + 48 + 10,
-        PAD + 1,
-        CLIENT_W - lx - 48 - 10 - PAD,
+        PAD + 48 + 10,
+        by + 6,
+        FORM_W - 48 - 10,
         18,
         ID_COUNT,
     );
