@@ -38,6 +38,8 @@ const ID_CASE: u32 = 113;
 /// 카드 A 타이틀 우측 +/−(PF 시안 — NxIconButton, − = 비활성 데모).
 const ID_ADD: u32 = 140;
 const ID_REMOVE: u32 = 141;
+/// NxMenuButton(… ⌄ 오버플로 메뉴) 데모.
+const ID_MORE: u32 = 155;
 /// NxButton 3상태 데모(Cancel 기본·Rename Default·비활성).
 const ID_CANCEL: u32 = 150;
 const ID_RENAME: u32 = 151;
@@ -283,6 +285,18 @@ unsafe fn build(win: HWND, font: HFONT) {
         "비활성",
         ctl::button::ButtonKind::Normal,
         false,
+        st,
+    );
+    // NxMenuButton(… ⌄ — 좁은 자리 액션 메뉴, 시안: 프리셋 메뉴)
+    ctl::menubutton::create(
+        c,
+        cx + 260,
+        cy,
+        0,
+        0,
+        ID_MORE,
+        font,
+        &["Save Renaming Sequence…", "Edit Renaming Sequences…"],
         st,
     );
     mk_static(c, font, "위치:", cx, cy + 4, 60);

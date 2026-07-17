@@ -13,7 +13,8 @@
 //! 라운드 입력·포커스 accent 링) · NxIconButton([`iconbutton`] — shape 투명
 //! 원형 버튼) · NxButton([`button`] — 푸시 버튼: 기본/Default[accent]/
 //! Disabled 3상태) · NxLabel([`label`] — 폼 라벨: 공통 높이·좌/우 정렬·클릭
-//! 투과) ·
+//! 투과) · NxMenuButton([`menubutton`] — `… ⌄` 오버플로 메뉴 버튼: 좁은 자리
+//! 액션 드롭다운·NXMB_PICK/GETPICK) ·
 //! 공용 [`style`](팔레트·**공통 자동 높이** auto_height — 모든 컨트롤
 //! `h<=0` 동일 기본 높이 = 반듯한 기본 배치).
 //! 후속 후보: 런처 편집기 목록(X-13)·모달 공통 골격(X-16 백로그 ①).
@@ -38,6 +39,7 @@ pub mod gdipctx;
 pub mod groupcard;
 pub mod iconbutton;
 pub mod label;
+pub mod menubutton;
 pub mod searchbox;
 pub mod segmented;
 pub mod spin;
