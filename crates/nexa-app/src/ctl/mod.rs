@@ -32,6 +32,7 @@
 //! 텍스트는 GDI/DirectWrite 유지. 판매 단위 = ctl + DrawCtx 트레이트 + 백엔드
 //! (기존 "nexa-gui 미참조" 문구는 **트레이트 참조 허용**으로 개정 — 사용자 승인).
 
+pub mod base;
 pub mod button;
 pub mod checkbox;
 pub mod combobox;

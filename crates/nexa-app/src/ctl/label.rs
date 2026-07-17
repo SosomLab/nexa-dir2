@@ -16,10 +16,9 @@ use windows::Win32::Graphics::Gdi::{
     DT_LEFT, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW, GetWindowTextW,
-    RegisterClassW, SendMessageW, SetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowTextW, SendMessageW, HMENU,
     WINDOW_EX_STYLE, WM_CREATE, WM_DESTROY, WM_NCHITTEST, WM_PAINT, WM_SETFONT, WM_SETTEXT,
-    WNDCLASSW, WS_CHILD, WS_VISIBLE,
+    WS_CHILD, WS_VISIBLE,
 };
 
 use super::style::{fill, Style};
@@ -55,16 +54,7 @@ pub unsafe fn create(
     align: LabelAlign,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     let h = if h <= 0 {
         super::style::auto_height(parent, font)
     } else {
@@ -87,7 +77,7 @@ pub unsafe fn create(
     )
     .unwrap_or_default();
     let st = Box::new(LbState { align, font, style });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     SendMessageW(
         hwnd,
         WM_SETFONT,
@@ -98,18 +88,14 @@ pub unsafe fn create(
 }
 
 unsafe fn state(hwnd: HWND) -> *mut LbState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LbState
+    super::base::state(hwnd)
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<LbState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {

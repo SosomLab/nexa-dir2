@@ -23,10 +23,9 @@ use windows::Win32::Graphics::Gdi::{
     DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, GetWindowLongPtrW,
-    RegisterClassW, SendMessageW, SetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, SendMessageW, HMENU,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_PAINT, WM_SETFONT, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    WM_PAINT, WM_SETFONT, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::gdipctx::{color, GdipCtx};
@@ -75,16 +74,7 @@ pub unsafe fn create(
     mode: CheckMode,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     let h = if h <= 0 { auto_height(parent, font) } else { h };
     let w = if w <= 0 { h } else { w }; // 폭 생략 = 박스만(정사각)
     let hwnd = CreateWindowExW(
@@ -110,7 +100,7 @@ pub unsafe fn create(
         font,
         style,
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     SendMessageW(
         hwnd,
         WM_SETFONT,
@@ -121,7 +111,7 @@ pub unsafe fn create(
 }
 
 unsafe fn state(hwnd: HWND) -> *mut ChkState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ChkState
+    super::base::state(hwnd)
 }
 
 unsafe fn toggle(hwnd: HWND, st: &mut ChkState) {
@@ -144,11 +134,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<ChkState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {

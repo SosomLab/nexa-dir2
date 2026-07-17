@@ -131,7 +131,7 @@ pub unsafe fn create(
 }
 
 unsafe fn state(hwnd: HWND) -> *mut MbState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut MbState
+    super::base::state(hwnd)
 }
 
 unsafe fn row_h(hwnd: HWND, st: &MbState) -> i32 {
@@ -223,14 +223,10 @@ unsafe extern "system" fn ctl_proc(
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if let Some(st) = p.as_mut() {
-                close_drop(hwnd, st);
+            if let Some(st) = state(hwnd).as_mut() {
+                close_drop(hwnd, st); // 팝업·타이머 정리(박스 회수 전)
             }
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<MbState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {

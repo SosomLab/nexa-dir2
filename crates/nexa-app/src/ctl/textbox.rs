@@ -20,11 +20,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, GetWindowLongPtrW,
-    MoveWindow, RegisterClassW, SendMessageW, SetWindowLongPtrW, ES_AUTOHSCROLL, GWLP_USERDATA,
-    HMENU, IDC_ARROW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETTEXT,
-    WM_GETTEXTLENGTH, WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE,
-    WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, MoveWindow,
+    SendMessageW, ES_AUTOHSCROLL, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE,
+    WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT,
+    WM_SETTEXT, WM_SIZE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::gdipctx::{color, rect as gc_rect, GdipCtx};
@@ -51,6 +50,15 @@ struct TbState {
     bg_brush: windows::Win32::Graphics::Gdi::HBRUSH,
 }
 
+impl Drop for TbState {
+    fn drop(&mut self) {
+        // CTLCOLOR 브러시 RAII 해제(상태 박스 회수 시 — base::drop_state)
+        unsafe {
+            let _ = DeleteObject(self.bg_brush.into());
+        }
+    }
+}
+
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("Nexa.NxTextBox");
 
@@ -66,16 +74,7 @@ pub unsafe fn create(
     font: HFONT,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     // h<=0 = 공통 자동 높이(전 Nx 컨트롤 동일 — 반듯한 기본 배치, 07-17)
     let h = if h <= 0 {
         super::style::auto_height(parent, font)
@@ -120,7 +119,7 @@ pub unsafe fn create(
         style,
         bg_brush: windows::Win32::Graphics::Gdi::CreateSolidBrush(style.bg),
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     // 라운드 모서리 = behind 칠 + AA 도형(07-17 개정 — 리전 클립 폐기)
     SendMessageW(
         hwnd,
@@ -133,7 +132,7 @@ pub unsafe fn create(
 }
 
 unsafe fn state(hwnd: HWND) -> *mut TbState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TbState
+    super::base::state(hwnd)
 }
 
 /// 내부 EDIT 재배치 — 글꼴 높이(+2)로 세로 중앙(상/하 균등 여백).
@@ -160,12 +159,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                let st = Box::from_raw(p);
-                let _ = DeleteObject(st.bg_brush.into());
-            }
+            super::base::drop_state::<TbState>(hwnd); // bg_brush = Drop RAII
             LRESULT(0)
         }
         WM_SETFONT => {

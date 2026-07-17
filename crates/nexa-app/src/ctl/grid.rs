@@ -36,12 +36,11 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, GetWindowLongPtrW,
-    KillTimer, RegisterClassW, SendMessageW, SetTimer, SetWindowLongPtrW, DLGC_WANTARROWS,
-    DLGC_WANTCHARS, GWLP_USERDATA, HMENU, IDC_ARROW, IDC_SIZEWE, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
-    WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, KillTimer, SendMessageW, SetTimer,
+    DLGC_WANTARROWS, DLGC_WANTCHARS, HMENU, IDC_SIZEWE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE,
+    WM_DESTROY, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE,
+    WM_TIMER, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::gdipctx::{color, GdipCtx};
@@ -165,16 +164,7 @@ pub unsafe fn create(
     opts: GridOpts,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         CLASS,
@@ -214,7 +204,7 @@ pub unsafe fn create(
         font,
         style,
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     SendMessageW(
         hwnd,
         WM_SETFONT,
@@ -267,7 +257,7 @@ pub unsafe fn selected_rows(hwnd: HWND) -> Vec<usize> {
 }
 
 unsafe fn state(hwnd: HWND) -> *mut GridState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridState
+    super::base::state(hwnd)
 }
 
 unsafe fn row_h(hwnd: HWND, st: &GridState) -> i32 {
@@ -286,17 +276,9 @@ unsafe fn header_h(hwnd: HWND, st: &GridState) -> i32 {
     }
 }
 
-/// 부모에 WM_COMMAND(MAKEWPARAM(id, code)) 재발행(ctl 통지 규약).
+/// 부모에 WM_COMMAND(MAKEWPARAM(id, code)) 재발행(ctl 통지 규약 — base 위임).
 unsafe fn notify(hwnd: HWND, code: u32) {
-    if let Ok(parent) = GetParent(hwnd) {
-        let id = GetDlgCtrlID(hwnd) as u32;
-        SendMessageW(
-            parent,
-            WM_COMMAND,
-            Some(WPARAM(((code as usize) << 16) | id as usize)),
-            Some(LPARAM(hwnd.0 as isize)),
-        );
-    }
+    super::base::notify(hwnd, code);
 }
 
 /// 단일 선택(전체 해제 후 i만) + 포커스·앵커 동기.
@@ -520,11 +502,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<GridState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {

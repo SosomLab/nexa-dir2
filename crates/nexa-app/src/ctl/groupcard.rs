@@ -24,10 +24,9 @@ use windows::Win32::Graphics::Gdi::{
     DT_VCENTER, HFONT, NULL_BRUSH, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetParent, GetWindowTextW, RegisterClassW,
-    SendMessageW, SetWindowLongPtrW, GWLP_USERDATA, HMENU, IDC_ARROW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DRAWITEM, WM_MEASUREITEM, WM_NOTIFY, WM_PAINT, WM_SETFONT, WM_SETTEXT, WM_SIZE, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetParent, GetWindowTextW, SendMessageW, HMENU,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DRAWITEM, WM_MEASUREITEM, WM_NOTIFY, WM_PAINT, WM_SETFONT, WM_SETTEXT, WM_SIZE,
     WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_VISIBLE,
 };
 
@@ -70,16 +69,7 @@ pub unsafe fn create(
     opts: GroupCardOpts,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     let h = opts.title_h + opts.body_h;
     let t16 = windows::core::HSTRING::from(title);
     let hwnd = CreateWindowExW(
@@ -103,7 +93,7 @@ pub unsafe fn create(
         font,
         style,
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     apply_region(hwnd, opts.corner, w, h);
     SendMessageW(
         hwnd,
@@ -138,7 +128,7 @@ pub unsafe fn body_rect(hwnd: HWND) -> RECT {
 }
 
 unsafe fn state(hwnd: HWND) -> *mut GcState {
-    windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GcState
+    super::base::state(hwnd)
 }
 
 /// 라운드 선택 시 창 리전 클립(각진 = 리전 해제). 크기 변경마다 재적용.
@@ -163,11 +153,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<GcState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {

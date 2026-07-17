@@ -24,10 +24,9 @@ use windows::Win32::Graphics::Gdi::{
     DT_CENTER, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent, GetWindowLongPtrW,
-    GetWindowTextW, RegisterClassW, SendMessageW, SetWindowLongPtrW, GWLP_USERDATA, HMENU,
-    IDC_ARROW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_PAINT, WM_SETFONT, WM_SETTEXT, WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowTextW, SendMessageW, HMENU,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_PAINT,
+    WM_SETFONT, WM_SETTEXT, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::gdipctx::{color, rect as gc_rect, GdipCtx};
@@ -82,16 +81,7 @@ pub unsafe fn create(
     enabled: bool,
     style: Style,
 ) -> HWND {
-    REGISTER.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(proc),
-            lpszClassName: CLASS,
-            hCursor: windows::Win32::UI::WindowsAndMessaging::LoadCursorW(None, IDC_ARROW)
-                .unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
+    super::base::register_class(&REGISTER, CLASS, Some(proc));
     // 기본 높이 = 글꼴 + 상/하 2px(사용자 확정 07-17 — 공통 auto_height보다
     // 컴팩트: 버튼은 텍스트에 딱 맞는 시안 비율)
     let h = if h <= 0 {
@@ -127,7 +117,7 @@ pub unsafe fn create(
         font,
         style,
     });
-    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+    super::base::attach_state(hwnd, st);
     SendMessageW(
         hwnd,
         WM_SETFONT,
@@ -152,30 +142,14 @@ unsafe fn label_width(hwnd: HWND, font: HFONT, label: &str) -> i32 {
 }
 
 unsafe fn state(hwnd: HWND) -> *mut BtnState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut BtnState
-}
-
-unsafe fn click(hwnd: HWND) {
-    if let Ok(parent) = GetParent(hwnd) {
-        let id = GetDlgCtrlID(hwnd) as u32;
-        SendMessageW(
-            parent,
-            WM_COMMAND,
-            Some(WPARAM(((NXBTN_CLICK as usize) << 16) | id as usize)),
-            Some(LPARAM(hwnd.0 as isize)),
-        );
-    }
+    super::base::state(hwnd)
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => LRESULT(0),
         WM_DESTROY => {
-            let p = state(hwnd);
-            if !p.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(p));
-            }
+            super::base::drop_state::<BtnState>(hwnd);
             LRESULT(0)
         }
         WM_SETFONT => {
@@ -215,7 +189,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             if let Some(st) = state(hwnd).as_ref() {
                 if st.enabled {
                     let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(hwnd));
-                    click(hwnd);
+                    super::base::notify(hwnd, NXBTN_CLICK);
                 }
             }
             LRESULT(0)
@@ -224,7 +198,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             // Space/Enter = 클릭(표준 버튼 키 계약)
             if let Some(st) = state(hwnd).as_ref() {
                 if st.enabled {
-                    click(hwnd);
+                    super::base::notify(hwnd, NXBTN_CLICK);
                 }
             }
             LRESULT(0)
