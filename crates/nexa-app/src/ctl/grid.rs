@@ -48,7 +48,10 @@ use super::gdipctx::{color, GdipCtx};
 use super::style::{fill, font_height, Style};
 
 /// 체크 토글 통지(WM_COMMAND HIWORD) — 행은 [`NXGR_GETROW`]로.
+/// `NXGR_GETROW == -2` = **헤더 전체 토글**(07-18 — 호스트는 전 행 재동기).
 pub const NXGR_TOGGLE: u32 = 1;
+/// 헤더 전체 토글 표식([`NXGR_GETROW`] 반환값).
+pub const NXGR_ROW_ALL: isize = -2;
 /// 행 선택 변경 통지(WM_COMMAND HIWORD) — 조회는 [`selected_rows`].
 pub const NXGR_SELCHANGE: u32 = 2;
 /// 마지막 토글 행 인덱스 조회(없음 = -1).
@@ -312,6 +315,29 @@ unsafe fn ensure_visible(hwnd: HWND, st: &mut GridState, i: usize) {
     }
 }
 
+/// 헤더 체크 상태(Mark::Check — 07-18 시안): `None` = 마크 행 없음 ·
+/// `Some(0/1/2)` = 전체 해제/전체 체크/부분(흐릿한 ✓).
+fn header_check(st: &GridState) -> Option<u32> {
+    let (mut on, mut total) = (0usize, 0usize);
+    for r in &st.rows {
+        if let Some(c) = r.check {
+            total += 1;
+            if c {
+                on += 1;
+            }
+        }
+    }
+    if total == 0 {
+        None
+    } else if on == 0 {
+        Some(0)
+    } else if on == total {
+        Some(1)
+    } else {
+        Some(2)
+    }
+}
+
 /// ⊖ 삭제 마크 rect(Mark::Minus — 행 우측 끝 고정, 가로 스크롤 무관).
 unsafe fn minus_rect(hwnd: HWND, st: &GridState, row_on_screen: i32) -> RECT {
     let rc = client(hwnd);
@@ -528,10 +554,25 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 }
                 let hh = header_h(hwnd, st);
                 if y < hh {
-                    // ② 헤더: 경계 드래그 = 컬럼 리사이즈
+                    // ② 헤더: 경계 드래그 = 컬럼 리사이즈 · 체크 열 = 전체 토글(07-18)
                     if let Some(ci) = border_hit(st, x) {
                         st.drag = Some((ci, x, st.cols[ci].width));
                         let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(hwnd);
+                    } else if st.opts.mark == Mark::Check
+                        && x + st.h_off < st.cols.first().map_or(0, |c| c.width)
+                    {
+                        if let Some(state0) = header_check(st) {
+                            // 전체 체크 상태면 전체 해제, 그 외(해제/부분) = 전체 체크
+                            let target = state0 != 1;
+                            for r in st.rows.iter_mut() {
+                                if r.check.is_some() {
+                                    r.check = Some(target);
+                                }
+                            }
+                            st.last_toggle = NXGR_ROW_ALL;
+                            let _ = InvalidateRect(Some(hwnd), None, false);
+                            notify(hwnd, NXGR_TOGGLE);
+                        }
                     }
                 } else {
                     // ③ 본문: 마크 히트 → 토글/삭제 통지, 그 외 = 행 선택(07-18)
@@ -791,6 +832,53 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         Mark::Check => {
                             let cw = st.cols.first().map_or(0, |c| c.width);
                             let side = fh;
+                            // 헤더 체크(07-18 시안): 전체 토글 — 0 해제(백지+외곽선)·
+                            // 1 전체(accent+✓)·2 부분(accent+**흐릿한 ✓**)
+                            if hh > 0 {
+                                if let Some(hc) = header_check(st) {
+                                    let bx = rc.left - ox + (cw - side) / 2;
+                                    let top = rc.top + (hh - 1 - side) / 2;
+                                    if bx + side >= rc.left {
+                                        let rect = Rect::new(bx, top, side, side);
+                                        let radius = (side / 3).max(4);
+                                        if hc == 0 {
+                                            // 헤더 밴드(sel_bg) 위 구별 = bg 필 + 외곽선
+                                            g.fill_round_rect(rect, radius, color(st.style.bg));
+                                            g.stroke_round_rect(
+                                                rect,
+                                                radius,
+                                                color(st.style.border),
+                                                1.0,
+                                            );
+                                        } else {
+                                            g.fill_round_rect(rect, radius, color(st.style.accent));
+                                            let vc = if hc == 2 {
+                                                let (b, a) =
+                                                    (st.style.bg.0, st.style.accent.0);
+                                                let half = |sh: u32| {
+                                                    (((b >> sh & 0xFF) + (a >> sh & 0xFF)) / 2)
+                                                        << sh
+                                                };
+                                                windows::Win32::Foundation::COLORREF(
+                                                    half(0) | half(8) | half(16),
+                                                )
+                                            } else {
+                                                st.style.bg
+                                            };
+                                            let (cx, cy) = (bx + side / 2, top + side / 2);
+                                            g.polyline(
+                                                &[
+                                                    (cx - side / 4, cy),
+                                                    (cx - side / 12, cy + side / 4 - 1),
+                                                    (cx + side / 4, cy - side / 5),
+                                                ],
+                                                color(vc),
+                                                2.0,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                             for (row, r) in st.rows.iter().skip(st.top).take(vis).enumerate() {
                                 let Some(on) = r.check else { continue };
                                 let top = rc.top + hh + row as i32 * rh + (rh - side) / 2;

@@ -224,7 +224,20 @@ unsafe fn build(win: HWND, font: HFONT) {
     );
     mk_static(a, font, "대소문자 일치:", bx, by + 76, 84);
     // 박스만(라벨 = 좌측 STATIC — 시안 배치)·h=0 자동
-    ctl::checkbox::create(a, bx + 88, by + 72, 0, 0, ID_CASE, font, "", false, st);
+    // 3단 체크 검증(사용자 확정 07-18 — 클릭 순환 0→1→2→0·부분 = 흐릿한 ✓)
+    ctl::checkbox::create(
+        a,
+        bx + 88,
+        by + 72,
+        0,
+        0,
+        ID_CASE,
+        font,
+        "",
+        0,
+        ctl::checkbox::CheckMode::Three,
+        st,
+    );
     mk_static(a, font, "찾기:", bx, by + 112, 80);
     // NxTextBox — h=0 자동(공통 자동 높이 — 다른 Nx와 같은 row 기본 정렬 검증)
     ctl::textbox::create(a, bx + 88, by + 108, 200, 0, ID_FIND, font, st);
@@ -361,7 +374,8 @@ unsafe fn build(win: HWND, font: HFONT) {
         ID_ROW_BASE + 2,
         font,
         "",
-        true,
+        1,
+        ctl::checkbox::CheckMode::Two,
         st,
     );
     rx += 32;
