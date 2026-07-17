@@ -167,11 +167,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
                 // 모서리 = behind(부모 배경색) → AA 원판이 자연스럽게 블렌드
                 fill(dc, &rc, st.style.behind);
-                // 원판: 활성 = text_dim(진회색)·비활성 = sel_bg(연회색) — 시안
+                // 원판: 활성 = text_dim(진회색)·비활성 = border(중간 회색 — QA 07-17:
+                // sel_bg는 타이틀 밴드와 동색이라 묻힘 → 한 단계 진하게)
                 let disc = if st.enabled {
                     st.style.text_dim
                 } else {
-                    st.style.sel_bg
+                    st.style.border
                 };
                 // AA 도형 = DrawCtx 백엔드만(07-17 규약 — GDI+ 직접 호출 금지)
                 let mut g = GdipCtx::new(dc);

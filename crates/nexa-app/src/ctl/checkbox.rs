@@ -188,6 +188,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         radius,
                         color(box_color),
                     );
+                    if !st.checked {
+                        // 미체크 = 1px 외곽선(QA 07-17 — 배경 위 구별·정의감)
+                        g.stroke_round_rect(
+                            Rect::new(rc.left, btop, side, side),
+                            radius,
+                            color(st.style.border),
+                            1.0,
+                        );
+                    }
                     if st.checked {
                         // 흰 ✓ — AA 폴리라인(둥근 캡)
                         let (cx, cy) = (rc.left + side / 2, btop + side / 2);

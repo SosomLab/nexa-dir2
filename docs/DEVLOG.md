@@ -8,6 +8,7 @@
 
 ## 2026-07-17
 
+- **카드 폼 마감(`fix/ctl-borders` — 사용자 QA·요청 4건)**: ① **테두리 위계**(동색 배경 구별 — 콤보 외곽선·타이틀 필 진하게·비활성 진하게·체크/버튼 외곽선) ② **NxLabel(ctl 12호)** + 카드 전 kind **좌측 정렬 라벨 열**(PF 구도·한 줄 복수 쌍[시작 값/접두]) — **라벨 폭 = 언어별 실측**(한/영 정렬 유지 검증) ③ **NxMenuButton(ctl 13호)** `… ⌄` 오버플로 메뉴(좁은 자리 액션 — NXMB_PICK/GETPICK·팝업 폭 실측). 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **X-23 카드 재편 — 일괄 이름 변경 = 카드 스택(`feat/x23-card-rename` — 사용자 시안 5장·후속 확정)**: 아키텍처 전환 "폼+리스트박스" → **NxGroupCard 스택 = 파이프라인**(카드 타이틀 = 동작 콤보 8종 + ⊕⊖ — **+ = 아래 카드 추가·− = 삭제·마지막 1장 불가**), kind 본문 **동적 재구성**·지역 id·**실시간 미리보기**. Replace **Text/RegEx 분리**·Number **Padding 콤보**·Date **Format = `${토큰}` 텍스트 입력 + ? 도움말**(코어 문법 개정·구식 프리셋 자동 이행)·프리셋 = 카드 복원(전 동작 역매핑). 실기: 카드 왕복·실시간 카운트 1건. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **NxSegmented 개선 + NxButton 신설(`feat/nx-segmented-style` — 사용자 시안)**: 세그먼트 = `SegOpts`(라운드/스퀘어·**간격 기본 0px**) — 연회색 컨테이너 + **선택 accent 필**·AA·호출부 5곳 이관 · **NxButton**(ctl 11호) = 기본/Default(accent)/Disabled 3상태·라벨 자동 폭·**컴팩트 기본 높이(글꼴+상/하 2px** — 사용자 QA)·Space/Enter. 실기 3상태 렌더·통지·비활성 무통지. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **NxSpin 재배치(`fix/nx-spin-layout` — 사용자 시안 재개정)**: 독립 라운드 글상자(**숫자 우측 정렬**·1px 하향) + **우측 분리 버튼 블록**(폭 = 높이 2/3 축소·높이 = 글상자 종속·min/max 비활성 유지·behind 블렌드 전신 AA). 콤보·글상자 텍스트 1px 하향(main 직커밋)도 동일 QA 흐름. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).

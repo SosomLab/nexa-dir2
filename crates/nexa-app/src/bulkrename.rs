@@ -40,7 +40,8 @@ const CLASS: PCWSTR = w!("NexaBulkRename");
 static REGISTER: std::sync::Once = std::sync::Once::new();
 
 const PAD: i32 = 12;
-const FORM_W: i32 = 300;
+/// 카드 폭(X-23 라벨 열 확정 후 320 — 한 줄 복수 라벨 행[Start/Prefix] 공간).
+const FORM_W: i32 = 320;
 const CLIENT_W: i32 = 880;
 const CLIENT_H: i32 = 620; // v2 — 파라미터 4행·스코프 행 추가분
 const STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0);
@@ -528,8 +529,11 @@ unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
         style2,
     );
     let trc = crate::ctl::groupcard::title_rect(card);
+    // 타이틀 밴드 위 컨트롤(QA 07-17): behind = 밴드 색 + 필 = 한 단계 진한
+    // 회색(밴드와 동색이라 묻히던 문제 — 외곽선과 함께 위계 형성)
     let st_band = Style {
         behind: style2.sel_bg,
+        sel_bg: windows::Win32::Foundation::COLORREF(0x00DC_D6D2),
         ..style2
     };
     let ib = crate::ctl::style::font_height(dlg, font).max(10);
@@ -577,6 +581,8 @@ unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
 
 /// 카드 본문 재구성(kind 변경·생성·프리셋 복원) — 타이틀(콤보·±) 외 자식을
 /// 파괴 후 해당 kind 컨트롤만 생성(패널 스왑 대신 동적 구성 — 카드 N장 대응).
+/// 행 구도(PF 시안·사용자 확정): **좌측 정렬 NxLabel 열 + 좌측 정렬 컨트롤 열**,
+/// 연번 카드 = 한 줄 복수 쌍(Start value:[spin] Prefix:[box]).
 unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_CHILD, GW_HWNDNEXT};
     // 기존 본문 파괴(수집 후 — 파괴 중 열거 금지)
@@ -597,10 +603,61 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
     let bx = body.left + 10;
     let bw = (body.right - body.left) - 20;
     let y0 = body.top + 8;
-    let bhalf = (bw - 6) / 2;
     let row = |k: i32| y0 + 28 * k;
+    // 라벨 열 폭 = **현재 언어 라벨 실측 최대치**(i18n 변경에도 정렬 유지 —
+    // 사용자 확정 07-17. 전 kind 공통 집합으로 재어 카드 간 열 위치도 일치)
+    let measure = |key: &str| crate::ctl::style::text_width(card, font, &tr(key));
+    let lbl_w = [
+        "bulk.lbl.applyTo",
+        "bulk.lbl.mode",
+        "bulk.lbl.matchCase",
+        "bulk.lbl.find",
+        "bulk.lbl.findRx",
+        "bulk.lbl.with",
+        "bulk.lbl.pos",
+        "bulk.lbl.text",
+        "bulk.lbl.caseTo",
+        "bulk.lbl.padding",
+        "bulk.lbl.start",
+        "bulk.lbl.step",
+        "bulk.lbl.type",
+        "bulk.lbl.fmt",
+        "bulk.lbl.prefix",
+        "bulk.lbl.range",
+        "bulk.lbl.dest",
+        "bulk.lbl.ext",
+    ]
+    .iter()
+    .map(|k| measure(k))
+    .max()
+    .unwrap_or(64)
+    .clamp(56, 140)
+        + 6;
+    let lbl2_w = measure("bulk.lbl.prefix")
+        .max(measure("bulk.lbl.suffix"))
+        .clamp(28, 90)
+        + 6;
+    // 컨트롤 열(라벨 오른쪽 고정 x — 두 열 모두 좌측 정렬)
+    let cx = bx + lbl_w + 6;
+    let cw = bw - lbl_w - 6;
+    let chalf = (cw - 6) / 2;
+    let lbl = |key: &str, x: i32, w: i32, r: i32| {
+        crate::ctl::label::create(
+            card,
+            x,
+            row(r),
+            w,
+            0,
+            0,
+            font,
+            &tr(key),
+            crate::ctl::label::LabelAlign::Left,
+            style2,
+        );
+    };
     // 공통 스코프(PF Apply to) — Move/Ext(자체 대상 고정)에선 생략
     if kind < 6 {
+        lbl("bulk.lbl.applyTo", bx, lbl_w, 0);
         let scope_items = [
             tr("bulk.scope.name"),
             tr("bulk.scope.nameext"),
@@ -610,9 +667,9 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
         let scope_refs: Vec<&str> = scope_items.iter().map(String::as_str).collect();
         crate::ctl::combobox::create(
             card,
-            bx,
+            cx,
             row(0),
-            bw,
+            cw,
             0,
             ID_SCOPE,
             font,
@@ -624,6 +681,7 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
     match kind {
         // Replace Text(PF 카드 — Mode·대소문자·찾기/바꾸기)
         0 => {
+            lbl("bulk.lbl.mode", bx, lbl_w, 1);
             let mode_items = [
                 tr("bulk.mode.all"),
                 tr("bulk.mode.first"),
@@ -633,9 +691,9 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
             let mode_refs: Vec<&str> = mode_items.iter().map(String::as_str).collect();
             crate::ctl::combobox::create(
                 card,
-                bx,
+                cx,
                 row(1),
-                bw,
+                cw,
                 0,
                 ID_RX_MODE,
                 font,
@@ -643,51 +701,42 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 0,
                 style2,
             );
-            crate::ctl::checkbox::create(
-                card,
-                bx,
-                row(2),
-                bw,
-                0,
-                ID_MC,
-                font,
-                &tr("bulk.matchCase"),
-                false,
-                style2,
-            );
-            let f = crate::ctl::textbox::create(card, bx, row(3), bw, 0, ID_FIND, font, style2);
-            cue(f, &tr("bulk.find"));
-            let wch = crate::ctl::textbox::create(card, bx, row(4), bw, 0, ID_WITH, font, style2);
-            cue(wch, &tr("bulk.with"));
+            lbl("bulk.lbl.matchCase", bx, lbl_w, 2);
+            crate::ctl::checkbox::create(card, cx, row(2), 0, 0, ID_MC, font, "", false, style2);
+            lbl("bulk.lbl.find", bx, lbl_w, 3);
+            crate::ctl::textbox::create(card, cx, row(3), cw, 0, ID_FIND, font, style2);
+            lbl("bulk.lbl.with", bx, lbl_w, 4);
+            crate::ctl::textbox::create(card, cx, row(4), cw, 0, ID_WITH, font, style2);
         }
         // Replace RegEx(분리 카드 — 정규식 = 항상 All, PF 규약)
         1 => {
+            lbl("bulk.lbl.matchCase", bx, lbl_w, 1);
             crate::ctl::checkbox::create(
                 card,
-                bx,
+                cx,
                 row(1),
-                bw,
+                0,
                 0,
                 ID_RXF_MC,
                 font,
-                &tr("bulk.matchCase"),
+                "",
                 false,
                 style2,
             );
-            let f = crate::ctl::textbox::create(card, bx, row(2), bw, 0, ID_RXF_FIND, font, style2);
-            cue(f, &tr("bulk.regex"));
-            let wch =
-                crate::ctl::textbox::create(card, bx, row(3), bw, 0, ID_RXF_WITH, font, style2);
-            cue(wch, &tr("bulk.with"));
+            lbl("bulk.lbl.findRx", bx, lbl_w, 2);
+            crate::ctl::textbox::create(card, cx, row(2), cw, 0, ID_RXF_FIND, font, style2);
+            lbl("bulk.lbl.with", bx, lbl_w, 3);
+            crate::ctl::textbox::create(card, cx, row(3), cw, 0, ID_RXF_WITH, font, style2);
         }
-        // Insert Text(Position = spin + →abc/←abc 세그먼트)
+        // Insert Text(Position = spin + →abc/←abc 세그먼트 — PF 시안)
         2 => {
-            crate::ctl::spin::create(card, bx, row(1), 90, 0, ID_INS_OFF, font, 0, 0, 999, style2);
+            lbl("bulk.lbl.pos", bx, lbl_w, 1);
+            crate::ctl::spin::create(card, cx, row(1), 70, 0, ID_INS_OFF, font, 0, 0, 999, style2);
             crate::ctl::segmented::create(
                 card,
-                bx + 98,
+                cx + 76,
                 row(1),
-                bw - 98,
+                cw - 76,
                 0,
                 ID_INS_DIR,
                 font,
@@ -696,16 +745,17 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 crate::ctl::segmented::SegOpts::default(),
                 style2,
             );
-            let t = crate::ctl::textbox::create(card, bx, row(2), bw, 0, ID_INS_TEXT, font, style2);
-            cue(t, &tr("bulk.insert"));
+            lbl("bulk.lbl.text", bx, lbl_w, 2);
+            crate::ctl::textbox::create(card, cx, row(2), cw, 0, ID_INS_TEXT, font, style2);
         }
         // Change Case — segmented(PF "AB CD|Ab Cd|Ab cd|ab cd")
         3 => {
+            lbl("bulk.lbl.caseTo", bx, lbl_w, 1);
             crate::ctl::segmented::create(
                 card,
-                bx,
+                cx,
                 row(1),
-                bw,
+                cw,
                 0,
                 ID_CASE_BASE,
                 font,
@@ -715,8 +765,9 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 style2,
             );
         }
-        // Add Number Sequence(Padding 콤보·Position·Start/Prefix·Step/Suffix)
+        // Add Number Sequence(PF 카드 — 한 줄 복수 쌍: Start/Prefix·Step/Suffix)
         4 => {
+            lbl("bulk.lbl.padding", bx, lbl_w, 1);
             let pad_items = [
                 "1, 2, 3, 4…",
                 "01, 02, 03…",
@@ -727,9 +778,9 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
             ];
             crate::ctl::combobox::create(
                 card,
-                bx,
+                cx,
                 row(1),
-                bw,
+                cw,
                 0,
                 ID_NUM_PAD,
                 font,
@@ -737,12 +788,13 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 2,
                 style2,
             );
-            crate::ctl::spin::create(card, bx, row(2), 90, 0, ID_NUM_OFF, font, 0, 0, 999, style2);
+            lbl("bulk.lbl.pos", bx, lbl_w, 2);
+            crate::ctl::spin::create(card, cx, row(2), 70, 0, ID_NUM_OFF, font, 0, 0, 999, style2);
             crate::ctl::segmented::create(
                 card,
-                bx + 98,
+                cx + 76,
                 row(2),
-                bw - 98,
+                cw - 76,
                 0,
                 ID_NUM_DIR,
                 font,
@@ -751,11 +803,15 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 crate::ctl::segmented::SegOpts::default(),
                 style2,
             );
+            // 한 줄 복수 쌍(PF): Start value:[spin]  Prefix:[box]
+            let x2 = cx + 76;
+            let bw2 = cw - 76 - lbl2_w - 6;
+            lbl("bulk.lbl.start", bx, lbl_w, 3);
             crate::ctl::spin::create(
                 card,
-                bx,
+                cx,
                 row(3),
-                90,
+                70,
                 0,
                 ID_NUM_START,
                 font,
@@ -764,22 +820,23 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 9999,
                 style2,
             );
-            let wp = crate::ctl::textbox::create(
+            lbl("bulk.lbl.prefix", x2, lbl2_w, 3);
+            crate::ctl::textbox::create(
                 card,
-                bx + 98,
+                x2 + lbl2_w + 6,
                 row(3),
-                bw - 98,
+                bw2,
                 0,
                 ID_NUM_WPRE,
                 font,
                 style2,
             );
-            cue(wp, &tr("bulk.wrapPre"));
+            lbl("bulk.lbl.step", bx, lbl_w, 4);
             crate::ctl::spin::create(
                 card,
-                bx,
+                cx,
                 row(4),
-                90,
+                70,
                 0,
                 ID_NUM_STEP,
                 font,
@@ -788,27 +845,28 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 9999,
                 style2,
             );
-            let ws2 = crate::ctl::textbox::create(
+            lbl("bulk.lbl.suffix", x2, lbl2_w, 4);
+            crate::ctl::textbox::create(
                 card,
-                bx + 98,
+                x2 + lbl2_w + 6,
                 row(4),
-                bw - 98,
+                bw2,
                 0,
                 ID_NUM_WSUF,
                 font,
                 style2,
             );
-            cue(ws2, &tr("bulk.wrapSuf"));
         }
-        // Add Date(Format = ${} 텍스트 + ? 도움말 — 사용자 확정 07-17)
+        // Add Date(PF 카드 + Format = ${} 텍스트·? 도움말 — 사용자 확정 07-17)
         5 => {
+            lbl("bulk.lbl.type", bx, lbl_w, 1);
             let kind_items = [tr("bulk.date.modified"), tr("bulk.date.created")];
             let kind_refs: Vec<&str> = kind_items.iter().map(String::as_str).collect();
             crate::ctl::combobox::create(
                 card,
-                bx,
+                cx,
                 row(1),
-                bw,
+                cw,
                 0,
                 ID_DT_KIND,
                 font,
@@ -816,12 +874,13 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 0,
                 style2,
             );
-            crate::ctl::spin::create(card, bx, row(2), 90, 0, ID_DT_OFF, font, 0, 0, 999, style2);
+            lbl("bulk.lbl.pos", bx, lbl_w, 2);
+            crate::ctl::spin::create(card, cx, row(2), 70, 0, ID_DT_OFF, font, 0, 0, 999, style2);
             crate::ctl::segmented::create(
                 card,
-                bx + 98,
+                cx + 76,
                 row(2),
-                bw - 98,
+                cw - 76,
                 0,
                 ID_DT_DIR,
                 font,
@@ -830,26 +889,29 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 crate::ctl::segmented::SegOpts::default(),
                 style2,
             );
-            let dp =
-                crate::ctl::textbox::create(card, bx, row(3), bhalf, 0, ID_DT_PRE, font, style2);
-            cue(dp, &tr("bulk.wrapPre"));
-            let ds2 = crate::ctl::textbox::create(
+            // 한 줄 복수 쌍(PF): Prefix:[box]  Suffix:[box]
+            let x2 = cx + 76;
+            let bw2 = cw - 76 - lbl2_w - 6;
+            lbl("bulk.lbl.prefix", bx, lbl_w, 3);
+            crate::ctl::textbox::create(card, cx, row(3), 70, 0, ID_DT_PRE, font, style2);
+            lbl("bulk.lbl.suffix", x2, lbl2_w, 3);
+            crate::ctl::textbox::create(
                 card,
-                bx + bhalf + 6,
+                x2 + lbl2_w + 6,
                 row(3),
-                bw - bhalf - 6,
+                bw2,
                 0,
                 ID_DT_SUF,
                 font,
                 style2,
             );
-            cue(ds2, &tr("bulk.wrapSuf"));
+            lbl("bulk.lbl.fmt", bx, lbl_w, 4);
             let ib = crate::ctl::style::font_height(card, font).max(10);
             let fmt = crate::ctl::textbox::create(
                 card,
-                bx,
+                cx,
                 row(4),
-                bw - ib - 8,
+                cw - ib - 6,
                 0,
                 ID_DT_FMT,
                 font,
@@ -859,7 +921,7 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
             let auto_h = crate::ctl::style::font_height(card, font) + 8;
             crate::ctl::iconbutton::create(
                 card,
-                bx + bw - ib,
+                cx + cw - ib,
                 row(4) + (auto_h - ib) / 2,
                 ib,
                 ID_DT_HELP,
@@ -869,13 +931,14 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 style2,
             );
         }
-        // 구간 이동(우리 고유)
+        // 구간 이동(우리 고유 — 구간:[시작][길이]·대상 세그먼트)
         6 => {
+            lbl("bulk.lbl.range", bx, lbl_w, 1);
             crate::ctl::spin::create(
                 card,
-                bx,
+                cx,
                 row(1),
-                90,
+                70,
                 0,
                 ID_MV_START,
                 font,
@@ -886,9 +949,9 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
             );
             crate::ctl::spin::create(
                 card,
-                bx + 98,
+                cx + 76,
                 row(1),
-                90,
+                70,
                 0,
                 ID_MV_LEN,
                 font,
@@ -897,11 +960,12 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 999,
                 style2,
             );
+            lbl("bulk.lbl.dest", bx, lbl_w, 2);
             crate::ctl::segmented::create(
                 card,
-                bx,
+                cx,
                 row(2),
-                bw,
+                cw,
                 0,
                 ID_MV_FRONT,
                 font,
@@ -911,16 +975,17 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 style2,
             );
         }
-        // 확장자 변경(우리 고유)
+        // 확장자 변경(우리 고유 — 확장자:[기존][새])
         _ => {
+            lbl("bulk.lbl.ext", bx, lbl_w, 1);
             let f =
-                crate::ctl::textbox::create(card, bx, row(1), bhalf, 0, ID_EXT_FROM, font, style2);
+                crate::ctl::textbox::create(card, cx, row(1), chalf, 0, ID_EXT_FROM, font, style2);
             cue(f, &tr("bulk.extFrom"));
             let t = crate::ctl::textbox::create(
                 card,
-                bx + bhalf + 6,
+                cx + chalf + 6,
                 row(1),
-                bw - bhalf - 6,
+                cw - chalf - 6,
                 0,
                 ID_EXT_TO,
                 font,
