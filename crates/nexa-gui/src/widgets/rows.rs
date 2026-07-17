@@ -30,11 +30,14 @@ pub enum Marker {
 }
 
 impl Marker {
+    /// 디스클로저 글리프(사용자 확정 07-18 — 원본 규약: Segoe MDL2 Assets
+    /// ChevronRight U+E76C[닫힘]/ChevronDown U+E70D[열림] — 백엔드
+    /// glyph_opaque가 PUA 대역을 MDL2 폰트로 라우팅).
     fn glyph(self) -> &'static str {
         match self {
             Marker::None => "",
-            Marker::Collapsed => "▸",
-            Marker::Expanded => "▾",
+            Marker::Collapsed => "\u{E76C}",
+            Marker::Expanded => "\u{E70D}",
         }
     }
 }
@@ -899,7 +902,13 @@ impl<S: RowSource> VirtualRows<S> {
         // 텍스트 세로 위치: 행 높이의 4/5를 글자 높이로 보고 중앙 정렬(M0-7 계승)
         let ty = cell.y + (cell.h - (cell.h * 4) / 5) / 2;
         let indent = cell.x + self.pad_x + item.depth as i32 * self.indent_w;
-        ctx.text_opaque(indent, ty, cell, item.marker.glyph(), theme.text_dim, bg);
+        // 셀 배경 선도장(기존 마커 text_opaque의 전체 셀 필 규약 유지) 후
+        // 디스클로저 = MDL2 글리프(glyph_opaque — 07-18 원본 규약)
+        ctx.text_opaque(indent, ty, cell, "", theme.text_dim, bg);
+        if item.marker != Marker::None {
+            let mrc = Rect::new(indent, cell.y, self.indent_w, cell.h);
+            ctx.glyph_opaque(mrc, item.marker.glyph(), theme.text_dim, bg);
+        }
         let mut name_x = indent + self.indent_w;
         if let Some((key, hint)) = icon {
             // 아이콘 크기 = 들여쓰기 폭(16px@96dpi) — 셸 스몰 아이콘 규격

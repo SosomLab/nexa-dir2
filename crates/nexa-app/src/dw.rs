@@ -159,6 +159,8 @@ pub struct DwBackend {
     /// Segoe MDL2 Assets 글리프 포맷(07-18 — 원본 내비/디스클로저 규약:
     /// U+E700 대역 PUA는 이 포맷으로 라우팅. 인박스 아이콘 폰트).
     mdl2_format: IDWriteTextFormat,
+    /// MDL2 셰브론용 소형(9 DIP — 원본 디스클로저 FontSize 9 규약).
+    mdl2_small_format: IDWriteTextFormat,
     /// 터미널 모노스페이스 포맷(M4-3 — 기본 Consolas 12 DIP, 셀 그리드 정렬.
     /// 설정 `term_font`로 교체 — 미설치 글리프는 DWrite 시스템 폴백이 해석).
     mono_format: IDWriteTextFormat,
@@ -258,18 +260,24 @@ impl DwBackend {
         icon_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
 
         // Segoe MDL2 Assets(07-18 — 원본 내비 버튼 11px 규약·인박스 아이콘 폰트)
-        let mdl2_format = factory.CreateTextFormat(
-            w!("Segoe MDL2 Assets"),
-            None,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
-            windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-            11.0,
-            w!("ko-kr"),
-        )?;
-        mdl2_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-        mdl2_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-        mdl2_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+        let mk_mdl2 = |size: f32| -> Result<IDWriteTextFormat> {
+            let f = factory.CreateTextFormat(
+                w!("Segoe MDL2 Assets"),
+                None,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
+                size,
+                w!("ko-kr"),
+            )?;
+            f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+            f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            f.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            Ok(f)
+        };
+        let mdl2_format = mk_mdl2(11.0)?;
+        // 디스클로저 셰브론(원본 9px 규약 — 트리 마커 ▶/▼)
+        let mdl2_small_format = mk_mdl2(9.0)?;
 
         // 터미널 모노스페이스(M4-3) — 기본 Consolas(비스타+ 인박스)·랩 없음·세로 중앙.
         // 설정 `term_font`(QA 07-14): **쉼표 목록 = 폴백 체인**(WT식 "D2Coding,
@@ -355,6 +363,7 @@ impl DwBackend {
             color,
             icon_format,
             mdl2_format,
+            mdl2_small_format,
             mono_format,
             mono_fallback,
             mono_glyphs: RefCell::new(HashMap::new()),
@@ -762,15 +771,17 @@ impl DrawCtx for DwCtx<'_> {
                 Some(l) => l,
                 None => {
                     let wtext: Vec<u16> = text.encode_utf16().collect();
-                    // U+E700 대역 PUA = Segoe MDL2 Assets(원본 내비/디스클로저 규약)
-                    let fmt = if text
-                        .chars()
-                        .next()
-                        .is_some_and(|c| ('\u{E700}'..='\u{E8FF}').contains(&c))
-                    {
-                        &self.back.mdl2_format
-                    } else {
-                        &self.back.icon_format
+                    // U+E700 대역 PUA = Segoe MDL2 Assets(원본 내비/디스클로저 규약).
+                    // 셰브론(E70D/E70E/E76B/E76C)은 소형 9 DIP(원본 디스클로저).
+                    let fmt = match text.chars().next() {
+                        Some(c @ '\u{E700}'..='\u{E8FF}') => {
+                            if matches!(c, '\u{E70D}' | '\u{E70E}' | '\u{E76B}' | '\u{E76C}') {
+                                &self.back.mdl2_small_format
+                            } else {
+                                &self.back.mdl2_format
+                            }
+                        }
+                        _ => &self.back.icon_format,
                     };
                     let Ok(l) = self.back.factory.CreateTextLayout(
                         &wtext,
