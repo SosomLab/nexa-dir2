@@ -11,6 +11,8 @@
 //!   컨트롤) → 호스트는 [`NXMB_GETPICK`]으로 **마지막 실행 인덱스** 조회.
 //! - 팝업 규약 = NxComboBox와 동일(NOACTIVATE·hover·클릭/Enter 실행·Esc/바깥
 //!   클릭 닫기·owner = 팝업 USERDATA[승격 함정 회피])·✓ 없음.
+//! - 항목 `"-"` = **구분선**(07-18 시안 — 프리셋들 위·고정 액션 아래):
+//!   hover/클릭/통지 없음, 수평선만 그린다.
 
 use nexa_gui::DrawCtx;
 use windows::core::{w, PCWSTR};
@@ -194,8 +196,11 @@ unsafe fn close_drop(hwnd: HWND, st: &mut MbState) {
     }
 }
 
-/// 항목 실행 — 인덱스 기록 + 통지(선택 상태 없음 — 액션 1회성).
+/// 항목 실행 — 인덱스 기록 + 통지(선택 상태 없음 — 액션 1회성). 구분선 무시.
 unsafe fn pick(hwnd: HWND, st: &mut MbState, idx: usize) {
+    if st.items.get(idx).is_some_and(|s| s == "-") {
+        return; // 구분선 = 실행 불가
+    }
     st.picked = idx as isize;
     close_drop(hwnd, st);
     if let Ok(parent) = GetParent(hwnd) {
@@ -251,9 +256,22 @@ unsafe extern "system" fn ctl_proc(
             if let Some(st) = state(hwnd).as_mut() {
                 let vk = wparam.0 as u32;
                 if st.drop.is_some() {
+                    // 구분선("-")은 건너뛴다(키보드 탐색)
+                    let step = |from: usize, up: bool, items: &[String]| -> usize {
+                        let mut i = from as isize;
+                        loop {
+                            i += if up { -1 } else { 1 };
+                            if i < 0 || i as usize >= items.len() {
+                                return from;
+                            }
+                            if items[i as usize] != "-" {
+                                return i as usize;
+                            }
+                        }
+                    };
                     match vk {
-                        0x26 => st.hot = st.hot.saturating_sub(1),             // ↑
-                        0x28 => st.hot = (st.hot + 1).min(st.items.len() - 1), // ↓
+                        0x26 => st.hot = step(st.hot, true, &st.items),  // ↑
+                        0x28 => st.hot = step(st.hot, false, &st.items), // ↓
                         0x0D => {
                             let i = st.hot;
                             pick(hwnd, st, i);
@@ -359,7 +377,8 @@ unsafe extern "system" fn pop_proc(
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let rh = row_h(owner, st);
                 let hit = ((y - 3).max(0) / rh.max(1)) as usize;
-                if hit < st.items.len() && hit != st.hot {
+                let sep = st.items.get(hit).is_some_and(|s| s == "-");
+                if hit < st.items.len() && hit != st.hot && !sep {
                     st.hot = hit;
                     let _ = InvalidateRect(Some(hwnd), None, true);
                 }
@@ -412,6 +431,18 @@ unsafe extern "system" fn pop_proc(
                     let cell = cell_of(i);
                     if cell.top >= rc.bottom - 3 {
                         break;
+                    }
+                    if label == "-" {
+                        // 구분선(07-18) — 수평선만
+                        let mid = (cell.top + cell.bottom) / 2;
+                        let line = RECT {
+                            left: cell.left + 6,
+                            top: mid,
+                            right: cell.right - 6,
+                            bottom: mid + 1,
+                        };
+                        fill(dc, &line, st.style.border);
+                        continue;
                     }
                     SetTextColor(
                         dc,

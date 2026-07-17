@@ -14,7 +14,8 @@
 //! 원형 버튼) · NxButton([`button`] — 푸시 버튼: 기본/Default[accent]/
 //! Disabled 3상태) · NxLabel([`label`] — 폼 라벨: 공통 높이·좌/우 정렬·클릭
 //! 투과) · NxMenuButton([`menubutton`] — `… ⌄` 오버플로 메뉴 버튼: 좁은 자리
-//! 액션 드롭다운·NXMB_PICK/GETPICK) ·
+//! 액션 드롭다운·NXMB_PICK/GETPICK) · NxGrid([`grid`] — 기본 그리드: 헤더
+//! 리사이즈·세로 스크롤·텍스트 셀 + **확장 = 셀 데이터화**[체크 마크 열 1호]) ·
 //! 공용 [`style`](팔레트·**공통 자동 높이** auto_height — 모든 컨트롤
 //! `h<=0` 동일 기본 높이 = 반듯한 기본 배치).
 //! 후속 후보: 런처 편집기 목록(X-13)·모달 공통 골격(X-16 백로그 ①).
@@ -36,6 +37,7 @@ pub mod checkbox;
 pub mod combobox;
 pub mod fontbox;
 pub mod gdipctx;
+pub mod grid;
 pub mod groupcard;
 pub mod iconbutton;
 pub mod label;
