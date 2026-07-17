@@ -15,7 +15,18 @@
 > idle 회색/변경 시 파랑) · 우하단 [취소][이름 변경] 실측 정렬 · 프리셋
 > [… ⌄]+건수 = 하단 좌측(구 Apply 자리) · 미리보기 그리드 전고 확장 ·
 > **GridOpts.row_h**(파일 목록 20px @96dpi 동일 산식 — 행 높이 통일).
-> 실기 왕복 QA 완료(24건 실변경·원복). 테스트 186 green·clippy 0.
+> ⑥ **Tab 내비·3단 체크·헤더 전체 토글**(`feat/bulk-tab-tristate`):
+> IsDialogMessage+CONTROLPARENT+WANTARROWS(Tab 배치 순서)·NxCheckBox
+> CheckMode 2단/3단(부분 = 흐릿한 ✓)·그리드 헤더 체크(전체 토글 NXGR_ROW_ALL).
+> ⑦ **NxGrid 깜빡임 제거**(`fix/grid-flicker`): WM_PAINT 더블버퍼+erase 배제.
+> ⑧ **NxGrid 다중열 정렬**(`feat/nxgrid-sort` — 원본 docs/23 §4 이식):
+> 3상태 순환·Shift 다중키·▲▼ 앞/①② 뒤·비교 = 호스트(NXGR_SORT). 같은 묶음에서
+> **ExtDot 이중 점 진범 픽스**·동작 **6종 확정**(이동/확장자 카드 제거)·
+> NxSegmented 화살표. ⑨ **Segoe MDL2 글리프 통일**(`feat/mdl2-glyphs`·
+> `feat/mdl2-disclosure`): 내비 ←→↑ = E72B/E72A/E74A·디스클로저 ▶▼ =
+> E76C/E70D(9 DIP)·세그먼트 화살표 = E72A/E72B · **내비 활성 상태**
+> (이전/다음 = 히스토리·상위 = This PC 비활성, 흐린 글리프 식별).
+> 실기 왕복 QA 완료. 테스트 187 green·clippy 0.
 > 다음: X-23 잔여 β(카드 스크롤·재배치) · X-13 2/2 · X-16 백로그.
 >
 > (이전 07-17) — ① **X-22 일괄 이름 변경 v2**(PF 6동작 패리티 —
