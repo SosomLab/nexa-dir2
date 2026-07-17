@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/nx-textbox-iconbtn` | 2026-07-17 | 2026-07-17 (`9986fb4`) | 2026-07-17 | 1 | **ctl 9·10호 NxTextBox·NxIconButton + 공통 자동 높이**(사용자 요청·macOS 시안) — `style::auto_height` 승격(전 Nx `h<=0` 동일 23px — "수정 없이 반듯한 기본 배치") · NxTextBox(라운드+**포커스 accent 2px 링**·EDIT 세로 중앙·텍스트 API 위임) · NxIconButton(**설계: 단일 컨트롤+Icon enum** — PNG 알파는 확장 변형 후속·**shape 투명 = 원형 리전 클립**·비활성 무통지). 갤러리 실기 검증 | [2026-07-17](journal/2026-07-17.md) |
 | `fix/nxcheckbox-size` | 2026-07-17 | 2026-07-17 (`e3f3f56`) | 2026-07-17 | 1 | NxCheckBox **박스 크기 QA**(사용자 — 기본이 큼): 박스를 컨트롤 높이와 분리, **글꼴 높이 − 2 정사각(≈13px) 세로 중앙** — 클릭 영역·행 정렬 유지·시각만 시안 비율·PAD_Y 비변경. 실기 재검증 | [2026-07-17](journal/2026-07-17.md) |
 | `feat/nx-combobox` | 2026-07-17 | 2026-07-17 (`5258a6f`) | 2026-07-17 | 2 | **ctl 7·8호 NxComboBox·NxCheckBox + Nx 명명 규약**(사용자 요청·macOS 시안) — 클래스 `Nexa.Nx*` 전면 개명 · NxComboBox(라운드 필·이중 셰브론·**✓ 체크 팝업**·hover accent·**높이 h<=0 자동 = 글꼴+최소 여백**·owner 승격 함정 선반영) · NxCheckBox(연회색↔accent+흰 ✓·클릭/Space) · GroupCard **title_rect**(타이틀 자식 배치 — PF 구도). 갤러리 실기 검증(선택 반영·토글 0→1→0·통지 투과). 186 green | [2026-07-17](journal/2026-07-17.md) |
 | `feat/ctldemo-toolbar` | 2026-07-17 | 2026-07-17 (`fa1a399`) | 2026-07-17 | 1 | ctl 갤러리 **임시 도구 모음 버튼 🃏**(사용자 요청) — CMD_CTLDEMO=62·WM_APP_CTLDEMO 지연 발행·연타 중복 가드(기존 창 전면). X-23 재편 완료 시 제거. 실클릭 검증(1회=1창·연타=1창) | [2026-07-17](journal/2026-07-17.md) |
