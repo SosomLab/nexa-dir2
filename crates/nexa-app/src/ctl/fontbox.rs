@@ -301,8 +301,12 @@ unsafe fn open_drop(hwnd: HWND, st: &mut FbState) {
 
 unsafe fn close_drop(st: &mut FbState) {
     if let Some(d) = st.drop.take() {
-        if let Ok(owner) = GetParent(d) {
-            let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(Some(owner), TIMER_OUTSIDE);
+        // GetParent(팝업)은 승격된 최상위를 돌려줘 KillTimer가 빗나감(60ms 누수) —
+        // DropState.owner(= 타이머를 건 컨트롤)로 해제(QA 07-17, droplist와 동일 진범).
+        let ds = GetWindowLongPtrW(d, GWLP_USERDATA) as *mut DropState;
+        if let Some(ds) = ds.as_ref() {
+            let _ =
+                windows::Win32::UI::WindowsAndMessaging::KillTimer(Some(ds.owner), TIMER_OUTSIDE);
         }
         let _ = DestroyWindow(d);
     }
