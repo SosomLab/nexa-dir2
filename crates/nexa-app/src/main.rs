@@ -19,6 +19,9 @@ mod conpty;
 /// Win32 커스텀 컨트롤 라이브러리(사용자 요청 07-16 — searchbox 등).
 #[cfg(windows)]
 mod ctl;
+/// ctl UI 검증 갤러리(개발 전용 — WM_APP_CTLDEMO 주입으로만 연다).
+#[cfg(windows)]
+mod ctldemo;
 #[cfg(windows)]
 mod dialog;
 #[cfg(windows)]

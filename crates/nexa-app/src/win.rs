@@ -99,6 +99,8 @@ const WM_APP_PREFS: u32 = 0x8005; // WM_APP + 5
 /// 일괄 이름변경 창 열기 지연 실행(M5-1 — WM_APP_PREFS와 동일 재진입 규약).
 /// 0x8006=prefs 적용·0x8007=UIA 선택(uia.rs) 다음.
 const WM_APP_BULK: u32 = 0x8008; // WM_APP + 8
+/// ctl 갤러리(개발 검증 전용 — 메뉴 비노출, 주입으로만 연다. ctldemo.rs).
+const WM_APP_CTLDEMO: u32 = 0x8009; // WM_APP + 9
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -4488,6 +4490,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         m if m == WM_APP_BULK => {
             open_bulk_rename(hwnd); // 일괄 이름변경(M5-1) — 동일 재진입 규약
+            LRESULT(0)
+        }
+        m if m == WM_APP_CTLDEMO => {
+            // ctl 갤러리(개발 검증 전용 — 07-17 GroupCard)
+            if let Some(st) = state_of(hwnd) {
+                let _ = crate::ctldemo::show(hwnd, &st.dlg_font.clone());
+            }
             LRESULT(0)
         }
         // 설정 창 즉시 적용 통지(X-8 — VS Code식): lparam 포인터는 SendMessage 동안만
