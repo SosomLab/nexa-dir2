@@ -139,9 +139,10 @@ unsafe fn build(win: HWND, font: HFONT) {
         st,
     );
     let t = ctl::groupcard::title_rect(a);
-    // 타이틀 밴드 위 컨트롤 = behind를 밴드 색(sel_bg)으로(AA 모서리 블렌드)
+    // 타이틀 밴드 위 컨트롤 = behind 밴드 색 + 필 한 단계 진하게(QA 07-17)
     let st_band = Style {
         behind: st.sel_bg,
+        sel_bg: windows::Win32::Foundation::COLORREF(0x00DC_D6D2),
         ..st
     };
     let cb_h = 24;

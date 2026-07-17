@@ -528,8 +528,11 @@ unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
         style2,
     );
     let trc = crate::ctl::groupcard::title_rect(card);
+    // 타이틀 밴드 위 컨트롤(QA 07-17): behind = 밴드 색 + 필 = 한 단계 진한
+    // 회색(밴드와 동색이라 묻히던 문제 — 외곽선과 함께 위계 형성)
     let st_band = Style {
         behind: style2.sel_bg,
+        sel_bg: windows::Win32::Foundation::COLORREF(0x00DC_D6D2),
         ..style2
     };
     let ib = crate::ctl::style::font_height(dlg, font).max(10);

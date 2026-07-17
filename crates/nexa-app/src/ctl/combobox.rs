@@ -342,11 +342,13 @@ unsafe extern "system" fn ctl_proc(
             if let Some(st) = state(hwnd).as_ref() {
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
-                // 모서리 = behind(부모 배경) → AA 라운드 필 + 셰브론(DrawCtx 백엔드)
+                // 모서리 = behind(부모 배경) → AA 라운드 필 + **1px 외곽선**
+                // (QA 07-17: 같은 색 배경[카드 타이틀 밴드] 위에서도 구별)
                 fill(dc, &rc, st.style.behind);
                 {
                     let mut g = GdipCtx::new(dc);
                     g.fill_round_rect(gc_rect(&rc), RADIUS, color(st.style.sel_bg));
+                    g.stroke_round_rect(gc_rect(&rc), RADIUS, color(st.style.border), 1.0);
                     let zone = RECT {
                         left: rc.right - 20,
                         top: rc.top,

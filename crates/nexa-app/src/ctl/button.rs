@@ -249,6 +249,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 {
                     let mut g = GdipCtx::new(dc);
                     g.fill_round_rect(gc_rect(&rc), RADIUS, color(fill_c));
+                    if st.kind != ButtonKind::Default || !st.enabled {
+                        // 기본/비활성 = 1px 외곽선(QA 07-17 — 동색 배경 구별·정의감.
+                        // Default(accent)는 필 자체가 구별되므로 무테)
+                        g.stroke_round_rect(gc_rect(&rc), RADIUS, color(st.style.border), 1.0);
+                    }
                 } // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
                 let mut buf = [0u16; 256];
                 let n = GetWindowTextW(hwnd, &mut buf) as usize;
