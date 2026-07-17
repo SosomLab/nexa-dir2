@@ -419,12 +419,21 @@ unsafe fn build(win: HWND, font: HFONT) {
         st,
     );
 
-    // ── 통지 투과 증명 상태줄 ──
-    let s = mk_static(win, font, "(통지 대기)", 16, 410, 680);
-    let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
-        s,
-        windows::Win32::UI::WindowsAndMessaging::GWLP_ID,
-        ID_STATUS as isize,
+    // ── 통지 투과 증명 상태줄(NxLabel Left — 창 배경 위 behind 지정 예시) ──
+    ctl::label::create(
+        win,
+        16,
+        410,
+        680,
+        0,
+        ID_STATUS,
+        font,
+        "(통지 대기)",
+        ctl::label::LabelAlign::Left,
+        Style {
+            behind: windows::Win32::Foundation::COLORREF(0x00F0_F0F0), // COLOR_BTNFACE
+            ..st
+        },
     );
 }
 

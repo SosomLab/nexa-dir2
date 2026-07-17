@@ -20,9 +20,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
     RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage,
-    ES_AUTOHSCROLL, GWLP_USERDATA, HMENU, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
-    WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_GROUP, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GWLP_USERDATA, HMENU, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
+    WM_CTLCOLORSTATIC, WM_SETFONT, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_GROUP, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::ctl::combobox::{NXCB_GETSEL, NXCB_SETSEL};
@@ -89,22 +89,16 @@ const ID_MV_LEN: u32 = 51;
 const ID_MV_FRONT: u32 = 52;
 const ID_EXT_FROM: u32 = 60;
 const ID_EXT_TO: u32 = 61;
-// 프리셋·확정
+// 프리셋·확정(X-23: 프리셋 = 이름 입력 + `…` 메뉴버튼 — PF 시안)
 const ID_PRESET_NAME: u32 = 70;
-const ID_PRESET_SAVE: u32 = 71;
-const ID_PRESET_COMBO: u32 = 72;
-const ID_PRESET_LOAD: u32 = 73;
+/// 프리셋 메뉴(항목 0 = 현재 이름으로 저장·1.. = 저장된 프리셋 불러오기).
+const ID_PRESET_MENU: u32 = 71;
 const ID_APPLY: u32 = 80;
 const ID_CANCEL: u32 = 81;
 
 // user32 컨트롤 메시지(winuser.h)
 const LB_ADDSTRING: u32 = 0x0180;
 const LB_RESETCONTENT: u32 = 0x0184;
-const CB_ADDSTRING: u32 = 0x0143;
-const CB_GETCURSEL: u32 = 0x0147;
-const CB_RESETCONTENT: u32 = 0x014B;
-const CB_GETLBTEXT: u32 = 0x0148;
-const CB_GETLBTEXTLEN: u32 = 0x0149;
 const EM_SETCUEBANNER: u32 = 0x1501;
 
 /// 동작 종류(카드 타이틀 콤보 순서 — X-23 재편: PF 카드 순서·치환 텍스트/정규식 분리).
@@ -138,7 +132,10 @@ struct BrState {
     prev: HWND,
     err: HWND,
     apply: HWND,
-    preset_combo: HWND,
+    /// 프리셋 `…` 메뉴버튼(항목 갱신 = 재생성 — X-23 PF 시안).
+    preset_menu: HWND,
+    /// 메뉴 항목 1..에 대응하는 저장된 프리셋 이름(0 = 저장 액션).
+    preset_names: Vec<String>,
     count: HWND,
     /// 확정 결과 — (부모, 현재 이름, 새 이름)의 변경 항목만(적용 클릭 시 채움).
     result: Option<Vec<(String, String, String)>>,
@@ -651,7 +648,8 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
             0,
             font,
             &tr(key),
-            crate::ctl::label::LabelAlign::Left,
+            // 우측 정렬(사용자 확정 07-17 재개정 — 라벨은 콜론이 컨트롤에 붙는 구도)
+            crate::ctl::label::LabelAlign::Right,
             style2,
         );
     };
@@ -1133,48 +1131,44 @@ unsafe fn rebuild_cards(dlg: HWND, st: &mut BrState, ops: &[RenameOp]) {
     relayout_cards(st);
 }
 
-/// 프리셋 콤보 재적재(`data\renames\*.cfg`).
-unsafe fn refresh_presets(st: &BrState) {
-    SendMessageW(st.preset_combo, CB_RESETCONTENT, None, None);
-    if let Ok(rd) = std::fs::read_dir(preset_dir()) {
-        let mut names: Vec<String> = rd
-            .flatten()
-            .filter_map(|e| {
-                let n = e.file_name().to_string_lossy().into_owned();
-                n.strip_suffix(".cfg").map(str::to_string)
-            })
-            .collect();
-        names.sort();
-        for n in names.iter().take(64) {
-            let w = windows::core::HSTRING::from(n.as_str());
-            SendMessageW(
-                st.preset_combo,
-                CB_ADDSTRING,
-                None,
-                Some(LPARAM(w.as_ptr() as isize)),
-            );
-        }
-    }
+/// 저장된 프리셋 이름 목록(`data\renames\*.cfg` — 정렬).
+fn preset_names() -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(preset_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.strip_suffix(".cfg").map(str::to_string)
+        })
+        .collect();
+    names.sort();
+    names.truncate(64);
+    names
 }
 
-unsafe fn combo_sel_text(combo: HWND) -> Option<String> {
-    let idx = SendMessageW(combo, CB_GETCURSEL, None, None).0;
-    if idx < 0 {
-        return None;
+/// 프리셋 `…` 메뉴 재구성(저장 후·초기) — NxMenuButton은 항목 불변이라 재생성.
+/// 항목 0 = "현재 이름으로 저장" · 1.. = 저장된 프리셋(클릭 = 불러오기).
+unsafe fn rebuild_preset_menu(dlg: HWND, st: &mut BrState) {
+    if !st.preset_menu.is_invalid() {
+        let _ = DestroyWindow(st.preset_menu);
     }
-    let len = SendMessageW(combo, CB_GETLBTEXTLEN, Some(WPARAM(idx as usize)), None).0;
-    if len <= 0 {
-        return None;
-    }
-    let mut buf = vec![0u16; len as usize + 1];
-    let got = SendMessageW(
-        combo,
-        CB_GETLBTEXT,
-        Some(WPARAM(idx as usize)),
-        Some(LPARAM(buf.as_mut_ptr() as isize)),
-    )
-    .0;
-    (got > 0).then(|| String::from_utf16_lossy(&buf[..got as usize]))
+    st.preset_names = preset_names();
+    let save_label = tr("bulk.preset.save");
+    let mut items: Vec<&str> = vec![save_label.as_str()];
+    items.extend(st.preset_names.iter().map(String::as_str));
+    let sy = CLIENT_H - PAD - 26 - 6 - 23;
+    st.preset_menu = crate::ctl::menubutton::create(
+        dlg,
+        PAD + FORM_W - 48,
+        sy,
+        48,
+        0,
+        ID_PRESET_MENU,
+        st.font,
+        &items,
+        Style::default(),
+    );
 }
 
 unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -1248,28 +1242,39 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     }
                 }
-                (ID_PRESET_SAVE, 0) => {
-                    // 이름 정제(금지 문자 제거) — 빈 이름·빈 파이프라인은 무시
-                    let name: String = get_text(ctl(hwnd, ID_PRESET_NAME))
-                        .chars()
-                        .filter(|c| !"<>:\"/\\|?*".contains(*c))
-                        .collect();
-                    let name = name.trim().to_string();
-                    if !name.is_empty() && !(*st).ops.is_empty() {
-                        let _ = crate::config::save(
-                            &preset_dir(),
-                            &format!("{name}.cfg"),
-                            &serialize_ops(&(*st).ops),
-                        );
-                        refresh_presets(&*st);
-                    }
-                }
-                (ID_PRESET_LOAD, 0) => {
-                    if let Some(name) = combo_sel_text((*st).preset_combo) {
+                (ID_PRESET_MENU, 1 /* NXMB_PICK — … 메뉴(PF 시안) */) => {
+                    let idx = SendMessageW(
+                        (*st).preset_menu,
+                        crate::ctl::menubutton::NXMB_GETPICK,
+                        None,
+                        None,
+                    )
+                    .0;
+                    if idx == 0 {
+                        // 항목 0 = 현재 이름으로 저장(금지 문자 제거 — 빈 이름·
+                        // 빈 파이프라인 무시) → 메뉴 재구성
+                        let name: String = get_text(ctl(hwnd, ID_PRESET_NAME))
+                            .chars()
+                            .filter(|c| !"<>:\"/\\|?*".contains(*c))
+                            .collect();
+                        let name = name.trim().to_string();
+                        if !name.is_empty() && !(*st).ops.is_empty() {
+                            let _ = crate::config::save(
+                                &preset_dir(),
+                                &format!("{name}.cfg"),
+                                &serialize_ops(&(*st).ops),
+                            );
+                            rebuild_preset_menu(hwnd, &mut *st);
+                        }
+                    } else if let Some(name) = {
+                        // 명시 재차용(원시 포인터 암시적 autoref 금지 lint)
+                        let names: &Vec<String> = &(*st).preset_names;
+                        names.get((idx - 1) as usize).cloned()
+                    } {
+                        // 항목 1.. = 저장된 프리셋 불러오기(카드 스택 재구성)
                         if let Some(text) =
                             crate::config::load(&preset_dir(), &format!("{name}.cfg"))
                         {
-                            // 카드 스택 재구성(X-23 — 파이프라인 = 카드)
                             let ops = parse_ops(&text);
                             rebuild_cards(hwnd, &mut *st, &ops);
                             refresh_preview(&mut *st);
@@ -1419,63 +1424,25 @@ pub unsafe fn show(
     };
 
     let x = PAD;
-    let ed = (WS_BORDER | WS_TABSTOP).0 | ES_AUTOHSCROLL as u32;
 
     // ── 카드 스택(X-23 PF 모델): 초기 = Replace Text 카드 1장 ──
     let card0 = make_card(dlg, font, 0);
 
-    // ── 프리셋 저장/불러오기(docs/25 §3) — 좌측 하단 고정(카드 스택 아래) ──
+    // ── 프리셋(PF 시안·사용자 확정 07-17): [이름 NxTextBox][… 메뉴버튼] 한 줄
+    //    — 메뉴 = 저장 + 저장된 프리셋(클릭 = 불러오기). 메뉴는 rebuild가 생성.
     let half = (FORM_W - 6) / 2;
-    let sy = CLIENT_H - PAD - 26 - 6 - 22 - 28;
-    let pn = mk(
+    let sy = CLIENT_H - PAD - 26 - 6 - 23;
+    let pn = crate::ctl::textbox::create(
         dlg,
-        font,
-        w!("EDIT"),
-        "",
-        ed | WS_GROUP.0,
         x,
         sy,
-        FORM_W - 90,
-        22,
+        FORM_W - 48 - 6,
+        0,
         ID_PRESET_NAME,
+        font,
+        Style::default(),
     );
     cue(pn, &tr("bulk.preset.name"));
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.preset.save"),
-        WS_TABSTOP.0,
-        x + FORM_W - 84,
-        sy,
-        84,
-        22,
-        ID_PRESET_SAVE,
-    );
-    let pc = mk(
-        dlg,
-        font,
-        w!("COMBOBOX"),
-        "",
-        (WS_TABSTOP | WS_VSCROLL).0 | 0x0003, /* CBS_DROPDOWNLIST */
-        x,
-        sy + 28,
-        FORM_W - 90,
-        200,
-        ID_PRESET_COMBO,
-    );
-    mk(
-        dlg,
-        font,
-        w!("BUTTON"),
-        &tr("bulk.preset.load"),
-        WS_TABSTOP.0,
-        x + FORM_W - 84,
-        sy + 28,
-        84,
-        22,
-        ID_PRESET_LOAD,
-    );
 
     // ── 하단 확정 버튼 ──
     let by = CLIENT_H - PAD - 26;
@@ -1553,13 +1520,14 @@ pub unsafe fn show(
         prev,
         err,
         apply,
-        preset_combo: pc,
+        preset_menu: HWND::default(),
+        preset_names: Vec::new(),
         count,
         result: None,
     });
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut BrState as isize);
     relayout_cards(&state); // 초기 카드 1장 = − 비활성(마지막 카드 삭제 불가)
-    refresh_presets(&state);
+    rebuild_preset_menu(dlg, &mut state);
     refresh_preview(&mut state);
 
     let _ = EnableWindow(owner, false);
