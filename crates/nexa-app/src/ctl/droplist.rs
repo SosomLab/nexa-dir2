@@ -162,6 +162,10 @@ unsafe fn open_drop(hwnd: HWND, st: &mut DlState) {
         None,
     )
     .unwrap_or_default();
+    // owner 연결(QA 07-17 진범): WS_POPUP을 자식 컨트롤 owner로 만들면 시스템이
+    // owner를 **최상위 창으로 승격** — GetParent(팝업)은 다이얼로그를 돌려주고
+    // 그 GWLP_USERDATA를 DlState로 오독해 크래시. 팝업 자신의 USERDATA에 저장.
+    SetWindowLongPtrW(drop, GWLP_USERDATA, hwnd.0 as isize);
     let _ = SetWindowPos(
         drop,
         Some(HWND_TOPMOST),
@@ -341,7 +345,8 @@ unsafe extern "system" fn pop_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let owner = GetParent(hwnd).unwrap_or_default();
+    // GetParent 금지(owner 승격 — open_drop 주석) — 자신의 USERDATA에서 owner 복원.
+    let owner = HWND(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut core::ffi::c_void);
     match msg {
         0x0021 /* WM_MOUSEACTIVATE */ => LRESULT(3 /* MA_NOACTIVATE — fontbox 규약 */),
         WM_MOUSEMOVE => {

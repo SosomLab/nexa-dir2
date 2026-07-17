@@ -1,6 +1,16 @@
 # STATUS — Nexa Dir 2 진행 현황
 
-> **갱신: 2026-07-16 (KST)** — 대규모 하루: 병합 브랜치 14개 + 등재 4건(X-15~X-20).
+> **갱신: 2026-07-17 (KST)** — ① **X-22 일괄 이름 변경 v2**(PF 6동작 패리티 —
+> 코어 재작성[스코프·Mode·임의 위치·감싸기·**Date 엔진**·v1 프리셋 호환] +
+> **ctl 3종 신설**[segmented/spin/droplist — 판매용 추상화] + UI 재구성[✓ 미리보기
+> +건수]) ② **X-21 shell: 특수 폴더**(SHParseDisplayName 위임) ③ X-20 QA 2건
+> (스플리터 음수 rect 정규화·0-rect 도크 히트) ④ **X-22 QA**: droplist **owner
+> 승격 크래시**(팝업 USERDATA로 해소·fontbox 타이머 누수 동일 수리) + 메뉴 명령
+> **설정 즉시 영속**(persist_settings — 비정상 종료 유실 방지).
+> 테스트 186 green·clippy 0·exe 1.18MB. 다음: ctl GroupCard(카드 컨테이너 —
+> 일괄 이름 변경 재편 예정) · X-13 2/2 · X-16 백로그.
+>
+> (이전 07-16) — 대규모 하루: 병합 브랜치 14개 + 등재 4건(X-15~X-20).
 > ① **X-16 최적화 1차**(핫패스 무클론 `row_ref`·DW 캐시 무할당·아이콘 틱 rect 축소 —
 > 백로그 7건 등재) ② **X-18 배포 2채널**(DR-3 개정 — 포터블+설치형 Inno Setup·
 > data_dir 폴백·release.yml 2종 첨부, [21](21-distribution.md)) ③ **X-17 가상 최상위
