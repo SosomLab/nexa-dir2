@@ -10,9 +10,13 @@
 > [프리셋들/─/Save/Edit]+건수 라벨 동일 행 · Save = 무캐션 **DWM 라운드
 > 팝업**[기본 이름 전체 선택·우하단 취소/OK] · Edit = 지브라 목록 행별 빨간
 > ⊖ **스테이징 삭제**[OK 확정/취소 폐기]) ④ NxMenuButton 구분선 ·
-> NxTextBox EM_SETSEL 위임 · Style.danger. 실기 왕복 QA 완료.
-> 테스트 186 green·clippy 0. 다음: X-23 잔여 β(카드 스크롤·재배치) ·
-> X-13 2/2 · X-16 백로그.
+> NxTextBox EM_SETSEL 위임 · Style.danger ⑤ **하단 행 재편**(`feat/bulk-bottom-bar`):
+> Apply → **"이름 변경(Rename)" NxButton Default**(NXBTN_SETENABLE 활성 —
+> idle 회색/변경 시 파랑) · 우하단 [취소][이름 변경] 실측 정렬 · 프리셋
+> [… ⌄]+건수 = 하단 좌측(구 Apply 자리) · 미리보기 그리드 전고 확장 ·
+> **GridOpts.row_h**(파일 목록 20px @96dpi 동일 산식 — 행 높이 통일).
+> 실기 왕복 QA 완료(24건 실변경·원복). 테스트 186 green·clippy 0.
+> 다음: X-23 잔여 β(카드 스크롤·재배치) · X-13 2/2 · X-16 백로그.
 >
 > (이전 07-17) — ① **X-22 일괄 이름 변경 v2**(PF 6동작 패리티 —
 > 코어 재작성[스코프·Mode·임의 위치·감싸기·**Date 엔진**·v1 프리셋 호환] +
