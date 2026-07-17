@@ -39,7 +39,7 @@ struct SegState {
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
-const CLASS: PCWSTR = w!("NexaSegmented");
+const CLASS: PCWSTR = w!("Nexa.NxSegmented");
 
 /// 세그먼트 라디오 생성 — `items` 라벨은 컨트롤이 복사 소유.
 #[allow(clippy::too_many_arguments)] // Win32 create 계열 관례(좌표+정의)

@@ -48,7 +48,7 @@ struct SpinState {
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
-const CLASS: PCWSTR = w!("NexaSpin");
+const CLASS: PCWSTR = w!("Nexa.NxSpin");
 
 /// 숫자 스피너 생성.
 #[allow(clippy::too_many_arguments)] // Win32 create 계열 관례
