@@ -131,6 +131,10 @@ struct BrState {
     prev: HWND,
     /// 행별 적용 제외(그리드 적용 열 체크 해제 — items와 같은 길이).
     excluded: Vec<bool>,
+    /// 그리드 정렬 상태((컬럼, desc) — NXGR_SORT 수신 시 sort_spec 복사, 07-18).
+    sort: Vec<(usize, bool)>,
+    /// 표시 행 → items 인덱스 맵(정렬 반영 — refresh_preview가 재계산).
+    order: Vec<usize>,
     err: HWND,
     apply: HWND,
     /// 프리셋 `…` 메뉴버튼(항목 갱신 = 재생성 — X-23 PF 시안).
@@ -461,7 +465,7 @@ unsafe fn refresh_preview(st: &mut BrState) {
     // 미리보기 그리드(NxGrid — 사용자 확정 07-18): 적용(변경 행만 체크 마크 —
     // 클릭 = 행별 제외) / 이전 / 이후. 충돌 행 = 마크 없음 + 사유 표기.
     let mut changed = 0usize;
-    let mut rows = Vec::with_capacity(triples.len());
+    let mut item_rows = Vec::with_capacity(triples.len());
     for (i, (_, old, new)) in triples.iter().enumerate() {
         let (check, after) = if confs[i] != Conflict::None {
             (None, format!("⚠ {new} ({})", conflict_label(confs[i])))
@@ -474,11 +478,37 @@ unsafe fn refresh_preview(st: &mut BrState) {
         } else {
             (None, String::new()) // 무변경 = 이후 빈 칸(변경 없음이 한눈에)
         };
-        rows.push(crate::ctl::grid::GridRow {
+        item_rows.push(crate::ctl::grid::GridRow {
             check,
             cells: vec![old.clone(), after],
         });
     }
+    // 다중열 정렬(07-18 — 원본 docs/23 §4): 표시 순서만 재배열(items·excluded는
+    // 항목 인덱스 고정 — order 맵으로 토글 왕복). 대소문자 무시·안정 정렬(동률 =
+    // 열거 순서). 컬럼 1 = 이전 이름·2 = 이후.
+    let mut order: Vec<usize> = (0..item_rows.len()).collect();
+    if !st.sort.is_empty() {
+        let sort = st.sort.clone();
+        order.sort_by(|&a, &b| {
+            for &(col, desc) in &sort {
+                let (ka, kb) = match col {
+                    1 => (&triples[a].1, &triples[b].1),
+                    2 => (&item_rows[a].cells[1], &item_rows[b].cells[1]),
+                    _ => continue,
+                };
+                let o = ka.to_lowercase().cmp(&kb.to_lowercase());
+                if o != std::cmp::Ordering::Equal {
+                    return if desc { o.reverse() } else { o };
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+    }
+    let rows: Vec<crate::ctl::grid::GridRow> = order
+        .iter()
+        .map(|&i| std::mem::take(&mut item_rows[i]))
+        .collect();
+    st.order = order;
     crate::ctl::grid::set_rows(st.prev, rows);
     // "N개 항목이 변경됩니다"(PF 카운트 — 체크 해제 행 제외)
     set_text(
@@ -1706,20 +1736,30 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let idx = SendMessageW(stm.prev, crate::ctl::grid::NXGR_GETROW, None, None).0;
                     if idx == crate::ctl::grid::NXGR_ROW_ALL {
                         // 헤더 전체 토글(07-18) — 그리드 행 상태로 전 항목 재동기
-                        for i in 0..stm.excluded.len() {
+                        // (표시 행 → items 인덱스는 order 맵 경유 — 정렬 반영)
+                        for i in 0..stm.order.len() {
                             if let Some(on) = crate::ctl::grid::row_check(stm.prev, i) {
-                                stm.excluded[i] = !on;
+                                let item = stm.order[i];
+                                if let Some(e) = stm.excluded.get_mut(item) {
+                                    *e = !on;
+                                }
                             }
                         }
                         refresh_preview(stm);
                     } else if idx >= 0 {
                         let checked =
                             crate::ctl::grid::row_check(stm.prev, idx as usize).unwrap_or(true);
-                        if let Some(e) = stm.excluded.get_mut(idx as usize) {
+                        let item = stm.order.get(idx as usize).copied().unwrap_or(idx as usize);
+                        if let Some(e) = stm.excluded.get_mut(item) {
                             *e = !checked;
                         }
                         refresh_preview(stm); // 카운트·[적용] 활성 재계산
                     }
+                }
+                (ID_PREV, 3 /* NXGR_SORT — 헤더 정렬 변경(07-18) */) => {
+                    let stm = &mut *st;
+                    stm.sort = crate::ctl::grid::sort_spec(stm.prev);
+                    refresh_preview(stm); // order 재계산 + 행 재배열
                 }
                 (ID_APPLY, 1 /* NXBTN_CLICK — Rename NxButton */) => {
                     // 확정 — 충돌 0·검증 통과는 refresh_preview가 보장([적용] 활성 조건)
@@ -1964,6 +2004,8 @@ pub unsafe fn show(
         tz_min,
         ops: Vec::new(),
         excluded: vec![false; items_len],
+        sort: Vec::new(),
+        order: Vec::new(),
         cards: vec![card0],
         prev,
         err,
