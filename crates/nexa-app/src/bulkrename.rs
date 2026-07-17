@@ -84,11 +84,6 @@ const ID_DT_PRE: u32 = 94;
 const ID_DT_SUF: u32 = 95;
 /// 변경 건수("N개 항목이 변경됩니다" — PF 카운트 대응).
 const ID_COUNT: u32 = 82;
-const ID_MV_START: u32 = 50;
-const ID_MV_LEN: u32 = 51;
-const ID_MV_FRONT: u32 = 52;
-const ID_EXT_FROM: u32 = 60;
-const ID_EXT_TO: u32 = 61;
 /// 미리보기 그리드(NxGrid — 적용 열 토글 통지, 07-18).
 const ID_PREV: u32 = 84;
 /// 프리셋 `…` 메뉴(07-18 v2 — 프리셋들·구분선·Save/Edit. 이름은 Save 팝업).
@@ -96,20 +91,16 @@ const ID_PRESET_MENU: u32 = 71;
 const ID_APPLY: u32 = 80;
 const ID_CANCEL: u32 = 81;
 
-// user32 컨트롤 메시지(winuser.h)
-const EM_SETCUEBANNER: u32 = 0x1501;
-
 /// 동작 종류(카드 타이틀 콤보 순서 — X-23 재편: PF 카드 순서·치환 텍스트/정규식 분리).
-/// 날짜(5) = 보류(사용자 07-17 — 새 시안 대기, 기존 폼 유지). 이동/확장자 = 우리 고유.
-const KINDS: [&str; 8] = [
+/// 6종 확정(사용자 07-18 — 구간 이동/확장자 변경 카드 제거. 코어 op·프리셋
+/// 파서는 유지하되 UI 복원 시 해당 블록은 건너뛴다).
+const KINDS: [&str; 6] = [
     "bulk.kind.replace",
     "bulk.kind.replaceRx",
     "bulk.kind.insert",
     "bulk.kind.case",
     "bulk.kind.number",
     "bulk.kind.date",
-    "bulk.kind.move",
-    "bulk.kind.ext",
 ];
 /// 스코프 콤보 항목 순서 ↔ [`Scope`] 매핑.
 const SCOPES: [Scope; 4] = [Scope::Name, Scope::NameExt, Scope::Ext, Scope::ExtDot];
@@ -197,16 +188,6 @@ unsafe fn mk(
         Some(LPARAM(1)),
     );
     hw
-}
-
-unsafe fn cue(hwnd: HWND, text: &str) {
-    let w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    SendMessageW(
-        hwnd,
-        EM_SETCUEBANNER,
-        Some(WPARAM(1)),
-        Some(LPARAM(w.as_ptr() as isize)),
-    );
 }
 
 /// 컨트롤 조회 — 직속 자식 우선, 없으면 **카드(컨테이너) 내부까지 탐색**
@@ -357,29 +338,8 @@ unsafe fn op_from_form(dlg: HWND, kind: usize) -> Option<RenameOp> {
                 },
             })
         }
-        // 구간 이동(우리 고유)
-        6 => {
-            let len = SendMessageW(ctl(dlg, ID_MV_LEN), SPIN_GETVAL, None, None)
-                .0
-                .max(0) as usize;
-            (len > 0).then(|| RenameOp::Move {
-                start: SendMessageW(ctl(dlg, ID_MV_START), SPIN_GETVAL, None, None)
-                    .0
-                    .max(1) as usize,
-                len,
-                to_front: SendMessageW(ctl(dlg, ID_MV_FRONT), SEG_GETSEL, None, None).0 == 0,
-            })
-        }
-        // 확장자 변경(우리 고유)
-        _ => {
-            let to = get_text(ctl(dlg, ID_EXT_TO));
-            let from = get_text(ctl(dlg, ID_EXT_FROM));
-            let strip = |s: String| s.trim().trim_start_matches('.').to_string();
-            (!to.trim().is_empty() || !from.trim().is_empty()).then(|| RenameOp::ChangeExt {
-                from: strip(from),
-                to: strip(to),
-            })
-        }
+        // 6종 확정(사용자 07-18 — 구간 이동/확장자 변경 카드 제거)
+        _ => None,
     }
 }
 
@@ -529,16 +489,16 @@ unsafe fn refresh_preview(st: &mut BrState) {
 }
 
 /// 동작 → kind 인덱스(카드 콤보 순서 — 프리셋 복원용).
-fn kind_index_of(op: &RenameOp) -> usize {
+/// `None` = 카드 없는 동작(구간 이동/확장자 변경 — 07-18 제거, 복원 시 스킵).
+fn kind_index_of(op: &RenameOp) -> Option<usize> {
     match op {
-        RenameOp::Replace { regex: false, .. } => 0,
-        RenameOp::Replace { regex: true, .. } => 1,
-        RenameOp::Insert { .. } => 2,
-        RenameOp::Case { .. } => 3,
-        RenameOp::Number { .. } => 4,
-        RenameOp::Date { .. } => 5,
-        RenameOp::Move { .. } => 6,
-        RenameOp::ChangeExt { .. } => 7,
+        RenameOp::Replace { regex: false, .. } => Some(0),
+        RenameOp::Replace { regex: true, .. } => Some(1),
+        RenameOp::Insert { .. } => Some(2),
+        RenameOp::Case { .. } => Some(3),
+        RenameOp::Number { .. } => Some(4),
+        RenameOp::Date { .. } => Some(5),
+        RenameOp::Move { .. } | RenameOp::ChangeExt { .. } => None,
     }
 }
 
@@ -660,9 +620,6 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
         "bulk.lbl.type",
         "bulk.lbl.fmt",
         "bulk.lbl.prefix",
-        "bulk.lbl.range",
-        "bulk.lbl.dest",
-        "bulk.lbl.ext",
     ]
     .iter()
     .map(|k| measure(k))
@@ -677,7 +634,6 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
     // 컨트롤 열(라벨 오른쪽 고정 x — 두 열 모두 좌측 정렬)
     let cx = bx + lbl_w + 6;
     let cw = bw - lbl_w - 6;
-    let chalf = (cw - 6) / 2;
     let lbl = |key: &str, x: i32, w: i32, r: i32| {
         crate::ctl::label::create(
             card,
@@ -982,68 +938,8 @@ unsafe fn build_card_body(card: HWND, kind: usize, font: HFONT) {
                 style2,
             );
         }
-        // 구간 이동(우리 고유 — 구간:[시작][길이]·대상 세그먼트)
-        6 => {
-            lbl("bulk.lbl.range", bx, lbl_w, 1);
-            crate::ctl::spin::create(
-                card,
-                cx,
-                row(1),
-                70,
-                0,
-                ID_MV_START,
-                font,
-                1,
-                1,
-                999,
-                style2,
-            );
-            crate::ctl::spin::create(
-                card,
-                cx + 76,
-                row(1),
-                70,
-                0,
-                ID_MV_LEN,
-                font,
-                2,
-                0,
-                999,
-                style2,
-            );
-            lbl("bulk.lbl.dest", bx, lbl_w, 2);
-            crate::ctl::segmented::create(
-                card,
-                cx,
-                row(2),
-                cw,
-                0,
-                ID_MV_FRONT,
-                font,
-                &[&tr("bulk.destFront"), &tr("bulk.destEnd")],
-                1,
-                crate::ctl::segmented::SegOpts::default(),
-                style2,
-            );
-        }
-        // 확장자 변경(우리 고유 — 확장자:[기존][새])
-        _ => {
-            lbl("bulk.lbl.ext", bx, lbl_w, 1);
-            let f =
-                crate::ctl::textbox::create(card, cx, row(1), chalf, 0, ID_EXT_FROM, font, style2);
-            cue(f, &tr("bulk.extFrom"));
-            let t = crate::ctl::textbox::create(
-                card,
-                cx + chalf + 6,
-                row(1),
-                cw - chalf - 6,
-                0,
-                ID_EXT_TO,
-                font,
-                style2,
-            );
-            cue(t, &tr("bulk.extTo"));
-        }
+        // 6종 확정(사용자 07-18) — 그 외 kind 없음
+        _ => {}
     }
 }
 
@@ -1146,19 +1042,8 @@ unsafe fn set_form_from_op(card: HWND, op: &RenameOp) {
             set_text(ctl(card, ID_DT_SUF), &spec.suffix);
             set_text(ctl(card, ID_DT_FMT), &spec.format);
         }
-        RenameOp::Move {
-            start,
-            len,
-            to_front,
-        } => {
-            set_spin(ID_MV_START, *start as i64);
-            set_spin(ID_MV_LEN, *len as i64);
-            set_seg(ID_MV_FRONT, usize::from(!*to_front));
-        }
-        RenameOp::ChangeExt { from, to } => {
-            set_text(ctl(card, ID_EXT_FROM), from);
-            set_text(ctl(card, ID_EXT_TO), to);
-        }
+        // 카드 없는 동작(구간 이동/확장자 변경 — 07-18 제거, rebuild_cards가 스킵)
+        RenameOp::Move { .. } | RenameOp::ChangeExt { .. } => {}
     }
 }
 
@@ -1172,14 +1057,17 @@ unsafe fn rebuild_cards(dlg: HWND, st: &mut BrState, ops: &[RenameOp]) {
     } else {
         ops
     };
-    if ops.is_empty() {
-        st.cards.push(make_card(dlg, st.font, 0));
-    } else {
-        for op in ops {
-            let card = make_card(dlg, st.font, kind_index_of(op));
-            set_form_from_op(card, op);
-            st.cards.push(card);
-        }
+    for op in ops {
+        // 카드 없는 동작(구간 이동/확장자 변경 — 07-18 제거)은 복원 스킵
+        let Some(kind) = kind_index_of(op) else {
+            continue;
+        };
+        let card = make_card(dlg, st.font, kind);
+        set_form_from_op(card, op);
+        st.cards.push(card);
+    }
+    if st.cards.is_empty() {
+        st.cards.push(make_card(dlg, st.font, 0)); // 빈/전량 스킵 = 기본 카드 1장
     }
     relayout_cards(st);
 }
