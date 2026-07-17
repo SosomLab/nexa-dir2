@@ -963,6 +963,7 @@ pub unsafe fn show(
             font,
             &["AB CD", "Ab Cd", "Ab cd", "ab cd"],
             0,
+            crate::ctl::segmented::SegOpts::default(),
             style2,
         );
         panels[1] = vec![seg];
@@ -1006,6 +1007,7 @@ pub unsafe fn show(
             font,
             &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
             1,
+            crate::ctl::segmented::SegOpts::default(),
             style2,
         );
         panels[2] = vec![t, off, dir];
@@ -1050,6 +1052,7 @@ pub unsafe fn show(
             font,
             &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
             1,
+            crate::ctl::segmented::SegOpts::default(),
             style2,
         );
         let wp = mk(
@@ -1124,6 +1127,7 @@ pub unsafe fn show(
             font,
             &[&tr("bulk.dirStart"), &tr("bulk.dirEnd")],
             1,
+            crate::ctl::segmented::SegOpts::default(),
             style2,
         );
         let dp = mk(

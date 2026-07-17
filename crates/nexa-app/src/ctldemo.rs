@@ -38,6 +38,13 @@ const ID_CASE: u32 = 113;
 /// 카드 A 타이틀 우측 +/−(PF 시안 — NxIconButton, − = 비활성 데모).
 const ID_ADD: u32 = 140;
 const ID_REMOVE: u32 = 141;
+/// NxButton 3상태 데모(Cancel 기본·Rename Default·비활성).
+const ID_CANCEL: u32 = 150;
+const ID_RENAME: u32 = 151;
+const ID_DISABLED: u32 = 152;
+/// 카드 C: 수평 배치 샘플(전 컨트롤 기본 높이 — 같은 row 중심 정렬 검증).
+const CARD_C: u32 = 102;
+const ID_ROW_BASE: u32 = 160; // +0..=6 = 콤보/글상자/체크/아이콘/버튼/세그/스핀
 const ID_STATUS: u32 = 900;
 
 /// 갤러리 창 열기(모달 아님 — 앱 메시지 루프가 디스패치). 반환 = 창 핸들.
@@ -73,7 +80,7 @@ pub unsafe fn show(owner: HWND, font_spec: &DlgFont) -> HWND {
         120,
         120,
         740,
-        420,
+        480,
         Some(owner),
         None,
         None,
@@ -237,6 +244,46 @@ unsafe fn build(win: HWND, font: HFONT) {
     );
     let b2 = ctl::groupcard::body_rect(c);
     let (cx, cy) = (b2.left + 12, b2.top + 12);
+    // NxButton 3상태(시안: Cancel 기본·Rename Default·비활성) — w=0 자동 폭
+    ctl::button::create(
+        c,
+        cx,
+        cy + 72,
+        0,
+        0,
+        ID_CANCEL,
+        font,
+        "Cancel",
+        ctl::button::ButtonKind::Normal,
+        true,
+        st,
+    );
+    ctl::button::create(
+        c,
+        cx + 84,
+        cy + 72,
+        0,
+        0,
+        ID_RENAME,
+        font,
+        "Rename",
+        ctl::button::ButtonKind::Default,
+        true,
+        st,
+    );
+    ctl::button::create(
+        c,
+        cx + 176,
+        cy + 72,
+        0,
+        0,
+        ID_DISABLED,
+        font,
+        "비활성",
+        ctl::button::ButtonKind::Normal,
+        false,
+        st,
+    );
     mk_static(c, font, "위치:", cx, cy + 4, 60);
     ctl::spin::create(c, cx + 68, cy, 90, 26, ID_OFF, font, 0, 0, 999, st);
     ctl::segmented::create(
@@ -244,16 +291,121 @@ unsafe fn build(win: HWND, font: HFONT) {
         cx + 68,
         cy + 36,
         160,
-        26,
+        0, // 자동(컴팩트 — 버튼과 동일 규칙) 높이 검증
         ID_DIR,
         font,
         &["앞에서", "뒤에서"],
         0,
+        ctl::segmented::SegOpts::default(),
+        st,
+    );
+
+    // ── 카드 C: 수평 배치 샘플(사용자 요청 07-17 — 전 컨트롤 기본 크기,
+    //    같은 row에서 세로 중심 정렬 확인. 배치 = 중심 y 기준) ──
+    let cc = ctl::groupcard::create(
+        win,
+        16,
+        300,
+        680,
+        CARD_C,
+        font,
+        "수평 배치 (기본 높이·중심 정렬)",
+        GroupCardOpts {
+            corner: 10,
+            title_h: 24,
+            body_h: 54,
+        },
+        st,
+    );
+    let b3 = ctl::groupcard::body_rect(cc);
+    let mid = b3.top + (b3.bottom - b3.top) / 2;
+    let fh = crate::ctl::style::font_height(cc, font).max(10);
+    let (auto_h, compact_h) = (fh + 8, fh + 4);
+    let mut rx = b3.left + 12;
+    ctl::combobox::create(
+        cc,
+        rx,
+        mid - auto_h / 2,
+        100,
+        0,
+        ID_ROW_BASE,
+        font,
+        &["콤보", "둘"],
+        0,
+        st,
+    );
+    rx += 108;
+    ctl::textbox::create(cc, rx, mid - auto_h / 2, 80, 0, ID_ROW_BASE + 1, font, st);
+    rx += 88;
+    ctl::checkbox::create(
+        cc,
+        rx,
+        mid - auto_h / 2,
+        0,
+        0,
+        ID_ROW_BASE + 2,
+        font,
+        "",
+        true,
+        st,
+    );
+    rx += 32;
+    ctl::iconbutton::create(
+        cc,
+        rx,
+        mid - fh / 2,
+        0,
+        ID_ROW_BASE + 3,
+        font,
+        ctl::iconbutton::Icon::Plus,
+        true,
+        st,
+    );
+    rx += fh + 10;
+    ctl::button::create(
+        cc,
+        rx,
+        mid - compact_h / 2,
+        0,
+        0,
+        ID_ROW_BASE + 4,
+        font,
+        "버튼",
+        ctl::button::ButtonKind::Default,
+        true,
+        st,
+    );
+    rx += 68;
+    ctl::segmented::create(
+        cc,
+        rx,
+        mid - compact_h / 2,
+        110,
+        0,
+        ID_ROW_BASE + 5,
+        font,
+        &["A", "B"],
+        0,
+        ctl::segmented::SegOpts::default(),
+        st,
+    );
+    rx += 118;
+    ctl::spin::create(
+        cc,
+        rx,
+        mid - auto_h / 2,
+        90,
+        0,
+        ID_ROW_BASE + 6,
+        font,
+        0,
+        0,
+        9,
         st,
     );
 
     // ── 통지 투과 증명 상태줄 ──
-    let s = mk_static(win, font, "(통지 대기)", 16, 350, 680);
+    let s = mk_static(win, font, "(통지 대기)", 16, 410, 680);
     let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
         s,
         windows::Win32::UI::WindowsAndMessaging::GWLP_ID,
