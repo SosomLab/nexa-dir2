@@ -8,6 +8,7 @@
 
 ## 2026-07-17
 
+- **ctl 6호 GroupCard + 검증 갤러리(`feat/ctl-groupcard` — 사용자 요청)**: 타이틀 밴드+본문 그룹 컨테이너(라운드/각진 선택 — 창 리전 클립, **영역별 높이 각각 지정**, 타이틀 = 윈도우 텍스트 위임, **자식 통지 투과** = WM_COMMAND/CTLCOLOR* 등을 카드 부모로 — 중첩 투명성). 검증은 기존 기능 무변경 원칙대로 **별도 갤러리 창**(ctldemo — 0x8009 주입 전용): 카드 2종에 droplist/segmented/spin 혼합·투과 통지 상태줄·캡처+픽셀 판독. 향후 일괄 이름 변경 동작별 카드 재편(X-23 등재)의 토대. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **X-22 실기 QA 2건(`fix/x22-qa-droplist` — 사용자 QA)**: ① droplist 팝업 크래시 진범 = **WS_POPUP owner 승격**(자식 컨트롤 owner → 시스템이 최상위로 교체 — GetParent(팝업)이 다이얼로그를 돌려줘 BrState를 DlState로 오독·크래시) — 팝업 자신의 USERDATA에 owner 저장으로 해소 + fontbox KillTimer 동일 진범(60ms 타이머 누수) 수리 ② **메뉴 명령 설정 유실** — run_command 경로(언어·테마·토글 6곳)는 종료 저장 의존 → `persist_settings()` 즉시 영속(비정상 종료 유실 방지). 실기: 팝업 4항목 렌더·선택 반영·생존 + F6 직후 settings.cfg 생성 확인. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 - **X-22 일괄 이름 변경 v2 구현(`feat/x22-batch-rename-v2` — 사용자 지시: 전체 직접 개발 컴포넌트)**: 코어 전면 재작성(스코프·위치 클램프·Mode·감싸기·**Date 토큰 엔진**·v1 프리셋 하위호환 — 32 green) + **ctl 3종 신설**(segmented·spin·droplist — 판매용 추상화: Style 인자·계약 명세) + UI 재구성(적용 대상/Mode droplist·PF식 케이스 세그먼트·위치 spin+방향·날짜 패널·**✓ 미리보기+건수**). 실기 캡처+기능 왕복 검증. 186 green. 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
 - **일괄 이름 변경 v2 설계(사용자 주도 PF 분석)**: Path Finder 6동작 전수 대조 → 갭 6건(스코프·Mode·**Add Date**·임의 위치·Number 감싸기·미리보기 ✓/건수) 확정, 설계 [22-batch-rename-v2.md](22-batch-rename-v2.md) 신설·X-22 등재(S1 코어/S2 UI/S3 미리보기 슬라이스). 상세 [journal/2026-07-16.md](journal/2026-07-16.md).
