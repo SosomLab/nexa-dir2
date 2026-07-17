@@ -2,11 +2,12 @@
 //! 라이브러리 추상화 — 앱 비결합).
 //!
 //! ## 계약(판매용 명세)
-//! - 생성: [`create`] — 초기값·범위(min..=max)·[`Style`]. 내부 = 숫자 EDIT(세로 중앙,
-//!   searchbox 규약) + 우측 ⌃⌄ 버튼 블록(컨트롤 소유 영역 — z-순서 이슈 없음).
-//! - **버튼 블록(사용자 확정 07-17 — macOS 시안)**: 두 버튼이 모여 **정사각형**
-//!   (변 = 컨트롤 높이), 개별 버튼 = 상/하 **1/2 직사각형**. `min`/`max` 도달 시
-//!   해당 방향 버튼 **비활성**(연한 셰브론 + 클릭 무시). 셰브론 = AA(DrawCtx 백엔드).
+//! - 생성: [`create`] — 초기값·범위(min..=max)·[`Style`].
+//! - **배치(사용자 확정 07-17 재개정 — macOS 시안)**: **독립 라운드 글상자**
+//!   (NxTextBox 모양 — bg 필+border, 숫자 = **우측 정렬**) + 우측에 **분리된**
+//!   ⌃⌄ 버튼 블록. 블록 폭 = 높이의 2/3(축소), **높이 = 글상자 높이 종속**,
+//!   개별 버튼 = 상/하 1/2. `min`/`max` 도달 방향 = 비활성(연한 셰브론+클릭
+//!   무시). 도형 = AA(DrawCtx 백엔드) · 모서리 = `style.behind` 블렌드.
 //! - 값 변경(타이핑·⌃⌄·↑/↓ 키) 시 부모에 `WM_COMMAND(MAKEWPARAM(id, EN_CHANGE))`.
 //!   포커스 이탈 시 `EN_KILLFOCUS` 재발행(범위 클램프 확정) — 기존 EDIT 배선 호환.
 //! - 조회/설정: [`SPIN_GETVAL`]/[`SPIN_SETVAL`](WM_USER+60/61) ·
@@ -20,14 +21,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetDlgCtrlID, GetParent,
     GetWindowLongPtrW, MoveWindow, RegisterClassW, SendMessageW, SetWindowLongPtrW, ES_AUTOHSCROLL,
-    ES_NUMBER, GWLP_USERDATA, GWLP_WNDPROC, HMENU, IDC_ARROW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WNDCLASSW, WS_CHILD,
-    WS_TABSTOP, WS_VISIBLE,
+    ES_NUMBER, ES_RIGHT, GWLP_USERDATA, GWLP_WNDPROC, HMENU, IDC_ARROW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
+    WM_KILLFOCUS, WM_LBUTTONDOWN, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE,
+    WNDCLASSW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use super::gdipctx::{color, GdipCtx};
-use super::style::{fill, font_height, frame, Style};
+use super::style::{fill, font_height, Style};
 
 /// 값 조회(반환 = 클램프된 현재 값).
 pub const SPIN_GETVAL: u32 = 0x0400 + 60;
@@ -37,6 +38,15 @@ pub const SPIN_SETVAL: u32 = 0x0400 + 61;
 const EDIT_ID: u32 = 1;
 const EN_CHANGE: u32 = 0x0300;
 const EN_KILLFOCUS: u32 = 0x0200;
+/// 라운드 반경(px — 글상자/콤보와 동일 시안).
+const RADIUS: i32 = 6;
+/// 글상자와 버튼 블록 사이 간격(px).
+const GAP: i32 = 4;
+
+/// 버튼 블록 폭 — 높이의 2/3(사용자 확정: 가로 축소·높이 = 글상자 종속).
+fn block_w(h: i32) -> i32 {
+    (h * 2 / 3).max(14)
+}
 
 struct SpinState {
     edit: HWND,
@@ -118,13 +128,14 @@ unsafe fn state(hwnd: HWND) -> *mut SpinState {
 unsafe fn layout(hwnd: HWND, st: &SpinState) {
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
-    let eh = (font_height(hwnd, st.font) + 4).min((rc.bottom - 4).max(8));
-    // 버튼 블록 = 정사각(변 = 컨트롤 높이) — EDIT는 그 왼쪽까지
+    let eh = (font_height(hwnd, st.font) + 2).min((rc.bottom - 4).max(8));
+    // 글상자 = 독립 라운드(버튼 블록·GAP 왼쪽까지) — EDIT는 그 안쪽, +1px 하향
+    let field_r = rc.right - block_w(rc.bottom) - GAP;
     let _ = MoveWindow(
         st.edit,
-        4,
-        (rc.bottom - eh) / 2,
-        (rc.right - 4 - rc.bottom - 2).max(10),
+        6,
+        (rc.bottom - eh) / 2 + 1,
+        (field_r - 12).max(10),
         eh,
         true,
     );
@@ -226,7 +237,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 WINDOW_EX_STYLE(0),
                 w!("EDIT"),
                 w!(""),
-                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(ES_AUTOHSCROLL as u32 | ES_NUMBER as u32),
+                WS_CHILD
+                    | WS_VISIBLE
+                    | WINDOW_STYLE(
+                        ES_AUTOHSCROLL as u32 | ES_NUMBER as u32 | ES_RIGHT as u32, // 숫자 = 우측 정렬(사용자 확정)
+                    ),
                 4,
                 2,
                 10,
@@ -314,8 +329,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
-                // 버튼 블록 = 우측 정사각(변 = 높이) — 상 1/2 = ⌃, 하 1/2 = ⌄
-                if x >= rc.right - rc.bottom {
+                // 버튼 블록 = 우측 분리(폭 = 높이 2/3) — 상 1/2 = ⌃, 하 1/2 = ⌄
+                if x >= rc.right - block_w(rc.bottom) {
                     let up = y < rc.bottom / 2;
                     let v = cur_val(st);
                     // min/max 도달 방향은 비활성(클릭 무시 — 사용자 확정)
@@ -337,15 +352,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             if let Some(st) = state(hwnd).as_ref() {
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
-                fill(dc, &rc, st.style.bg);
-                frame(dc, &rc, st.style.border);
-                // 버튼 블록(사용자 확정): 정사각(변 = 높이)·개별 = 상/하 1/2,
-                // min/max 도달 방향 = 연한 셰브론(비활성). AA = DrawCtx 백엔드만.
+                // 배치(사용자 확정): 독립 라운드 글상자 + 우측 분리 버튼 블록
+                // (폭 = 높이 2/3·높이 = 글상자 종속). 모서리 = behind 블렌드.
+                fill(dc, &rc, st.style.behind);
                 let h = rc.bottom - rc.top;
+                let bw = block_w(h);
                 let v = cur_val(st).clamp(st.min, st.max);
-                let block = Rect::new(rc.right - h + 2, rc.top + 2, h - 4, h - 4);
+                let field = Rect::new(rc.left, rc.top, rc.right - bw - GAP, h);
+                let block = Rect::new(rc.right - bw, rc.top, bw, h);
                 let mut g = GdipCtx::new(dc);
-                g.fill_round_rect(block, 4, color(st.style.sel_bg));
+                g.fill_round_rect(field, RADIUS, color(st.style.bg));
+                g.stroke_round_rect(field, RADIUS, color(st.style.border), 1.0);
+                g.fill_round_rect(block, RADIUS, color(st.style.sel_bg));
                 let cx = block.x + block.w / 2;
                 let hw = 4;
                 let up_c = if v < st.max {
