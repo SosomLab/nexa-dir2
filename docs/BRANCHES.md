@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/nx-segmented-style` | 2026-07-17 | 2026-07-17 (`698c3e0`) | 2026-07-17 | 1 | **NxSegmented 개선 + NxButton 신설**(사용자 시안) — SegOpts(라운드/스퀘어·**간격 기본 0**)·연회색 컨테이너+**선택 accent 필**·AA·컴팩트 높이(글꼴+4 — 버튼 공통) · **NxButton 3상태**(기본/Default accent/Disabled·라벨 자동 폭·Space/Enter) · 갤러리 **카드 C 수평 배치 샘플**(7종 중심 정렬). 실기 검증·186 green | [2026-07-17](journal/2026-07-17.md) |
 | `fix/nx-spin-layout` | 2026-07-17 | 2026-07-17 (`40ede1f`) | 2026-07-17 | 1 | **NxSpin 재배치**(사용자 시안 재개정) — **독립 라운드 글상자**(숫자 **우측 정렬**·1px 하향) + **우측 분리 버튼 블록**(GAP 4·폭 = 높이 2/3·높이 = 글상자 종속·min/max 비활성 유지·behind AA). 실기 검증·186 green | [2026-07-17](journal/2026-07-17.md) |
 | `feat/nx-spin-buttons` | 2026-07-17 | 2026-07-17 (`9ed9e31`) | 2026-07-17 | 1 | **NxSpin 버튼 재설계 + NxDropList 은퇴**(사용자 확정) — 스핀 버튼 블록 = **정사각(변=높이)·상/하 1/2**·min/max 방향 **비활성**(연한 셰브론+클릭 무시)·AA 셰브론 · NxDropList 삭제(NxComboBox 통일 — bulkrename 3곳·갤러리 이관) · NxIconButton 기본 지름 = 글꼴 높이(체크박스 동일 15px). 실기 검증·186 green | [2026-07-17](journal/2026-07-17.md) |
 | `feat/ctl-gdiplus-aa` | 2026-07-17 | 2026-07-17 (`d8489fe`) | 2026-07-17 | 1 | **ctl AA 렌더링**(사용자 QA "raster 느낌"·지시 "GDI+는 DrawCtx 백엔드로만") — 진단: GDI 무AA+**1비트 리전 클립 = 곡선 계단 진범**. DrawCtx AA 프리미티브 4종 신설 + **GdipCtx = 유일 GDI+ 접점**(인박스·크레이트 0·D2D 교체 대비) + 규약 개정(ctl→DrawCtx 트레이트 참조 허용) + 4종 적용·리전 폐기·`Style.behind` 블렌드·텍스트 GDI/DW 유지. 실기 계단 제거·회귀 없음·186 green | [2026-07-17](journal/2026-07-17.md) |
