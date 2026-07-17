@@ -10,8 +10,9 @@
 //! NxGroupCard([`groupcard`] — 타이틀+본문 카드) ·
 //! NxComboBox([`combobox`] — macOS 팝업 버튼 스타일 ✓ 선택) ·
 //! NxCheckBox([`checkbox`] — 라운드 박스 토글) · NxTextBox([`textbox`] —
-//! 라운드 입력·포커스 accent 링) · NxIconButton([`iconbutton`] — **shape 투명**
-//! 원형 버튼: 리전 클립이라 어떤 부모 배경 위에서도 도형만 보임) ·
+//! 라운드 입력·포커스 accent 링) · NxIconButton([`iconbutton`] — shape 투명
+//! 원형 버튼) · NxButton([`button`] — 푸시 버튼: 기본/Default[accent]/
+//! Disabled 3상태) ·
 //! 공용 [`style`](팔레트·**공통 자동 높이** auto_height — 모든 컨트롤
 //! `h<=0` 동일 기본 높이 = 반듯한 기본 배치).
 //! 후속 후보: 런처 편집기 목록(X-13)·모달 공통 골격(X-16 백로그 ①).
@@ -28,6 +29,7 @@
 //! 텍스트는 GDI/DirectWrite 유지. 판매 단위 = ctl + DrawCtx 트레이트 + 백엔드
 //! (기존 "nexa-gui 미참조" 문구는 **트레이트 참조 허용**으로 개정 — 사용자 승인).
 
+pub mod button;
 pub mod checkbox;
 pub mod combobox;
 pub mod fontbox;

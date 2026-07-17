@@ -7,13 +7,16 @@
 > (스플리터 음수 rect 정규화·0-rect 도크 히트) ④ **X-22 QA**: droplist **owner
 > 승격 크래시**(팝업 USERDATA로 해소·fontbox 타이머 누수 동일 수리) + 메뉴 명령
 > **설정 즉시 영속**(persist_settings — 비정상 종료 유실 방지).
-> ⑤ **ctl Nx 컨트롤 5종 + 규약 2건**(X-23 토대 — 일괄 이름 변경 카드 재편,
-> macOS 시안): NxGroupCard(타이틀+본문 카드·타이틀 자식 배치)·NxComboBox
-> (✓ 팝업 버튼)·NxCheckBox(라운드 박스 토글 — 글꼴 정사각)·NxTextBox(포커스
-> accent 링·텍스트 API 위임)·NxIconButton(**shape 투명** 원형 리전·Icon enum
-> — PNG 알파는 확장 변형 후속). 규약 = **Nx 명명**(클래스 `Nexa.Nx*`) +
-> **공통 자동 높이**(`h<=0` 전 컨트롤 동일 — 수정 없이 반듯한 기본 배치).
-> 검증 갤러리 ctldemo(임시 🃏 버튼).
+> ⑤ **Nx 컨트롤 세트 완성**(X-23 토대 — macOS 시안, 사용자 QA 연속 반영):
+> NxGroupCard(타이틀 자식 배치·통지 투과)·NxComboBox(✓ 팝업)·NxCheckBox·
+> NxTextBox(포커스 accent 링)·NxIconButton(shape 투명·크기 = 체크박스)·
+> **NxButton**(기본/Default[accent]/Disabled)·**NxSegmented**(SegOpts —
+> 라운드/스퀘어·간격 기본 0·선택 accent 필)·**NxSpin**(독립 라운드 글상자·
+> 숫자 우측 정렬·분리 버튼 블록·min/max 비활성). NxDropList 은퇴(콤보 통일).
+> ⑥ **렌더 규약**: **AA = DrawCtx 백엔드만**(GdipCtx = 유일 GDI+ 접점 —
+> 인박스·크레이트 0·D2D 교체 대비)·1비트 리전 클립 폐기 → `Style.behind`
+> 블렌드·텍스트 = GDI/DW 유지·높이 규약(공통 자동 + 버튼/세그 컴팩트).
+> 검증 갤러리 ctldemo(임시 🃏 — 카드 3종·**수평 배치 샘플 행**).
 > 테스트 186 green·clippy 0·exe 1.20MB. 다음: X-23 카드 재편(사용자 주도
 > 탐색) · X-13 2/2 · X-16 백로그.
 >
