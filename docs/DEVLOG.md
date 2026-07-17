@@ -8,6 +8,7 @@
 
 ## 2026-07-18
 
+- **하단 행 재편(`feat/bulk-bottom-bar` — 사용자 요청 5건)**: Apply → **"이름 변경(Rename)" NxButton Default**(활성 = NXBTN_SETENABLE — idle 회색·변경 시 파랑) · 하단 우측 [취소][이름 변경] 실측 정렬 · 프리셋 [… ⌄]+건수 = 구 Apply 자리(하단 좌측) · 미리보기 그리드 = 우측 컬럼 전고 확장 · **GridOpts.row_h**(파일 목록 20px @96dpi 동일 산식 — 미리보기·관리 목록 적용). 실기 왕복(24건 실변경·원복). 186 green. 상세 [journal/2026-07-18.md](journal/2026-07-18.md).
 - **NxGrid(ctl 14호) + 프리셋 v2 + macOS 팝업 시안(`feat/nx-grid` — 사용자 요청 7건·시안 5장)**: ① **NxGrid** = 컬럼 리사이즈·체크 마크 열(미리보기 Apply — 행별 제외)·**오버레이 스크롤바 세로/가로**(macOS — 스크롤 시 얇은 썸 6px→900ms 페이드·썸 드래그 = 일반 바 10px+트랙, 픽셀 실측 검증)·**행 선택 파일 목록 규약**(Shift 연속·Ctrl 비연속·Ctrl+방향키+Space·Ctrl+A·포커스 프레임)·**GridOpts 확장**(no_header·zebra·outline·Mark::Check/Minus — "셀 데이터화" 계약) ② **user32 AV 진범** = 빈 문자열 셀의 빈 Vec을 DrawTextW에 전달(런타임 이분 — 원장 채록) ③ **프리셋 v2**: […⌄] 메뉴 = [프리셋들/─/Save/Edit] + 변경 건수 라벨 동일 행 · Save = **무캐션 DWM 라운드 팝업**(기본 이름 전체 선택·[취소][OK] 우하단) · Edit = **지브라 무헤더 목록 + 행별 빨간 ⊖**(스테이징 — OK 확정/취소 폐기) ④ NxMenuButton 구분선·NxTextBox EM_SETSEL 위임·Style.danger. 실기 왕복 QA(저장→보존→삭제·선택 3종·오버레이 수치). 186 green. 상세 [journal/2026-07-18.md](journal/2026-07-18.md).
 - **프리셋 = `…` 메뉴버튼 + 라벨 우측 정렬(`feat/preset-menubutton` — 사용자 확정)**: 프리셋 행 = [이름 NxTextBox][`…` 메뉴] 한 줄(항목 0 = 저장·1.. = 프리셋 클릭 불러오기 — 카드 스택 복원·저장 후 메뉴 재생성) · 카드 라벨 = 우측 정렬. 실기 저장/재구성/복원 왕복 검증. 186 green. 상세 [journal/2026-07-17.md](journal/2026-07-17.md).
 

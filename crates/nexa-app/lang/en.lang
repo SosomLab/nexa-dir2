@@ -303,6 +303,7 @@ bulk.preset.saveSeq = Save Renaming Sequence…
 bulk.preset.editSeq = Edit Renaming Sequences…
 bulk.preset.savePrompt = Preset name
 bulk.preset.savedSeq = Saved Renaming Sequence
+bulk.rename = Rename
 bulk.preset.delete = Delete
 bulk.preset.close = Close
 bulk.preset.ok = OK

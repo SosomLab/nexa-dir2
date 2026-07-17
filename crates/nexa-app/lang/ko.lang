@@ -300,6 +300,7 @@ bulk.preset.saveSeq = 이름 변경 순서 저장…
 bulk.preset.editSeq = 이름 변경 순서 편집…
 bulk.preset.savePrompt = 프리셋 이름
 bulk.preset.savedSeq = 저장된 이름 변경 순서
+bulk.rename = 이름 변경
 bulk.preset.delete = 삭제
 bulk.preset.close = 닫기
 bulk.preset.ok = 확인
