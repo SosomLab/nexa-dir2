@@ -37,8 +37,8 @@ pub const NXCB_GETSEL: u32 = 0x0400 + 90;
 /// 선택 설정(wparam = 인덱스 — 통지 없음·범위 밖 무시).
 pub const NXCB_SETSEL: u32 = 0x0400 + 91;
 
-/// 텍스트 상/하 최소 여백(px) — 자동 높이 = 글꼴 높이 + 2×PAD_Y(사용자 확정).
-pub const PAD_Y: i32 = 4;
+/// 텍스트 상/하 최소 여백 — 공통 규약([`super::style::PAD_Y`]) 재노출(하위호환).
+pub use super::style::PAD_Y;
 
 const TIMER_OUTSIDE: usize = 1;
 /// 팝업 최대 가시 행.
@@ -94,9 +94,12 @@ pub unsafe fn create(
             RegisterClassW(&wc);
         }
     });
-    // 높이 규칙: 자동 = 글꼴 높이 + 상/하 최소 여백(각 PAD_Y)
-    let auto_h = font_height(parent, font) + PAD_Y * 2;
-    let h = if h <= 0 { auto_h } else { h };
+    // 높이 규칙: 자동 = 공통 auto_height(전 Nx 컨트롤 동일 — 반듯한 기본 배치)
+    let h = if h <= 0 {
+        super::style::auto_height(parent, font)
+    } else {
+        h
+    };
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         CLASS,

@@ -75,6 +75,12 @@ pub unsafe fn create(
         };
         RegisterClassW(&wc);
     });
+    // h<=0 = 공통 자동 높이(전 Nx 컨트롤 동일 — 반듯한 기본 배치, 07-17)
+    let h = if h <= 0 {
+        super::style::auto_height(parent, font)
+    } else {
+        h
+    };
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         CLASS,
