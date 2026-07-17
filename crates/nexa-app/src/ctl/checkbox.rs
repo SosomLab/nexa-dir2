@@ -172,7 +172,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 // 박스 = 글꼴 높이 기준 정사각을 세로 중앙에(컨트롤 높이와 분리 —
                 // 클릭 영역은 그대로, 시각만 시안 비율. 미체크 = sel_bg·체크 = accent)
                 let ch = rc.bottom - rc.top;
-                let side = (font_height(hwnd, st.font) - 2).clamp(10, ch);
+                // 글꼴 높이 정사각(사용자 확정 07-17: −2에서 상/하 1px씩 증가)
+                let side = font_height(hwnd, st.font).clamp(10, ch);
                 let btop = rc.top + (ch - side) / 2;
                 let radius = (side / 3).max(4);
                 let box_color = if st.checked {
