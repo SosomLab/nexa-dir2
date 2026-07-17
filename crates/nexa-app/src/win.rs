@@ -141,6 +141,9 @@ const CMD_LANG_BASE: u32 = 41;
 const CMD_PREFS: u32 = 60;
 /// 일괄 이름변경(M5-1 — 원본 docs/25, Ctrl+Shift+R).
 const CMD_BULK_RENAME: u32 = 61;
+/// ctl 갤러리(GroupCard 검증 — **임시** 도구 모음 버튼, 사용자 요청 07-17.
+/// 카드 재편(X-23) 완료 시 버튼 제거).
+const CMD_CTLDEMO: u32 = 62;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 
@@ -324,6 +327,9 @@ fn build_toolbar(show_hidden: bool, show_dotfiles: bool, view_mode: &str) -> Vec
         ToolButton::sep(),
         ToolButton::new(CMD_TOGGLE_HIDDEN, "👁").toggled(show_hidden),
         ToolButton::new(CMD_TOGGLE_DOTFILES, "…").toggled(show_dotfiles),
+        ToolButton::sep(),
+        // 임시(07-17): ctl 갤러리 — GroupCard 검증용. X-23 재편 완료 시 제거.
+        ToolButton::new(CMD_CTLDEMO, "🃏"),
     ]
 }
 
@@ -2747,6 +2753,10 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         CMD_BULK_RENAME => {
             // 모달 창 — 설정 창과 동일 재진입 규약(M5-1)
             let _ = PostMessageW(Some(hwnd), WM_APP_BULK, WPARAM(0), LPARAM(0));
+        }
+        CMD_CTLDEMO => {
+            // 임시(07-17): ctl 갤러리(GroupCard 검증) — X-23 재편 완료 시 제거
+            let _ = PostMessageW(Some(hwnd), WM_APP_CTLDEMO, WPARAM(0), LPARAM(0));
         }
         CMD_UNDO | CMD_REDO => {
             do_undo_redo(hwnd, st, id == CMD_REDO);
