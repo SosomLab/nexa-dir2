@@ -83,7 +83,7 @@ pub unsafe fn create(
     let h = opts.title_h + opts.body_h;
     let t16 = windows::core::HSTRING::from(title);
     let hwnd = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
+        WINDOW_EX_STYLE(0x0001_0000), // WS_EX_CONTROLPARENT — Tab 내비가 카드 안으로(07-18)
         CLASS,
         PCWSTR(t16.as_ptr()),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),

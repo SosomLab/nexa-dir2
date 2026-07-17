@@ -287,6 +287,8 @@ unsafe extern "system" fn ctl_proc(
             }
             LRESULT(0)
         }
+        // IsDialogMessage(Tab 내비 — 07-18) 아래에서도 ↑↓ 선택 유지
+        0x0087 /* WM_GETDLGCODE */ => LRESULT(0x0001 /* DLGC_WANTARROWS */),
         WM_KEYDOWN => {
             if let Some(st) = state(hwnd).as_mut() {
                 let vk = wparam.0 as u32;

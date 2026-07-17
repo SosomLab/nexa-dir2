@@ -82,11 +82,12 @@ pub unsafe fn create(
     } else {
         h
     };
+    // 래퍼 = CONTROLPARENT(Tab이 내부 EDIT로 착지 — 07-18)·탭스톱은 EDIT 단독
     let hwnd = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
+        WINDOW_EX_STYLE(0x0001_0000), // WS_EX_CONTROLPARENT
         CLASS,
         w!(""),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(WS_TABSTOP.0),
+        WS_CHILD | WS_VISIBLE,
         x,
         y,
         w,

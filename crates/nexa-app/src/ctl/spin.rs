@@ -91,11 +91,12 @@ pub unsafe fn create(
     } else {
         h
     };
+    // 래퍼 = CONTROLPARENT(Tab 착지 = 내부 EDIT — 07-18)
     let hwnd = CreateWindowExW(
-        WINDOW_EX_STYLE(0),
+        WINDOW_EX_STYLE(0x0001_0000), // WS_EX_CONTROLPARENT
         CLASS,
         w!(""),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(WS_TABSTOP.0),
+        WS_CHILD | WS_VISIBLE,
         x,
         y,
         w,
@@ -240,7 +241,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 WS_CHILD
                     | WS_VISIBLE
                     | WINDOW_STYLE(
-                        ES_AUTOHSCROLL as u32 | ES_NUMBER as u32 | ES_RIGHT as u32, // 숫자 = 우측 정렬(사용자 확정)
+                        // 숫자 = 우측 정렬(사용자 확정)·Tab 착지 = 내부 EDIT(07-18)
+                        WS_TABSTOP.0 | ES_AUTOHSCROLL as u32 | ES_NUMBER as u32 | ES_RIGHT as u32,
                     ),
                 4,
                 2,
