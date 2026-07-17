@@ -2618,6 +2618,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.toolbar.set_checked(CMD_TOGGLE_HIDDEN, on, &mut inv); // 토글 그룹 동기
             let ctx = st.nav_ctx();
             st.active_panel().reopen_filtered(ctx, &mut inv);
+            persist_settings(st);
         }
         CMD_TOGGLE_DOTFILES => {
             st.show_dotfiles = !st.show_dotfiles;
@@ -2626,6 +2627,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.toolbar.set_checked(CMD_TOGGLE_DOTFILES, on, &mut inv);
             let ctx = st.nav_ctx();
             st.active_panel().reopen_filtered(ctx, &mut inv);
+            persist_settings(st);
         }
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
@@ -2708,6 +2710,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.menubar.set_checked(CMD_TOGGLE_DOCK, on, &mut inv);
             layout(hwnd, st, &mut inv); // 도크는 전폭 밴드 — 호스트 재배치(X-6)
             update_dock_info(st, &mut inv);
+            persist_settings(st);
         }
         CMD_TOGGLE_LAUNCHER => {
             // 퀵 런처 바 토글(M5-1 — 원본 ShowLauncher, settings 영속)
@@ -2716,6 +2719,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 .set_checked(CMD_TOGGLE_LAUNCHER, st.launcher_visible, &mut inv);
             layout(hwnd, st, &mut inv);
             let _ = InvalidateRect(Some(hwnd), None, false);
+            persist_settings(st);
         }
         id if (CMD_LAUNCHER_BASE..CMD_LAUNCHER_BASE + st.launcher_items.len() as u32)
             .contains(&id) =>
@@ -2757,14 +2761,17 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 _ => ThemeMode::System,
             };
             apply_theme(hwnd, st, &mut inv);
+            persist_settings(st);
         }
         CMD_LANG_SYSTEM => {
             st.lang_setting = "system".into();
             apply_lang(hwnd, st, &mut inv);
+            persist_settings(st);
         }
         i if i >= CMD_LANG_BASE && ((i - CMD_LANG_BASE) as usize) < st.langs.len() => {
             st.lang_setting = st.langs[(i - CMD_LANG_BASE) as usize].0.clone();
             apply_lang(hwnd, st, &mut inv);
+            persist_settings(st);
         }
         _ => {}
     }
@@ -3323,6 +3330,13 @@ fn current_session(st: &mut State) -> Session {
 }
 
 /// 현재 상태 → 설정 스냅샷(즉시 영속·종료 저장 공용 — 단일 원천).
+/// 설정 즉시 영속(QA 07-17): 메뉴 라디오·토글도 변경 즉시 저장 — 종료 저장에만
+/// 의존하면 비정상 종료 시 유실(언어 변경 유실 사고).
+fn persist_settings(st: &State) {
+    let settings = current_settings(st);
+    let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+}
+
 fn current_settings(st: &State) -> Settings {
     Settings {
         theme: st.theme_mode.as_str().into(),
