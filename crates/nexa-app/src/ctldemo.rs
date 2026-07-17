@@ -4,7 +4,7 @@
 //! 이 창과 무관하게 유지 — 검증 완료 후 적용처(예: bulkrename 카드 재편)로 이식.
 //!
 //! 현재 수록: [`ctl::groupcard`] 2종(라운드/각진 — 타이틀·본문 높이 상이) +
-//! 카드 본문에 ctl 자식(droplist/segmented/spin)과 user32 자식(STATIC/EDIT)을
+//! 카드 본문에 ctl 자식(combobox/segmented/spin)과 user32 자식(STATIC/EDIT)을
 //! 섞어 배치해 **통지 투과**(자식 → 카드 → 호스트 WM_COMMAND)를 상태줄로 증명.
 
 use windows::core::{w, PCWSTR};
@@ -158,7 +158,8 @@ unsafe fn build(win: HWND, font: HFONT) {
         st_band,
     );
     // 타이틀 우측 +/−(shape 투명 검증 — 회색 타이틀 밴드 위 원형만 보여야 함)
-    let ib = 20;
+    // 지름 = 글꼴 높이(체크박스 박스와 동일 — d=0 자동과 같은 값, 배치 계산용)
+    let ib = crate::ctl::style::font_height(win, font).max(10);
     let iy = t.top + (t.bottom - t.top - ib) / 2;
     ctl::iconbutton::create(
         a,
@@ -199,7 +200,7 @@ unsafe fn build(win: HWND, font: HFONT) {
         st,
     );
     mk_static(a, font, "Mode:", bx, by + 40, 80);
-    ctl::droplist::create(
+    ctl::combobox::create(
         a,
         bx + 88,
         by + 36,

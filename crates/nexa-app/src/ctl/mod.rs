@@ -7,7 +7,7 @@
 //!
 //! 수록: NxSearchBox([`searchbox`] — 내장 ✕ 검색 입력) · NxFontBox([`fontbox`] —
 //! 글꼴 피커) · NxSegmented([`segmented`]) · NxSpin([`spin`]) ·
-//! NxDropList([`droplist`]) · NxGroupCard([`groupcard`] — 타이틀+본문 카드) ·
+//! NxGroupCard([`groupcard`] — 타이틀+본문 카드) ·
 //! NxComboBox([`combobox`] — macOS 팝업 버튼 스타일 ✓ 선택) ·
 //! NxCheckBox([`checkbox`] — 라운드 박스 토글) · NxTextBox([`textbox`] —
 //! 라운드 입력·포커스 accent 링) · NxIconButton([`iconbutton`] — **shape 투명**
@@ -30,7 +30,6 @@
 
 pub mod checkbox;
 pub mod combobox;
-pub mod droplist;
 pub mod fontbox;
 pub mod gdipctx;
 pub mod groupcard;
