@@ -157,31 +157,10 @@ pub mod shell {
     pub const BATCH: usize = 4;
     pub const TICK_MS: u32 = 80;
 
-    /// 임베드 툴바 아이콘(07-18 — 사용자: "도구 모음을 16x16 이미지 형태로").
-    /// 키 = `emb:<이름>:<크기>` — dw.rs [`draw_icon`](crate::dw)이 그리기 크기에 맞는
-    /// 버킷(16/20/32 = 100/125/200% DPI)을 골라 조회. 원본 64px 벡터에서 다운스케일
-    /// 생성([assets/toolbar](../assets/toolbar/README.md)) 후 exe에 임베드(포터블 규약).
-    macro_rules! emb {
-        ($($name:literal),+ $(,)?) => {
-            &[$(
-                (concat!("emb:", $name, ":16"),
-                 include_bytes!(concat!("../assets/toolbar/", $name, "-16.png")) as &[u8]),
-                (concat!("emb:", $name, ":20"),
-                 include_bytes!(concat!("../assets/toolbar/", $name, "-20.png")) as &[u8]),
-                (concat!("emb:", $name, ":32"),
-                 include_bytes!(concat!("../assets/toolbar/", $name, "-32.png")) as &[u8]),
-            )+]
-        };
-    }
-    const EMBEDDED: &[(&str, &[u8])] = emb!(
-        "settings",
-    );
-
-    /// SVG 원본 임베드(07-18 사용자: "svg 방식도 적용") — PNG보다 **우선**
-    /// 조회하며 요청 크기(16/20/32 등 임의)에 즉석 래스터([`crate::svg`]
-    /// 서브셋 파서 → gdipctx `svg_to_hicon`). SVG 등록 아이콘은 PNG 불필요
-    /// (view-flat PNG 제거 — 사용자 확정 07-18); 실패 시 PNG 버킷이 있으면
-    /// 폴백, 없으면 글리프 폴백.
+    /// 임베드 툴바 아이콘 = **SVG 단일 파이프라인**(07-19 settings 전환으로
+    /// PNG 버킷 기구 폐지 — 전 아이콘 SVG). 키 = `emb:<이름>`(dw.rs가 그리기
+    /// 크기 버킷을 붙여 조회) → [`crate::svg`] 서브셋 파서 → gdipctx
+    /// `svg_to_hicon` 즉석 래스터. 실패 = 글리프 폴백.
     const EMBEDDED_SVG: &[(&str, &str)] = &[
         // 켜짐(듀얼)은 접미 규칙 `-on` = 전체 accent 재렌더(사용자 재확정
         // 07-19: "toggle on은 전체 선이 모두 파란색" — 전용 시안 폐지)
@@ -191,6 +170,7 @@ pub mod shell {
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
         ("colsync", include_str!("../assets/toolbar/colsync.svg")),
         ("refresh", include_str!("../assets/toolbar/refresh.svg")),
+        ("settings", include_str!("../assets/toolbar/settings.svg")),
         ("hidden", include_str!("../assets/toolbar/hidden.svg")),
         ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
     ];
@@ -224,9 +204,8 @@ pub mod shell {
         }
 
         /// 캐시 조회 — 미스면 큐 등록 후 `None`(틱이 로드).
-        /// `emb:` 키는 임베드 자산에서 **동기** 생성(1회 — 이후 캐시 히트,
-        /// LRU 축출돼도 다음 조회에서 재생성): **SVG 우선**(요청 크기 즉석
-        /// 래스터), 실패 시 PNG 버킷.
+        /// `emb:` 키는 임베드 SVG에서 **동기** 생성(1회 — 이후 캐시 히트,
+        /// LRU 축출돼도 다음 조회에서 재생성).
         pub fn get_or_request(&mut self, key: &str, hint: &str) -> Option<HICON> {
             if let Some(&h) = self.store.get(key) {
                 return Some(h);
@@ -244,8 +223,8 @@ pub mod shell {
             None
         }
 
-        /// 임베드 키(`emb:<이름>:<크기>`) → HICON 생성. SVG(원본 그대로 요청
-        /// 크기 래스터) → PNG(버킷 파일) 순. 미지 키/실패 = `None`(글리프 폴백).
+        /// 임베드 키(`emb:<이름>:<크기>`) → SVG 래스터 HICON.
+        /// 미지 키/파싱 실패 = `None`(글리프 폴백).
         fn make_embedded(key: &str) -> Option<HICON> {
             if let Some((name, sz)) = key["emb:".len()..].rsplit_once(':') {
                 if let Some(px) = sz.parse::<i32>().ok().filter(|p| *p > 0) {
@@ -263,17 +242,13 @@ pub mod shell {
                         } else {
                             (name, SVG_INK)
                         };
-                    if let Some((_, src)) = EMBEDDED_SVG.iter().find(|(n, _)| *n == base) {
-                        if let Some(icon) = crate::svg::parse(src).and_then(|doc| unsafe {
-                            crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink)
-                        }) {
-                            return Some(icon);
-                        }
-                    }
+                    let (_, src) = EMBEDDED_SVG.iter().find(|(n, _)| *n == base)?;
+                    return crate::svg::parse(src).and_then(|doc| unsafe {
+                        crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink)
+                    });
                 }
             }
-            let bytes = EMBEDDED.iter().find(|(k, _)| *k == key).map(|(_, b)| *b)?;
-            unsafe { crate::ctl::gdipctx::png_to_hicon(bytes) }
+            None
         }
 
         pub fn has_pending(&self) -> bool {

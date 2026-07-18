@@ -1,45 +1,33 @@
-# toolbar — 도구 모음 임베드 아이콘
+# toolbar — 도구 모음 임베드 아이콘(SVG)
 
-도구 모음 버튼용 16×16 이미지 세트(사용자 요청 07-18: "도구 모음을 16x16 이미지
-형태로 변경 — 각 이미지는 큰 이미지를 기반으로 생성").
-**64px 캔버스에 벡터로 드로잉 후 16/20/32px 다운스케일**(HighQualityBicubic) —
-원 스크립트는 세션 스크래치(`gen_toolbar_icons2.ps1`, GDI+ PowerShell).
+도구 모음 버튼 아이콘 원본. **전부 SVG 단일 파이프라인**(07-19 완결 —
+PNG 버킷 기구 폐지): `include_str!` 임베드 → [svg.rs](../../src/svg.rs)
+서브셋 파서 → [gdipctx](../../src/ctl/gdipctx.rs) `svg_to_hicon`(GDI+
+오프스크린 ARGB → HICON, **요청 크기 즉석 래스터** — DPI 무관 선명).
 
-## 색 규약
+## 규격(사용자 확정 07-19)
 
-- **활성 잉크** = `#6E747C` 단일색 — 라이트/다크 테마 겸용 중간톤
-  (v1 `#9AA0A8`은 라이트 배경에서 흐려 교체).
-- **비활성** = 같은 그림 **알파 38%**(`96/255`) — 색이 아닌 투명도라
-  어떤 배경에서도 '흐림'으로 읽힘(라이트 테마에서 진해 보이던 v1 결함 수정).
+- **32 viewBox · 콘텐츠 1..31(꽉 참) · stroke 2 · currentColor** —
+  단, 16px 정합이 중요한 스트로크는 정수 픽셀 정렬(panel-toggle 2..30).
+- 잉크: 활성 `SVG_INK #2B3036`(어두운 회색) · 비활성 = 알파 38% ·
+  켜짐 강조 = accent `#3D8BFF`(`-on` 접미 — 전체 재렌더).
+- 지원 서브셋(초과 시 전체 무효 → 글리프 폴백): rect(rx)/circle/line/
+  polyline/path(M·L·H·V·C·**A[원형 한정]**·Z)/text — 요소별 `stroke`/`fill`
+  색·채움 오버라이드.
 
-## 파일(각 16/20/32px — 100%/125%/200% DPI 버킷)
+## 파일(명령 매핑)
 
-| 이름 | 기능(명령) | 비활성 변형 |
-| --- | --- | --- |
-| `panel-toggle` | 패널 듀얼↔싱글 토글(CMD_PANEL_TOGGLE) — **SVG 단독**(사용자 제공 07-19: 사각+세로 분할선) | 켜짐(듀얼) = `-on` 접미 규칙(전체 accent #3D8BFF 재렌더) |
-| `colsync` | 컬럼 넓이 동기화(CMD_COLW_SYNC) — **SVG 단독**(`colsync.svg`, 사용자 제공 07-19 — ↔ 화살표+SYNC 텍스트) | SVG 알파 38% 렌더(파일 불필요) |
-| `view-tree` | 트리 보기(CMD_VIEW_TREE) — **SVG 단독**(`view-tree.svg`, 사용자 제공 07-19 — 부모+└자식 2) | — |
-| `view-flat` | 플랫 보기(CMD_VIEW_FLAT) — **SVG 단독**(`view-flat.svg`, 사용자 제공 07-18 — PNG 제거, 전 크기 즉석 래스터) | — |
-| `view-tiles` | 타일 보기(CMD_VIEW_TILES) — **SVG 단독**(`view-tiles.svg`, 사용자 제공 07-19 — 2×2 라운드 사각) | — |
-| `refresh` | 새로고침(CMD_REFRESH) — **SVG 단독**(`refresh.svg`, 사용자 제공 07-19 — A 원호+화살촉) | — |
-| `settings` | 설정(CMD_PREFS) — 톱니(도넛+치형 8) | — |
-| `hidden` | 숨김 파일 토글(CMD_TOGGLE_HIDDEN) — **SVG 단독**(`hidden.svg`, 사용자 제공 07-19 — 파일+HIDDEN 텍스트) | — |
-| `dotfiles` | 닷파일 토글(CMD_TOGGLE_DOTFILES) — **SVG 단독**(`dotfiles.svg`, 사용자 제공 07-19 — 파일+DOT 텍스트) | — |
+| 파일 | 기능(명령) |
+| --- | --- |
+| `panel-toggle.svg` | 패널 듀얼↔싱글 토글(CMD_PANEL_TOGGLE) — 켜짐 = 전체 accent |
+| `colsync.svg` | 컬럼 넓이 동기화(CMD_COLW_SYNC) — 싱글 모드 비활성(알파 렌더) |
+| `view-tree.svg` | 트리 보기(CMD_VIEW_TREE) |
+| `view-flat.svg` | 플랫 보기(CMD_VIEW_FLAT) |
+| `view-tiles.svg` | 타일 보기(CMD_VIEW_TILES) |
+| `refresh.svg` | 새로고침(CMD_REFRESH) — A 원호 |
+| `settings.svg` | 설정(CMD_PREFS) — 톱니(원호 다수) |
+| `hidden.svg` | 숨김 파일 토글(CMD_TOGGLE_HIDDEN) — 파일+H |
+| `dotfiles.svg` | 닷파일 토글(CMD_TOGGLE_DOTFILES) — 파일+점 |
 
-## SVG 파이프라인(07-18 — "svg 방식도 적용")
-
-`<이름>.svg`를 두고 [icons.rs](../../src/icons.rs) `EMBEDDED_SVG`에 등록하면
-**PNG보다 우선** 적용된다 — [svg.rs](../../src/svg.rs) 서브셋 파서(외부
-crate 0: viewBox·stroke-width·rect/circle/line/polyline/path M·L·H·V·C·Z,
-스트로크 전용) → gdipctx `svg_to_hicon`(GDI+ 오프스크린 ARGB → HICON,
-요청 크기 즉석 래스터 — 버킷 다운스케일 불필요). 색은 `SVG_INK`(#6E747C)
-고정(currentColor 대응). 파싱/래스터 실패 시 PNG 버킷 폴백.
-
-## 렌더 경로
-
-`include_bytes!` 임베드([icons.rs](../../src/icons.rs) `EMBEDDED`, 키
-`emb:<이름>:<크기>`) → [gdipctx](../../src/ctl/gdipctx.rs) `png_to_hicon`
-(GDI+ 디코드 → `GdipCreateHICONFromBitmap`) → HICON 캐시(LRU — 축출 시 재생성).
-그리기 크기→버킷(16/20/32) 매핑과 비활성 `#dis`→`-disabled` 해석은
-[dw.rs](../../src/dw.rs) `draw_icon`. 포터블 단일 exe 규약(DR-3)에 따라
-파일은 참조용 보관본이며 실행 시 디스크 접근 없음.
+등록 = [icons.rs](../../src/icons.rs) `EMBEDDED_SVG`(이름·경로 한 줄).
+전 시안 = 사용자 제공(07-18~19).

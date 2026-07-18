@@ -303,22 +303,6 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
     icon
 }
 
-/// PNG 바이트 → `HICON`(알파 보존 — 07-18 툴바 임베드 아이콘).
-/// 반환 핸들은 호출자가 `DestroyIcon`으로 해제(아이콘 캐시 규약과 동일).
-///
-/// # Safety
-/// `bytes`는 유효한 이미지 인코딩이어야 한다(실패 시 `None` — 오류 격리).
-pub(crate) unsafe fn png_to_hicon(bytes: &[u8]) -> Option<HICON> {
-    let img = decode_png(bytes);
-    if img.is_null() {
-        return None;
-    }
-    let mut icon = HICON::default();
-    let st = GdipCreateHICONFromBitmap(img as *mut GpBitmap, &mut icon);
-    dispose_image(img);
-    (st.0 == 0 && !icon.is_invalid()).then_some(icon)
-}
-
 /// [`decode_png`] 이미지 해제(호스트 컨트롤 파괴 시).
 ///
 /// # Safety
