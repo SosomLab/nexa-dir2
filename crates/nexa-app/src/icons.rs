@@ -180,9 +180,6 @@ pub mod shell {
     const SVG_INK: u32 = 0xFF00_0000;
     /// 비활성 잉크 = 검정 알파 38%(`<이름>-disabled` 키 — 원본 SVG 재렌더).
     const SVG_INK_DIM: u32 = 0x6100_0000;
-    /// 켜짐 잉크 = **흰색**(`<이름>-on` 키 — 켜짐 배경이 파랑 필이라
-    /// 선은 흰색, macOS 시안. 배경색은 chrome.rs CHECKED_BG).
-    const SVG_INK_ACCENT: u32 = 0xFFFF_FFFF;
 
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);
@@ -228,20 +225,14 @@ pub mod shell {
         fn make_embedded(key: &str) -> Option<HICON> {
             if let Some((name, sz)) = key["emb:".len()..].rsplit_once(':') {
                 if let Some(px) = sz.parse::<i32>().ok().filter(|p| *p > 0) {
-                    // 1) 정확한 이름의 상태 전용 SVG(예: panel-toggle-on —
-                    //    요소별 색 오버라이드 시안)가 있으면 기본 잉크로 렌더
-                    // 2) 없으면 접미 규칙: `-disabled` = 원본을 흐림(알파 38%)·
-                    //    `-on` = 원본을 accent 잉크로 재렌더
-                    let (base, ink) =
-                        if EMBEDDED_SVG.iter().any(|(n, _)| *n == name) {
-                            (name, SVG_INK)
-                        } else if let Some(b) = name.strip_suffix("-disabled") {
+                    // 접미 규칙: `-disabled` = 원본을 흐림(알파 38%)으로 재렌더
+                    // (켜짐 상태 변형은 07-19 재확정으로 폐지 — 검정 유지)
+                    let (base, ink) = match name.strip_suffix("-disabled") {
+                        Some(b) if !EMBEDDED_SVG.iter().any(|(n, _)| *n == name) => {
                             (b, SVG_INK_DIM)
-                        } else if let Some(b) = name.strip_suffix("-on") {
-                            (b, SVG_INK_ACCENT)
-                        } else {
-                            (name, SVG_INK)
-                        };
+                        }
+                        _ => (name, SVG_INK),
+                    };
                     let (_, src) = EMBEDDED_SVG.iter().find(|(n, _)| *n == base)?;
                     return crate::svg::parse(src).and_then(|doc| unsafe {
                         crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink)

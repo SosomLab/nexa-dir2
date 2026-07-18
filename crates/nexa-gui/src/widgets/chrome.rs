@@ -251,12 +251,16 @@ impl Widget for Toolbar {
                     .unwrap_or_else(|| ctx.text_width(&btn.glyph) + self.pad_x * 2)
             };
             let cell = Rect::new(x, b.y, w.min((b.right() - x).max(0)), b.h);
-            // 토글 켜짐 = **파랑 필 배경 + 흰 선 아이콘**(07-19 사용자
-            // macOS 시안 확정 — 기본은 배경 없음·검정 선). 배경은 테마
-            // 무관 고정(흰 아이콘 대비 보장).
-            const CHECKED_BG: crate::theme::Color = crate::theme::Color::from_hex(0x0A7AFF);
+            // 토글 켜짐 배경 = **accent 38% 블렌드**(07-19 재확정 — 파랑 필
+            // + 흰 선 시안은 원복, 아이콘은 검정 유지. 라이트 ≈ #ABCAF9·
+            // 다크 ≈ #2A4A7A)
+            let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * 0.38) as u8;
             let bg = if btn.checked {
-                CHECKED_BG
+                crate::theme::Color {
+                    r: mix(theme.chrome_bg.r, theme.accent.r),
+                    g: mix(theme.chrome_bg.g, theme.accent.g),
+                    b: mix(theme.chrome_bg.b, theme.accent.b),
+                }
             } else if self.hover == Some(i) && btn.enabled {
                 theme.header_bg
             } else {
@@ -274,15 +278,12 @@ impl Widget for Toolbar {
                     // 아이콘 16px 유지) 아이콘을 정사각 셀 중앙에.
                     ctx.fill_rect(cell, bg);
                     let isz = (b.h - 10).max(8);
-                    // 상태 변형 키: 비활성 = `#dis`(흐림) · 켜짐 = `#on`
-                    // (흰 선 — 파랑 필 배경 위, 07-19 macOS 시안) — dw.rs가
-                    // 임베드 변형으로 해석, 없으면 미로드 폴백 글리프
+                    // 상태 변형 키: 비활성 = `#dis`(흐림 — dw.rs가 임베드
+                    // 변형으로 해석). 켜짐도 아이콘은 기본 검정 유지
+                    // (07-19 재확정 — 배경 블렌드만으로 식별).
                     let var_key;
                     let key = if !btn.enabled {
                         var_key = format!("{key}#dis");
-                        var_key.as_str()
-                    } else if btn.checked {
-                        var_key = format!("{key}#on");
                         var_key.as_str()
                     } else {
                         key.as_str()
