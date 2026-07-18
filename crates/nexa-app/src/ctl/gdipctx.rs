@@ -79,6 +79,137 @@ pub(crate) unsafe fn image_size(img: *mut GpImage) -> (i32, i32) {
     (w as i32, h as i32)
 }
 
+/// [SVG 서브셋 문서](crate::svg::Doc) → `HICON`(07-18 사용자 요청 "svg 방식도
+/// 적용" — GDI+ 오프스크린 32bpp ARGB 비트맵에 스트로크 렌더 후 아이콘 변환).
+/// `px` = 정사각 픽셀 크기(viewBox → px 균등 스케일) · `argb` = 잉크 색.
+/// 반환 핸들은 호출자가 `DestroyIcon`으로 해제.
+///
+/// # Safety
+/// GDI+ 초기화 전제(내부에서 보장). 실패 시 `None`(오류 격리 — 아이콘 공백).
+pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<HICON> {
+    use crate::svg::{Op, Seg};
+    use windows::Win32::Graphics::GdiPlus::{
+        GdipAddPathBezier, GdipAddPathEllipse, GdipAddPathLine, GdipCreateBitmapFromScan0,
+        GdipGetImageGraphicsContext, GdipStartPathFigure,
+    };
+    if !ensure_startup() || px <= 0 {
+        return None;
+    }
+    const PXF_32ARGB: i32 = 0x0026_200A; // PixelFormat32bppARGB
+    let mut bmp: *mut GpBitmap = std::ptr::null_mut();
+    // scan0 = None → 0 초기화(투명 배경)
+    if GdipCreateBitmapFromScan0(px, px, 0, PXF_32ARGB, None, &mut bmp).0 != 0 || bmp.is_null() {
+        return None;
+    }
+    let mut g: *mut GpGraphics = std::ptr::null_mut();
+    let _ = GdipGetImageGraphicsContext(bmp as *mut GpImage, &mut g);
+    let mut icon = None;
+    if !g.is_null() {
+        let _ = GdipSetSmoothingMode(g, SmoothingModeAntiAlias);
+        let (vx, vy, vw, vh) = doc.viewbox;
+        let scale = (px as f32 / vw).min(px as f32 / vh);
+        let sx = |x: f32| (x - vx) * scale;
+        let sy = |y: f32| (y - vy) * scale;
+        let mut pen: *mut GpPen = std::ptr::null_mut();
+        let _ = GdipCreatePen1(
+            argb,
+            (doc.stroke_width * scale).max(1.0),
+            Unit(2 /* UnitPixel */),
+            &mut pen,
+        );
+        if !pen.is_null() {
+            let _ = GdipSetPenStartCap(pen, LineCapRound);
+            let _ = GdipSetPenEndCap(pen, LineCapRound);
+            let _ = GdipSetPenLineJoin(pen, LineJoinRound);
+            for op in &doc.ops {
+                let mut path: *mut GpPath = std::ptr::null_mut();
+                if GdipCreatePath(FillModeAlternate, &mut path).0 != 0 || path.is_null() {
+                    continue;
+                }
+                match op {
+                    Op::Rect { x, y, w, h, rx } => {
+                        let (l, t, w2, h2) = (sx(*x), sy(*y), w * scale, h * scale);
+                        let d = (rx * scale * 2.0).clamp(0.0, w2.min(h2));
+                        if d > 0.0 {
+                            let _ = GdipAddPathArc(path, l, t, d, d, 180.0, 90.0);
+                            let _ = GdipAddPathArc(path, l + w2 - d, t, d, d, 270.0, 90.0);
+                            let _ = GdipAddPathArc(path, l + w2 - d, t + h2 - d, d, d, 0.0, 90.0);
+                            let _ = GdipAddPathArc(path, l, t + h2 - d, d, d, 90.0, 90.0);
+                        } else {
+                            let _ = GdipAddPathLine(path, l, t, l + w2, t);
+                            let _ = GdipAddPathLine(path, l + w2, t, l + w2, t + h2);
+                            let _ = GdipAddPathLine(path, l + w2, t + h2, l, t + h2);
+                        }
+                        let _ = GdipClosePathFigure(path);
+                    }
+                    Op::Circle { cx, cy, r } => {
+                        let d = r * scale * 2.0;
+                        let _ =
+                            GdipAddPathEllipse(path, sx(*cx) - r * scale, sy(*cy) - r * scale, d, d);
+                    }
+                    Op::Line { x1, y1, x2, y2 } => {
+                        let _ = GdipAddPathLine(path, sx(*x1), sy(*y1), sx(*x2), sy(*y2));
+                    }
+                    Op::Polyline(pts) => {
+                        for w2 in pts.windows(2) {
+                            let _ = GdipAddPathLine(
+                                path,
+                                sx(w2[0].0),
+                                sy(w2[0].1),
+                                sx(w2[1].0),
+                                sy(w2[1].1),
+                            );
+                        }
+                    }
+                    Op::Path(segs) => {
+                        let (mut cx, mut cy) = (0.0f32, 0.0f32);
+                        for seg in segs {
+                            match *seg {
+                                Seg::MoveTo(x, y) => {
+                                    let _ = GdipStartPathFigure(path);
+                                    (cx, cy) = (x, y);
+                                }
+                                Seg::LineTo(x, y) => {
+                                    let _ =
+                                        GdipAddPathLine(path, sx(cx), sy(cy), sx(x), sy(y));
+                                    (cx, cy) = (x, y);
+                                }
+                                Seg::CurveTo([c1, c2, e]) => {
+                                    let _ = GdipAddPathBezier(
+                                        path,
+                                        sx(cx),
+                                        sy(cy),
+                                        sx(c1.0),
+                                        sy(c1.1),
+                                        sx(c2.0),
+                                        sy(c2.1),
+                                        sx(e.0),
+                                        sy(e.1),
+                                    );
+                                    (cx, cy) = (e.0, e.1);
+                                }
+                                Seg::Close => {
+                                    let _ = GdipClosePathFigure(path);
+                                }
+                            }
+                        }
+                    }
+                }
+                let _ = GdipDrawPath(g, pen, path);
+                let _ = GdipDeletePath(path);
+            }
+            let _ = GdipDeletePen(pen);
+        }
+        let _ = GdipDeleteGraphics(g);
+        let mut h = HICON::default();
+        if GdipCreateHICONFromBitmap(bmp, &mut h).0 == 0 && !h.is_invalid() {
+            icon = Some(h);
+        }
+    }
+    let _ = GdipDisposeImage(bmp as *mut GpImage);
+    icon
+}
+
 /// PNG 바이트 → `HICON`(알파 보존 — 07-18 툴바 임베드 아이콘).
 /// 반환 핸들은 호출자가 `DestroyIcon`으로 해제(아이콘 캐시 규약과 동일).
 ///
