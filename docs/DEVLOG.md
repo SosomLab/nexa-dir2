@@ -8,6 +8,7 @@
 
 ## 2026-07-19
 
+- **트리 보기 SVG 전환(main 직커밋 — 사용자 SVG 제공)**: view-tree.svg 등록(EMBEDDED_SVG 3호)·PNG 3종 제거 — **보기 모드 3종 전부 SVG 단독** 완결. 194 green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **타일 보기 SVG 전환(main 직커밋 — 사용자 SVG 제공)**: view-tiles.svg 등록(EMBEDDED_SVG 2호)·PNG 3종 제거(SVG = 전 크기 즉석 래스터). 릴리스 재빌드·캡처 확인. 194 green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 
 ## 2026-07-18

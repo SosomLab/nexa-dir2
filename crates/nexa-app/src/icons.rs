@@ -178,7 +178,6 @@ pub mod shell {
         "panel-single",
         "colsync",
         "colsync-disabled",
-        "view-tree",
         "refresh",
         "settings",
         "hidden",
@@ -191,6 +190,7 @@ pub mod shell {
     /// (view-flat PNG 제거 — 사용자 확정 07-18); 실패 시 PNG 버킷이 있으면
     /// 폴백, 없으면 글리프 폴백.
     const EMBEDDED_SVG: &[(&str, &str)] = &[
+        ("view-tree", include_str!("../assets/toolbar/view-tree.svg")),
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
     ];
