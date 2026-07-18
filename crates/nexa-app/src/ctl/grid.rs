@@ -367,11 +367,10 @@ fn header_label(st: &GridState, i: usize, c: &GridCol) -> String {
         s.push_str(if desc { "▼ " } else { "▲ " });
     }
     s.push_str(&c.title);
-    if st.sort.len() > 1 {
-        if let Some(order) = st.sort.iter().position(|(k, _)| *k == i) {
-            s.push(' ');
-            s.push_str(nexa_gui::order_badge(order));
-        }
+    // 순번 = 정렬 시작부터 상시 표시(사용자 확정 07-18 — 단일 = ①)
+    if let Some(order) = st.sort.iter().position(|(k, _)| *k == i) {
+        s.push(' ');
+        s.push_str(nexa_gui::order_badge(order));
     }
     s
 }
@@ -620,8 +619,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                             edge += c.width;
                         }
                         if let Some(ci) = hit {
-                            let shift = (wparam.0 & 0x0004/* MK_SHIFT */) != 0;
-                            apply_sort(hwnd, st, ci, shift);
+                            // 다중열 트리거 = Shift 또는 Ctrl(사용자 확정 07-18)
+                            let multi = (wparam.0 & 0x0004/* MK_SHIFT */) != 0
+                                || (wparam.0 & 0x0008/* MK_CONTROL */) != 0;
+                            apply_sort(hwnd, st, ci, multi);
                         }
                     }
                 } else {
