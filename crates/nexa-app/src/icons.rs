@@ -179,7 +179,6 @@ pub mod shell {
         "colsync",
         "colsync-disabled",
         "view-tree",
-        "view-flat",
         "view-tiles",
         "refresh",
         "settings",
@@ -188,8 +187,10 @@ pub mod shell {
     );
 
     /// SVG 원본 임베드(07-18 사용자: "svg 방식도 적용") — PNG보다 **우선**
-    /// 조회하며 요청 크기에 즉석 래스터([`crate::svg`] 서브셋 파서 →
-    /// gdipctx `svg_to_hicon`). 파싱/래스터 실패 시 PNG 버킷 폴백.
+    /// 조회하며 요청 크기(16/20/32 등 임의)에 즉석 래스터([`crate::svg`]
+    /// 서브셋 파서 → gdipctx `svg_to_hicon`). SVG 등록 아이콘은 PNG 불필요
+    /// (view-flat PNG 제거 — 사용자 확정 07-18); 실패 시 PNG 버킷이 있으면
+    /// 폴백, 없으면 글리프 폴백.
     const EMBEDDED_SVG: &[(&str, &str)] = &[(
         "view-flat",
         include_str!("../assets/toolbar/view-flat.svg"),
