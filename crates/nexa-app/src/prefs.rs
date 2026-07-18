@@ -492,6 +492,8 @@ struct PrefState {
     font: HFONT,
     /// 섹션 제목용 큰 글꼴(X-9 — 원본 스크린샷 "File List" 헤더).
     title_font: HFONT,
+    /// 트리 디스클로저 글리프 폰트(Segoe MDL2 — 파일 목록과 동일 규약, 07-18).
+    icon_font: HFONT,
     /// 현재 선택 노드 key(빈 검색 시)·검색어(있으면 전 카테고리에서 필터).
     category: String,
     query: String,
@@ -1238,21 +1240,34 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     }
     let old = SelectObject(dis.hDC, st.font.into());
     SetBkMode(dis.hDC, TRANSPARENT);
-    // 그룹 = ▸(접힘)/▾(펼침) 마커, leaf = 마커 없음(트리 시각 규약 — rows.rs와 동일).
-    // 검색 중엔 필터가 하위를 강제 표시하므로 항상 ▾ + 매치 수 "(N)"(X-10 ①).
-    let mut label = if tree_has_children(node) {
-        format!(
-            "{} {}",
-            if st.expanded[node] || !st.query.is_empty() {
-                "▾"
-            } else {
-                "▸"
-            },
-            tr(label_key)
-        )
-    } else {
-        tr(label_key)
-    };
+    // 그룹 디스클로저 = **파일 목록과 동일 MDL2 셰브론**(E76C 접힘/E70D 펼침 —
+    // 사용자 확정 07-18: 텍스트 ▸/▾ 폐기). 검색 중 = 강제 펼침 표시.
+    let base_left = dis.rcItem.left + 10 + depth * 14;
+    let mut text_left = base_left;
+    if tree_has_children(node) {
+        let glyph = if st.expanded[node] || !st.query.is_empty() {
+            "\u{E70D}" // ChevronDown(펼침)
+        } else {
+            "\u{E76C}" // ChevronRight(접힘)
+        };
+        let prev = SelectObject(dis.hDC, st.icon_font.into());
+        let mut g16: Vec<u16> = glyph.encode_utf16().collect();
+        let mut grc = RECT {
+            left: base_left,
+            top: dis.rcItem.top,
+            right: base_left + 12,
+            bottom: dis.rcItem.bottom,
+        };
+        DrawTextW(
+            dis.hDC,
+            &mut g16,
+            &mut grc,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        );
+        SelectObject(dis.hDC, prev);
+        text_left = base_left + 14;
+    }
+    let mut label = tr(label_key);
     if !st.query.is_empty() {
         if let Some(n) = st.search_counts.get(node).filter(|n| **n > 0) {
             label.push_str(&format!(" ({n})"));
@@ -1260,7 +1275,7 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     }
     let mut wide: Vec<u16> = label.encode_utf16().collect();
     let mut rc = RECT {
-        left: dis.rcItem.left + 10 + depth * 14,
+        left: text_left,
         top: dis.rcItem.top,
         right: dis.rcItem.right - 4,
         bottom: dis.rcItem.bottom,
@@ -1535,6 +1550,18 @@ const PREFS_STYLE: WINDOW_STYLE =
     WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0);
 
 /// 섹션 제목용 글꼴(X-9) — 대화상자 글꼴 +5pt·세미볼드.
+/// 디스클로저 글리프 폰트(Segoe MDL2 Assets 9px — 파일 목록 mdl2_small과
+/// 동일 크기 규약, 사용자 확정 07-18).
+unsafe fn make_icon_font() -> HFONT {
+    let name: Vec<u16> = "Segoe MDL2 Assets\0".encode_utf16().collect();
+    let mut lf = windows::Win32::Graphics::Gdi::LOGFONTW {
+        lfHeight: -9,
+        ..Default::default()
+    };
+    lf.lfFaceName[..name.len().min(32)].copy_from_slice(&name[..name.len().min(32)]);
+    windows::Win32::Graphics::Gdi::CreateFontIndirectW(&lf)
+}
+
 unsafe fn make_title_font(hwnd: HWND, spec: &DlgFont) -> HFONT {
     let dpi = GetDpiForWindow(hwnd).max(96);
     let h = -(((spec.size_pt + 5).clamp(9, 30) * dpi as i32) / 72);
@@ -1615,12 +1642,14 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         return None;
     };
     let title_font = make_title_font(dlg, font_spec);
+    let icon_font = make_icon_font();
     let mut state = Box::new(PrefState {
         values,
         hwnd: dlg,
         owner,
         font,
         title_font,
+        icon_font,
         category: "general".into(), // 첫 화면 = 일반 그룹(하위 섹션 전체)
         query: String::new(),
         tree: HWND::default(),
@@ -1735,6 +1764,7 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
     let _ = SetForegroundWindow(owner);
     let _ = DeleteObject(font.into());
     let _ = DeleteObject(title_font.into());
+    let _ = DeleteObject(icon_font.into());
     let _ = DeleteObject(state.accent_brush.into());
     // 즉시 적용 방식(X-8) — 닫기 = 확정. 최종 값 반환(미이탈 편집 값 포함, WM_CLOSE에서 수거).
     let mut v = state.values.clone();
