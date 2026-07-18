@@ -60,6 +60,10 @@ pub enum Icon {
     Minus,
     /// ? (도움말 — 글자는 GDI 텍스트: 텍스트 = GDI 규약, 07-17)
     Help,
+    /// ∧ (위로 — 순서 이동, 07-19 도구모음 순서 편집)
+    Up,
+    /// ∨ (아래로)
+    Down,
 }
 
 struct IbState {
@@ -252,6 +256,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     }
                     Icon::Minus => {
                         g.polyline(&[(cx - arm, cy), (cx + arm, cy)], color(st.style.bg), 2.0);
+                    }
+                    Icon::Up => {
+                        let h = arm / 2;
+                        g.polyline(
+                            &[(cx - arm, cy + h), (cx, cy - h), (cx + arm, cy + h)],
+                            color(st.style.bg),
+                            2.0,
+                        );
+                    }
+                    Icon::Down => {
+                        let h = arm / 2;
+                        g.polyline(
+                            &[(cx - arm, cy - h), (cx, cy + h), (cx + arm, cy - h)],
+                            color(st.style.bg),
+                            2.0,
+                        );
                     }
                     Icon::Help => {
                         drop(g); // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)

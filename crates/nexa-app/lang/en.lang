@@ -215,6 +215,15 @@ pref.dlgFont.desc = Font for dialogs (confirmations, progress).
 pref.dlgFontSize.desc = Dialog font size in points (7~24).
 pref.showHidden.desc = Show files and folders with the hidden attribute.
 pref.showDotfiles.desc = Show files and folders whose name starts with a dot.
+pref.colAutofitMax = Column auto-fit max width (50-2000)
+pref.colAutofitMax.desc = Maximum width in pixels when double-clicking a column border to auto-fit contents.
+pref.toolbarOrder = Toolbar order
+pref.toolbarOrder.desc = Reorder toolbar buttons. Select a group or an item, then use the up/down buttons - groups move as a whole, items move within their group (Shift-click = contiguous multi-select).
+pref.tbo.grpPanel = Panel controls
+pref.tbo.grpView = View mode
+pref.tbo.grpShow = Visibility
+pref.tbo.panelToggle = Panel toggle
+pref.tbo.infoToggle = Info panes toggle
 pref.dock.desc = Show the bottom dock (info, preview, terminal).
 pref.sortFoldersFirst = Sort folders first
 pref.sortFoldersFirst.desc = Group folders before files regardless of sort order.
