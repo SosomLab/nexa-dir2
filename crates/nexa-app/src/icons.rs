@@ -195,12 +195,11 @@ pub mod shell {
         ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
     ];
 
-    /// SVG 아이콘 잉크 — 사용자 확정 07-19 "더 진하게"(2차): `#40464E`
-    /// (PNG 세트 `#6E747C` 대비 두 단계 어두운 회색).
-    const SVG_INK: u32 = 0xFF40_464E;
+    /// SVG 아이콘 잉크 — 사용자 확정 07-19 "어두운 회색"(3차): `#2B3036`.
+    const SVG_INK: u32 = 0xFF2B_3036;
     /// 비활성 잉크 = 같은 색 알파 38%(PNG disabled 변형 규약 동일 —
     /// `<이름>-disabled` 키를 원본 SVG로 렌더).
-    const SVG_INK_DIM: u32 = 0x6140_464E;
+    const SVG_INK_DIM: u32 = 0x612B_3036;
     /// 켜짐 강조 잉크 = 테마 accent(`#3D8BFF` — 라이트/다크 공통,
     /// `<이름>-on` 키 — 07-19 패널 토글 "푸른계열").
     const SVG_INK_ACCENT: u32 = 0xFF3D_8BFF;
