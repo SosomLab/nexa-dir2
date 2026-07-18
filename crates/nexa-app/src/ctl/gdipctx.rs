@@ -245,8 +245,8 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
                         }
                     }
                 }
-                // 채색: 루트 fill 모드 = 채움(텍스트 포함), 아니면 텍스트만 채움
-                let filled = doc.fill || matches!(op, Op::Text { .. });
+                // 채색: 요소 fill 오버라이드 > 루트 fill 모드 · 텍스트 상시 채움
+                let filled = matches!(op, Op::Text { .. }) || el.fill.unwrap_or(doc.fill);
                 if filled {
                     let mut b: *mut GpSolidFill = std::ptr::null_mut();
                     let _ = GdipCreateSolidFill(el_argb, &mut b);

@@ -53,6 +53,10 @@ pub enum Op {
 pub struct Element {
     pub op: Op,
     pub color: Option<u32>,
+    /// 요소별 채움 오버라이드 — `fill` 속성: `none` = `Some(false)`(스트로크),
+    /// 색 지정 = `Some(true)`(채움), 부재 = `None`(루트 모드 상속).
+    /// 07-19 hidden H 글자(스트로크 문서 안의 채움 요소).
+    pub fill: Option<bool>,
 }
 
 /// 파싱된 문서 — viewBox `(x, y, w, h)` + 루트 스트로크 폭 + 요소 목록.
@@ -111,6 +115,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     rx: num(attrs, "rx"),
                 },
                 color: elem_color(attrs),
+                fill: elem_fill(attrs),
             }),
             "circle" => doc.ops.push(Element {
                 op: Op::Circle {
@@ -119,6 +124,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     r: num(attrs, "r"),
                 },
                 color: elem_color(attrs),
+                fill: elem_fill(attrs),
             }),
             "line" => doc.ops.push(Element {
                 op: Op::Line {
@@ -128,6 +134,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     y2: num(attrs, "y2"),
                 },
                 color: elem_color(attrs),
+                fill: elem_fill(attrs),
             }),
             "polyline" => {
                 let pts: Vec<f32> = attr(attrs, "points")
@@ -142,6 +149,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     doc.ops.push(Element {
                         op: Op::Polyline(pairs),
                         color: elem_color(attrs),
+                        fill: elem_fill(attrs),
                     });
                 }
             }
@@ -152,6 +160,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                         doc.ops.push(Element {
                             op: Op::Path(segs),
                             color: elem_color(attrs),
+                            fill: elem_fill(attrs),
                         });
                     }
                 }
@@ -173,6 +182,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                             content,
                         },
                         color: elem_color(attrs),
+                        fill: elem_fill(attrs),
                     });
                 }
             }
@@ -205,6 +215,11 @@ fn attr(attrs: &str, key: &str) -> Option<String> {
         rest = &rest[i + key.len()..];
     }
     None
+}
+
+/// 요소별 채움 오버라이드 — 문서의 [`Element::fill`] 규칙.
+fn elem_fill(attrs: &str) -> Option<bool> {
+    attr(attrs, "fill").map(|v| v != "none")
 }
 
 /// 요소 색 오버라이드 — `stroke`/`fill`의 `#RRGGBB`(6자리)만 인식.
@@ -452,6 +467,21 @@ mod tests {
                 content: "SYNC".into(),
             }
         );
+    }
+
+    #[test]
+    fn element_fill_override_in_stroke_doc() {
+        // 07-19 hidden: 스트로크 문서 안의 채움 H 글자(fill=currentColor·stroke=none)
+        let svg = concat!(
+            r##"<svg viewBox="0 0 32 32" fill="none" stroke="currentColor">"##,
+            r##"<path d="M5 5 H20 Z"/>"##,
+            r##"<path d="M7 8 H10 Z" fill="currentColor" stroke="none"/>"##,
+            "</svg>",
+        );
+        let doc = parse(svg).unwrap();
+        assert!(!doc.fill);
+        assert_eq!(doc.ops[0].fill, None, "상속 = 스트로크");
+        assert_eq!(doc.ops[1].fill, Some(true), "요소 채움");
     }
 
     #[test]
