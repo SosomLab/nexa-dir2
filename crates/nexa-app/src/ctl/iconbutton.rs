@@ -39,6 +39,17 @@ pub const NXIB_GETENABLE: u32 = 0x0400 + 100;
 /// 활성 상태 설정(wparam = 0/1 — 재도장).
 pub const NXIB_SETENABLE: u32 = 0x0400 + 101;
 
+/// 이미지 표시 모드(사용자 확정 07-18 — [`create_image`] 인자).
+#[allow(dead_code)] // 판매용 계약 API — 호스트 소비는 선택(현재 앱은 Stretch만)
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ImageFit {
+    /// 원본 이미지 크기 그대로(컨트롤 중앙 배치 — 컨트롤보다 크면 잘림).
+    Native,
+    /// 컨트롤 크기에 맞춰 늘림(고품질 바이큐빅 스케일 — 기본).
+    #[default]
+    Stretch,
+}
+
 /// 아이콘 소스 — 현재 벡터 글리프(펜). PNG/HBITMAP 알파 이미지는 확장 변형으로
 /// 추가(모듈 설계 주석 — AlphaBlend 경로), 호스트 API 불변.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,6 +72,8 @@ struct IbState {
     /// 이미지, 널 = 벡터 글리프 모드). enum 확장 변형 규약의 실체.
     img_on: *mut windows::Win32::Graphics::GdiPlus::GpImage,
     img_off: *mut windows::Win32::Graphics::GdiPlus::GpImage,
+    /// 이미지 표시 모드(원본 크기 중앙/컨트롤 맞춤 늘림 — 사용자 확정 07-18).
+    fit: ImageFit,
 }
 
 impl Drop for IbState {
@@ -119,6 +132,7 @@ pub unsafe fn create(
         font,
         img_on: std::ptr::null_mut(),
         img_off: std::ptr::null_mut(),
+        fit: ImageFit::default(),
     });
     super::base::attach_state(hwnd, st);
     // shape 투명(07-17 AA 개정): 1비트 리전 클립은 계단 가장자리의 진범 —
@@ -128,6 +142,7 @@ pub unsafe fn create(
 
 /// **이미지 아이콘 버튼**(07-18 — 리네임 ± raster 교체): `active`/`disabled`
 /// PNG 바이트로 원형 벡터 대신 알파 이미지를 그린다(상태 전환은 enabled).
+/// `fit` = 표시 모드([`ImageFit`] — 원본 크기 중앙/컨트롤 맞춤 늘림).
 /// enum 확장 변형(모듈 설계 §)의 실체 — 벡터 `create`와 동일 통지·히트테스트.
 #[allow(clippy::too_many_arguments)] // Win32 create 계열 관례
 pub unsafe fn create_image(
@@ -139,6 +154,7 @@ pub unsafe fn create_image(
     font: windows::Win32::Graphics::Gdi::HFONT,
     active: &[u8],
     disabled: &[u8],
+    fit: ImageFit,
     enabled: bool,
     style: Style,
 ) -> HWND {
@@ -146,6 +162,7 @@ pub unsafe fn create_image(
     if let Some(st) = state(hwnd).as_mut() {
         st.img_on = super::gdipctx::decode_png(active);
         st.img_off = super::gdipctx::decode_png(disabled);
+        st.fit = fit;
         let _ = InvalidateRect(Some(hwnd), None, true);
     }
     hwnd
@@ -194,14 +211,20 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
                 // 모서리 = behind(부모 배경색) → AA 원판/이미지 알파가 자연 블렌드
                 fill(dc, &rc, st.style.behind);
-                // 이미지 모드(07-18 raster): 활성/비활성 PNG를 셀에 스케일 드로우
+                // 이미지 모드(07-18 raster): 표시 모드에 따라 원본 중앙/맞춤 늘림
                 let img = if st.enabled { st.img_on } else { st.img_off };
                 if !img.is_null() {
+                    let (cw, ch) = (rc.right - rc.left, rc.bottom - rc.top);
+                    let dst = match st.fit {
+                        ImageFit::Stretch => Rect::new(rc.left, rc.top, cw, ch),
+                        ImageFit::Native => {
+                            // 원본 픽셀 크기 그대로 컨트롤 중앙 배치
+                            let (iw, ih) = super::gdipctx::image_size(img);
+                            Rect::new(rc.left + (cw - iw) / 2, rc.top + (ch - ih) / 2, iw, ih)
+                        }
+                    };
                     let mut g = GdipCtx::new(dc);
-                    g.draw_image(
-                        img,
-                        Rect::new(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top),
-                    );
+                    g.draw_image(img, dst);
                     let _ = EndPaint(hwnd, &ps);
                     return LRESULT(0);
                 }

@@ -20,7 +20,8 @@ use windows::Win32::Graphics::GdiPlus::{
     FillModeAlternate, GdipAddPathArc, GdipClosePathFigure, GdipCreateFromHDC, GdipCreatePath,
     GdipCreatePen1, GdipCreateSolidFill, GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePath,
     GdipDeletePen, GdipDisposeImage, GdipDrawImageRectI, GdipDrawLines, GdipDrawPath,
-    GdipFillEllipse, GdipFillPath, GdipLoadImageFromStream, GdipSetInterpolationMode,
+    GdipFillEllipse, GdipFillPath, GdipGetImageHeight, GdipGetImageWidth,
+    GdipLoadImageFromStream, GdipSetInterpolationMode,
     GdipSetPenEndCap, GdipSetPenLineJoin, GdipSetPenStartCap, GdipSetSmoothingMode, GdiplusStartup,
     GdiplusStartupInput, GdiplusStartupOutput, GpBrush, GpGraphics, GpImage, GpPath, GpPen,
     GpSolidFill, InterpolationModeHighQualityBicubic, LineCapRound, LineJoinRound, PointF,
@@ -61,6 +62,20 @@ pub(crate) unsafe fn decode_png(bytes: &[u8]) -> *mut GpImage {
     let mut img: *mut GpImage = std::ptr::null_mut();
     let _ = GdipLoadImageFromStream(&stream, &mut img);
     img
+}
+
+/// [`decode_png`] 이미지의 원본 픽셀 크기(폭, 높이). 널/실패 = (0, 0).
+///
+/// # Safety
+/// `img`는 [`decode_png`]가 반환한 유효/널 포인터여야 한다.
+pub(crate) unsafe fn image_size(img: *mut GpImage) -> (i32, i32) {
+    if img.is_null() {
+        return (0, 0);
+    }
+    let (mut w, mut h) = (0u32, 0u32);
+    let _ = GdipGetImageWidth(img, &mut w);
+    let _ = GdipGetImageHeight(img, &mut h);
+    (w as i32, h as i32)
 }
 
 /// [`decode_png`] 이미지 해제(호스트 컨트롤 파괴 시).

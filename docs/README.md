@@ -35,6 +35,7 @@
 | [MILESTONES](MILESTONES.md) | ★ 기능·마일스톤 현황(✅/🚧/📐/☐) |
 | [01 아키텍처](01-architecture.md) | 크레이트 구조·렌더링·스레딩·원본 대응표 |
 | [12 패키징](12-packaging-single-exe.md) | 단일 exe·영속 규율·서명 |
+| [ctl 컨트롤 라이브러리](ctl/README.md) | ★ Nexa Controls — 컨트롤 14종 문서 색인·공통 규약(판매용) |
 
 ## ③ 진행 경과 · 할 일
 

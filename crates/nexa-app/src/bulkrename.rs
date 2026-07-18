@@ -566,6 +566,7 @@ unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
         font,
         PNG_ADD,
         PNG_ADD_OFF,
+        crate::ctl::iconbutton::ImageFit::Stretch,
         true,
         st_band,
     );
@@ -578,6 +579,7 @@ unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
         font,
         PNG_DEL,
         PNG_DEL_OFF,
+        crate::ctl::iconbutton::ImageFit::Stretch,
         true,
         st_band,
     );
