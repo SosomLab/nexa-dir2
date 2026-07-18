@@ -836,6 +836,26 @@ impl DrawCtx for DwCtx<'_> {
     }
 
     fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) -> bool {
+        // 임베드 아이콘(`emb:<이름>`) — 그리기 크기에 맞는 원본 버킷(16/20/32)을
+        // 키에 붙여 조회(DPI 100/125/200% 대응 — icons::shell::EMBEDDED).
+        // `#dis` 접미(Toolbar 비활성) = `-disabled` 변형 원본으로 매핑.
+        let emb_key;
+        let key = if key.starts_with("emb:") {
+            let bucket = if size >= 27 {
+                32
+            } else if size >= 18 {
+                20
+            } else {
+                16
+            };
+            emb_key = match key.strip_suffix("#dis") {
+                Some(base) => format!("{base}-disabled:{bucket}"),
+                None => format!("{key}:{bucket}"),
+            };
+            &emb_key
+        } else {
+            key
+        };
         if let Some(icon) = self.icons.borrow_mut().get_or_request(key, hint) {
             unsafe {
                 let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(

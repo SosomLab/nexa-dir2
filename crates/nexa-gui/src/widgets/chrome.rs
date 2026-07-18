@@ -60,6 +60,12 @@ impl ToolButton {
         self.icon = Some((key.into(), hint.into()));
         self
     }
+
+    /// 초기 활성 상태(빌더) — 런타임 변경은 [`Toolbar::set_enabled`].
+    pub fn enable(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
+    }
 }
 
 pub struct Toolbar {
@@ -229,6 +235,15 @@ impl Widget for Toolbar {
                     // 16×16 상당(바 높이 − 상하 4px 여백) 아이콘을 정사각 셀 중앙에.
                     ctx.fill_rect(cell, bg);
                     let isz = (b.h - 8).max(8);
+                    // 비활성 = `#dis` 접미 키(dw.rs가 `-disabled` 임베드 변형으로
+                    // 해석 — 없으면 미로드 폴백 글리프가 text_dim으로 흐려짐)
+                    let dis_key;
+                    let key = if btn.enabled {
+                        key.as_str()
+                    } else {
+                        dis_key = format!("{key}#dis");
+                        dis_key.as_str()
+                    };
                     let drew = ctx.draw_icon(
                         cell.x + (cell.w - isz) / 2,
                         b.y + (b.h - isz) / 2,
