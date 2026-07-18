@@ -179,7 +179,6 @@ pub mod shell {
         "refresh",
         "settings",
         "hidden",
-        "dotfiles",
     );
 
     /// SVG 원본 임베드(07-18 사용자: "svg 방식도 적용") — PNG보다 **우선**
@@ -192,6 +191,7 @@ pub mod shell {
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
         ("colsync", include_str!("../assets/toolbar/colsync.svg")),
+        ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
     ];
 
     /// SVG 아이콘 잉크 — 사용자 확정 07-19 "더 진하게"(2차): `#40464E`
