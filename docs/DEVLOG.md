@@ -8,6 +8,7 @@
 
 ## 2026-07-18
 
+- **ImageFit + ctl 문서 세트(`feat/imagebtn-fit` — 사용자 요청 2건)**: NxIconButton **이미지 표시 모드**(`Native` 원본 크기 중앙/`Stretch` 컨트롤 맞춤 — gdipctx image_size) · **docs/ctl/ 신설**(내비게이션 허브 README + overview 공통 규약 + 컨트롤별 13문서 — 색인·API·메시지 계약 표, docs/README 연결). 187 green. 상세 [journal/2026-07-18.md](journal/2026-07-18.md).
 - **ctl 재사용 리팩터 + 전수 검토(`refactor/ctl-base` — 사용자 요청)**: **base.rs** 신설로 14개 Nx 컨트롤 생명주기 보일러플레이트 통합(state/attach/drop_state/notify/register_class — 순 −107줄)·GDI 자원 RAII화(segmented icon_font·textbox bg_brush = Drop). **전수 검토**: GDI 누수 0(gdipctx 오류 분기까지 짝 맞음·region 시스템 소유·grid 더블버퍼 정상)·**잠재 크래시 1건 수정**(segmented 빈 텍스트→DrawTextW 댕글링, grid 크래시 동일 클래스)·나눗셈/캐스트/인덱스/MDL2 라우팅/내비 활성 모두 안전. clippy 0·187 green. 후속: 팝업 3종 골격 계층화(보류 — 안전 우선). 상세 [journal/2026-07-18.md](journal/2026-07-18.md).
 - **디스클로저 MDL2 + 내비 활성 상태(`feat/mdl2-disclosure` — 사용자 요청 2건)**: ① 폴더 마커 ▸/▾ → **MDL2 E76C/E70D**(glyph_opaque 전환·`mdl2_small_format` 9 DIP — 원본 규약) ② **ToolButton.enabled**(비활성 = text_dim 흐림·hover/클릭 무시) — 이전/다음 = 히스토리 가능 시만·상위 = **This PC 비활성**(sync_chrome 동기). 실기: 초기/이동 후/내 PC 상태 3종 + 닫힘/펼침 셰브론 캡처. 187 green. 상세 [journal/2026-07-18.md](journal/2026-07-18.md).
 - **Segoe MDL2 글리프 통일(`feat/mdl2-glyphs` — 사용자 확인·요청 3건)**: 원본 화살표 정체 = **Segoe MDL2 Assets 글리프**(내비 E72B/E72A/E74A·디스클로저 E76C/E70D) 확인 → 현 앱 적용: DwBackend `mdl2_format` 신설 + glyph_opaque **U+E700 대역 자동 라우팅**(내비 버튼 ←→↑), NxSegmented 화살표 = 벡터 폐기·MDL2 E72A/E72B(컨트롤 소유 icon_font). 실기 캡처 검증. 187 green. 상세 [journal/2026-07-18.md](journal/2026-07-18.md).
