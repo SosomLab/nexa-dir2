@@ -175,14 +175,14 @@ pub mod shell {
         ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
     ];
 
-    /// SVG 아이콘 잉크 — 사용자 확정 07-19 "어두운 회색"(3차): `#2B3036`.
-    const SVG_INK: u32 = 0xFF2B_3036;
-    /// 비활성 잉크 = 같은 색 알파 38%(PNG disabled 변형 규약 동일 —
-    /// `<이름>-disabled` 키를 원본 SVG로 렌더).
-    const SVG_INK_DIM: u32 = 0x612B_3036;
-    /// 켜짐 강조 잉크 = 테마 accent(`#3D8BFF` — 라이트/다크 공통,
-    /// `<이름>-on` 키 — 07-19 패널 토글 "푸른계열").
-    const SVG_INK_ACCENT: u32 = 0xFF3D_8BFF;
+    /// SVG 아이콘 잉크 — 사용자 확정 07-19(4차, macOS 시안 기준):
+    /// **기본 = 검정**(배경 없음).
+    const SVG_INK: u32 = 0xFF00_0000;
+    /// 비활성 잉크 = 검정 알파 38%(`<이름>-disabled` 키 — 원본 SVG 재렌더).
+    const SVG_INK_DIM: u32 = 0x6100_0000;
+    /// 켜짐 잉크 = **흰색**(`<이름>-on` 키 — 켜짐 배경이 파랑 필이라
+    /// 선은 흰색, macOS 시안. 배경색은 chrome.rs CHECKED_BG).
+    const SVG_INK_ACCENT: u32 = 0xFFFF_FFFF;
 
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);

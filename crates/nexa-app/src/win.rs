@@ -347,7 +347,6 @@ fn build_toolbar(
             } else {
                 tr("menu.view.panelSingle")
             })
-            .accent_checked()
             .toggled(panel_mode == "dual"),
         ToolButton::new(CMD_COLW_SYNC, "⇔")
             .with_icon("emb:colsync", "")

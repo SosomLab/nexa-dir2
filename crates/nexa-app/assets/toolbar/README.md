@@ -9,13 +9,14 @@ PNG 버킷 기구 폐지): `include_str!` 임베드 → [svg.rs](../../src/svg.r
 
 - **32 viewBox · 콘텐츠 1..31(꽉 참) · stroke 2 · currentColor** —
   단, 16px 정합이 중요한 스트로크는 정수 픽셀 정렬(panel-toggle 2..30).
-- **잉크 색상표(사용자 확정 07-19 — SSOT = [icons.rs](../../src/icons.rs) 상수)**:
+- **잉크 색상표(사용자 확정 07-19 4차 — macOS 시안 기준. SSOT =
+  [icons.rs](../../src/icons.rs) 상수·배경은 chrome.rs `CHECKED_BG`)**:
 
-  | 상태 | 색 | ARGB 상수 | 비고 |
+  | 상태 | 선 색 | 배경 | 상수 |
   | --- | --- | --- | --- |
-  | 기본(활성) | `#2B3036` | `SVG_INK = 0xFF2B_3036` | 어두운 회색(3차 확정) |
-  | 토글 켜짐(선택) | `#3D8BFF` | `SVG_INK_ACCENT = 0xFF3D_8BFF` | 테마 accent 동일 — `-on` 접미 전체 재렌더 |
-  | 비활성(disable) | `#2B3036` + 알파 38% | `SVG_INK_DIM = 0x612B_3036` | `-disabled` 접미 — 배경 무관 흐림 |
+  | 기본(활성) | 검정 `#000000` | 없음(툴바 배경) | `SVG_INK = 0xFF00_0000` |
+  | 토글 켜짐(선택) | 흰색 `#FFFFFF` | 파랑 필 `#0A7AFF` | `SVG_INK_ACCENT = 0xFFFF_FFFF` + `CHECKED_BG` |
+  | 비활성(disable) | 검정 + 알파 38% | 없음 | `SVG_INK_DIM = 0x6100_0000` |
 - 지원 서브셋(초과 시 전체 무효 → 글리프 폴백): rect(rx)/circle/line/
   polyline/path(M·L·H·V·C·**A[원형 한정]**·Z)/text — 요소별 `stroke`/`fill`
   색·채움 오버라이드.
