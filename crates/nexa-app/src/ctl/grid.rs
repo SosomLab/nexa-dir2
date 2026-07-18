@@ -619,10 +619,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                             edge += c.width;
                         }
                         if let Some(ci) = hit {
-                            // 다중열 트리거 = Shift 또는 Ctrl(사용자 확정 07-18)
-                            let multi = (wparam.0 & 0x0004/* MK_SHIFT */) != 0
-                                || (wparam.0 & 0x0008/* MK_CONTROL */) != 0;
-                            apply_sort(hwnd, st, ci, multi);
+                            // 다중열 트리거 = Shift 전용(사용자 재확정 07-18)
+                            let shift = (wparam.0 & 0x0004/* MK_SHIFT */) != 0;
+                            apply_sort(hwnd, st, ci, shift);
                         }
                     }
                 } else {

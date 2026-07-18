@@ -1302,10 +1302,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             start_w2,
                         });
                     } else if self.columns[i].sortable {
-                        // 다중열 트리거 = Shift 또는 **Ctrl**(사용자 확정 07-18 —
-                        // Ctrl+헤더 클릭도 정렬 키 추가/순환)
+                        // 다중열 트리거 = Shift 전용(사용자 재확정 07-18 —
+                        // Ctrl 병행은 혼동으로 회귀·원본 docs/23 §4 규약 유지)
                         let key = self.columns[i].key;
-                        self.apply_sort(key, shift || ctrl, inv);
+                        self.apply_sort(key, shift, inv);
                     }
                 } else if let Some(row) = self.row_at(x, y) {
                     if self.in_marker_zone(row, x) {
@@ -2028,23 +2028,6 @@ mod tests {
         assert_eq!(v.sort(), &[(0, false), (2, true), (3, false)]);
         down(&mut v, &mut inv, 250, 5, true); // 크기 ▼→없음(제거, 뒤 순번 당김)
         assert_eq!(v.sort(), &[(0, false), (3, false)]);
-    }
-
-    #[test]
-    fn ctrl_click_adds_multi_sort_like_shift() {
-        // 다중열 트리거 = Shift 또는 Ctrl(사용자 확정 07-18)
-        let (mut v, mut inv) = list_with_cols(10, 220);
-        down(&mut v, &mut inv, 50, 5, false); // 이름 ▲
-        v.on_event(
-            &InputEvent::MouseDown {
-                x: 250,
-                y: 5,
-                shift: false,
-                ctrl: true, // Ctrl+클릭 = 크기 추가
-            },
-            &mut inv,
-        );
-        assert_eq!(v.sort(), &[(0, false), (2, false)]);
     }
 
     #[test]
