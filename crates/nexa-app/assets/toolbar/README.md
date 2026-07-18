@@ -20,12 +20,21 @@
 | `panel-single` | 싱글 파일 패널(CMD_PANEL_SINGLE) | — |
 | `colsync` | 컬럼 넓이 동기화(CMD_COLW_SYNC) | ○ (싱글 모드에서 선택 불가) |
 | `view-tree` | 트리 보기(CMD_VIEW_TREE) — 사용자 시안 v3(부모 사각+긴 줄·└자식 2) | — |
-| `view-flat` | 플랫 보기(CMD_VIEW_FLAT) — 사용자 시안 v3(사각+줄 3행 목록) | — |
+| `view-flat` | 플랫 보기(CMD_VIEW_FLAT) — **SVG 원본**(`view-flat.svg`, 사용자 제공 07-18 — PNG는 폴백) | — |
 | `view-tiles` | 타일 보기(CMD_VIEW_TILES) — 사용자 시안 v3(2×2 스트로크·좌상 열린 모서리) | — |
 | `refresh` | 새로고침(CMD_REFRESH) — 300° 호 + 접선 화살촉 | — |
 | `settings` | 설정(CMD_PREFS) — 톱니(도넛+치형 8) | — |
 | `hidden` | 숨김 파일 토글(CMD_TOGGLE_HIDDEN) — 눈 | — |
 | `dotfiles` | 닷파일 토글(CMD_TOGGLE_DOTFILES) — ⋯ | — |
+
+## SVG 파이프라인(07-18 — "svg 방식도 적용")
+
+`<이름>.svg`를 두고 [icons.rs](../../src/icons.rs) `EMBEDDED_SVG`에 등록하면
+**PNG보다 우선** 적용된다 — [svg.rs](../../src/svg.rs) 서브셋 파서(외부
+crate 0: viewBox·stroke-width·rect/circle/line/polyline/path M·L·H·V·C·Z,
+스트로크 전용) → gdipctx `svg_to_hicon`(GDI+ 오프스크린 ARGB → HICON,
+요청 크기 즉석 래스터 — 버킷 다운스케일 불필요). 색은 `SVG_INK`(#6E747C)
+고정(currentColor 대응). 파싱/래스터 실패 시 PNG 버킷 폴백.
 
 ## 렌더 경로
 

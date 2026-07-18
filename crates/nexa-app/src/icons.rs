@@ -187,6 +187,17 @@ pub mod shell {
         "dotfiles",
     );
 
+    /// SVG 원본 임베드(07-18 사용자: "svg 방식도 적용") — PNG보다 **우선**
+    /// 조회하며 요청 크기에 즉석 래스터([`crate::svg`] 서브셋 파서 →
+    /// gdipctx `svg_to_hicon`). 파싱/래스터 실패 시 PNG 버킷 폴백.
+    const EMBEDDED_SVG: &[(&str, &str)] = &[(
+        "view-flat",
+        include_str!("../assets/toolbar/view-flat.svg"),
+    )];
+
+    /// 임베드 아이콘 잉크(PNG 세트와 동일 — 라이트/다크 겸용 `#6E747C`).
+    const SVG_INK: u32 = 0xFF6E_747C;
+
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);
     /// 워커 결과(PostMessage WPARAM으로 전달되는 Box): (키, HICON raw — 0=실패).
@@ -207,15 +218,15 @@ pub mod shell {
         }
 
         /// 캐시 조회 — 미스면 큐 등록 후 `None`(틱이 로드).
-        /// `emb:` 키는 임베드 PNG에서 **동기** 생성(디코드 1회 — 이후 캐시 히트,
-        /// LRU 축출돼도 다음 조회에서 재생성).
+        /// `emb:` 키는 임베드 자산에서 **동기** 생성(1회 — 이후 캐시 히트,
+        /// LRU 축출돼도 다음 조회에서 재생성): **SVG 우선**(요청 크기 즉석
+        /// 래스터), 실패 시 PNG 버킷.
         pub fn get_or_request(&mut self, key: &str, hint: &str) -> Option<HICON> {
             if let Some(&h) = self.store.get(key) {
                 return Some(h);
             }
             if key.starts_with("emb:") {
-                let bytes = EMBEDDED.iter().find(|(k, _)| *k == key).map(|(_, b)| *b)?;
-                let icon = unsafe { crate::ctl::gdipctx::png_to_hicon(bytes) }?;
+                let icon = Self::make_embedded(key)?;
                 if let Some(old) = self.store.insert(key.to_string(), icon) {
                     unsafe {
                         let _ = DestroyIcon(old);
@@ -225,6 +236,24 @@ pub mod shell {
             }
             self.store.request(key, hint);
             None
+        }
+
+        /// 임베드 키(`emb:<이름>:<크기>`) → HICON 생성. SVG(원본 그대로 요청
+        /// 크기 래스터) → PNG(버킷 파일) 순. 미지 키/실패 = `None`(글리프 폴백).
+        fn make_embedded(key: &str) -> Option<HICON> {
+            if let Some((name, sz)) = key["emb:".len()..].rsplit_once(':') {
+                if let Some(px) = sz.parse::<i32>().ok().filter(|p| *p > 0) {
+                    if let Some((_, src)) = EMBEDDED_SVG.iter().find(|(n, _)| *n == name) {
+                        if let Some(icon) = crate::svg::parse(src).and_then(|doc| unsafe {
+                            crate::ctl::gdipctx::svg_to_hicon(&doc, px, SVG_INK)
+                        }) {
+                            return Some(icon);
+                        }
+                    }
+                }
+            }
+            let bytes = EMBEDDED.iter().find(|(k, _)| *k == key).map(|(_, b)| *b)?;
+            unsafe { crate::ctl::gdipctx::png_to_hicon(bytes) }
         }
 
         pub fn has_pending(&self) -> bool {
