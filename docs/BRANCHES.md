@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/svg-icons` | 2026-07-18 | 2026-07-18 (`aad2b93`) | 2026-07-18 | 1 | **SVG 아이콘 파이프라인**(사용자 요청·SVG 제공) — svg.rs 서브셋 파서(중립·테스트 6·crate 0)+gdipctx svg_to_hicon(ARGB 오프스크린·요청 크기 즉석 래스터)+icons EMBEDDED_SVG(PNG 우선순위 역전·폴백). 1호 view-flat.svg. 193 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/toolbar-tips` | 2026-07-18 | 2026-07-18 (`033ac02`) | 2026-07-18 | 1 | **도구 모음 툴팁 i18n**(사용자 요청) — tip.rs 팝업(NOACTIVATE·테마 색·dlg_font)+chrome hover_tip/set_buttons+win TIMER_TIP(500ms 표시·커서 실측 이탈 해제·클릭 파괴). 기존 메뉴 키 재사용(신규 키 0)·언어 전환 즉시 반영. 실기 en/ko·187 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/toolbar-icons` | 2026-07-18 | 2026-07-18 (`776700a`) | 2026-07-18 | 2 | **도구 모음 16×16 이미지화 + 패널 모드 버튼**(사용자 요청 5건) — ① 보기 모드 라벨 Tree/Flat/Tile view ② 툴바 전 버튼 = **임베드 16×16 이미지**(64px GDI+ 벡터→16/20/32 DPI 버킷·`emb:` 키→gdipctx `png_to_hicon`→HICON 캐시 동기 분기·글리프 폴백) ③ refresh 300° 호+접선 화살촉·view-tree 타일 동일 점유(시안 2건) ④ **[듀얼][싱글][컬럼동기] 그룹**(싱글 = 듀얼·컬럼동기 비활성 — **알파 38% 변형**·클릭 무시·라이트 테마 반전 결함 QA 수정·ToolButton `enable`) ⑤ 핸들러 툴바 checked/enabled 동기. 실기 QA 5종·187 green | [2026-07-18](journal/2026-07-18.md) |
 | `fix/prefs-mdl2-marker` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 1 | **설정 트리 디스클로저 MDL2 통일**(사용자 요청) — 텍스트 ▸/▾ → 파일 목록과 동일 Segoe MDL2 E76C/E70D(9px icon_font 분리 렌더). 실기 캡처 | [2026-07-18](journal/2026-07-18.md) |
