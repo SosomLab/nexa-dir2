@@ -57,6 +57,20 @@ struct IbState {
     style: Style,
     /// Help(?) 글자 렌더용(텍스트 = GDI 규약).
     font: windows::Win32::Graphics::Gdi::HFONT,
+    /// 이미지 모드(07-18 — [`create_image`]): 활성/비활성 raster(디코드된 GDI+
+    /// 이미지, 널 = 벡터 글리프 모드). enum 확장 변형 규약의 실체.
+    img_on: *mut windows::Win32::Graphics::GdiPlus::GpImage,
+    img_off: *mut windows::Win32::Graphics::GdiPlus::GpImage,
+}
+
+impl Drop for IbState {
+    fn drop(&mut self) {
+        // raster 이미지 RAII 해제(base::drop_state가 박스 회수 시)
+        unsafe {
+            super::gdipctx::dispose_image(self.img_on);
+            super::gdipctx::dispose_image(self.img_off);
+        }
+    }
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
@@ -103,10 +117,37 @@ pub unsafe fn create(
         enabled,
         style,
         font,
+        img_on: std::ptr::null_mut(),
+        img_off: std::ptr::null_mut(),
     });
     super::base::attach_state(hwnd, st);
     // shape 투명(07-17 AA 개정): 1비트 리전 클립은 계단 가장자리의 진범 —
     // 대신 모서리를 style.behind(부모 배경색)로 칠하고 AA 원판을 얹는다.
+    hwnd
+}
+
+/// **이미지 아이콘 버튼**(07-18 — 리네임 ± raster 교체): `active`/`disabled`
+/// PNG 바이트로 원형 벡터 대신 알파 이미지를 그린다(상태 전환은 enabled).
+/// enum 확장 변형(모듈 설계 §)의 실체 — 벡터 `create`와 동일 통지·히트테스트.
+#[allow(clippy::too_many_arguments)] // Win32 create 계열 관례
+pub unsafe fn create_image(
+    parent: HWND,
+    x: i32,
+    y: i32,
+    d: i32,
+    id: u32,
+    font: windows::Win32::Graphics::Gdi::HFONT,
+    active: &[u8],
+    disabled: &[u8],
+    enabled: bool,
+    style: Style,
+) -> HWND {
+    let hwnd = create(parent, x, y, d, id, font, Icon::Plus, enabled, style);
+    if let Some(st) = state(hwnd).as_mut() {
+        st.img_on = super::gdipctx::decode_png(active);
+        st.img_off = super::gdipctx::decode_png(disabled);
+        let _ = InvalidateRect(Some(hwnd), None, true);
+    }
     hwnd
 }
 
@@ -151,8 +192,19 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             if let Some(st) = state(hwnd).as_ref() {
                 let mut rc = RECT::default();
                 let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
-                // 모서리 = behind(부모 배경색) → AA 원판이 자연스럽게 블렌드
+                // 모서리 = behind(부모 배경색) → AA 원판/이미지 알파가 자연 블렌드
                 fill(dc, &rc, st.style.behind);
+                // 이미지 모드(07-18 raster): 활성/비활성 PNG를 셀에 스케일 드로우
+                let img = if st.enabled { st.img_on } else { st.img_off };
+                if !img.is_null() {
+                    let mut g = GdipCtx::new(dc);
+                    g.draw_image(
+                        img,
+                        Rect::new(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top),
+                    );
+                    let _ = EndPaint(hwnd, &ps);
+                    return LRESULT(0);
+                }
                 // 원판: 활성 = text_dim(진회색)·비활성 = border(중간 회색 — QA 07-17:
                 // sel_bg는 타이틀 밴드와 동색이라 묻힘 → 한 단계 진하게)
                 let disc = if st.enabled {
