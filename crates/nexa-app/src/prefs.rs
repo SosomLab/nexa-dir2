@@ -22,7 +22,7 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetDlgCtrlID, GetDlgItem, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    GetDlgCtrlID, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
     MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW,
     ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE,
@@ -51,8 +51,13 @@ pub struct PrefValues {
     pub term_cols: i32,
     /// 컬럼 auto-fit 최대 폭(px @96dpi — 07-19).
     pub col_autofit_max: i32,
-    /// 도구모음 순서 문자열(07-19 — 트리 편집).
+    /// 도구모음 순서 문자열(07-19 — 별도 창 편집).
     pub toolbar_order: String,
+    /// 앱 고유 컨텍스트 메뉴 항목 순서/표시(07-19 — 별도 창 편집).
+    pub ctx_menu_order: String,
+    /// 포커스 패널 컬럼 레이아웃(07-19 — 별도 창 편집·적용 = 포커스 패널
+    /// + 동기 규약).
+    pub col_layout: String,
     pub dlg_font: String,
     pub dlg_font_size: i32,
     /// 폰트 슬롯(X-12 — 07-16): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
@@ -104,8 +109,9 @@ enum Kind {
     /// Entry.field = 패밀리, 인자 = 크기 필드 id.
     Font(u32),
     CheckBox, // 불리언(라벨 일체형 — 원본 스크린샷)
-    /// 도구모음 순서 트리(07-19) — NxOrderTree + ▲▼ 이동 버튼.
-    ToolbarOrder,
+    /// 별도 편집 창 호출 버튼(07-19 사용자: 컬럼·툴바·컨텍스트 메뉴 설정은
+    /// 각각 별도 창) — [`crate::ordereditor`] 공통 창.
+    OrderDialog,
 }
 
 /// 설정 항목(레지스트리) — 카테고리·라벨키·설명키·종류·대상 필드 id.
@@ -154,6 +160,8 @@ const F_HDR_BOLD: u32 = 32;
 const F_HDR_ITALIC: u32 = 33;
 const F_COL_AUTOFIT: u32 = 34;
 const F_TOOLBAR_ORDER: u32 = 35;
+const F_COL_LAYOUT: u32 = 36;
+const F_CTX_MENU: u32 = 37;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -311,7 +319,7 @@ fn registry() -> Vec<Entry> {
             cat: "appearance",
             label_key: "pref.toolbarOrder",
             desc_key: "pref.toolbarOrder.desc",
-            kind: Kind::ToolbarOrder,
+            kind: Kind::OrderDialog,
             field: F_TOOLBAR_ORDER,
         },
         Entry {
@@ -404,6 +412,20 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.colAutofitMax.desc",
             kind: Kind::Number,
             field: F_COL_AUTOFIT,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.colLayout",
+            desc_key: "pref.colLayout.desc",
+            kind: Kind::OrderDialog,
+            field: F_COL_LAYOUT,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.ctxMenuOrder",
+            desc_key: "pref.ctxMenuOrder.desc",
+            kind: Kind::OrderDialog,
+            field: F_CTX_MENU,
         },
         Entry {
             cat: "list",
@@ -560,10 +582,6 @@ const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
 const ID_NAV_BASE: u32 = 1600;
 /// 타입어헤드 위치 3×3 피커 셀(오너드로 — QA 07-15) — +0..9.
 const ID_POS_BASE: u32 = 1900;
-/// 도구모음 순서 편집(07-19): 트리 + 위/아래 이동 버튼.
-const ID_TBO_TREE: u32 = 1950;
-const ID_TBO_UP: u32 = 1951;
-const ID_TBO_DOWN: u32 = 1952;
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("NexaPrefs");
@@ -654,33 +672,44 @@ fn sanitize(v: &mut PrefValues) {
     v.toolbar_order = crate::config::serialize_toolbar_order(&crate::config::parse_toolbar_order(
         &v.toolbar_order,
     ));
+    v.ctx_menu_order = crate::config::serialize_order_with(
+        &crate::config::parse_order_with(crate::config::CTXMENU_BLOCKS, &v.ctx_menu_order),
+        true,
+    );
+    v.col_layout = crate::config::serialize_order_with(
+        &crate::config::parse_order_with(crate::config::COLUMN_BLOCKS, &v.col_layout),
+        true,
+    );
     v.typeahead_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
     v.typeahead_pos = v.typeahead_pos.clamp(0, 8);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
 }
 
-/// 도구모음 순서 → 트리 행(라벨, 레벨) — [`tbo_map`]과 index 정렬 일치.
-fn tbo_rows(order: &str) -> Vec<(String, u8)> {
-    let mut rows = Vec::new();
-    for (block, items) in crate::config::parse_toolbar_order(order) {
-        rows.push((tbo_label(&block, None), 0));
-        for it in &items {
-            rows.push((tbo_label(&block, Some(it)), 1));
-        }
+/// 컬럼 key → 표시 라벨(컬럼 편집 창 — 07-19).
+fn col_label(_block: &str, item: Option<&str>) -> String {
+    match item {
+        Some("name") => tr("col.name"),
+        Some("ext") => tr("col.ext"),
+        Some("size") => tr("col.size"),
+        Some("modified") => tr("col.modified"),
+        Some("kind") => tr("col.kind"),
+        _ => tr("pref.colLayout"),
     }
-    rows
 }
 
-/// 행 index → (블록 index, 자식 index — 블록 행 = None).
-fn tbo_map(order: &[(String, Vec<String>)]) -> Vec<(usize, Option<usize>)> {
-    let mut map = Vec::new();
-    for (bi, (_, items)) in order.iter().enumerate() {
-        map.push((bi, None));
-        for ii in 0..items.len() {
-            map.push((bi, Some(ii)));
-        }
+/// 컨텍스트 메뉴 key → 표시 라벨(편집 창 — 07-19).
+fn ctxm_label(block: &str, item: Option<&str>) -> String {
+    match (block, item) {
+        ("row", None) => tr("pref.ctxm.grpRow"),
+        ("bg", None) => tr("pref.ctxm.grpBg"),
+        (_, Some("deletePermanent")) => tr("ctx.deletePermanent"),
+        (_, Some("copyName")) => tr("ctx.copyName"),
+        (_, Some("pasteInto")) => tr("ctx.pasteInto"),
+        (_, Some("paste")) => tr("ctx.paste"),
+        (_, Some("undo")) => tr("menu.edit.undo"),
+        (_, Some("redo")) => tr("menu.edit.redo"),
+        (b, i) => i.unwrap_or(b).to_string(),
     }
-    map
 }
 
 /// 블록/자식 key → 표시 라벨(i18n — 기존 메뉴 키 최대 재사용).
@@ -705,85 +734,7 @@ fn tbo_label(block: &str, item: Option<&str>) -> String {
     }
 }
 
-/// 연속 선택 집합을 한 칸 이동(공용) — `sel`은 오름차순 index, 범위 밖이면 무변경.
-fn shift_range<T>(v: &mut [T], sel: &[usize], up: bool) -> bool {
-    let (lo, hi) = (sel[0], sel[sel.len() - 1]);
-    if up {
-        if lo == 0 {
-            return false;
-        }
-        v[lo - 1..=hi].rotate_left(1);
-    } else {
-        if hi + 1 >= v.len() {
-            return false;
-        }
-        v[lo..=hi + 1].rotate_right(1);
-    }
-    true
-}
-
 impl PrefState {
-    /// 도구모음 순서 이동(07-19) — 그룹(레벨 0) 선택 = 블록 통째,
-    /// 자식(레벨 1) 선택 = 그 그룹 안에서만. 이동 후 재선택 유지.
-    unsafe fn tbo_move(&mut self, up: bool) {
-        let tree = GetDlgItem(Some(self.hwnd), ID_TBO_TREE as i32).unwrap_or_default();
-        if tree.is_invalid() {
-            return;
-        }
-        let sel = crate::ctl::ordertree::selection(tree);
-        if sel.is_empty() {
-            return;
-        }
-        let mut order = crate::config::parse_toolbar_order(&self.values.toolbar_order);
-        let map = tbo_map(&order);
-        let moved: Vec<(usize, Option<usize>)> = sel.iter().map(|&r| map[r]).collect();
-        let ok = match moved[0].1 {
-            None => {
-                // 블록 통째 이동 — 선택 = 블록 index 집합(연속)
-                let bis: Vec<usize> = moved.iter().map(|(b, _)| *b).collect();
-                shift_range(&mut order, &bis, up)
-            }
-            Some(_) => {
-                // 그룹 내 자식 이동
-                let bi = moved[0].0;
-                let iis: Vec<usize> = moved.iter().filter_map(|(_, i)| *i).collect();
-                shift_range(&mut order[bi].1, &iis, up)
-            }
-        };
-        if !ok {
-            return;
-        }
-        self.values.toolbar_order = crate::config::serialize_toolbar_order(&order);
-        // 행 재구성 + 이동분 재선택(새 map에서 이동된 항목 index 역산)
-        crate::ctl::ordertree::set_rows(tree, tbo_rows(&self.values.toolbar_order));
-        let new_map = tbo_map(&order);
-        let delta = |v: usize| if up { v - 1 } else { v + 1 };
-        let new_sel: Vec<usize> = match moved[0].1 {
-            None => {
-                let bis: Vec<usize> = moved.iter().map(|(b, _)| delta(*b)).collect();
-                new_map
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (b, i))| i.is_none() && bis.contains(b))
-                    .map(|(r, _)| r)
-                    .collect()
-            }
-            Some(_) => {
-                let bi = moved[0].0;
-                let iis: Vec<usize> = moved.iter().filter_map(|(_, i)| *i).map(delta).collect();
-                new_map
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (b, i))| *b == bi && i.is_some_and(|x| iis.contains(&x)))
-                    .map(|(r, _)| r)
-                    .collect()
-            }
-        };
-        crate::ctl::ordertree::set_selection(tree, &new_sel);
-        self.apply_now(); // 즉시 적용(X-8) — 도구모음 실시간 재배열
-        let _ = InvalidateRect(Some(self.hwnd), None, false); // 수정됨 바 갱신
-    }
-
     /// VS Code식 즉시 적용(X-8) — 정규화한 현재 값을 소유자에 동기 통지(포인터는 통지 동안만
     /// 유효 — 같은 스레드 SendMessage라 수신 측이 복사를 마친 뒤 반환된다).
     unsafe fn apply_now(&self) {
@@ -919,9 +870,8 @@ impl PrefState {
                 // 수정됨 표시(X-10 ④) — 기본값과 다른 항목 좌측 세로 accent 바
                 let y0 = y;
                 match e.kind {
-                    Kind::ToolbarOrder => {
-                        // 도구모음 순서 트리(07-19) — 캡션 + NxOrderTree +
-                        // 우측 ▲▼(그룹 선택 = 통째 이동·자식 = 그룹 안 이동)
+                    Kind::OrderDialog => {
+                        // 별도 편집 창 호출(07-19) — 캡션 + [편집…] 버튼
                         let cap = mk(
                             self.hwnd,
                             self.font,
@@ -929,53 +879,26 @@ impl PrefState {
                             &label,
                             0,
                             x0,
-                            y,
-                            pane_w,
+                            y + 3,
+                            pane_w - 90,
                             20,
                             0,
                         );
                         self.rows.push(cap);
-                        y += 24;
-                        let rows_v = tbo_rows(&self.values.toolbar_order);
-                        let th = crate::ctl::ordertree::height_for(rows_v.len());
-                        let tw = (pane_w - 40).clamp(160, 320);
-                        let tree = crate::ctl::ordertree::create(
+                        let b = mk(
                             self.hwnd,
-                            x0,
+                            self.font,
+                            w!("BUTTON"),
+                            &tr("pref.editBtn"),
+                            WS_TABSTOP.0,
+                            x0 + pane_w - 84,
                             y,
-                            tw,
-                            th,
-                            ID_TBO_TREE,
-                            self.font,
-                            crate::ctl::style::Style::default(),
+                            76,
+                            24,
+                            ID_FIELD_BASE + e.field,
                         );
-                        crate::ctl::ordertree::set_rows(tree, rows_v);
-                        self.rows.push(tree);
-                        let up = crate::ctl::iconbutton::create(
-                            self.hwnd,
-                            x0 + tw + 10,
-                            y + 2,
-                            22,
-                            ID_TBO_UP,
-                            self.font,
-                            crate::ctl::iconbutton::Icon::Up,
-                            true,
-                            crate::ctl::style::Style::default(),
-                        );
-                        let dn = crate::ctl::iconbutton::create(
-                            self.hwnd,
-                            x0 + tw + 10,
-                            y + 30,
-                            22,
-                            ID_TBO_DOWN,
-                            self.font,
-                            crate::ctl::iconbutton::Icon::Down,
-                            true,
-                            crate::ctl::style::Style::default(),
-                        );
-                        self.rows.push(up);
-                        self.rows.push(dn);
-                        y += th + 6;
+                        self.rows.push(b);
+                        y += 28;
                     }
                     Kind::PosGrid => {
                         // 3×3 이미지 피커(원본 §7-A — QA 07-15 라디오 9종 대체)
@@ -1301,6 +1224,10 @@ impl PrefState {
             F_TERM_COLS => v.term_cols != d.term_cols,
             F_COL_AUTOFIT => v.col_autofit_max != d.col_autofit_max,
             F_TOOLBAR_ORDER => v.toolbar_order != d.toolbar_order,
+            F_COL_LAYOUT => {
+                v.col_layout != crate::config::default_order(crate::config::COLUMN_BLOCKS)
+            }
+            F_CTX_MENU => v.ctx_menu_order != d.ctx_menu_order,
             F_CASE_SORT => v.sort_case_sensitive != d.sort_case_sensitive,
             F_NAV_UP => v.nav_up_align != d.nav_up_align,
             F_TAB_DBL => v.tab_dblclick != d.tab_dblclick,
@@ -1554,6 +1481,20 @@ unsafe extern "system" fn prefs_proc(
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     match msg {
+        m if m == crate::ordereditor::WM_APP_ORDER_EDIT => {
+            // 편집 창 실시간 값(07-19) — 즉시 반영(X-8)
+            if let Some(v) = (lparam.0 as *const String).as_ref() {
+                let s = &mut *st;
+                match wparam.0 as u32 {
+                    F_COL_LAYOUT => s.values.col_layout = v.clone(),
+                    F_CTX_MENU => s.values.ctx_menu_order = v.clone(),
+                    F_TOOLBAR_ORDER => s.values.toolbar_order = v.clone(),
+                    _ => {}
+                }
+                s.apply_now();
+            }
+            LRESULT(0)
+        }
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as u32;
             let notify = (wparam.0 >> 16) as u32;
@@ -1573,11 +1514,51 @@ unsafe extern "system" fn prefs_proc(
                     s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                ID_TBO_UP if notify == crate::ctl::iconbutton::NXIB_CLICK => {
-                    (*st).tbo_move(true);
-                }
-                ID_TBO_DOWN if notify == crate::ctl::iconbutton::NXIB_CLICK => {
-                    (*st).tbo_move(false);
+                i if i == ID_FIELD_BASE + F_TOOLBAR_ORDER
+                    || i == ID_FIELD_BASE + F_COL_LAYOUT
+                    || i == ID_FIELD_BASE + F_CTX_MENU =>
+                {
+                    // 별도 편집 창(07-19 — ordereditor 공통. 변경은
+                    // WM_APP_ORDER_EDIT 실시간 수신 → apply_now)
+                    let s = &mut *st;
+                    let field = i - ID_FIELD_BASE;
+                    let (spec, value) = match field {
+                        F_COL_LAYOUT => (
+                            crate::ordereditor::EditorSpec {
+                                title: tr("pref.colLayout"),
+                                defs: crate::config::COLUMN_BLOCKS,
+                                with_vis: true,
+                                flat: true,
+                                locked: &["name"],
+                                label: col_label,
+                            },
+                            s.values.col_layout.clone(),
+                        ),
+                        F_CTX_MENU => (
+                            crate::ordereditor::EditorSpec {
+                                title: tr("pref.ctxMenuOrder"),
+                                defs: crate::config::CTXMENU_BLOCKS,
+                                with_vis: true,
+                                flat: false,
+                                locked: &[],
+                                label: ctxm_label,
+                            },
+                            s.values.ctx_menu_order.clone(),
+                        ),
+                        _ => (
+                            crate::ordereditor::EditorSpec {
+                                title: tr("pref.toolbarOrder"),
+                                defs: crate::config::TOOLBAR_BLOCKS,
+                                with_vis: false,
+                                flat: false,
+                                locked: &[],
+                                label: tbo_label,
+                            },
+                            s.values.toolbar_order.clone(),
+                        ),
+                    };
+                    crate::ordereditor::show(hwnd, &spec, &value, field, s.font);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 ID_TREE if notify == 1 => {
                     // LBN_SELCHANGE — 트리 노드 선택(전면 개편 07-15): 그룹 = 펼침 토글 +

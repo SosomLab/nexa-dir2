@@ -263,6 +263,52 @@ impl Panel {
         }
     }
 
+    /// 활성 탭 컬럼 순서 드래그 변경 수거(07-19 — 호스트 동기 폴링).
+    pub fn take_col_reordered(&mut self) -> bool {
+        self.tabs[self.active].rows.take_col_reordered()
+    }
+
+    /// 활성 탭의 컬럼 세트(순서·폭) 복제 — 동기/상속 전파용(07-19).
+    pub fn columns_snapshot(&self) -> Vec<Column> {
+        self.rows().columns().to_vec()
+    }
+
+    /// 컬럼 세트(순서·표시·폭) 전 탭 적용(07-19 — 탭 = 패널 상속 규약).
+    pub fn apply_columns(&mut self, cols: &[Column], inv: &mut Invalidations) {
+        for tab in &mut self.tabs {
+            tab.rows.set_columns(cols.to_vec(), inv);
+        }
+    }
+
+    /// 컬럼 레이아웃(key·표시) 적용 — 현재 폭 보존·재표시 컬럼 = 기본 폭.
+    /// 표시 0개 방지: 전부 숨김이면 첫 정의 컬럼(name) 강제 표시(07-19).
+    pub fn apply_col_layout(&mut self, spec: &[(u32, bool)], inv: &mut Invalidations) {
+        let cur = self.columns_snapshot();
+        let mut out: Vec<Column> = Vec::new();
+        for (key, vis) in spec {
+            if !vis {
+                continue;
+            }
+            if let Some(c) = cur.iter().find(|c| c.key == *key) {
+                out.push(c.clone());
+            } else if let Some(c) = self.base_columns.iter().find(|c| c.key == *key) {
+                out.push(c.clone());
+            }
+        }
+        if out.is_empty() {
+            if let Some(c) = cur
+                .first()
+                .cloned()
+                .or_else(|| self.base_columns.first().cloned())
+            {
+                out.push(c);
+            }
+        }
+        if !out.is_empty() {
+            self.apply_columns(&out, inv);
+        }
+    }
+
     pub fn rows(&self) -> &VirtualRows<TreeSource> {
         &self.tabs[self.active].rows
     }

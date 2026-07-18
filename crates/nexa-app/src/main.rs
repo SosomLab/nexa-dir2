@@ -49,6 +49,8 @@ mod shellmenu;
 mod shellpath;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod source;
+#[cfg(windows)]
+mod ordereditor;
 mod svg;
 #[cfg(windows)]
 mod tip;

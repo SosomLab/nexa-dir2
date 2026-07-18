@@ -548,6 +548,10 @@ struct State {
     col_autofit_max: i32,
     /// 도구모음 순서 문자열(설정 영속 — 07-19 prefs 트리 편집).
     toolbar_order: String,
+    /// 앱 고유 컨텍스트 메뉴 항목 순서/표시(설정 영속 — 07-19).
+    ctx_menu_order: String,
+    /// 세션 컬럼 레이아웃 복원 대기(07-19 — DPI set_metrics 이후 폭보다 먼저 적용).
+    pending_cols: [String; 2],
     /// 대화상자 글꼴(확인창·진행 창 — dialog.rs 공유).
     dlg_font: crate::dialog::DlgFont,
     /// 툴바 툴팁(07-18): 표시 중 팝업 · hover 추적(버튼 id, 경과 틱).
@@ -1003,6 +1007,11 @@ pub fn run() -> Result<()> {
         term_cols: settings.term_cols,
         col_autofit_max: settings.col_autofit_max,
         toolbar_order: settings.toolbar_order.clone(),
+        ctx_menu_order: settings.ctx_menu_order.clone(),
+        pending_cols: [
+            session.panels[0].col_layout.clone(),
+            session.panels[1].col_layout.clone(),
+        ],
         dlg_font: crate::dialog::DlgFont {
             family: settings.dlg_font,
             size_pt: settings.dlg_font_size,
@@ -1778,28 +1787,42 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
             Some(d) => trf("ctx.redoOf", &[d]),
             None => tr("menu.edit.redo"),
         };
-        let custom = vec![
-            // 고유 붙여넣기 — 셸 배경 메뉴가 paste 동사를 안 내는 환경 대비(QA 07-13:
-            // 복사 후 빈영역 우클릭에 붙여넣기 부재). 클립보드에 파일 있을 때만 활성
-            CustomItem {
-                id: CTX_PASTE_BG,
-                label: tr("ctx.paste"),
-                enabled: crate::clipboard::has_files(),
-                after_id: None,
-            },
-            CustomItem {
-                id: CTX_UNDO,
-                label: undo_label,
-                enabled: st.history.can_undo(),
-                after_id: None,
-            },
-            CustomItem {
-                id: CTX_REDO,
-                label: redo_label,
-                enabled: st.history.can_redo(),
-                after_id: None,
-            },
-        ];
+        // 순서/표시 = 설정 ctx_menu_order(07-19 — 별도 편집 창)
+        let ord = config::parse_order_with(config::CTXMENU_BLOCKS, &st.ctx_menu_order);
+        let bg_items = ord
+            .iter()
+            .find(|(b, _)| b == "bg")
+            .map(|(_, i)| i.clone())
+            .unwrap_or_default();
+        let mut custom = Vec::new();
+        for (k, vis) in &bg_items {
+            if !vis {
+                continue;
+            }
+            match k.as_str() {
+                // 고유 붙여넣기 — 셸 배경 메뉴가 paste 동사를 안 내는 환경
+                // 대비(QA 07-13). 클립보드에 파일 있을 때만 활성
+                "paste" => custom.push(CustomItem {
+                    id: CTX_PASTE_BG,
+                    label: tr("ctx.paste"),
+                    enabled: crate::clipboard::has_files(),
+                    after_id: None,
+                }),
+                "undo" => custom.push(CustomItem {
+                    id: CTX_UNDO,
+                    label: undo_label.clone(),
+                    enabled: st.history.can_undo(),
+                    after_id: None,
+                }),
+                "redo" => custom.push(CustomItem {
+                    id: CTX_REDO,
+                    label: redo_label.clone(),
+                    enabled: st.history.can_redo(),
+                    after_id: None,
+                }),
+                _ => {}
+            }
+        }
         (dir, GetKeyState(VK_SHIFT.0 as i32) < 0, custom)
     });
     let Some((dir, shift, custom)) = req else {
@@ -1876,32 +1899,45 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         } else {
             None
         };
-        // 고유 병합 항목(원본 S1: 셸이 제공하는 동사는 중복 금지) — 완전 삭제·폴더에 붙여넣기
+        // 고유 병합 항목(원본 S1: 셸이 제공하는 동사는 중복 금지) — 순서/표시 =
+        // 설정 ctx_menu_order(07-19 사용자 — 별도 편집 창)
         let paste_dir = caret_path.filter(|p| targets.len() == 1 && p.is_dir());
-        // "경로 복사"는 셸 항목 제자리 대체(hide→CTX_COPY_PATH — 앱 언어 라벨·윈도우 위치)
-        let mut custom = vec![
-            CustomItem {
-                id: CTX_DELETE_PERMANENT,
-                label: tr("ctx.deletePermanent"),
-                enabled: true,
-                after_id: None,
-            },
-            // 이름 복사(QA 07-14 — 원본 Copy as name): 경로 제외 파일 이름만.
-            // 위치 = "경로 복사"(제자리 대체) 바로 아래(사용자 지시 2026-07-15).
-            CustomItem {
-                id: CTX_COPY_NAME,
-                label: tr("ctx.copyName"),
-                enabled: true,
-                after_id: Some(CTX_COPY_PATH),
-            },
-        ];
-        if paste_dir.is_some() && crate::clipboard::has_files() {
-            custom.push(CustomItem {
-                id: CTX_PASTE_INTO,
-                label: tr("ctx.pasteInto"),
-                enabled: true,
-                after_id: None,
-            });
+        let ord = config::parse_order_with(config::CTXMENU_BLOCKS, &st.ctx_menu_order);
+        let row_items = ord
+            .iter()
+            .find(|(b, _)| b == "row")
+            .map(|(_, i)| i.clone())
+            .unwrap_or_default();
+        let mut custom = Vec::new();
+        for (k, vis) in &row_items {
+            if !vis {
+                continue;
+            }
+            match k.as_str() {
+                "deletePermanent" => custom.push(CustomItem {
+                    id: CTX_DELETE_PERMANENT,
+                    label: tr("ctx.deletePermanent"),
+                    enabled: true,
+                    after_id: None,
+                }),
+                // 이름 복사(QA 07-14) — "경로 복사"(제자리 대체) 바로 아래 고정
+                // (사용자 지시 07-15 — after_id 우선, 설정 순서는 나머지에 적용)
+                "copyName" => custom.push(CustomItem {
+                    id: CTX_COPY_NAME,
+                    label: tr("ctx.copyName"),
+                    enabled: true,
+                    after_id: Some(CTX_COPY_PATH),
+                }),
+                "pasteInto" if paste_dir.is_some() && crate::clipboard::has_files() => {
+                    custom.push(CustomItem {
+                        id: CTX_PASTE_INTO,
+                        label: tr("ctx.pasteInto"),
+                        enabled: true,
+                        after_id: None,
+                    });
+                }
+                _ => {}
+            }
         }
         Some(Req {
             targets,
@@ -3260,8 +3296,10 @@ unsafe fn open_prefs(hwnd: HWND) {
                 term_font_size: st.term_font_size,
                 term_wrap: st.term_wrap,
                 term_cols: st.term_cols,
-        col_autofit_max: st.col_autofit_max,
-        toolbar_order: st.toolbar_order.clone(),
+                col_autofit_max: st.col_autofit_max,
+                toolbar_order: st.toolbar_order.clone(),
+                ctx_menu_order: st.ctx_menu_order.clone(),
+                col_layout: panel_col_layout(&st.panels[st.active]),
                 dlg_font: st.dlg_font.family.clone(),
                 dlg_font_size: st.dlg_font.size_pt,
                 base_font: st.base_font.clone(),
@@ -3454,6 +3492,22 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     if v.col_autofit_max != st.col_autofit_max {
         st.col_autofit_max = v.col_autofit_max.clamp(50, 2000);
     }
+    // 컨텍스트 메뉴 순서/표시(07-19 — 다음 메뉴 표시부터 반영)
+    if v.ctx_menu_order != st.ctx_menu_order {
+        st.ctx_menu_order = v.ctx_menu_order.clone();
+    }
+    // 컬럼 레이아웃(07-19 — 포커스 패널 + 동기 규약)
+    if !v.col_layout.is_empty() && v.col_layout != panel_col_layout(&st.panels[st.active]) {
+        let mut inv = Invalidations::default();
+        let lay = v.col_layout.clone();
+        let a = st.active;
+        apply_col_layout_str(&mut st.panels[a], &lay, &mut inv);
+        if st.col_width_sync {
+            let cols = st.panels[a].columns_snapshot();
+            st.panels[1 - a].apply_columns(&cols, &mut inv);
+        }
+        flush_invalidations(hwnd, &mut inv);
+    }
     // 도구모음 순서(07-19 — prefs 트리 편집 즉시 반영)
     if v.toolbar_order != st.toolbar_order {
         st.toolbar_order = v.toolbar_order.clone();
@@ -3595,6 +3649,7 @@ fn current_session(st: &mut State) -> Session {
                 pinned: st.panels[0].session_pinned(),
                 modes: st.panels[0].session_modes(),
                 col_widths: st.panels[0].col_widths(),
+                col_layout: panel_col_layout(&st.panels[0]),
             },
             PanelSession {
                 tabs: t1,
@@ -3604,6 +3659,7 @@ fn current_session(st: &mut State) -> Session {
                 pinned: st.panels[1].session_pinned(),
                 modes: st.panels[1].session_modes(),
                 col_widths: st.panels[1].col_widths(),
+                col_layout: panel_col_layout(&st.panels[1]),
             },
         ],
     }
@@ -3641,8 +3697,69 @@ fn autofit_column(st: &mut State, panel: usize, col: usize, inv: &mut Invalidati
     sync_col_widths(st, inv); // 패널 탭 상속 + (설정 on 시) 반대 패널 동기
 }
 
+/// 컬럼 key 문자열([`config::COLUMN_BLOCKS`]) ↔ 소스 컬럼 id.
+fn col_key_id(name: &str) -> Option<u32> {
+    Some(match name {
+        "name" => COL_NAME,
+        "ext" => COL_EXT,
+        "size" => COL_SIZE,
+        "modified" => COL_MODIFIED,
+        "kind" => COL_KIND,
+        _ => return None,
+    })
+}
+
+fn col_id_key(id: u32) -> &'static str {
+    match id {
+        COL_EXT => "ext",
+        COL_SIZE => "size",
+        COL_MODIFIED => "modified",
+        COL_KIND => "kind",
+        _ => "name",
+    }
+}
+
+/// 패널의 현재 컬럼 레이아웃 문자열(`cols[name:1,…]` — 표시 컬럼 = 표시 순,
+/// 숨김 컬럼 = 정의 순으로 말미 `:0`).
+fn panel_col_layout(p: &crate::panel::Panel) -> String {
+    let visible: Vec<u32> = p.rows().columns().iter().map(|c| c.key).collect();
+    let mut items: Vec<(String, bool)> = visible
+        .iter()
+        .map(|k| (col_id_key(*k).to_string(), true))
+        .collect();
+    for (_, defs) in config::COLUMN_BLOCKS {
+        for d in *defs {
+            if !items.iter().any(|(k, _)| k == d) {
+                items.push((d.to_string(), false));
+            }
+        }
+    }
+    config::serialize_order_with(&[("cols".to_string(), items)], true)
+}
+
+/// 레이아웃 문자열을 패널에 적용(07-19 — 폭 보존은 [`crate::panel::Panel::apply_col_layout`]).
+fn apply_col_layout_str(p: &mut crate::panel::Panel, layout: &str, inv: &mut Invalidations) {
+    let parsed = config::parse_order_with(config::COLUMN_BLOCKS, layout);
+    let Some((_, items)) = parsed.first() else {
+        return;
+    };
+    let spec: Vec<(u32, bool)> = items
+        .iter()
+        .filter_map(|(k, v)| col_key_id(k).map(|id| (id, *v)))
+        .collect();
+    p.apply_col_layout(&spec, inv);
+}
+
 fn sync_col_widths(st: &mut State, inv: &mut Invalidations) {
     for i in 0..2 {
+        // 드래그 재배열(07-19) — 순서+폭을 탭 상속·(동기 on 시) 반대 패널 동기
+        if st.panels[i].take_col_reordered() {
+            let cols = st.panels[i].columns_snapshot();
+            st.panels[i].apply_columns(&cols, inv);
+            if st.col_width_sync {
+                st.panels[1 - i].apply_columns(&cols, inv);
+            }
+        }
         if st.panels[i].take_col_resized() {
             let w = st.panels[i].col_widths();
             st.panels[i].apply_col_widths(&w, inv);
@@ -3699,6 +3816,7 @@ fn current_settings(st: &State) -> Settings {
         term_cols: st.term_cols,
         col_autofit_max: st.col_autofit_max,
         toolbar_order: st.toolbar_order.clone(),
+        ctx_menu_order: st.ctx_menu_order.clone(),
         dlg_font: st.dlg_font.family.clone(),
         dlg_font_size: st.dlg_font.size_pt,
         launcher: st.launcher_visible,
@@ -3872,8 +3990,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let cols = columns(st.dpi);
                 st.panels[0].set_metrics(m, cols.clone(), &mut inv);
                 st.panels[1].set_metrics(m, cols, &mut inv);
-                // 세션 컬럼 폭 복원(07-18) — DPI 기본 폭 리셋 **이후** 적용
+                // 세션 컬럼 복원(07-18/19) — DPI 기본 리셋 **이후**:
+                // 레이아웃(순서·표시) 먼저, 폭(표시 순 대응)은 그 다음
                 for i in 0..2 {
+                    let lay = std::mem::take(&mut st.pending_cols[i]);
+                    if !lay.is_empty() {
+                        apply_col_layout_str(&mut st.panels[i], &lay, &mut inv);
+                    }
                     let w = std::mem::take(&mut st.pending_colw[i]);
                     if !w.is_empty() {
                         st.panels[i].apply_col_widths(&w, &mut inv);

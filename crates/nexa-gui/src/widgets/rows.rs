@@ -138,6 +138,17 @@ pub enum ScrollAlign {
     Bottom,
 }
 
+/// 헤더 드래그 재배열 상태(07-19 사용자 — 탭 드래그와 동일 UX).
+#[derive(Clone, Copy, Debug)]
+struct ColDrag {
+    col: usize,
+    press_x: i32,
+    cur_x: i32,
+    /// 임계(5px) 초과 이동 후 활성 — 활성 전 MouseUp = 정렬 클릭.
+    active: bool,
+    shift: bool,
+}
+
 /// 리사이즈 드래그 상태.
 #[derive(Clone, Copy, Debug)]
 struct ResizeDrag {
@@ -194,8 +205,12 @@ pub struct VirtualRows<S> {
     /// 정렬 상태(우선순위 순). 빈 목록 = 소스 기본 정렬.
     sort: Vec<(u32, bool)>,
     resize: Option<ResizeDrag>,
+    /// 헤더 라벨 드래그 재배열(07-19) — 활성 시 페인트가 삽입 인디케이터.
+    col_drag: Option<ColDrag>,
     /// 컬럼 폭이 사용자 리사이즈로 변경됨(호스트 폴링 — take_col_resized).
     col_resized: bool,
+    /// 컬럼 순서가 드래그로 변경됨(호스트 폴링 — take_col_reordered).
+    col_reordered: bool,
     band: Option<BandDrag>,
     /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
@@ -234,7 +249,9 @@ impl<S: RowSource> VirtualRows<S> {
             columns: Vec::new(),
             sort: Vec::new(),
             resize: None,
+            col_drag: None,
             col_resized: false,
+            col_reordered: false,
             band: None,
             caret: None,
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
@@ -934,6 +951,31 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
+    /// 드래그 x에서 가장 가까운 컬럼 경계 index(0..=len — 삽입 위치).
+    fn nearest_boundary(&self, x: i32) -> usize {
+        let n = self.columns.len();
+        let mut best = 0usize;
+        let mut best_d = i32::MAX;
+        for i in 0..=n {
+            let bx = if i < n {
+                self.col_x(i)
+            } else {
+                self.columns_right()
+            };
+            let d = (x - bx).abs();
+            if d < best_d {
+                best_d = d;
+                best = i;
+            }
+        }
+        best
+    }
+
+    /// 컬럼 순서 드래그 변경 수거(1회성 — 호스트가 탭 상속/좌우 동기, 07-19).
+    pub fn take_col_reordered(&mut self) -> bool {
+        std::mem::take(&mut self.col_reordered)
+    }
+
     /// 컬럼 리사이즈 발생 여부 수거(1회성 — 호스트가 폭 동기화에 사용, 07-18).
     pub fn take_col_resized(&mut self) -> bool {
         std::mem::take(&mut self.col_resized)
@@ -1360,11 +1402,17 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             start_w: self.columns[i].width,
                             start_w2,
                         });
-                    } else if self.columns[i].sortable {
-                        // 다중열 트리거 = Shift 전용(사용자 재확정 07-18 —
-                        // Ctrl 병행은 혼동으로 회귀·원본 docs/23 §4 규약 유지)
-                        let key = self.columns[i].key;
-                        self.apply_sort(key, shift, inv);
+                    } else {
+                        // 헤더 라벨 프레스 = 드래그 재배열 후보(07-19 — 탭과
+                        // 동일 UX). 정렬은 MouseUp 무드래그 클릭에서 확정
+                        // (다중열 = Shift 전용 — 07-18 규약 유지).
+                        self.col_drag = Some(ColDrag {
+                            col: i,
+                            press_x: x,
+                            cur_x: x,
+                            active: false,
+                            shift,
+                        });
                     }
                 } else if let Some(row) = self.row_at(x, y) {
                     if self.in_marker_zone(row, x) {
@@ -1441,6 +1489,15 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             inv.push(self.bounds);
                         }
                     }
+                } else if let Some(mut d) = self.col_drag {
+                    d.cur_x = x;
+                    if !d.active && (x - d.press_x).abs() > 5 {
+                        d.active = true; // 임계 초과 — 재배열 모드 진입
+                    }
+                    self.col_drag = Some(d);
+                    if d.active {
+                        inv.push(self.bounds); // 삽입 인디케이터 갱신
+                    }
                 } else if let Some(mut band) = self.band {
                     band.cx = x;
                     band.cy = y;
@@ -1489,6 +1546,25 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             }
             InputEvent::MouseUp { .. } => {
                 self.resize = None;
+                if let Some(d) = self.col_drag.take() {
+                    if d.active {
+                        // 경계선 근처 드롭 = 그 위치로 이동(07-19 — 가장 가까운
+                        // 컬럼 경계로 스냅)
+                        let ins = self.nearest_boundary(d.cur_x);
+                        let to = if ins > d.col { ins - 1 } else { ins };
+                        if to != d.col && to < self.columns.len() {
+                            let c = self.columns.remove(d.col);
+                            self.columns.insert(to, c);
+                            self.col_reordered = true; // 호스트 동기 폴링
+                            self.clamp_scroll_x();
+                        }
+                        inv.push(self.bounds);
+                    } else if self.columns[d.col].sortable {
+                        // 무드래그 클릭 = 정렬(다중열 = Shift 전용 — 07-18)
+                        let key = self.columns[d.col].key;
+                        self.apply_sort(key, d.shift, inv);
+                    }
+                }
                 // 클릭 확정(무드래그) — 기선택 행 프레스를 단일 선택으로 붕괴(탐색기 규약).
                 // 파일 DnD가 시작됐으면 MouseUp이 오지 않아 다중 선택이 유지된다.
                 if let Some(row) = self.press_pending.take() {
@@ -1631,6 +1707,19 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 ),
                 theme.panel_bg,
             );
+        }
+
+        // 컬럼 드래그 삽입 인디케이터(07-19 — 경계 근처 스냅 시각화)
+        if let Some(d) = self.col_drag {
+            if d.active {
+                let ins = self.nearest_boundary(d.cur_x);
+                let bx = if ins < self.columns.len() {
+                    self.col_x(ins)
+                } else {
+                    self.columns_right()
+                };
+                ctx.fill_rect(Rect::new(bx - 1, b.y, 2, b.h), theme.accent);
+            }
         }
 
         // ── 헤더(본문 위에 그려 스크롤과 무관하게 고정) ──
@@ -1982,6 +2071,13 @@ mod tests {
         );
     }
 
+    /// 완전 클릭(down+up) — 정렬은 MouseUp 무드래그에서 확정(07-19 드래그
+    /// 재배열 도입으로 이동).
+    fn click(v: &mut VirtualRows<Rows>, inv: &mut Invalidations, x: i32, y: i32, shift: bool) {
+        down(v, inv, x, y, shift);
+        v.on_event(&InputEvent::MouseUp { x, y }, inv);
+    }
+
     fn key(k: Key) -> InputEvent {
         InputEvent::Key {
             key: k,
@@ -2053,11 +2149,11 @@ mod tests {
     fn header_click_cycles_three_states() {
         let (mut v, mut inv) = list_with_cols(10, 220);
         let name_x = 50; // 이름 컬럼(0..200)
-        down(&mut v, &mut inv, name_x, 5, false);
+        click(&mut v, &mut inv, name_x, 5, false);
         assert_eq!(v.sort(), &[(0, false)]); // ▲
-        down(&mut v, &mut inv, name_x, 5, false);
+        click(&mut v, &mut inv, name_x, 5, false);
         assert_eq!(v.sort(), &[(0, true)]); // ▼
-        down(&mut v, &mut inv, name_x, 5, false);
+        click(&mut v, &mut inv, name_x, 5, false);
         assert_eq!(v.sort(), &[]); // 없음(열거)
         assert_eq!(
             *v.source().sorts.borrow(),
@@ -2068,34 +2164,34 @@ mod tests {
     #[test]
     fn plain_click_resets_to_single_sort() {
         let (mut v, mut inv) = list_with_cols(10, 220);
-        down(&mut v, &mut inv, 50, 5, false); // 이름 ▲
-        down(&mut v, &mut inv, 250, 5, true); // Shift+크기 → 다중 [이름▲, 크기▲]
+        click(&mut v, &mut inv, 50, 5, false); // 이름 ▲
+        click(&mut v, &mut inv, 250, 5, true); // Shift+크기 → 다중 [이름▲, 크기▲]
         assert_eq!(v.sort(), &[(0, false), (2, false)]);
-        down(&mut v, &mut inv, 250, 5, false); // 단순 클릭 = 단일 리셋 + 크기의 3상태(▲→▼)
+        click(&mut v, &mut inv, 250, 5, false); // 단순 클릭 = 단일 리셋 + 크기의 3상태(▲→▼)
         assert_eq!(v.sort(), &[(2, true)]);
     }
 
     #[test]
     fn shift_click_adds_cycles_and_removes_keys() {
         let (mut v, mut inv) = list_with_cols(10, 220);
-        down(&mut v, &mut inv, 50, 5, true); // 정렬 없음 + Shift = 단일로 동작
+        click(&mut v, &mut inv, 50, 5, true); // 정렬 없음 + Shift = 단일로 동작
         assert_eq!(v.sort(), &[(0, false)]);
-        down(&mut v, &mut inv, 250, 5, true); // 크기 추가(오름)
-        down(&mut v, &mut inv, 350, 5, true); // 날짜 추가(오름 — 날짜 컬럼 300..450 중 가시 범위)
+        click(&mut v, &mut inv, 250, 5, true); // 크기 추가(오름)
+        click(&mut v, &mut inv, 350, 5, true); // 날짜 추가(오름 — 날짜 컬럼 300..450 중 가시 범위)
         assert_eq!(v.sort(), &[(0, false), (2, false), (3, false)]);
-        down(&mut v, &mut inv, 250, 5, true); // 크기 방향 순환 ▲→▼
+        click(&mut v, &mut inv, 250, 5, true); // 크기 방향 순환 ▲→▼
         assert_eq!(v.sort(), &[(0, false), (2, true), (3, false)]);
-        down(&mut v, &mut inv, 250, 5, true); // 크기 ▼→없음(제거, 뒤 순번 당김)
+        click(&mut v, &mut inv, 250, 5, true); // 크기 ▼→없음(제거, 뒤 순번 당김)
         assert_eq!(v.sort(), &[(0, false), (3, false)]);
     }
 
     #[test]
     fn header_label_shows_arrow_before_and_badge_after() {
         let (mut v, mut inv) = list_with_cols(10, 220);
-        down(&mut v, &mut inv, 50, 5, false); // 이름 ▲
+        click(&mut v, &mut inv, 50, 5, false); // 이름 ▲
                                               // 순번 = 정렬 시작부터 상시 표시(사용자 확정 07-18 — 단일 = ①)
         assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");
-        down(&mut v, &mut inv, 250, 5, true); // + 크기
+        click(&mut v, &mut inv, 250, 5, true); // + 크기
         assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");
         assert_eq!(v.header_label(&v.columns()[1]), "▲ 크기 ②");
         assert_eq!(v.header_label(&v.columns()[2]), "수정한 날짜");
@@ -2481,7 +2577,7 @@ mod tests {
     #[test]
     fn replace_source_resets_view_but_keeps_sort() {
         let (mut v, mut inv) = list_with_cols(100, 220);
-        down(&mut v, &mut inv, 50, 5, false); // 이름 ▲ 정렬
+        click(&mut v, &mut inv, 50, 5, false); // 이름 ▲ 정렬
         v.on_event(&key(Key::End), &mut inv); // 스크롤·캐럿 이동
         assert!(v.scroll_row() > 0 && v.caret().is_some());
 

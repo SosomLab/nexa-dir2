@@ -107,6 +107,8 @@ pub struct Settings {
     /// 형식 = [`serialize_toolbar_order`], 읽기 = [`parse_toolbar_order`]
     /// (검증·누락 보충 — 전방 호환).
     pub toolbar_order: String,
+    /// 앱 고유 컨텍스트 메뉴 항목 순서/표시(07-19 — [`CTXMENU_BLOCKS`] 문법).
+    pub ctx_menu_order: String,
     /// 패널 모드(사용자 요청 07-16 — 원본 FR-C1 단일↔듀얼): "dual"(기본)|"single"
     /// (우 패널 숨김 — 상태는 보존, 복귀 시 원복).
     pub panel_mode: String,
@@ -166,6 +168,7 @@ impl Default for Settings {
             col_width_sync: true,
             col_autofit_max: 400,
             toolbar_order: default_toolbar_order(),
+            ctx_menu_order: default_order(CTXMENU_BLOCKS),
             panel_mode: "dual".into(),
             info_mode: "dual".into(),
             launcher: true,
@@ -192,6 +195,9 @@ pub struct PanelSession {
     /// 확장성: 향후 탭별 폭은 `panel{i}.colw{j}` 키로 같은 레벨에 추가한다
     /// (탭별 modes와 동일 직렬화 레벨 — 사용자 지침).
     pub col_widths: Vec<i32>,
+    /// 컬럼 레이아웃(07-19) — `cols[name:1,ext:0,…]` 문법([`COLUMN_BLOCKS`]).
+    /// 빈 문자열 = 기본. 폭([`Self::col_widths`])은 **표시 컬럼의 표시 순** 대응.
+    pub col_layout: String,
 }
 
 /// 세션(원본 session.json 대응) — `data\session.cfg`(패널·탭·활성·펼침).
@@ -298,6 +304,7 @@ impl Settings {
         ));
         out.push_str(&format!("col_autofit_max={}\n", self.col_autofit_max));
         out.push_str(&format!("toolbar_order={}\n", self.toolbar_order));
+        out.push_str(&format!("ctx_menu_order={}\n", self.ctx_menu_order));
         out.push_str(&format!(
             "typeahead_scope={}\ntypeahead_reset_ms={}\ntypeahead_pos={}\ntypeahead_special={}\ntypeahead_space={}\ntypeahead_backspace={}\n",
             self.typeahead_scope,
@@ -432,6 +439,10 @@ impl Settings {
                 "toolbar_order" => {
                     s.toolbar_order = serialize_toolbar_order(&parse_toolbar_order(v))
                 }
+                "ctx_menu_order" => {
+                    s.ctx_menu_order =
+                        serialize_order_with(&parse_order_with(CTXMENU_BLOCKS, v), true)
+                }
                 "view_mode" if matches!(v, "tree" | "flat" | "tiles") => {
                     s.view_mode = v.into() // 미지 값 = 기본(tree) 유지
                 }
@@ -542,6 +553,9 @@ impl Session {
                 out.push_str(&format!("panel{i}.modes={}\n", p.modes.join("|")));
             }
             // 패널 컬럼 폭(07-18 — 탭 상속. 탭별 확장 = panel{i}.colw{j} 예약)
+            if !p.col_layout.is_empty() {
+                out.push_str(&format!("panel{i}.cols={}\n", p.col_layout));
+            }
             if !p.col_widths.is_empty() {
                 let ws: Vec<String> = p.col_widths.iter().map(|w| w.to_string()).collect();
                 out.push_str(&format!("panel{i}.colw={}\n", ws.join(",")));
@@ -574,6 +588,12 @@ impl Session {
                 "panel0.pinned" | "panel1.pinned" => {
                     let idx = usize::from(k.starts_with("panel1"));
                     s.panels[idx].pinned = v.split('|').map(|f| f == "1").collect();
+                }
+                "panel0.cols" | "panel1.cols" => {
+                    // 컬럼 레이아웃(07-19) — 재직렬화 정규화(미지 토큰 제거·보충)
+                    let idx = usize::from(k.starts_with("panel1"));
+                    s.panels[idx].col_layout =
+                        serialize_order_with(&parse_order_with(COLUMN_BLOCKS, v), true);
                 }
                 "panel0.colw" | "panel1.colw" => {
                     // 패널 컬럼 폭(07-18 — 탭 상속. 탭별 확장 = panel{i}.colw{j})
@@ -670,6 +690,22 @@ pub const TOOLBAR_BLOCKS: &[(&str, &[&str])] = &[
     ("show", &["hidden", "dot"]),
 ];
 
+/// 기본 순서 문자열(정의 순·전부 표시 — vis 포함 문법).
+pub fn default_order(defs: OrderDefs) -> String {
+    serialize_order_with(
+        &defs
+            .iter()
+            .map(|(b, items)| {
+                (
+                    b.to_string(),
+                    items.iter().map(|i| (i.to_string(), true)).collect(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        true,
+    )
+}
+
 /// 기본 순서 문자열(= [`TOOLBAR_BLOCKS`] 정의 순).
 pub fn default_toolbar_order() -> String {
     serialize_toolbar_order(
@@ -680,61 +716,106 @@ pub fn default_toolbar_order() -> String {
     )
 }
 
-/// 순서 직렬화 — `블록[자식,자식]|블록|…`(단일 블록 = 대괄호 생략).
-pub fn serialize_toolbar_order(order: &[(String, Vec<String>)]) -> String {
+/// 순서 정의 타입(SSOT) — `(블록 key, 자식 key 목록)`, 빈 자식 = 단일 블록.
+pub type OrderDefs = &'static [(&'static str, &'static [&'static str])];
+
+/// 파일 목록 컬럼 정의(07-19 — key 순서 = 기본 표시 순서. name = 상시 표시).
+pub const COLUMN_BLOCKS: OrderDefs = &[("cols", &["name", "ext", "size", "modified", "kind"])];
+
+/// 앱 고유 컨텍스트 메뉴 항목 정의(07-19 — 셸 제공 동사는 대상 아님).
+pub const CTXMENU_BLOCKS: OrderDefs = &[
+    ("row", &["deletePermanent", "copyName", "pasteInto"]),
+    ("bg", &["paste", "undo", "redo"]),
+];
+
+/// 제네릭 순서 직렬화 — `블록[자식:vis,…]|블록|…`(단일 블록 = 대괄호 생략).
+/// `with_vis` = 표시 여부 포함(`:0`/`:1` — 컬럼·컨텍스트 메뉴).
+pub fn serialize_order_with(order: &[(String, Vec<(String, bool)>)], with_vis: bool) -> String {
     order
         .iter()
         .map(|(b, items)| {
             if items.is_empty() {
                 b.clone()
             } else {
-                format!("{b}[{}]", items.join(","))
+                let inner: Vec<String> = items
+                    .iter()
+                    .map(|(k, v)| {
+                        if with_vis {
+                            format!("{k}:{}", u8::from(*v))
+                        } else {
+                            k.clone()
+                        }
+                    })
+                    .collect();
+                format!("{b}[{}]", inner.join(","))
             }
         })
         .collect::<Vec<_>>()
         .join("|")
 }
 
-/// 순서 파싱 + 검증 — 미지 블록/자식·중복은 버리고, **누락분은 기본 정의
-/// 순으로 보충**(전방 호환: 새 버튼이 추가돼도 기존 설정이 유효).
-pub fn parse_toolbar_order(s: &str) -> Vec<(String, Vec<String>)> {
-    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+/// 제네릭 순서 파싱 + 검증 — 미지 블록/자식·중복은 버리고, **누락분은 기본
+/// 정의 순으로 보충**(전방 호환). `자식:0/1` = 표시 여부(생략 = 표시).
+pub fn parse_order_with(defs: OrderDefs, s: &str) -> Vec<(String, Vec<(String, bool)>)> {
+    let mut out: Vec<(String, Vec<(String, bool)>)> = Vec::new();
     for tok in s.split('|') {
         let tok = tok.trim();
         let (name, inner) = match tok.split_once('[') {
             Some((n, rest)) => (n.trim(), Some(rest.trim_end_matches(']'))),
             None => (tok, None),
         };
-        let Some((_, def_items)) = TOOLBAR_BLOCKS.iter().find(|(b, _)| *b == name) else {
+        let Some((_, def_items)) = defs.iter().find(|(b, _)| *b == name) else {
             continue; // 미지 블록
         };
         if out.iter().any(|(b, _)| b == name) {
             continue; // 중복 블록
         }
-        let mut items: Vec<String> = Vec::new();
+        let mut items: Vec<(String, bool)> = Vec::new();
         if let Some(inner) = inner {
             for it in inner.split(',') {
                 let it = it.trim();
-                if def_items.contains(&it) && !items.iter().any(|x| x == it) {
-                    items.push(it.to_string());
+                let (k, vis) = match it.split_once(':') {
+                    Some((k, v)) => (k.trim(), v.trim() != "0"),
+                    None => (it, true),
+                };
+                if def_items.contains(&k) && !items.iter().any(|(x, _)| x == k) {
+                    items.push((k.to_string(), vis));
                 }
             }
         }
-        // 누락 자식 보충(기본 정의 순)
         for d in *def_items {
-            if !items.iter().any(|x| x == d) {
-                items.push(d.to_string());
+            if !items.iter().any(|(x, _)| x == d) {
+                items.push((d.to_string(), true)); // 누락 자식 보충(표시)
             }
         }
         out.push((name.to_string(), items));
     }
-    // 누락 블록 보충(기본 정의 순)
-    for (b, def_items) in TOOLBAR_BLOCKS {
+    for (b, def_items) in defs {
         if !out.iter().any(|(n, _)| n == b) {
-            out.push((b.to_string(), def_items.iter().map(|i| i.to_string()).collect()));
+            out.push((
+                b.to_string(),
+                def_items.iter().map(|i| (i.to_string(), true)).collect(),
+            ));
         }
     }
     out
+}
+
+/// 순서 직렬화(툴바 호환 — vis 없음).
+pub fn serialize_toolbar_order(order: &[(String, Vec<String>)]) -> String {
+    let with_vis: Vec<(String, Vec<(String, bool)>)> = order
+        .iter()
+        .map(|(b, items)| (b.clone(), items.iter().map(|i| (i.clone(), true)).collect()))
+        .collect();
+    serialize_order_with(&with_vis, false)
+}
+
+/// 순서 파싱(툴바 호환 래퍼 — [`parse_order_with`] + [`TOOLBAR_BLOCKS`]).
+pub fn parse_toolbar_order(s: &str) -> Vec<(String, Vec<String>)> {
+    parse_order_with(TOOLBAR_BLOCKS, s)
+        .into_iter()
+        .map(|(b, items)| (b, items.into_iter().map(|(k, _)| k).collect()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -774,6 +855,7 @@ mod tests {
             col_width_sync: false, // 기본 true — 왕복 검증 위해 반전
             col_autofit_max: 640,
             toolbar_order: "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]".into(),
+            ctx_menu_order: "row[copyName:1,deletePermanent:0,pasteInto:1]|bg[paste:1,undo:1,redo:1]".into(),
             dock_ratio: 0.42,
             dock_split: 0.61,
             term_font: "D2Coding, JetBrainsMono Nerd Font".into(),
@@ -844,6 +926,11 @@ mod tests {
             parsed.toolbar_order,
             "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]",
             "도구모음 순서 왕복(07-19)"
+        );
+        assert_eq!(
+            parsed.ctx_menu_order,
+            "row[copyName:1,deletePermanent:0,pasteInto:1]|bg[paste:1,undo:1,redo:1]",
+            "컨텍스트 메뉴 순서/표시 왕복(07-19)"
         );
         assert_eq!(
             Settings::parse("term_cols=20").term_cols,
@@ -932,6 +1019,7 @@ mod tests {
                     pinned: vec![true, false], // 탭0 고정 — 07-15 왕복
                     modes: vec!["tiles".into(), "tree".into()], // 탭별 보기 모드 — 07-16 왕복
                     col_widths: vec![320, 64, 96], // 패널 컬럼 폭 — 07-18 왕복
+                    col_layout: "cols[ext:1,name:1,size:0,modified:1,kind:1]".into(),
                 },
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\")],
@@ -941,6 +1029,7 @@ mod tests {
                     pinned: vec![],
                     modes: vec![],
                     col_widths: vec![], // 빈 목록 = 생략 직렬화
+                    col_layout: String::new(),
                 },
             ],
         };

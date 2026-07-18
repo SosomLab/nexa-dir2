@@ -9,6 +9,7 @@
 ## 2026-07-19
 
 - **트리 보기 SVG 전환(main 직커밋 — 사용자 SVG 제공)**: view-tree.svg 등록(EMBEDDED_SVG 3호)·PNG 3종 제거 — **보기 모드 3종 전부 SVG 단독** 완결. 194 green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
+- **설정 편집기 3종 공통 창 + 컬럼 기능(`feat/order-editors` — 사용자 요청 3건)**: **ordereditor 공통 모달**(EditorSpec 어댑터 — config 제네릭 순서 문법·NxOrderTree 체크 열) → 툴바/파일 컬럼/컨텍스트 메뉴 설정을 **각각 별도 창**으로(prefs = [편집…] 버튼·실시간 적용). **컬럼 헤더 드래그 재배열**(무드래그 = 정렬·인디케이터·colsync 연동·세션 `panel{i}.cols`)·컨텍스트 메뉴 표시/순서 반영. 실기 QA 전 항목·196+ green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **타일 보기 SVG 전환(main 직커밋 — 사용자 SVG 제공)**: view-tiles.svg 등록(EMBEDDED_SVG 2호)·PNG 3종 제거(SVG = 전 크기 즉석 래스터). 릴리스 재빌드·캡처 확인. 194 green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 
 ## 2026-07-18

@@ -30,6 +30,8 @@ use super::style::{fill, frame, Style};
 
 /// 선택 변경 통지(WM_COMMAND HIWORD).
 pub const NXOT_SELCHANGE: u32 = 1;
+/// 체크 토글 통지(07-19 — 표시 여부 편집). 토글 행 = [`take_toggled`].
+pub const NXOT_TOGGLE: u32 = 2;
 
 /// 행 높이(px @96dpi).
 const ROW_H: i32 = 22;
@@ -37,11 +39,13 @@ const ROW_H: i32 = 22;
 const INDENT: i32 = 18;
 
 struct OtState {
-    /// (라벨, 레벨 0/1).
-    rows: Vec<(String, u8)>,
+    /// (라벨, 레벨 0/1, 체크 — None = 체크 열 없음).
+    rows: Vec<(String, u8, Option<bool>)>,
     /// 선택(index 오름차순 — 항상 같은 부모의 형제).
     sel: Vec<usize>,
     anchor: Option<usize>,
+    /// 마지막 토글 행(NXOT_TOGGLE 통지 후 호스트 수거).
+    toggled: Option<usize>,
     font: HFONT,
     style: Style,
 }
@@ -50,7 +54,7 @@ static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("Nexa.NxOrderTree");
 
 /// 부모 index(-1 = 최상위) — 순서 유도: 레벨 1 행은 직전 레벨 0 행 소속.
-fn parent_of(rows: &[(String, u8)], i: usize) -> i32 {
+fn parent_of(rows: &[(String, u8, Option<bool>)], i: usize) -> i32 {
     if rows[i].1 == 0 {
         return -1;
     }
@@ -96,6 +100,7 @@ pub unsafe fn create(
                 rows: Vec::new(),
                 sel: Vec::new(),
                 anchor: None,
+                toggled: None,
                 font,
                 style,
             }),
@@ -105,7 +110,7 @@ pub unsafe fn create(
 }
 
 /// 행 재설정(선택/앵커 초기화 — 호스트가 이동 후 [`set_selection`]).
-pub unsafe fn set_rows(hwnd: HWND, rows: Vec<(String, u8)>) {
+pub unsafe fn set_rows(hwnd: HWND, rows: Vec<(String, u8, Option<bool>)>) {
     if let Some(st) = super::base::state::<OtState>(hwnd).as_mut() {
         st.rows = rows;
         st.sel.clear();
@@ -137,6 +142,22 @@ pub fn height_for(rows: usize) -> i32 {
     rows as i32 * ROW_H + 2
 }
 
+/// 마지막 체크 토글 행 수거(1회성 — NXOT_TOGGLE 통지 후 호출).
+/// 토글은 내부 상태에 이미 반영됨(호스트 거부 시 [`set_rows`]로 재설정).
+pub unsafe fn take_toggled(hwnd: HWND) -> Option<usize> {
+    super::base::state::<OtState>(hwnd)
+        .as_mut()
+        .and_then(|st| st.toggled.take())
+}
+
+/// 현재 체크 상태 목록(체크 열 없는 행 = None).
+pub unsafe fn checks(hwnd: HWND) -> Vec<Option<bool>> {
+    super::base::state::<OtState>(hwnd)
+        .as_ref()
+        .map(|st| st.rows.iter().map(|(_, _, c)| *c).collect())
+        .unwrap_or_default()
+}
+
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_PAINT => {
@@ -149,7 +170,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 frame(dc, &rc, st.style.border);
                 let old = SelectObject(dc, st.font.into());
                 SetBkMode(dc, TRANSPARENT);
-                for (i, (label, level)) in st.rows.iter().enumerate() {
+                for (i, (label, level, check)) in st.rows.iter().enumerate() {
                     let top = 1 + i as i32 * ROW_H;
                     let row = RECT {
                         left: rc.left + 1,
@@ -172,12 +193,36 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                             st.style.text_dim
                         },
                     );
+                    let mut tx = row.left + 8 + *level as i32 * INDENT;
+                    if let Some(on) = check {
+                        // 체크 박스(12px — 표시 여부 열, 07-19)
+                        let bs = 12;
+                        let bx = tx;
+                        let by = row.top + (ROW_H - bs) / 2;
+                        let brc = RECT {
+                            left: bx,
+                            top: by,
+                            right: bx + bs,
+                            bottom: by + bs,
+                        };
+                        frame(dc, &brc, st.style.border);
+                        if *on {
+                            let irc = RECT {
+                                left: bx + 3,
+                                top: by + 3,
+                                right: bx + bs - 3,
+                                bottom: by + bs - 3,
+                            };
+                            fill(dc, &irc, st.style.accent);
+                        }
+                        tx += bs + 6;
+                    }
                     let mut w16: Vec<u16> = label.encode_utf16().collect();
                     if w16.is_empty() {
                         continue; // 빈 Vec→DrawTextW = AV(원장)
                     }
                     let mut trc = RECT {
-                        left: row.left + 8 + *level as i32 * INDENT,
+                        left: tx,
                         top: row.top,
                         right: row.right - 4,
                         bottom: row.bottom,
@@ -200,6 +245,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 let y = (lp.0 as u32 >> 16) as i16 as i32;
                 let i = ((y - 1) / ROW_H) as usize;
                 if (y - 1) >= 0 && i < st.rows.len() {
+                    let x = (lp.0 as u32 & 0xFFFF) as i16 as i32;
+                    // 체크 존(박스 12px + 여백) 클릭 = 표시 토글(07-19)
+                    if let Some(on) = st.rows[i].2 {
+                        let bx = 2 + 8 + st.rows[i].1 as i32 * INDENT;
+                        if x >= bx - 2 && x < bx + 16 {
+                            st.rows[i].2 = Some(!on);
+                            st.toggled = Some(i);
+                            let _ = InvalidateRect(Some(hwnd), None, false);
+                            super::base::notify(hwnd, NXOT_TOGGLE);
+                            return LRESULT(0);
+                        }
+                    }
                     let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
                     let mut changed = false;
                     if shift {
