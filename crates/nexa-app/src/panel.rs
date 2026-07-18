@@ -245,6 +245,24 @@ impl Panel {
         self.active
     }
 
+    /// 활성 탭의 컬럼 리사이즈 발생 수거(호스트 동기 폴링 — 07-18).
+    pub fn take_col_resized(&mut self) -> bool {
+        self.tabs[self.active].rows.take_col_resized()
+    }
+
+    /// 활성 탭의 현재 컬럼 폭(패널 대표값 — 탭은 패널 폭 상속 규약).
+    pub fn col_widths(&self) -> Vec<i32> {
+        self.rows().columns().iter().map(|c| c.width).collect()
+    }
+
+    /// 패널 전 탭에 컬럼 폭 적용(탭 = 패널 상속 — 사용자 확정 07-18.
+    /// 향후 탭별 독립 폭은 세션 `panel{i}.colw{j}` 확장으로).
+    pub fn apply_col_widths(&mut self, widths: &[i32], inv: &mut Invalidations) {
+        for tab in &mut self.tabs {
+            tab.rows.set_col_widths(widths, inv);
+        }
+    }
+
     pub fn rows(&self) -> &VirtualRows<TreeSource> {
         &self.tabs[self.active].rows
     }

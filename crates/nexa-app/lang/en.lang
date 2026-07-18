@@ -287,10 +287,11 @@ pref.hdrBold.desc = Decoration only - same family/size as the file list.
 pref.hdrItalic = Italic column headers
 pref.hdrItalic.desc = Decoration only - same family/size as the file list.
 # panel/info modes (07-16)
-menu.view.panelDual = Dual panels
-menu.view.panelSingle = Single panel
+menu.view.panelDual = Dual file panels
+menu.view.panelSingle = Single file panel
 menu.view.infoDual = Dual info panes
 menu.view.infoSingle = Single info pane
+menu.view.colWidthSync = Synchronize column widths
 status.infoLocked = Info pane is fixed to single in single-panel mode
 # bulk rename v2 (X-22)
 bulk.kind.date = Add Date

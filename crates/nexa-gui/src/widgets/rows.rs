@@ -194,6 +194,8 @@ pub struct VirtualRows<S> {
     /// 정렬 상태(우선순위 순). 빈 목록 = 소스 기본 정렬.
     sort: Vec<(u32, bool)>,
     resize: Option<ResizeDrag>,
+    /// 컬럼 폭이 사용자 리사이즈로 변경됨(호스트 폴링 — take_col_resized).
+    col_resized: bool,
     band: Option<BandDrag>,
     /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
@@ -232,6 +234,7 @@ impl<S: RowSource> VirtualRows<S> {
             columns: Vec::new(),
             sort: Vec::new(),
             resize: None,
+            col_resized: false,
             band: None,
             caret: None,
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
@@ -931,6 +934,27 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
+    /// 컬럼 리사이즈 발생 여부 수거(1회성 — 호스트가 폭 동기화에 사용, 07-18).
+    pub fn take_col_resized(&mut self) -> bool {
+        std::mem::take(&mut self.col_resized)
+    }
+
+    /// 컬럼 폭 일괄 적용(순서 대응·개수 부족분 무시 — 패널 상속/좌우 동기, 07-18).
+    pub fn set_col_widths(&mut self, widths: &[i32], inv: &mut Invalidations) {
+        let mut changed = false;
+        for (c, w) in self.columns.iter_mut().zip(widths) {
+            let w = (*w).max(c.min_width);
+            if c.width != w {
+                c.width = w;
+                changed = true;
+            }
+        }
+        if changed {
+            self.clamp_scroll_x();
+            inv.push(self.bounds);
+        }
+    }
+
     /// 헤더 셀 제목: ▲/▼는 이름 앞, 정렬 순번(①②…)은 이름 뒤(원본 docs/23 §4).
     /// 순번은 **정렬 시작부터 상시 표시**(사용자 확정 07-18 — 단일 정렬 = ①,
     /// Ctrl/Shift로 추가한 컬럼 = ② 순차).
@@ -1345,6 +1369,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         {
                             self.columns[drag.col].width = nw1;
                             self.columns[drag.col + 1].width = nw2;
+                            self.col_resized = true; // 호스트 동기 폴링(07-18)
                             self.clamp_scroll_x();
                             inv.push(self.bounds);
                         }
@@ -1352,6 +1377,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         let w = drag.start_w + dx;
                         if w != self.columns[drag.col].width {
                             self.columns[drag.col].width = w;
+                            self.col_resized = true; // 호스트 동기 폴링(07-18)
                             self.clamp_scroll_x();
                             inv.push(self.bounds);
                         }

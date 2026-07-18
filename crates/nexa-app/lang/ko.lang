@@ -284,10 +284,11 @@ pref.hdrBold.desc = 장식만 — 패밀리·크기는 파일 목록과 동일.
 pref.hdrItalic = 컬럼 헤더 이탤릭
 pref.hdrItalic.desc = 장식만 — 패밀리·크기는 파일 목록과 동일.
 # panel/info modes (07-16)
-menu.view.panelDual = 듀얼 패널
-menu.view.panelSingle = 싱글 패널
+menu.view.panelDual = 듀얼 파일 패널
+menu.view.panelSingle = 싱글 파일 패널
 menu.view.infoDual = 듀얼 정보
 menu.view.infoSingle = 싱글 정보
+menu.view.colWidthSync = 컬럼 넓이 동기화
 status.infoLocked = 싱글 패널에서는 정보 모드가 싱글로 고정됩니다
 # bulk rename v2 (X-22)
 bulk.kind.date = 날짜 삽입

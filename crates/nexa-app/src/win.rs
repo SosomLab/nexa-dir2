@@ -144,6 +144,8 @@ const CMD_BULK_RENAME: u32 = 61;
 /// ctl 갤러리(GroupCard 검증 — **임시** 도구 모음 버튼, 사용자 요청 07-17.
 /// 카드 재편(X-23) 완료 시 버튼 제거).
 const CMD_CTLDEMO: u32 = 62;
+/// 컬럼 넓이 동기화 토글(사용자 확정 07-18 — 보기 메뉴 패널 모드 4종 하단).
+const CMD_COLW_SYNC: u32 = 63;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 
@@ -242,6 +244,7 @@ fn build_menus(
     view_mode: &str,
     panel_mode: &str,
     info_single_eff: bool,
+    col_width_sync: bool,
 ) -> Vec<Menu> {
     let mut view_items = vec![
         // 보기 모드 라디오(07-16 — 원본 FR-A4 1차: 계층/일반/타일)
@@ -256,6 +259,8 @@ fn build_menus(
             .checked(panel_mode == "single"),
         MenuItem::new(CMD_INFO_DUAL, tr("menu.view.infoDual"), "").checked(!info_single_eff),
         MenuItem::new(CMD_INFO_SINGLE, tr("menu.view.infoSingle"), "").checked(info_single_eff),
+        // 컬럼 넓이 동기화(사용자 확정 07-18 — 모드 4종 하단·기본 on·영속)
+        MenuItem::new(CMD_COLW_SYNC, tr("menu.view.colWidthSync"), "").checked(col_width_sync),
         MenuItem::separator(),
         MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
         MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
@@ -411,6 +416,11 @@ struct State {
     list_folder_bold: bool,
     header_bold: bool,
     header_italic: bool,
+    /// 컬럼 넓이 동기화(07-18) — on = 좌/우 패널 실시간 동기(영속).
+    col_width_sync: bool,
+    /// 세션 복원 컬럼 폭(07-18) — DPI set_metrics(기본 폭 리셋) **이후** 적용
+    /// 하려고 보류(WM_NCCREATE에서 소비).
+    pending_colw: [Vec<i32>; 2],
     statusbar: StatusBar,
     /// 듀얼 패널(0=좌 주, 1=우 — docs/20 §2). 우 패널 숨김 토글은 후속.
     panels: [Panel; 2],
@@ -832,6 +842,7 @@ pub fn run() -> Result<()> {
                 &settings.view_mode,
                 &settings.panel_mode,
                 settings.panel_mode == "single" || settings.info_mode == "single",
+                settings.col_width_sync,
             ),
             m.row_h,
             m.pad_x,
@@ -861,6 +872,11 @@ pub fn run() -> Result<()> {
         list_font_size: settings.list_font_size,
         list_folder_bold: settings.list_folder_bold,
         header_bold: settings.header_bold,
+        col_width_sync: settings.col_width_sync,
+        pending_colw: [
+            session.panels[0].col_widths.clone(),
+            session.panels[1].col_widths.clone(),
+        ],
         header_italic: settings.header_italic,
         statusbar: StatusBar::new(m.row_h, m.pad_x),
         panels: [left, right],
@@ -2655,6 +2671,19 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
             let _ = InvalidateRect(Some(hwnd), None, false);
         }
+        CMD_COLW_SYNC => {
+            // 컬럼 넓이 동기화 토글(사용자 확정 07-18 — 영속·on 전환 시 활성
+            // 패널 폭으로 반대 패널 즉시 정렬)
+            st.col_width_sync = !st.col_width_sync;
+            st.menubar
+                .set_checked(CMD_COLW_SYNC, st.col_width_sync, &mut inv);
+            if st.col_width_sync {
+                let w = st.panels[st.active].col_widths();
+                st.panels[1 - st.active].apply_col_widths(&w, &mut inv);
+            }
+            let settings = current_settings(st);
+            let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
+        }
         CMD_PANEL_SINGLE | CMD_PANEL_DUAL => {
             // 패널 모드(07-16 — 원본 FR-C1): 싱글 = 우 패널 숨김(**상태 보존** — 탭/
             // 세션 그대로, 복귀 시 원복). 싱글 진입 시 활성 = 좌 강제.
@@ -2825,6 +2854,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             &st.view_mode,
             &st.panel_mode,
             single_info(st),
+            st.col_width_sync,
         ),
         inv,
     );
@@ -3328,6 +3358,7 @@ fn current_session(st: &mut State) -> Session {
                 locked: st.panels[0].session_locked(),
                 pinned: st.panels[0].session_pinned(),
                 modes: st.panels[0].session_modes(),
+                col_widths: st.panels[0].col_widths(),
             },
             PanelSession {
                 tabs: t1,
@@ -3336,6 +3367,7 @@ fn current_session(st: &mut State) -> Session {
                 locked: st.panels[1].session_locked(),
                 pinned: st.panels[1].session_pinned(),
                 modes: st.panels[1].session_modes(),
+                col_widths: st.panels[1].col_widths(),
             },
         ],
     }
@@ -3344,6 +3376,20 @@ fn current_session(st: &mut State) -> Session {
 /// 현재 상태 → 설정 스냅샷(즉시 영속·종료 저장 공용 — 단일 원천).
 /// 설정 즉시 영속(QA 07-17): 메뉴 라디오·토글도 변경 즉시 저장 — 종료 저장에만
 /// 의존하면 비정상 종료 시 유실(언어 변경 유실 사고).
+/// 컬럼 리사이즈 후 폭 동기(사용자 확정 07-18): 같은 패널 전 탭 = 상속,
+/// `col_width_sync`면 반대 패널도 동일 폭. 마우스 디스패치 뒤 폴링.
+fn sync_col_widths(st: &mut State, inv: &mut Invalidations) {
+    for i in 0..2 {
+        if st.panels[i].take_col_resized() {
+            let w = st.panels[i].col_widths();
+            st.panels[i].apply_col_widths(&w, inv);
+            if st.col_width_sync {
+                st.panels[1 - i].apply_col_widths(&w, inv);
+            }
+        }
+    }
+}
+
 fn persist_settings(st: &State) {
     let settings = current_settings(st);
     let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
@@ -3366,6 +3412,7 @@ fn current_settings(st: &State) -> Settings {
         list_folder_bold: st.list_folder_bold,
         header_bold: st.header_bold,
         header_italic: st.header_italic,
+        col_width_sync: st.col_width_sync,
         lang: st.lang_setting.clone(),
         show_hidden: st.show_hidden,
         show_dotfiles: st.show_dotfiles,
@@ -3560,6 +3607,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let cols = columns(st.dpi);
                 st.panels[0].set_metrics(m, cols.clone(), &mut inv);
                 st.panels[1].set_metrics(m, cols, &mut inv);
+                // 세션 컬럼 폭 복원(07-18) — DPI 기본 폭 리셋 **이후** 적용
+                for i in 0..2 {
+                    let w = std::mem::take(&mut st.pending_colw[i]);
+                    if !w.is_empty() {
+                        st.panels[i].apply_col_widths(&w, &mut inv);
+                    }
+                }
                 sync_focus_visuals(st, &mut inv);
                 st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
                 st.toolbar.set_metrics(m.row_h, m.pad_x, &mut inv);
@@ -4066,7 +4120,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 드롭다운 아래 hover 잔상 방지
                         st.panels[0].on_event(&ev, &mut inv);
                         st.panels[1].on_event(&ev, &mut inv);
-                        // 탭 드래그 재정렬(편의 UX ②) — Move 액션 즉시 반영
+                        sync_col_widths(st, &mut inv); // 컬럼 폭 동기(07-18)
+                                                       // 탭 드래그 재정렬(편의 UX ②) — Move 액션 즉시 반영
                         let ctx = st.nav_ctx();
                         st.panels[0].drain_actions(ctx, &mut inv);
                         st.panels[1].drain_actions(ctx, &mut inv);
@@ -4124,6 +4179,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let mut inv = Invalidations::default();
                 st.panels[0].on_event(&ev, &mut inv);
                 st.panels[1].on_event(&ev, &mut inv);
+                sync_col_widths(st, &mut inv); // 컬럼 폭 동기(07-18)
                 flush_invalidations(hwnd, &mut inv);
                 // 느린 재클릭 리네임 — 클릭 확정(무드래그) 시 **더블클릭 시간만큼 지연** 후
                 // 진입(그 안에 두 번째 클릭 = 더블클릭 열기 → WM_LBUTTONDBLCLK가 취소, QA 07-14)
