@@ -97,6 +97,9 @@ pub struct Settings {
     pub typeahead_backspace: bool,
     /// 보기 모드(사용자 요청 07-16): "tree"(계층 — 기본)|"flat"(일반 폴더)|"tiles"(타일).
     pub view_mode: String,
+    /// 컬럼 넓이 동기화(사용자 확정 07-18) — on = 좌/우 패널 폭 실시간 동기,
+    /// off = 패널별 독립(탭은 패널 폭 상속).
+    pub col_width_sync: bool,
     /// 패널 모드(사용자 요청 07-16 — 원본 FR-C1 단일↔듀얼): "dual"(기본)|"single"
     /// (우 패널 숨김 — 상태는 보존, 복귀 시 원복).
     pub panel_mode: String,
@@ -153,6 +156,7 @@ impl Default for Settings {
             typeahead_space: true,
             typeahead_backspace: true,
             view_mode: "tree".into(),
+            col_width_sync: true,
             panel_mode: "dual".into(),
             info_mode: "dual".into(),
             launcher: true,
@@ -175,6 +179,10 @@ pub struct PanelSession {
     pub pinned: Vec<bool>,
     /// 탭별 보기 모드("tree"|"flat"|"tiles" — 사용자 요청 07-16: 탭별 설정).
     pub modes: Vec<String>,
+    /// 패널 컬럼 폭(px — 탭은 패널 폭 상속, 사용자 확정 07-18).
+    /// 확장성: 향후 탭별 폭은 `panel{i}.colw{j}` 키로 같은 레벨에 추가한다
+    /// (탭별 modes와 동일 직렬화 레벨 — 사용자 지침).
+    pub col_widths: Vec<i32>,
 }
 
 /// 세션(원본 session.json 대응) — `data\session.cfg`(패널·탭·활성·펼침).
@@ -274,6 +282,10 @@ impl Settings {
             self.view_mode,
             self.panel_mode,
             self.info_mode
+        ));
+        out.push_str(&format!(
+            "col_width_sync={}\n",
+            u8::from(self.col_width_sync)
         ));
         out.push_str(&format!(
             "typeahead_scope={}\ntypeahead_reset_ms={}\ntypeahead_pos={}\ntypeahead_special={}\ntypeahead_space={}\ntypeahead_backspace={}\n",
@@ -399,6 +411,7 @@ impl Settings {
                 "nav_up_align" if matches!(v, "top" | "center" | "bottom") => {
                     s.nav_up_align = v.into()
                 }
+                "col_width_sync" => s.col_width_sync = v != "0",
                 "view_mode" if matches!(v, "tree" | "flat" | "tiles") => {
                     s.view_mode = v.into() // 미지 값 = 기본(tree) 유지
                 }
@@ -508,6 +521,11 @@ impl Session {
             if p.modes.iter().any(|m| m != "tree") {
                 out.push_str(&format!("panel{i}.modes={}\n", p.modes.join("|")));
             }
+            // 패널 컬럼 폭(07-18 — 탭 상속. 탭별 확장 = panel{i}.colw{j} 예약)
+            if !p.col_widths.is_empty() {
+                let ws: Vec<String> = p.col_widths.iter().map(|w| w.to_string()).collect();
+                out.push_str(&format!("panel{i}.colw={}\n", ws.join(",")));
+            }
         }
         out
     }
@@ -536,6 +554,14 @@ impl Session {
                 "panel0.pinned" | "panel1.pinned" => {
                     let idx = usize::from(k.starts_with("panel1"));
                     s.panels[idx].pinned = v.split('|').map(|f| f == "1").collect();
+                }
+                "panel0.colw" | "panel1.colw" => {
+                    // 패널 컬럼 폭(07-18 — 탭 상속. 탭별 확장 = panel{i}.colw{j})
+                    let idx = usize::from(k.starts_with("panel1"));
+                    s.panels[idx].col_widths = v
+                        .split(',')
+                        .filter_map(|w| w.trim().parse::<i32>().ok())
+                        .collect();
                 }
                 "panel0.modes" | "panel1.modes" => {
                     let idx = usize::from(k.starts_with("panel1"));
@@ -627,6 +653,7 @@ mod tests {
             show_dotfiles: true,
             split: 0.62,
             dock: true,
+            col_width_sync: false, // 기본 true — 왕복 검증 위해 반전
             dock_ratio: 0.42,
             dock_split: 0.61,
             term_font: "D2Coding, JetBrainsMono Nerd Font".into(),
@@ -701,6 +728,7 @@ mod tests {
         assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
         assert_eq!(parsed.tab_dblclick, "lock", "탭 더블클릭 동작 왕복(07-15)");
         assert_eq!(parsed.view_mode, "tiles", "보기 모드 왕복(07-16)");
+        assert!(!parsed.col_width_sync, "컬럼 동기화 왕복(07-18)");
         assert_eq!(parsed.panel_mode, "single", "패널 모드 왕복(07-16)");
         assert_eq!(parsed.info_mode, "single", "정보 모드 왕복(07-16)");
         assert_eq!(
@@ -777,6 +805,7 @@ mod tests {
                     locked: vec![false, true], // 탭1 잠금 — 편의 UX ② 왕복
                     pinned: vec![true, false], // 탭0 고정 — 07-15 왕복
                     modes: vec!["tiles".into(), "tree".into()], // 탭별 보기 모드 — 07-16 왕복
+                    col_widths: vec![320, 64, 96], // 패널 컬럼 폭 — 07-18 왕복
                 },
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\")],
@@ -785,6 +814,7 @@ mod tests {
                     locked: vec![],
                     pinned: vec![],
                     modes: vec![],
+                    col_widths: vec![], // 빈 목록 = 생략 직렬화
                 },
             ],
         };

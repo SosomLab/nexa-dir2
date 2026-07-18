@@ -125,6 +125,8 @@ struct BrState {
     /// 위→아래 순서 적용. + = 아래에 카드 추가·− = 해당 카드 삭제,
     /// **마지막 1장은 삭제 불가** — 사용자 확정 07-17).
     cards: Vec<HWND>,
+    /// 카드 스크롤 뷰포트(NexaCardHost — 카드들의 부모, 07-18).
+    host: HWND,
     /// 미리보기 NxGrid(적용/이전/이후 — 07-18).
     prev: HWND,
     /// 행별 적용 제외(그리드 적용 열 체크 해제 — items와 같은 길이).
@@ -204,9 +206,12 @@ unsafe fn ctl(dlg: HWND, id: u32) -> HWND {
     if let Ok(h) = GetDlgItem(Some(dlg), id as i32) {
         return h;
     }
+    // 재귀 하강(07-18 — 카드가 스크롤 호스트 아래로 들어가 2단 깊이):
+    // 직속 우선 후 각 자식 서브트리 탐색(첫 매치 규약 유지)
     let mut c = GetWindow(dlg, GW_CHILD).unwrap_or_default();
     while !c.is_invalid() {
-        if let Ok(h) = GetDlgItem(Some(c), id as i32) {
+        let h = ctl(c, id);
+        if !h.is_invalid() {
             return h;
         }
         c = GetWindow(c, GW_HWNDNEXT).unwrap_or_default();
@@ -379,15 +384,26 @@ unsafe fn harvest(st: &BrState) -> Vec<RenameOp> {
 unsafe fn relayout_cards(st: &BrState) {
     use windows::Win32::UI::WindowsAndMessaging::MoveWindow;
     let one = st.cards.len() <= 1;
-    for (i, c) in st.cards.iter().enumerate() {
-        let _ = MoveWindow(
-            *c,
-            PAD,
-            PAD + i as i32 * (CARD_H + CARD_GAP),
-            FORM_W,
-            CARD_H,
-            true,
-        );
+    // 콘텐츠 높이(kind별 fitting 합) → 스크롤 클램프 → 배치(호스트 기준 y-scroll)
+    let total: i32 = st
+        .cards
+        .iter()
+        .map(|c| card_h(card_kind(*c)) + CARD_GAP)
+        .sum::<i32>()
+        - if st.cards.is_empty() { 0 } else { CARD_GAP };
+    let view = host_view_h(st.host);
+    let scroll = if let Some(hs) = host_state(st.host).as_mut() {
+        hs.content = total;
+        hs.scroll = hs.scroll.clamp(0, (total - view).max(0));
+        hs.scroll
+    } else {
+        0
+    };
+    let mut y = -scroll;
+    for c in st.cards.iter() {
+        let h_i = card_h(card_kind(*c));
+        let _ = MoveWindow(*c, 0, y, FORM_W, h_i, true);
+        y += h_i + CARD_GAP;
         SendMessageW(
             ctl(*c, ID_DEL),
             crate::ctl::iconbutton::NXIB_SETENABLE,
@@ -395,6 +411,7 @@ unsafe fn relayout_cards(st: &BrState) {
             None,
         );
     }
+    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(st.host), None, true);
 }
 
 /// 미리보기·충돌 재계산 → 우측 목록·오류 표시·[적용] 활성 판정.
@@ -509,9 +526,270 @@ fn kind_index_of(op: &RenameOp) -> Option<usize> {
     }
 }
 
-/// 카드 크기(타이틀 34 + 본문 168)·간격.
-const CARD_H: i32 = 34 + 168;
+/// 카드 타이틀 밴드 높이·카드 간격.
+const TITLE_H: i32 = 34;
 const CARD_GAP: i32 = 8;
+/// kind별 본문 마지막 행 인덱스(build_card_body의 row(k)와 동기 — 사용자
+/// 확정 07-18: 마지막 컨트롤 기준 하단 공백 제거 fitting).
+const KIND_LAST_ROW: [i32; 6] = [4, 3, 2, 1, 4, 4];
+
+/// 카드 전체 높이(kind별) = 타이틀 + 상단 8 + 28×행 + 컨트롤 23 + 하단 8.
+fn card_h(kind: usize) -> i32 {
+    TITLE_H + 8 + 28 * KIND_LAST_ROW.get(kind).copied().unwrap_or(4) + 23 + 8
+}
+
+// ── 카드 스크롤 뷰포트(사용자 확정 07-18 — 그리드 오버레이 바 방식):
+//    카드 다수 시 하단 바(프리셋·버튼) 불침범, 폼 영역만 스크롤 ──
+
+const HOST_CLASS: PCWSTR = w!("NexaCardHost");
+static HOST_REGISTER: std::sync::Once = std::sync::Once::new();
+/// 카드 우측 썸 트랙 여백(카드가 덮지 않는 영역 — 오버레이 썸이 여기 그려짐).
+const HOST_BAR: i32 = 10;
+const HOST_TIMER_FADE: usize = 2;
+const HOST_FADE_MS: u32 = 900;
+
+struct HostState {
+    /// 세로 스크롤 오프셋(px).
+    scroll: i32,
+    /// 콘텐츠 전체 높이(카드 합 — relayout_cards가 갱신).
+    content: i32,
+    /// 오버레이 바 표시 중(스크롤 직후 — 페이드 타이머 소등).
+    bars: bool,
+    /// 썸 드래그(시작 y, 시작 scroll).
+    drag: Option<(i32, i32)>,
+}
+
+unsafe fn host_state(h: HWND) -> *mut HostState {
+    crate::ctl::base::state(h)
+}
+
+unsafe fn host_view_h(h: HWND) -> i32 {
+    let mut rc = RECT::default();
+    let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(h, &mut rc);
+    rc.bottom
+}
+
+/// 세로 썸 rect(그리드 v_thumb 픽셀판) — 스크롤 불요 시 None.
+unsafe fn host_thumb(h: HWND, hs: &HostState, wide: bool) -> Option<RECT> {
+    let mut rc = RECT::default();
+    let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(h, &mut rc);
+    let view = rc.bottom;
+    if hs.content <= view {
+        return None;
+    }
+    let th = ((view as i64 * view as i64 / hs.content.max(1) as i64) as i32).max(24);
+    let max_s = (hs.content - view).max(1);
+    let ty = ((view - th) as i64 * hs.scroll as i64 / max_s as i64) as i32;
+    let w = if wide { 10 } else { 6 };
+    Some(RECT {
+        left: rc.right - w - 2,
+        top: ty,
+        right: rc.right - 2,
+        bottom: ty + th,
+    })
+}
+
+/// 스크롤 설정(클램프) + 카드 재배치 + 오버레이 표시·페이드 재무장.
+unsafe fn host_set_scroll(h: HWND, v: i32) {
+    let Some(hs) = host_state(h).as_mut() else {
+        return;
+    };
+    let view = host_view_h(h);
+    hs.scroll = v.clamp(0, (hs.content - view).max(0));
+    hs.bars = true;
+    let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
+        Some(h),
+        HOST_TIMER_FADE,
+        HOST_FADE_MS,
+        None,
+    );
+    if let Ok(dlg) = GetParent(h) {
+        let st = GetWindowLongPtrW(dlg, GWLP_USERDATA) as *mut BrState;
+        if let Some(stm) = st.as_ref() {
+            relayout_cards(stm);
+        }
+    }
+    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(h), None, true);
+}
+
+unsafe extern "system" fn host_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        KillTimer, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_TIMER,
+    };
+    match msg {
+        WM_CREATE => LRESULT(0),
+        WM_DESTROY => {
+            crate::ctl::base::drop_state::<HostState>(hwnd);
+            LRESULT(0)
+        }
+        // 카드 통지 투과(그룹카드 → 호스트 → 다이얼로그 — 중첩 투명성 유지)
+        WM_COMMAND => match GetParent(hwnd) {
+            Ok(p) => SendMessageW(p, msg, Some(wparam), Some(lparam)),
+            Err(_) => LRESULT(0),
+        },
+        m if (WM_CTLCOLOREDIT..=WM_CTLCOLORSTATIC).contains(&m) => match GetParent(hwnd) {
+            Ok(p) => SendMessageW(p, msg, Some(wparam), Some(lparam)),
+            Err(_) => DefWindowProcW(hwnd, msg, wparam, lparam),
+        },
+        WM_MOUSEWHEEL => {
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let cur = host_state(hwnd).as_ref().map_or(0, |h| h.scroll);
+            host_set_scroll(hwnd, cur - delta.signum() * 48);
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            if let Some(hs) = host_state(hwnd).as_mut() {
+                if hs.bars {
+                    if let Some(t) = host_thumb(hwnd, hs, true) {
+                        if x >= t.left && x < t.right && y >= t.top && y < t.bottom {
+                            hs.drag = Some((y, hs.scroll));
+                            let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(hwnd);
+                            let _ = InvalidateRect(Some(hwnd), None, true);
+                        }
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let drag = host_state(hwnd).as_ref().and_then(|h| h.drag);
+            if let Some((sy, s0)) = drag {
+                if let Some(hs) = host_state(hwnd).as_ref() {
+                    let view = host_view_h(hwnd);
+                    let th =
+                        ((view as i64 * view as i64 / hs.content.max(1) as i64) as i32).max(24);
+                    let denom = (view - th).max(1);
+                    let max_s = (hs.content - view).max(0);
+                    host_set_scroll(hwnd, s0 + (y - sy) * max_s / denom);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if let Some(hs) = host_state(hwnd).as_mut() {
+                if hs.drag.take().is_some() {
+                    let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == HOST_TIMER_FADE => {
+            let _ = KillTimer(Some(hwnd), HOST_TIMER_FADE);
+            if let Some(hs) = host_state(hwnd).as_mut() {
+                if hs.drag.is_none() {
+                    hs.bars = false;
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let dc = BeginPaint(hwnd, &mut ps);
+            let style2 = Style::default();
+            let mut rc = RECT::default();
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
+            crate::ctl::style::fill(dc, &rc, style2.bg);
+            if let Some(hs) = host_state(hwnd).as_ref() {
+                let dragging = hs.drag.is_some();
+                if hs.bars || dragging {
+                    if let Some(t) = host_thumb(hwnd, hs, dragging) {
+                        use nexa_gui::DrawCtx;
+                        if dragging {
+                            let track = RECT {
+                                left: t.left,
+                                top: rc.top,
+                                right: rc.right,
+                                bottom: rc.bottom,
+                            };
+                            crate::ctl::style::fill(dc, &track, style2.sel_bg);
+                        }
+                        let mut g = crate::ctl::gdipctx::GdipCtx::new(dc);
+                        g.fill_round_rect(
+                            nexa_gui::Rect::new(t.left, t.top, t.right - t.left, t.bottom - t.top),
+                            (t.right - t.left) / 2,
+                            crate::ctl::gdipctx::color(style2.border),
+                        );
+                    }
+                }
+            }
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// 카드 호스트 생성(폼 영역 뷰포트 — 우측 썸 트랙 여백 포함 폭).
+unsafe fn make_card_host(dlg: HWND, h: i32) -> HWND {
+    crate::ctl::base::register_class(&HOST_REGISTER, HOST_CLASS, Some(host_proc));
+    let host = CreateWindowExW(
+        WINDOW_EX_STYLE(0x0001_0000), // WS_EX_CONTROLPARENT — Tab이 카드로
+        HOST_CLASS,
+        w!(""),
+        windows::Win32::UI::WindowsAndMessaging::WS_CHILD
+            | WS_VISIBLE
+            | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                0x0200_0000, /* WS_CLIPCHILDREN */
+            ),
+        PAD,
+        PAD,
+        FORM_W + HOST_BAR,
+        h,
+        Some(dlg),
+        None,
+        None,
+        None,
+    )
+    .unwrap_or_default();
+    crate::ctl::base::attach_state(
+        host,
+        Box::new(HostState {
+            scroll: 0,
+            content: 0,
+            bars: false,
+            drag: None,
+        }),
+    );
+    host
+}
+
+/// `at` 카드가 뷰포트에 보이도록 스크롤 보정 후 재배치(+ 추가 직후).
+unsafe fn ensure_card_visible(st: &BrState, at: usize) {
+    let view = host_view_h(st.host);
+    let mut top = 0;
+    for c in st.cards.iter().take(at) {
+        top += card_h(card_kind(*c)) + CARD_GAP;
+    }
+    let h = st.cards.get(at).map_or(0, |c| card_h(card_kind(*c)));
+    if let Some(hs) = host_state(st.host).as_mut() {
+        if top + h - hs.scroll > view {
+            hs.scroll = top + h - view;
+        }
+        if top < hs.scroll {
+            hs.scroll = top;
+        }
+        hs.bars = true;
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
+            Some(st.host),
+            HOST_TIMER_FADE,
+            HOST_FADE_MS,
+            None,
+        );
+    }
+    relayout_cards(st);
+}
 
 /// 카드 생성(X-23 PF 모델) — 타이틀 = 동작 콤보 + ±(+ = 아래 카드 추가·
 /// − = 이 카드 삭제[마지막 1장 비활성]) + kind 본문. 위치는 relayout_cards가 확정.
@@ -527,8 +805,8 @@ unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
         "",
         crate::ctl::groupcard::GroupCardOpts {
             corner: 8,
-            title_h: 34,
-            body_h: CARD_H - 34,
+            title_h: TITLE_H,
+            body_h: card_h(kind) - TITLE_H,
         },
         style2,
     );
@@ -1059,7 +1337,7 @@ unsafe fn set_form_from_op(card: HWND, op: &RenameOp) {
 }
 
 /// 카드 스택을 파이프라인으로 재구성(프리셋 불러오기 — 기존 카드 전부 교체).
-unsafe fn rebuild_cards(dlg: HWND, st: &mut BrState, ops: &[RenameOp]) {
+unsafe fn rebuild_cards(st: &mut BrState, ops: &[RenameOp]) {
     for c in st.cards.drain(..) {
         let _ = DestroyWindow(c);
     }
@@ -1073,12 +1351,12 @@ unsafe fn rebuild_cards(dlg: HWND, st: &mut BrState, ops: &[RenameOp]) {
         let Some(kind) = kind_index_of(op) else {
             continue;
         };
-        let card = make_card(dlg, st.font, kind);
+        let card = make_card(st.host, st.font, kind);
         set_form_from_op(card, op);
         st.cards.push(card);
     }
     if st.cards.is_empty() {
-        st.cards.push(make_card(dlg, st.font, 0)); // 빈/전량 스킵 = 기본 카드 1장
+        st.cards.push(make_card(st.host, st.font, 0)); // 빈/전량 스킵 = 기본 카드 1장
     }
     relayout_cards(st);
 }
@@ -1119,7 +1397,7 @@ unsafe fn rebuild_preset_menu(dlg: HWND, st: &mut BrState) {
     st.preset_menu = crate::ctl::menubutton::create(
         dlg,
         PAD,
-        CLIENT_H - PAD - 26 + 2,
+        CLIENT_H - PAD - 21 + 2,
         48,
         0,
         ID_PRESET_MENU,
@@ -1522,6 +1800,17 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     match msg {
+        m if m == windows::Win32::UI::WindowsAndMessaging::WM_MOUSEWHEEL => {
+            // 폼(카드) 영역 휠 = 카드 호스트 스크롤(그리드는 자체 수신 —
+            // 카드 내부 EDIT 포커스 시 버블이 여기로 온다)
+            let mut pt = windows::Win32::Foundation::POINT::default();
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+            if pt.x < PAD + FORM_W + HOST_BAR {
+                SendMessageW((*st).host, m, Some(wparam), Some(lparam));
+            }
+            LRESULT(0)
+        }
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as u32;
             let notify = ((wparam.0 >> 16) & 0xFFFF) as u32;
@@ -1534,6 +1823,7 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let card = src_card();
                     let k = SendMessageW(src, NXCB_GETSEL, None, None).0.max(0) as usize;
                     build_card_body(card, k, (*st).font);
+                    relayout_cards(&*st); // kind별 높이 fitting 반영
                     refresh_preview(&mut *st);
                 }
                 (ID_DT_HELP, 1 /* NXIB_CLICK */) => {
@@ -1569,9 +1859,9 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         .iter()
                         .position(|c| *c == card)
                         .map_or((*st).cards.len(), |i| i + 1);
-                    let new_card = make_card(hwnd, (*st).font, 0);
+                    let new_card = make_card((*st).host, (*st).font, 0);
                     (*st).cards.insert(at, new_card);
-                    relayout_cards(&*st);
+                    ensure_card_visible(&*st, at); // 새 카드 보이게 + 재배치
                     refresh_preview(&mut *st);
                 }
                 (
@@ -1608,7 +1898,7 @@ unsafe extern "system" fn br_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 crate::config::load(&preset_dir(), &format!("{name}.cfg"))
                             {
                                 let ops = parse_ops(&text);
-                                rebuild_cards(hwnd, stm, &ops);
+                                rebuild_cards(stm, &ops);
                                 refresh_preview(stm);
                             }
                         }
@@ -1807,12 +2097,15 @@ pub unsafe fn show(
         return None;
     };
 
-    // ── 카드 스택(X-23 PF 모델): 초기 = Replace Text 카드 1장 ──
-    let card0 = make_card(dlg, font, 0);
+    // ── 하단 행 기준선(사용자 확정 07-18: 하단 여백 5px 축소) ──
+    let by = CLIENT_H - PAD - 21;
 
-    // ── 하단 행(사용자 확정 07-18): 좌 [… ⌄]+건수 · 중 검증 오류 ·
-    //    우 [취소][Rename NxButton Default] ──
-    let by = CLIENT_H - PAD - 26;
+    // ── 카드 스택(X-23 PF 모델): 스크롤 뷰포트(호스트) 안에 카드 —
+    //    하단 바 불침범(우측 그리드와 동일 상~하단 레이아웃) ──
+    let host = make_card_host(dlg, by - 8 - PAD);
+    let card0 = make_card(host, font, 0);
+
+    // ── 하단 행: 좌 [… ⌄]+건수 · 중 검증 오류 · 우 [취소][Rename Default] ──
     let apply = crate::ctl::button::create(
         dlg,
         0,
@@ -1906,6 +2199,7 @@ pub unsafe fn show(
         sort: Vec::new(),
         order: Vec::new(),
         cards: vec![card0],
+        host,
         prev,
         err,
         apply,

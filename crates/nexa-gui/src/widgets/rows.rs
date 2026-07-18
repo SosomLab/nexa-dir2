@@ -194,6 +194,8 @@ pub struct VirtualRows<S> {
     /// 정렬 상태(우선순위 순). 빈 목록 = 소스 기본 정렬.
     sort: Vec<(u32, bool)>,
     resize: Option<ResizeDrag>,
+    /// 컬럼 폭이 사용자 리사이즈로 변경됨(호스트 폴링 — take_col_resized).
+    col_resized: bool,
     band: Option<BandDrag>,
     /// 캐럿(키보드 네비 기준 행 — docs/07 §8·docs/32).
     caret: Option<usize>,
@@ -232,6 +234,7 @@ impl<S: RowSource> VirtualRows<S> {
             columns: Vec::new(),
             sort: Vec::new(),
             resize: None,
+            col_resized: false,
             band: None,
             caret: None,
             typeahead: TypeAhead::new(TYPEAHEAD_TIMEOUT_MS),
@@ -931,18 +934,39 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
-    /// 헤더 셀 제목: ▲/▼는 이름 앞, 다중 정렬 순번(①②…)은 이름 뒤(원본 docs/23 §4).
+    /// 컬럼 리사이즈 발생 여부 수거(1회성 — 호스트가 폭 동기화에 사용, 07-18).
+    pub fn take_col_resized(&mut self) -> bool {
+        std::mem::take(&mut self.col_resized)
+    }
+
+    /// 컬럼 폭 일괄 적용(순서 대응·개수 부족분 무시 — 패널 상속/좌우 동기, 07-18).
+    pub fn set_col_widths(&mut self, widths: &[i32], inv: &mut Invalidations) {
+        let mut changed = false;
+        for (c, w) in self.columns.iter_mut().zip(widths) {
+            let w = (*w).max(c.min_width);
+            if c.width != w {
+                c.width = w;
+                changed = true;
+            }
+        }
+        if changed {
+            self.clamp_scroll_x();
+            inv.push(self.bounds);
+        }
+    }
+
+    /// 헤더 셀 제목: ▲/▼는 이름 앞, 정렬 순번(①②…)은 이름 뒤(원본 docs/23 §4).
+    /// 순번은 **정렬 시작부터 상시 표시**(사용자 확정 07-18 — 단일 정렬 = ①,
+    /// Ctrl/Shift로 추가한 컬럼 = ② 순차).
     fn header_label(&self, col: &Column) -> String {
         let mut s = String::new();
         if let Some(desc) = self.dir_of(col.key) {
             s.push_str(if desc { "▼ " } else { "▲ " });
         }
         s.push_str(&col.title);
-        if self.sort.len() > 1 {
-            if let Some(order) = self.sort.iter().position(|(k, _)| *k == col.key) {
-                s.push(' ');
-                s.push_str(order_badge(order));
-            }
+        if let Some(order) = self.sort.iter().position(|(k, _)| *k == col.key) {
+            s.push(' ');
+            s.push_str(order_badge(order));
         }
         s
     }
@@ -1278,8 +1302,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             start_w2,
                         });
                     } else if self.columns[i].sortable {
+                        // 다중열 트리거 = Shift 또는 **Ctrl**(사용자 확정 07-18 —
+                        // Ctrl+헤더 클릭도 정렬 키 추가/순환)
                         let key = self.columns[i].key;
-                        self.apply_sort(key, shift, inv);
+                        self.apply_sort(key, shift || ctrl, inv);
                     }
                 } else if let Some(row) = self.row_at(x, y) {
                     if self.in_marker_zone(row, x) {
@@ -1343,6 +1369,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         {
                             self.columns[drag.col].width = nw1;
                             self.columns[drag.col + 1].width = nw2;
+                            self.col_resized = true; // 호스트 동기 폴링(07-18)
                             self.clamp_scroll_x();
                             inv.push(self.bounds);
                         }
@@ -1350,6 +1377,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         let w = drag.start_w + dx;
                         if w != self.columns[drag.col].width {
                             self.columns[drag.col].width = w;
+                            self.col_resized = true; // 호스트 동기 폴링(07-18)
                             self.clamp_scroll_x();
                             inv.push(self.bounds);
                         }
@@ -2003,10 +2031,28 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_click_adds_multi_sort_like_shift() {
+        // 다중열 트리거 = Shift 또는 Ctrl(사용자 확정 07-18)
+        let (mut v, mut inv) = list_with_cols(10, 220);
+        down(&mut v, &mut inv, 50, 5, false); // 이름 ▲
+        v.on_event(
+            &InputEvent::MouseDown {
+                x: 250,
+                y: 5,
+                shift: false,
+                ctrl: true, // Ctrl+클릭 = 크기 추가
+            },
+            &mut inv,
+        );
+        assert_eq!(v.sort(), &[(0, false), (2, false)]);
+    }
+
+    #[test]
     fn header_label_shows_arrow_before_and_badge_after() {
         let (mut v, mut inv) = list_with_cols(10, 220);
         down(&mut v, &mut inv, 50, 5, false); // 이름 ▲
-        assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름"); // 단일 = 순번 없음
+                                              // 순번 = 정렬 시작부터 상시 표시(사용자 확정 07-18 — 단일 = ①)
+        assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");
         down(&mut v, &mut inv, 250, 5, true); // + 크기
         assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");
         assert_eq!(v.header_label(&v.columns()[1]), "▲ 크기 ②");
