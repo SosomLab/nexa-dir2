@@ -848,9 +848,12 @@ impl DrawCtx for DwCtx<'_> {
             } else {
                 16
             };
-            emb_key = match key.strip_suffix("#dis") {
-                Some(base) => format!("{base}-disabled:{bucket}"),
-                None => format!("{key}:{bucket}"),
+            emb_key = if let Some(base) = key.strip_suffix("#dis") {
+                format!("{base}-disabled:{bucket}")
+            } else if let Some(base) = key.strip_suffix("#on") {
+                format!("{base}-on:{bucket}")
+            } else {
+                format!("{key}:{bucket}")
             };
             &emb_key
         } else {

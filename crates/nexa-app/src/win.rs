@@ -151,6 +151,8 @@ const CMD_BULK_RENAME: u32 = 61;
 const CMD_CTLDEMO: u32 = 62;
 /// 컬럼 넓이 동기화 토글(사용자 확정 07-18 — 보기 메뉴 패널 모드 4종 하단).
 const CMD_COLW_SYNC: u32 = 63;
+/// 패널 듀얼↔싱글 토글(07-19 — 툴바 단일 버튼: 켜짐 = 듀얼·accent 아이콘).
+const CMD_PANEL_TOGGLE: u32 = 64;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 
@@ -335,16 +337,18 @@ fn build_toolbar(
     // 07-18: 전 버튼 임베드 16×16 이미지(`emb:` — icons::shell::EMBEDDED,
     // 사용자: "도구 모음을 16x16 이미지 형태로"). 글리프는 미로드 폴백 텍스트.
     vec![
-        // 패널 모드 라디오 + 컬럼 동기(07-18 사용자 정정: 듀얼↔싱글은 상호
-        // 전환 가능 라디오, 컬럼 동기만 싱글에서 비활성)
-        ToolButton::new(CMD_PANEL_DUAL, "▌▐")
-            .with_icon("emb:panel-dual", "")
-            .with_tip(tr("menu.view.panelDual"))
+        // 패널 모드 = 단일 토글 버튼(07-19 사용자 재확정: 라디오 2개 폐지 —
+        // 켜짐 = 듀얼·accent 아이콘, 꺼짐 = 싱글·기본 잉크) + 컬럼 동기
+        // (싱글에서 비활성)
+        ToolButton::new(CMD_PANEL_TOGGLE, "▌▐")
+            .with_icon("emb:panel-toggle", "")
+            .with_tip(if panel_mode == "dual" {
+                tr("menu.view.panelDual")
+            } else {
+                tr("menu.view.panelSingle")
+            })
+            .accent_checked()
             .toggled(panel_mode == "dual"),
-        ToolButton::new(CMD_PANEL_SINGLE, "■")
-            .with_icon("emb:panel-single", "")
-            .with_tip(tr("menu.view.panelSingle"))
-            .toggled(panel_mode == "single"),
         ToolButton::new(CMD_COLW_SYNC, "⇔")
             .with_icon("emb:colsync", "")
             .with_tip(tr("menu.view.colWidthSync"))
@@ -2741,13 +2745,15 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let settings = current_settings(st);
             let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
         }
-        CMD_PANEL_SINGLE | CMD_PANEL_DUAL => {
+        CMD_PANEL_SINGLE | CMD_PANEL_DUAL | CMD_PANEL_TOGGLE => {
             // 패널 모드(07-16 — 원본 FR-C1): 싱글 = 우 패널 숨김(**상태 보존** — 탭/
             // 세션 그대로, 복귀 시 원복). 싱글 진입 시 활성 = 좌 강제.
-            let want = if id == CMD_PANEL_SINGLE {
-                "single"
-            } else {
-                "dual"
+            // CMD_PANEL_TOGGLE = 툴바 단일 버튼(07-19) — 현재 모드 반전.
+            let want = match id {
+                CMD_PANEL_SINGLE => "single",
+                CMD_PANEL_DUAL => "dual",
+                _ if st.panel_mode == "dual" => "single",
+                _ => "dual",
             };
             if st.panel_mode != want {
                 st.panel_mode = want.into();
@@ -2758,13 +2764,18 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     .set_checked(CMD_PANEL_SINGLE, want == "single", &mut inv);
                 st.menubar
                     .set_checked(CMD_PANEL_DUAL, want == "dual", &mut inv);
-                st.toolbar
-                    .set_checked(CMD_PANEL_SINGLE, want == "single", &mut inv);
-                st.toolbar
-                    .set_checked(CMD_PANEL_DUAL, want == "dual", &mut inv);
-                // 싱글 = 컬럼 동기만 비활성(07-18 정정 — 듀얼↔싱글 상호 전환)
-                st.toolbar
-                    .set_enabled(CMD_COLW_SYNC, want == "dual", &mut inv);
+                // 툴바 재구성(07-19 — 토글 checked/accent·colsync 활성·툴팁
+                // [현재 모드명] 일괄 갱신)
+                st.toolbar.set_buttons(
+                    build_toolbar(
+                        st.show_hidden,
+                        st.show_dotfiles,
+                        &st.view_mode,
+                        &st.panel_mode,
+                        st.col_width_sync,
+                    ),
+                    &mut inv,
+                );
                 // 정보 라디오 = 효과 기준(싱글 패널이면 싱글 표시·선호값은 보존)
                 let ie = single_info(st);
                 st.menubar.set_checked(CMD_INFO_SINGLE, ie, &mut inv);

@@ -46,14 +46,23 @@ pub enum Op {
     },
 }
 
-/// 파싱된 문서 — viewBox `(x, y, w, h)` + 루트 스트로크 폭 + op 목록.
+/// 문서 내 한 요소 — op + 색 오버라이드(요소 `stroke`/`fill`의 `#RRGGBB`.
+/// `currentColor`/부재 = `None` → 렌더러 잉크. 알파는 잉크 것을 따름 —
+/// 비활성 흐림이 오버라이드 색에도 적용).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Element {
+    pub op: Op,
+    pub color: Option<u32>,
+}
+
+/// 파싱된 문서 — viewBox `(x, y, w, h)` + 루트 스트로크 폭 + 요소 목록.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Doc {
     pub viewbox: (f32, f32, f32, f32),
     pub stroke_width: f32,
     /// 루트 `fill` 채움 모드(true = 도형 채움·false = 스트로크).
     pub fill: bool,
-    pub ops: Vec<Op>,
+    pub ops: Vec<Element>,
 }
 
 /// SVG 텍스트 파싱. viewBox 없음/형식 오류 = `None`(오류 격리 — 아이콘 공백).
@@ -93,23 +102,32 @@ pub fn parse(svg: &str) -> Option<Doc> {
                 doc.fill = attr(attrs, "fill").is_some_and(|f| f != "none");
                 seen_root = true;
             }
-            "rect" => doc.ops.push(Op::Rect {
-                x: num(attrs, "x"),
-                y: num(attrs, "y"),
-                w: num(attrs, "width"),
-                h: num(attrs, "height"),
-                rx: num(attrs, "rx"),
+            "rect" => doc.ops.push(Element {
+                op: Op::Rect {
+                    x: num(attrs, "x"),
+                    y: num(attrs, "y"),
+                    w: num(attrs, "width"),
+                    h: num(attrs, "height"),
+                    rx: num(attrs, "rx"),
+                },
+                color: elem_color(attrs),
             }),
-            "circle" => doc.ops.push(Op::Circle {
-                cx: num(attrs, "cx"),
-                cy: num(attrs, "cy"),
-                r: num(attrs, "r"),
+            "circle" => doc.ops.push(Element {
+                op: Op::Circle {
+                    cx: num(attrs, "cx"),
+                    cy: num(attrs, "cy"),
+                    r: num(attrs, "r"),
+                },
+                color: elem_color(attrs),
             }),
-            "line" => doc.ops.push(Op::Line {
-                x1: num(attrs, "x1"),
-                y1: num(attrs, "y1"),
-                x2: num(attrs, "x2"),
-                y2: num(attrs, "y2"),
+            "line" => doc.ops.push(Element {
+                op: Op::Line {
+                    x1: num(attrs, "x1"),
+                    y1: num(attrs, "y1"),
+                    x2: num(attrs, "x2"),
+                    y2: num(attrs, "y2"),
+                },
+                color: elem_color(attrs),
             }),
             "polyline" => {
                 let pts: Vec<f32> = attr(attrs, "points")
@@ -121,31 +139,40 @@ pub fn parse(svg: &str) -> Option<Doc> {
                 let pairs: Vec<(f32, f32)> =
                     pts.chunks_exact(2).map(|c| (c[0], c[1])).collect();
                 if pairs.len() >= 2 {
-                    doc.ops.push(Op::Polyline(pairs));
+                    doc.ops.push(Element {
+                        op: Op::Polyline(pairs),
+                        color: elem_color(attrs),
+                    });
                 }
             }
             "path" => {
                 if let Some(d) = attr(attrs, "d") {
                     let segs = parse_path(&d)?;
                     if !segs.is_empty() {
-                        doc.ops.push(Op::Path(segs));
+                        doc.ops.push(Element {
+                            op: Op::Path(segs),
+                            color: elem_color(attrs),
+                        });
                     }
                 }
             }
             "text" => {
                 let content = inner.trim().to_string();
                 if !content.is_empty() {
-                    doc.ops.push(Op::Text {
-                        x: num(attrs, "x"),
-                        y: num(attrs, "y"),
-                        size: attr(attrs, "font-size")
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(10.0),
-                        bold: attr(attrs, "font-weight").is_some_and(|w| {
-                            w == "bold" || w.parse::<i32>().is_ok_and(|n| n >= 600)
-                        }),
-                        middle: attr(attrs, "text-anchor").is_some_and(|a| a == "middle"),
-                        content,
+                    doc.ops.push(Element {
+                        op: Op::Text {
+                            x: num(attrs, "x"),
+                            y: num(attrs, "y"),
+                            size: attr(attrs, "font-size")
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(10.0),
+                            bold: attr(attrs, "font-weight").is_some_and(|w| {
+                                w == "bold" || w.parse::<i32>().is_ok_and(|n| n >= 600)
+                            }),
+                            middle: attr(attrs, "text-anchor").is_some_and(|a| a == "middle"),
+                            content,
+                        },
+                        color: elem_color(attrs),
                     });
                 }
             }
@@ -176,6 +203,23 @@ fn attr(attrs: &str, key: &str) -> Option<String> {
             }
         }
         rest = &rest[i + key.len()..];
+    }
+    None
+}
+
+/// 요소 색 오버라이드 — `stroke`/`fill`의 `#RRGGBB`(6자리)만 인식.
+/// `currentColor`·`none`·부재 = `None`(렌더러 잉크).
+fn elem_color(attrs: &str) -> Option<u32> {
+    for key in ["stroke", "fill"] {
+        if let Some(v) = attr(attrs, key) {
+            if let Some(hex) = v.strip_prefix('#') {
+                if hex.len() == 6 {
+                    if let Ok(rgb) = u32::from_str_radix(hex, 16) {
+                        return Some(rgb);
+                    }
+                }
+            }
+        }
     }
     None
 }
@@ -331,11 +375,12 @@ mod tests {
         assert_eq!(doc.stroke_width, 2.0);
         assert_eq!(doc.ops.len(), 6, "rect 3 + path 3");
         assert_eq!(
-            doc.ops[0],
+            doc.ops[0].op,
             Op::Rect { x: 4.0, y: 4.0, w: 6.0, h: 6.0, rx: 1.0 }
         );
+        assert_eq!(doc.ops[0].color, None, "currentColor = 잉크");
         assert_eq!(
-            doc.ops[1],
+            doc.ops[1].op,
             Op::Path(vec![Seg::MoveTo(15.0, 7.0), Seg::LineTo(28.0, 7.0)])
         );
     }
@@ -345,7 +390,7 @@ mod tests {
         let svg = r#"<svg viewBox="0 0 10 10"><path d="M1 1 l2 0 v2 h-2 z"/></svg>"#;
         let doc = parse(svg).unwrap();
         assert_eq!(
-            doc.ops[0],
+            doc.ops[0].op,
             Op::Path(vec![
                 Seg::MoveTo(1.0, 1.0),
                 Seg::LineTo(3.0, 1.0),
@@ -361,7 +406,7 @@ mod tests {
         let svg = r#"<svg viewBox="0 0 10 10"><path d="M0 5C1 -1,4 -1,5 5"/></svg>"#;
         let doc = parse(svg).unwrap();
         assert_eq!(
-            doc.ops[0],
+            doc.ops[0].op,
             Op::Path(vec![
                 Seg::MoveTo(0.0, 5.0),
                 Seg::CurveTo([(1.0, -1.0), (4.0, -1.0), (5.0, 5.0)]),
@@ -374,7 +419,7 @@ mod tests {
         let svg = r#"<svg viewBox="0 0 8 8"><rect x="1" y="2" width="3" height="4" rx="0.5"/></svg>"#;
         let doc = parse(svg).unwrap();
         assert_eq!(
-            doc.ops[0],
+            doc.ops[0].op,
             Op::Rect { x: 1.0, y: 2.0, w: 3.0, h: 4.0, rx: 0.5 }
         );
     }
@@ -397,7 +442,7 @@ mod tests {
         assert!(doc.fill);
         assert_eq!(doc.ops.len(), 2);
         assert_eq!(
-            doc.ops[1],
+            doc.ops[1].op,
             Op::Text {
                 x: 16.0,
                 y: 26.0,
@@ -407,6 +452,20 @@ mod tests {
                 content: "SYNC".into(),
             }
         );
+    }
+
+    #[test]
+    fn element_color_override() {
+        // 07-19 패널 토글 켜짐 시안: rect = currentColor(잉크)·선 = #3D8BFF
+        let svg = concat!(
+            r##"<svg viewBox="0 0 32 32" fill="none" stroke="currentColor">"##,
+            r##"<rect x="5" y="5" width="22" height="22" rx="3"/>"##,
+            r##"<path d="M16 5 V27" stroke="#3D8BFF"/>"##,
+            "</svg>",
+        );
+        let doc = parse(svg).unwrap();
+        assert_eq!(doc.ops[0].color, None);
+        assert_eq!(doc.ops[1].color, Some(0x3D8BFF));
     }
 
     #[test]

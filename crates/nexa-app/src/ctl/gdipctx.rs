@@ -113,18 +113,15 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
         let scale = (px as f32 / vw).min(px as f32 / vh);
         let sx = |x: f32| (x - vx) * scale;
         let sy = |y: f32| (y - vy) * scale;
-        let mut pen: *mut GpPen = std::ptr::null_mut();
-        let _ = GdipCreatePen1(
-            argb,
-            (doc.stroke_width * scale).max(1.0),
-            Unit(2 /* UnitPixel */),
-            &mut pen,
-        );
-        if !pen.is_null() {
-            let _ = GdipSetPenStartCap(pen, LineCapRound);
-            let _ = GdipSetPenEndCap(pen, LineCapRound);
-            let _ = GdipSetPenLineJoin(pen, LineJoinRound);
-            for op in &doc.ops {
+        {
+            for el in &doc.ops {
+                let op = &el.op;
+                // 요소 색 오버라이드(RGB) — 알파는 잉크 것 유지(비활성 흐림
+                // 이 오버라이드 색에도 적용, 07-19 패널 토글 accent 선)
+                let el_argb = match el.color {
+                    Some(rgb) => (argb & 0xFF00_0000) | rgb,
+                    None => argb,
+                };
                 let mut path: *mut GpPath = std::ptr::null_mut();
                 if GdipCreatePath(FillModeAlternate, &mut path).0 != 0 || path.is_null() {
                     continue;
@@ -252,17 +249,29 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
                 let filled = doc.fill || matches!(op, Op::Text { .. });
                 if filled {
                     let mut b: *mut GpSolidFill = std::ptr::null_mut();
-                    let _ = GdipCreateSolidFill(argb, &mut b);
+                    let _ = GdipCreateSolidFill(el_argb, &mut b);
                     if !b.is_null() {
                         let _ = GdipFillPath(g, b as *mut GpBrush, path);
                         let _ = GdipDeleteBrush(b as *mut GpBrush);
                     }
                 } else {
-                    let _ = GdipDrawPath(g, pen, path);
+                    let mut pen: *mut GpPen = std::ptr::null_mut();
+                    let _ = GdipCreatePen1(
+                        el_argb,
+                        (doc.stroke_width * scale).max(1.0),
+                        Unit(2 /* UnitPixel */),
+                        &mut pen,
+                    );
+                    if !pen.is_null() {
+                        let _ = GdipSetPenStartCap(pen, LineCapRound);
+                        let _ = GdipSetPenEndCap(pen, LineCapRound);
+                        let _ = GdipSetPenLineJoin(pen, LineJoinRound);
+                        let _ = GdipDrawPath(g, pen, path);
+                        let _ = GdipDeletePen(pen);
+                    }
                 }
                 let _ = GdipDeletePath(path);
             }
-            let _ = GdipDeletePen(pen);
         }
         let _ = GdipDeleteGraphics(g);
         let mut h = HICON::default();

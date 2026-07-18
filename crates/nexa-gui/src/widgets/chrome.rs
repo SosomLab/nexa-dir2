@@ -26,6 +26,9 @@ pub struct ToolButton {
     pub enabled: bool,
     /// 툴팁 텍스트(07-18 — i18n 문자열은 호출자가 주입). 빈 문자열 = 없음.
     pub tip: String,
+    /// 켜짐(checked) 시 아이콘을 강조 변형(`#on` 키 — accent 잉크)으로
+    /// 그린다(07-19 패널 토글 — 사용자: "켜지면 선을 푸른계열으로").
+    pub accent: bool,
 }
 
 impl ToolButton {
@@ -38,6 +41,7 @@ impl ToolButton {
             icon: None,
             enabled: true,
             tip: String::new(),
+            accent: false,
         }
     }
 
@@ -51,6 +55,7 @@ impl ToolButton {
             icon: None,
             enabled: true,
             tip: String::new(),
+            accent: false,
         }
     }
 
@@ -74,6 +79,12 @@ impl ToolButton {
     /// 툴팁 텍스트(빌더 — 07-18). 표시는 호스트 몫([`Toolbar::hover_tip`] 폴링).
     pub fn with_tip(mut self, tip: impl Into<String>) -> Self {
         self.tip = tip.into();
+        self
+    }
+
+    /// 켜짐 시 강조 아이콘(빌더 — 07-19 패널 토글).
+    pub fn accent_checked(mut self) -> Self {
+        self.accent = true;
         self
     }
 }
@@ -270,14 +281,18 @@ impl Widget for Toolbar {
                     // 16×16 상당(바 높이 − 상하 4px 여백) 아이콘을 정사각 셀 중앙에.
                     ctx.fill_rect(cell, bg);
                     let isz = (b.h - 8).max(8);
-                    // 비활성 = `#dis` 접미 키(dw.rs가 `-disabled` 임베드 변형으로
-                    // 해석 — 없으면 미로드 폴백 글리프가 text_dim으로 흐려짐)
-                    let dis_key;
-                    let key = if btn.enabled {
-                        key.as_str()
+                    // 상태 변형 키: 비활성 = `#dis`(흐림) · accent 켜짐 = `#on`
+                    // (강조 잉크) — dw.rs가 임베드 변형으로 해석, 없으면 미로드
+                    // 폴백 글리프
+                    let var_key;
+                    let key = if !btn.enabled {
+                        var_key = format!("{key}#dis");
+                        var_key.as_str()
+                    } else if btn.accent && btn.checked {
+                        var_key = format!("{key}#on");
+                        var_key.as_str()
                     } else {
-                        dis_key = format!("{key}#dis");
-                        dis_key.as_str()
+                        key.as_str()
                     };
                     let drew = ctx.draw_icon(
                         cell.x + (cell.w - isz) / 2,

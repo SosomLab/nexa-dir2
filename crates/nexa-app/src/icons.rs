@@ -174,8 +174,6 @@ pub mod shell {
         };
     }
     const EMBEDDED: &[(&str, &[u8])] = emb!(
-        "panel-dual",
-        "panel-single",
         "refresh",
         "settings",
         "hidden",
@@ -187,6 +185,14 @@ pub mod shell {
     /// (view-flat PNG 제거 — 사용자 확정 07-18); 실패 시 PNG 버킷이 있으면
     /// 폴백, 없으면 글리프 폴백.
     const EMBEDDED_SVG: &[(&str, &str)] = &[
+        ("panel-toggle", include_str!("../assets/toolbar/panel-toggle.svg")),
+        // 켜짐(듀얼) 전용 시안 — 테두리 = currentColor(잉크)·가운데 선 =
+        // #3D8BFF(요소 색 오버라이드). 사용자 확정 07-19: "border 색은
+        // 이전과 동일, 선만 푸른계열".
+        (
+            "panel-toggle-on",
+            include_str!("../assets/toolbar/panel-toggle-on.svg"),
+        ),
         ("view-tree", include_str!("../assets/toolbar/view-tree.svg")),
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
@@ -200,6 +206,9 @@ pub mod shell {
     /// 비활성 잉크 = 같은 색 알파 38%(PNG disabled 변형 규약 동일 —
     /// `<이름>-disabled` 키를 원본 SVG로 렌더).
     const SVG_INK_DIM: u32 = 0x6140_464E;
+    /// 켜짐 강조 잉크 = 테마 accent(`#3D8BFF` — 라이트/다크 공통,
+    /// `<이름>-on` 키 — 07-19 패널 토글 "푸른계열").
+    const SVG_INK_ACCENT: u32 = 0xFF3D_8BFF;
 
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);
@@ -246,11 +255,20 @@ pub mod shell {
         fn make_embedded(key: &str) -> Option<HICON> {
             if let Some((name, sz)) = key["emb:".len()..].rsplit_once(':') {
                 if let Some(px) = sz.parse::<i32>().ok().filter(|p| *p > 0) {
-                    // `-disabled` 변형 = 원본 SVG를 흐린 잉크(알파 38%)로 렌더
-                    let (base, ink) = match name.strip_suffix("-disabled") {
-                        Some(b) => (b, SVG_INK_DIM),
-                        None => (name, SVG_INK),
-                    };
+                    // 1) 정확한 이름의 상태 전용 SVG(예: panel-toggle-on —
+                    //    요소별 색 오버라이드 시안)가 있으면 기본 잉크로 렌더
+                    // 2) 없으면 접미 규칙: `-disabled` = 원본을 흐림(알파 38%)·
+                    //    `-on` = 원본을 accent 잉크로 재렌더
+                    let (base, ink) =
+                        if EMBEDDED_SVG.iter().any(|(n, _)| *n == name) {
+                            (name, SVG_INK)
+                        } else if let Some(b) = name.strip_suffix("-disabled") {
+                            (b, SVG_INK_DIM)
+                        } else if let Some(b) = name.strip_suffix("-on") {
+                            (b, SVG_INK_ACCENT)
+                        } else {
+                            (name, SVG_INK)
+                        };
                     if let Some((_, src)) = EMBEDDED_SVG.iter().find(|(n, _)| *n == base) {
                         if let Some(icon) = crate::svg::parse(src).and_then(|doc| unsafe {
                             crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink)
