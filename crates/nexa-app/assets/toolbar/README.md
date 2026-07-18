@@ -23,7 +23,7 @@
 | `view-tiles` | 타일 보기(CMD_VIEW_TILES) — **SVG 단독**(`view-tiles.svg`, 사용자 제공 07-19 — 2×2 라운드 사각) | — |
 | `refresh` | 새로고침(CMD_REFRESH) — 300° 호 + 접선 화살촉 | — |
 | `settings` | 설정(CMD_PREFS) — 톱니(도넛+치형 8) | — |
-| `hidden` | 숨김 파일 토글(CMD_TOGGLE_HIDDEN) — 눈 | — |
+| `hidden` | 숨김 파일 토글(CMD_TOGGLE_HIDDEN) — **SVG 단독**(`hidden.svg`, 사용자 제공 07-19 — 파일+HIDDEN 텍스트) | — |
 | `dotfiles` | 닷파일 토글(CMD_TOGGLE_DOTFILES) — **SVG 단독**(`dotfiles.svg`, 사용자 제공 07-19 — 파일+DOT 텍스트) | — |
 
 ## SVG 파이프라인(07-18 — "svg 방식도 적용")

@@ -176,7 +176,6 @@ pub mod shell {
     const EMBEDDED: &[(&str, &[u8])] = emb!(
         "refresh",
         "settings",
-        "hidden",
     );
 
     /// SVG 원본 임베드(07-18 사용자: "svg 방식도 적용") — PNG보다 **우선**
@@ -197,6 +196,7 @@ pub mod shell {
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
         ("colsync", include_str!("../assets/toolbar/colsync.svg")),
+        ("hidden", include_str!("../assets/toolbar/hidden.svg")),
         ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
     ];
 
