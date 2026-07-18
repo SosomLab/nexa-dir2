@@ -40,6 +40,7 @@ pub const NXIB_GETENABLE: u32 = 0x0400 + 100;
 pub const NXIB_SETENABLE: u32 = 0x0400 + 101;
 
 /// 이미지 표시 모드(사용자 확정 07-18 — [`create_image`] 인자).
+#[allow(dead_code)] // 판매용 계약 API — 호스트 소비는 선택(현재 앱은 Stretch만)
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ImageFit {
     /// 원본 이미지 크기 그대로(컨트롤 중앙 배치 — 컨트롤보다 크면 잘림).
