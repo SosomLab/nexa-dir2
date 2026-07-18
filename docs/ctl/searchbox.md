@@ -22,3 +22,18 @@
 ## 상태(구형 — 개정 대기)
 - Style 인자화·AA 개정 미적용(라이트 고정 — 동일 팔레트라 시각 일치).
   개정은 **사용자 개별 요청 시에만**(07-18 프로토콜).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font) -> HWND` | 검색 입력 생성(현재 라이트 팔레트 고정 — Style 인자화는 개정 대기) |
+
+### 사용 예
+```rust
+let sb = searchbox::create(dlg, x, y, 220, 24, ID_SEARCH, font);
+SendMessageW(sb, 0x1501 /*EM_SETCUEBANNER*/, Some(WPARAM(1)),
+             Some(LPARAM(cue.as_ptr() as isize)));
+// (ID_SEARCH, 0x300 /*EN_CHANGE*/) => 필터 갱신(✕ 클릭 비우기도 같은 경로)
+```

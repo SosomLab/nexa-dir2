@@ -24,3 +24,24 @@
 - **owner 승격 함정**: WS_POPUP 팝업의 owner는 시스템이 최상위로 교체 —
   GetParent 금지, **팝업 USERDATA에 owner 저장**(droplist 크래시 교훈).
 - 항목 목록은 불변 — 갱신은 재생성(프리셋 메뉴 규약과 동일).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font, items, selected, style) -> HWND` | 콤보 생성 |
+
+| 인자 | 타입 | 설명 |
+|---|---|---|
+| `items` | `&[&str]` | 항목 라벨(복사 소유 — 갱신은 재생성) |
+| `selected` | `usize` | 초기 선택 인덱스(범위 밖 = 마지막으로 클램프) |
+
+### 사용 예
+```rust
+let cb = combobox::create(dlg, x, y, 170, 0, ID_KIND, font,
+                          &["치환", "삽입", "연번"], 0, style);
+// (ID_KIND, combobox::NXCB_CHANGED) =>
+let sel = SendMessageW(cb, combobox::NXCB_GETSEL, None, None).0 as usize;
+SendMessageW(cb, combobox::NXCB_SETSEL, Some(WPARAM(2)), None); // 통지 없음
+```

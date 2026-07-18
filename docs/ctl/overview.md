@@ -1,10 +1,58 @@
-# ctl 개요 — 공통 규약
+# ctl 개요 — 공통 규약·통합 가이드
 
 > [ctl 홈](README.md) · 소스 [`src/ctl/mod.rs`](../../crates/nexa-app/src/ctl/mod.rs)
 
 comctl32 비의존(B3 게이트) — user32 창 클래스 + 자체 그리기 커스텀 컨트롤 묶음.
 네이티브 대화상자(설정·일괄 이름변경)에서 재사용하며, **차후 독립 라이브러리
 판매**를 겨냥해 앱 비결합으로 설계한다(사용자 확정 07-17).
+
+## 시작하기 (Quick Start)
+
+모든 컨트롤은 같은 사용 절차를 따른다 — ① 생성 ② 부모 WndProc에서 통지 수신
+③ 메시지로 상태 조회/설정.
+
+```rust
+use ctl::{button, checkbox, style::Style};
+
+// ① 생성 — 클래스 등록은 create가 내부에서 1회 처리(Once)
+let style = Style::default(); // 라이트 팔레트. 다크는 필드 값만 교체
+let ok = button::create(dlg, 0, y, 0, 0, ID_OK, font, "확인",
+                        button::ButtonKind::Default, true, style);
+let chk = checkbox::create(dlg, x, y, 0, 0, ID_OPT, font, "옵션", 0,
+                           checkbox::CheckMode::Two, style);
+
+// ② 부모 WndProc — 통지는 WM_COMMAND(MAKEWPARAM(id, code), lparam=컨트롤)
+WM_COMMAND => {
+    let id   = (wparam.0 & 0xFFFF) as u32;
+    let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+    match (id, code) {
+        (ID_OK, button::NXBTN_CLICK) => { /* 확인 실행 */ }
+        (ID_OPT, checkbox::NXCHK_CHANGED) => {
+            // ③ 상태 조회 — WM_USER 오프셋 메시지
+            let on = SendMessageW(chk, checkbox::NXCHK_GETCHECK, None, None).0;
+        }
+        _ => {}
+    }
+}
+```
+
+### 공통 생성 인자
+전 컨트롤의 `create` 선두 인자는 동일하다(각 문서에는 **컨트롤 고유 인자만** 서술):
+
+| 인자 | 타입 | 설명 |
+|---|---|---|
+| `parent` | `HWND` | 부모 창(통지 수신처 — WM_COMMAND 재발행 대상) |
+| `x`, `y` | `i32` | 부모 클라이언트 기준 위치(px) |
+| `w`, `h` | `i32` | 크기. **`h <= 0` = 공통 자동 높이**(글꼴+4px — 버튼/세그는 컴팩트 +2px). `w <= 0` 자동은 컨트롤별 명시 |
+| `id` | `u32` | 컨트롤 id(통지의 `LOWORD(wparam)` — 다이얼로그 내 유일) |
+| `font` | `HFONT` | 본문 글꼴(컨트롤은 참조만 — 소유·해제는 호스트) |
+| `style` | `Style` | 팔레트(마지막 인자 — 값 복사 소유) |
+
+### Tab 내비게이션
+호스트 모달 루프에 `IsDialogMessageW(dlg, &msg)`를 넣으면 Tab이 배치(생성)
+순서로 이동한다. 컨테이너(NxGroupCard·NxTextBox·NxSpin)는 `WS_EX_CONTROLPARENT`
+로 내부 입력에 착지하고, 방향키 소비 컨트롤은 `DLGC_WANTARROWS`를 선언해
+화살표 동작이 유지된다.
 
 ## 명명 규약
 - 컨트롤 = **Nx 접두어**, 네임스페이스 = **Nexa** → Win32 클래스 `Nexa.Nx<이름>`.

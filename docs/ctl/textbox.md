@@ -26,3 +26,20 @@
 ## 내부 구현 메모
 - CTLCOLOR 브러시는 상태에 1회 보관(메시지마다 생성 시 GDI 누수) —
   **Drop RAII 해제**(07-18 리팩터).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font, style) -> HWND` | 입력 상자 생성(반환 HWND = 텍스트 API 드롭인) |
+
+### 사용 예
+```rust
+let tb = textbox::create(dlg, x, y, 200, 0, ID_FIND, font, style);
+SetWindowTextW(tb, w!("초기값"));                       // WM_SETTEXT 위임
+SendMessageW(tb, 0x1501 /*EM_SETCUEBANNER*/, Some(WPARAM(1)),
+             Some(LPARAM(cue_utf16.as_ptr() as isize))); // 플레이스홀더
+SendMessageW(tb, 0x00B1 /*EM_SETSEL*/, Some(WPARAM(0)), Some(LPARAM(-1))); // 전체 선택
+// (ID_FIND, textbox::EN_CHANGE) => 실시간 반영
+```

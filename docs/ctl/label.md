@@ -21,3 +21,30 @@
 |---|---|
 | `create(parent, x, y, w, h, id, font, text, align, style)` | 텍스트 복사 소유 |
 | 통지 | 없음(표시 전용) |
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font, text, align, style) -> HWND` | 라벨 생성(표시 전용 — 통지 없음·클릭 투과) |
+
+| 인자 | 타입 | 설명 |
+|---|---|---|
+| `text` | `&str` | 라벨 텍스트(복사 소유) |
+| `align` | `LabelAlign` | 정렬(아래) |
+
+### 프로퍼티 — `LabelAlign`
+| 값 | 설명 |
+|---|---|
+| `Left` | 좌측 정렬(상태줄류) |
+| `Right` | 우측 정렬(폼 라벨 열 — 콜론이 컨트롤에 붙는 구도) |
+
+### 사용 예 — 언어-내구 라벨 열
+```rust
+// 라벨 열 폭 = 현재 언어 실측 최대(전환에도 정렬 유지)
+let lbl_w = keys.iter().map(|k| style::text_width(card, font, tr(k)))
+                .max().unwrap_or(64).clamp(56, 140) + 6;
+label::create(card, bx, y, lbl_w, 0, 0, font, &tr("bulk.lbl.find"),
+              label::LabelAlign::Right, style);
+```

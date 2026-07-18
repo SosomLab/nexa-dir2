@@ -24,3 +24,30 @@
 
 ## 연관
 - NxGrid `Mark::Check` 헤더 체크박스가 같은 3단 시각 규약을 공유(전체/부분/해제).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font, label, check, mode, style) -> HWND` | 체크박스 생성. `w <= 0` = 박스만(정사각) |
+
+| 인자 | 타입 | 설명 |
+|---|---|---|
+| `label` | `&str` | 우측 라벨(빈 문자열 = 박스만) |
+| `check` | `u32` | 초기 상태 0/1/2(2는 `Three` 모드만 — 모드별 클램프) |
+| `mode` | `CheckMode` | 체크 단수(아래) |
+
+### 프로퍼티 — `CheckMode`
+| 값 | 클릭 순환 | 설명 |
+|---|---|---|
+| `Two` | 0↔1 | 체크/해제 |
+| `Three` | 0→1→2→0 | 체크/부분(흐릿한 ✓)/해제 — 전체 선택 헤더류 |
+
+### 사용 예
+```rust
+let chk = checkbox::create(dlg, x, y, 0, 0, ID_MC, font, "", 0,
+                           checkbox::CheckMode::Two, style);
+// (ID_MC, checkbox::NXCHK_CHANGED) =>
+let v = SendMessageW(chk, checkbox::NXCHK_GETCHECK, None, None).0; // 0/1/2
+```

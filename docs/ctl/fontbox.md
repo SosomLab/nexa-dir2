@@ -24,3 +24,20 @@
 ## 상태(구형 — 개정 대기)
 - Style 인자화·AA 개정 미적용(라이트 고정). 개정은 사용자 개별 요청 시에만.
 - 팝업 owner = USERDATA 규약(승격 함정)·타이머 해제는 owner 기준(QA 07-17).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font) -> HWND` | 글꼴 입력 생성(라이트 고정 — Style 인자화는 개정 대기) |
+
+### 사용 예 — 모달 펌프의 Enter 라우팅
+```rust
+let fb = fontbox::create(dlg, x, y, 260, 24, ID_FONT, font);
+// Enter 처리: 드롭다운 열림 = 목록 확정에 양보, 닫힘 = 즉시 적용
+if SendMessageW(fb, fontbox::FBM_HAS_DROP, None, None).0 == 1 {
+    /* 컨트롤에 전달(IsDialogMessage/Translate 경로 유지) */
+} else { /* 호스트 즉시 적용 */ }
+// (ID_FONT, 0x300) = 내용 변경 · (ID_FONT, 0x200 /*EN_KILLFOCUS*/) = 확정
+```
