@@ -176,8 +176,6 @@ pub mod shell {
     const EMBEDDED: &[(&str, &[u8])] = emb!(
         "panel-dual",
         "panel-single",
-        "colsync",
-        "colsync-disabled",
         "refresh",
         "settings",
         "hidden",
@@ -193,11 +191,15 @@ pub mod shell {
         ("view-tree", include_str!("../assets/toolbar/view-tree.svg")),
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
+        ("colsync", include_str!("../assets/toolbar/colsync.svg")),
     ];
 
     /// SVG 아이콘 잉크 — 사용자 확정 07-19 "더 진하게"(2차): `#40464E`
     /// (PNG 세트 `#6E747C` 대비 두 단계 어두운 회색).
     const SVG_INK: u32 = 0xFF40_464E;
+    /// 비활성 잉크 = 같은 색 알파 38%(PNG disabled 변형 규약 동일 —
+    /// `<이름>-disabled` 키를 원본 SVG로 렌더).
+    const SVG_INK_DIM: u32 = 0x6140_464E;
 
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);
@@ -244,9 +246,14 @@ pub mod shell {
         fn make_embedded(key: &str) -> Option<HICON> {
             if let Some((name, sz)) = key["emb:".len()..].rsplit_once(':') {
                 if let Some(px) = sz.parse::<i32>().ok().filter(|p| *p > 0) {
-                    if let Some((_, src)) = EMBEDDED_SVG.iter().find(|(n, _)| *n == name) {
+                    // `-disabled` 변형 = 원본 SVG를 흐린 잉크(알파 38%)로 렌더
+                    let (base, ink) = match name.strip_suffix("-disabled") {
+                        Some(b) => (b, SVG_INK_DIM),
+                        None => (name, SVG_INK),
+                    };
+                    if let Some((_, src)) = EMBEDDED_SVG.iter().find(|(n, _)| *n == base) {
                         if let Some(icon) = crate::svg::parse(src).and_then(|doc| unsafe {
-                            crate::ctl::gdipctx::svg_to_hicon(&doc, px, SVG_INK)
+                            crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink)
                         }) {
                             return Some(icon);
                         }

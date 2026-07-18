@@ -7,8 +7,11 @@
 //!   속성(stroke 색·linecap 등)은 렌더러 고정 규약(라운드 캡/조인·단색 잉크).
 //! - 요소: `rect`(x/y/width/height/rx) · `circle`(cx/cy/r) ·
 //!   `line`(x1/y1/x2/y2) · `polyline`(points) ·
-//!   `path`(`d` = M/m·L/l·H/h·V/v·C/c·Z/z).
-//! - 전 요소 **스트로크 전용**(fill 무시 — 시안 스타일). 미지 요소는 건너뜀.
+//!   `path`(`d` = M/m·L/l·H/h·V/v·C/c·Z/z) ·
+//!   `text`(x/y[베이스라인]/font-size/font-weight/text-anchor=middle —
+//!   글꼴 지정은 무시, 렌더러 고정 산세리프).
+//! - 도형 채색 = 루트 `fill` 지시(`none`/부재 = **스트로크**, 색 지정 =
+//!   **채움** — 07-19 SYNC 아이콘). 텍스트는 항상 채움. 미지 요소는 건너뜀.
 //!
 //! 파싱 결과는 플랫폼 중립 [`Doc`](드로 op 목록) — 래스터는
 //! [gdipctx](crate::ctl::gdipctx) `svg_to_hicon`(Windows 전용)이 수행.
@@ -32,6 +35,15 @@ pub enum Op {
     Line { x1: f32, y1: f32, x2: f32, y2: f32 },
     Polyline(Vec<(f32, f32)>),
     Path(Vec<Seg>),
+    /// 텍스트(`y` = 베이스라인 — SVG 규약). `middle` = 수평 중앙 앵커.
+    Text {
+        x: f32,
+        y: f32,
+        size: f32,
+        bold: bool,
+        middle: bool,
+        content: String,
+    },
 }
 
 /// 파싱된 문서 — viewBox `(x, y, w, h)` + 루트 스트로크 폭 + op 목록.
@@ -39,6 +51,8 @@ pub enum Op {
 pub struct Doc {
     pub viewbox: (f32, f32, f32, f32),
     pub stroke_width: f32,
+    /// 루트 `fill` 채움 모드(true = 도형 채움·false = 스트로크).
+    pub fill: bool,
     pub ops: Vec<Op>,
 }
 
@@ -47,11 +61,16 @@ pub fn parse(svg: &str) -> Option<Doc> {
     let mut doc = Doc {
         viewbox: (0.0, 0.0, 0.0, 0.0),
         stroke_width: 1.0,
+        fill: false,
         ops: Vec::new(),
     };
     let mut seen_root = false;
-    for tag in svg.split('<').skip(1) {
-        let tag = tag.split('>').next()?.trim_end_matches('/').trim();
+    for chunk in svg.split('<').skip(1) {
+        let Some(gt) = chunk.find('>') else {
+            continue; // 닫히지 않은 조각(말미 공백 등) — 건너뜀
+        };
+        let tag = chunk[..gt].trim_end_matches('/').trim();
+        let inner = &chunk[gt + 1..]; // 태그 뒤 내용(text 요소의 본문)
         let (name, attrs) = match tag.split_once(char::is_whitespace) {
             Some((n, a)) => (n, a),
             None => (tag, ""),
@@ -71,6 +90,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                 if let Some(sw) = attr(attrs, "stroke-width").and_then(|s| s.parse().ok()) {
                     doc.stroke_width = sw;
                 }
+                doc.fill = attr(attrs, "fill").is_some_and(|f| f != "none");
                 seen_root = true;
             }
             "rect" => doc.ops.push(Op::Rect {
@@ -110,6 +130,23 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     if !segs.is_empty() {
                         doc.ops.push(Op::Path(segs));
                     }
+                }
+            }
+            "text" => {
+                let content = inner.trim().to_string();
+                if !content.is_empty() {
+                    doc.ops.push(Op::Text {
+                        x: num(attrs, "x"),
+                        y: num(attrs, "y"),
+                        size: attr(attrs, "font-size")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(10.0),
+                        bold: attr(attrs, "font-weight").is_some_and(|w| {
+                            w == "bold" || w.parse::<i32>().is_ok_and(|n| n >= 600)
+                        }),
+                        middle: attr(attrs, "text-anchor").is_some_and(|a| a == "middle"),
+                        content,
+                    });
                 }
             }
             _ => {} // 미지 요소(닫는 태그·주석 포함) — 건너뜀
@@ -346,6 +383,36 @@ mod tests {
     fn rejects_missing_viewbox_or_unknown_path_cmd() {
         assert!(parse(r#"<svg width="8"><rect x="1" width="2" height="2"/></svg>"#).is_none());
         assert!(parse(r#"<svg viewBox="0 0 8 8"><path d="M0 0 A 1 1 0 0 1 2 2"/></svg>"#).is_none());
+    }
+
+    #[test]
+    fn fill_root_and_text_element() {
+        let svg = concat!(
+            r#"<svg viewBox="0 0 32 32" fill="currentColor">"#,
+            r#"<path d="M2 11 L10 6 Z"/>"#,
+            r#"<text x="16" y="26" text-anchor="middle" font-size="9" font-weight="700">SYNC</text>"#,
+            "</svg>",
+        );
+        let doc = parse(svg).unwrap();
+        assert!(doc.fill);
+        assert_eq!(doc.ops.len(), 2);
+        assert_eq!(
+            doc.ops[1],
+            Op::Text {
+                x: 16.0,
+                y: 26.0,
+                size: 9.0,
+                bold: true,
+                middle: true,
+                content: "SYNC".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn stroke_root_keeps_fill_false() {
+        let svg = r#"<svg viewBox="0 0 8 8" fill="none" stroke="currentColor"><line x1="0" y1="0" x2="4" y2="4"/></svg>"#;
+        assert!(!parse(svg).unwrap().fill);
     }
 
     #[test]

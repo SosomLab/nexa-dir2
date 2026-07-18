@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | `panel-dual` | 듀얼 파일 패널(CMD_PANEL_DUAL) | 파일만 보관(07-18 정정 — 듀얼↔싱글 상호 전환, 임베드 제외) |
 | `panel-single` | 싱글 파일 패널(CMD_PANEL_SINGLE) | — |
-| `colsync` | 컬럼 넓이 동기화(CMD_COLW_SYNC) | ○ (싱글 모드에서 선택 불가) |
+| `colsync` | 컬럼 넓이 동기화(CMD_COLW_SYNC) — **SVG 단독**(`colsync.svg`, 사용자 제공 07-19 — ↔ 화살표+SYNC 텍스트) | SVG 알파 38% 렌더(파일 불필요) |
 | `view-tree` | 트리 보기(CMD_VIEW_TREE) — **SVG 단독**(`view-tree.svg`, 사용자 제공 07-19 — 부모+└자식 2) | — |
 | `view-flat` | 플랫 보기(CMD_VIEW_FLAT) — **SVG 단독**(`view-flat.svg`, 사용자 제공 07-18 — PNG 제거, 전 크기 즉석 래스터) | — |
 | `view-tiles` | 타일 보기(CMD_VIEW_TILES) — **SVG 단독**(`view-tiles.svg`, 사용자 제공 07-19 — 2×2 라운드 사각) | — |

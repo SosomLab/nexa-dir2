@@ -89,8 +89,11 @@ pub(crate) unsafe fn image_size(img: *mut GpImage) -> (i32, i32) {
 pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<HICON> {
     use crate::svg::{Op, Seg};
     use windows::Win32::Graphics::GdiPlus::{
-        GdipAddPathBezier, GdipAddPathEllipse, GdipAddPathLine, GdipCreateBitmapFromScan0,
-        GdipGetImageGraphicsContext, GdipStartPathFigure,
+        GdipAddPathBezier, GdipAddPathEllipse, GdipAddPathLine, GdipAddPathString,
+        GdipCreateBitmapFromScan0, GdipCreateFontFamilyFromName, GdipCreateStringFormat,
+        GdipDeleteFontFamily, GdipDeleteStringFormat, GdipGetImageGraphicsContext,
+        GdipSetStringFormatAlign, GdipStartPathFigure, GpFontFamily, GpStringFormat, RectF,
+        StringAlignmentCenter,
     };
     if !ensure_startup() || px <= 0 {
         return None;
@@ -194,8 +197,69 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
                             }
                         }
                     }
+                    Op::Text {
+                        x,
+                        y,
+                        size,
+                        bold,
+                        middle,
+                        content,
+                    } => {
+                        // 텍스트 아웃라인 패스(GdipAddPathString) — 항상 채움.
+                        // 글꼴 = 고정 산세리프(Arial — 인박스)·`y` = 베이스라인
+                        // 근사(em 위로). 가족 로드 실패 시 건너뜀(오류 격리).
+                        let mut family: *mut GpFontFamily = std::ptr::null_mut();
+                        let _ = GdipCreateFontFamilyFromName(
+                            windows::core::w!("Arial"),
+                            std::ptr::null_mut(),
+                            &mut family,
+                        );
+                        if !family.is_null() {
+                            let mut fmt: *mut GpStringFormat = std::ptr::null_mut();
+                            let _ = GdipCreateStringFormat(0, 0, &mut fmt);
+                            let em = size * scale;
+                            let width = vw * scale;
+                            let mut left = sx(*x);
+                            if *middle && !fmt.is_null() {
+                                let _ = GdipSetStringFormatAlign(fmt, StringAlignmentCenter);
+                                left = sx(*x) - width / 2.0;
+                            }
+                            let rect = RectF {
+                                X: left,
+                                Y: sy(*y) - em,
+                                Width: width,
+                                Height: em * 1.6,
+                            };
+                            let wide = windows::core::HSTRING::from(content.as_str());
+                            let _ = GdipAddPathString(
+                                path,
+                                windows::core::PCWSTR(wide.as_ptr()),
+                                content.encode_utf16().count() as i32,
+                                family,
+                                if *bold { 1 /* FontStyleBold */ } else { 0 },
+                                em,
+                                &rect,
+                                fmt,
+                            );
+                            if !fmt.is_null() {
+                                let _ = GdipDeleteStringFormat(fmt);
+                            }
+                            let _ = GdipDeleteFontFamily(family);
+                        }
+                    }
                 }
-                let _ = GdipDrawPath(g, pen, path);
+                // 채색: 루트 fill 모드 = 채움(텍스트 포함), 아니면 텍스트만 채움
+                let filled = doc.fill || matches!(op, Op::Text { .. });
+                if filled {
+                    let mut b: *mut GpSolidFill = std::ptr::null_mut();
+                    let _ = GdipCreateSolidFill(argb, &mut b);
+                    if !b.is_null() {
+                        let _ = GdipFillPath(g, b as *mut GpBrush, path);
+                        let _ = GdipDeleteBrush(b as *mut GpBrush);
+                    }
+                } else {
+                    let _ = GdipDrawPath(g, pen, path);
+                }
                 let _ = GdipDeletePath(path);
             }
             let _ = GdipDeletePen(pen);
