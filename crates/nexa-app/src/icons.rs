@@ -179,7 +179,6 @@ pub mod shell {
         "colsync",
         "colsync-disabled",
         "view-tree",
-        "view-tiles",
         "refresh",
         "settings",
         "hidden",
@@ -191,10 +190,10 @@ pub mod shell {
     /// 서브셋 파서 → gdipctx `svg_to_hicon`). SVG 등록 아이콘은 PNG 불필요
     /// (view-flat PNG 제거 — 사용자 확정 07-18); 실패 시 PNG 버킷이 있으면
     /// 폴백, 없으면 글리프 폴백.
-    const EMBEDDED_SVG: &[(&str, &str)] = &[(
-        "view-flat",
-        include_str!("../assets/toolbar/view-flat.svg"),
-    )];
+    const EMBEDDED_SVG: &[(&str, &str)] = &[
+        ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
+        ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
+    ];
 
     /// 임베드 아이콘 잉크(PNG 세트와 동일 — 라이트/다크 겸용 `#6E747C`).
     const SVG_INK: u32 = 0xFF6E_747C;

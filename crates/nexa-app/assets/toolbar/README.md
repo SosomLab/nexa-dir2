@@ -21,7 +21,7 @@
 | `colsync` | 컬럼 넓이 동기화(CMD_COLW_SYNC) | ○ (싱글 모드에서 선택 불가) |
 | `view-tree` | 트리 보기(CMD_VIEW_TREE) — 사용자 시안 v3(부모 사각+긴 줄·└자식 2) | — |
 | `view-flat` | 플랫 보기(CMD_VIEW_FLAT) — **SVG 단독**(`view-flat.svg`, 사용자 제공 07-18 — PNG 제거, 전 크기 즉석 래스터) | — |
-| `view-tiles` | 타일 보기(CMD_VIEW_TILES) — 사용자 시안 v3(2×2 스트로크·좌상 열린 모서리) | — |
+| `view-tiles` | 타일 보기(CMD_VIEW_TILES) — **SVG 단독**(`view-tiles.svg`, 사용자 제공 07-19 — 2×2 라운드 사각) | — |
 | `refresh` | 새로고침(CMD_REFRESH) — 300° 호 + 접선 화살촉 | — |
 | `settings` | 설정(CMD_PREFS) — 톱니(도넛+치형 8) | — |
 | `hidden` | 숨김 파일 토글(CMD_TOGGLE_HIDDEN) — 눈 | — |

@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-19
+
+- **타일 보기 SVG 전환(main 직커밋 — 사용자 SVG 제공)**: view-tiles.svg 등록(EMBEDDED_SVG 2호)·PNG 3종 제거(SVG = 전 크기 즉석 래스터). 릴리스 재빌드·캡처 확인. 194 green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
+
 ## 2026-07-18
 
 - **SVG 아이콘 파이프라인(`feat/svg-icons` — 사용자 요청·SVG 제공)**: "svg 방식도 적용" — **svg.rs 서브셋 파서 신설**(플랫폼 중립·테스트 6종·외부 crate 0: viewBox/rect·circle·line·polyline·path[M·L·H·V·C·Z]·스트로크 전용) + gdipctx `svg_to_hicon`(GDI+ ARGB 오프스크린 → HICON — **요청 크기 즉석 래스터**, 버킷 불필요) + icons `EMBEDDED_SVG` **PNG보다 우선·실패 폴백**. 1호 = 사용자 제공 view-flat.svg(SSOT 보관). 193 green·clippy 0. 상세 [journal/2026-07-18.md](journal/2026-07-18.md).
