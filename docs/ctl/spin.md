@@ -27,3 +27,23 @@
 ## 내부 구현 메모
 - 내부 EDIT 서브클래스(`GWLP_WNDPROC` 교체)는 WM_DESTROY에서 **원복 후**
   상태 박스 회수(base::drop_state).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font, value, min, max, style) -> HWND` | 스피너 생성(`h <= 0` = 공통 자동) |
+
+| 인자 | 타입 | 설명 |
+|---|---|---|
+| `value` | `i64` | 초기값(범위 클램프) |
+| `min` / `max` | `i64` | 값 범위 — 도달 방향 버튼 자동 비활성 |
+
+### 사용 예
+```rust
+let sp = spin::create(dlg, x, y, 70, 0, ID_POS, font, 0, 0, 999, style);
+let v = SendMessageW(sp, spin::SPIN_GETVAL, None, None).0 as i64;
+SendMessageW(sp, spin::SPIN_SETVAL, Some(WPARAM(5 as usize)), None); // 통지 없음
+// (ID_POS, 0x300 /*EN_CHANGE*/) => 값 변경 실시간
+```

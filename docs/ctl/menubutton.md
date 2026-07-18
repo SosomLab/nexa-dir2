@@ -23,3 +23,24 @@
 - owner 승격 함정 = 콤보와 동일(팝업 USERDATA에 owner).
 - 모달 루프에서 팝업 항목을 프로그램으로 누를 땐 **PostMessage**(SendMessage는
   모달 진입에 블록 — QA 방법론).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font, items, style) -> HWND` | `… ⌄` 메뉴 버튼 생성 |
+
+| 인자 | 타입 | 설명 |
+|---|---|---|
+| `items` | `&[&str]` | 메뉴 항목(복사 소유·불변 — 갱신 = 재생성). `"-"` = 구분선(pick 불가) |
+
+### 사용 예 — 프리셋 메뉴([항목들/─/저장/편집])
+```rust
+let mut items: Vec<&str> = presets.iter().map(String::as_str).collect();
+if !items.is_empty() { items.push("-"); }
+items.push("저장…"); items.push("편집…");
+let mb = menubutton::create(dlg, x, y, 48, 0, ID_MENU, font, &items, style);
+// (ID_MENU, menubutton::NXMB_PICK) =>
+let i = SendMessageW(mb, menubutton::NXMB_GETPICK, None, None).0; // 구분선 제외 인덱스 아님 — 항목 절대 인덱스
+```

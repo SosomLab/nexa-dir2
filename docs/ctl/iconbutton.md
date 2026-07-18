@@ -36,3 +36,40 @@
 ## 내부 구현 메모
 - GpImage 2장(활성/비활성)은 상태 보유·**Drop RAII 해제**. 디코드/드로우는
   gdipctx 경유(GDI+ 유일 접점 규약).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, d, id, font, icon, enabled, style) -> HWND` | **벡터 모드** — `d` = 지름(`<= 0` = 글꼴 높이) |
+| `create_image(parent, x, y, d, id, font, active, disabled, fit, enabled, style) -> HWND` | **이미지 모드** — PNG 바이트 2장(활성/비활성) 디코드·캐시(Drop 해제) |
+
+| 인자 | 타입 | 설명 |
+|---|---|---|
+| `icon` | `Icon` | 벡터 글리프(아래) |
+| `active` / `disabled` | `&[u8]` | PNG 인코딩 바이트(`include_bytes!` 임베드 권장 — 알파 보존) |
+| `fit` | `ImageFit` | 이미지 표시 모드(아래) |
+
+### 프로퍼티 — `Icon`
+| 값 | 설명 |
+|---|---|
+| `Plus` | ＋(십자 — AA 폴리라인) |
+| `Minus` | −(수평선) |
+| `Help` | ?(GDI 텍스트 — 도움말) |
+
+### 프로퍼티 — `ImageFit`
+| 값 | 설명 |
+|---|---|
+| `Native` | 원본 픽셀 크기 그대로 컨트롤 중앙(크면 잘림) |
+| `Stretch` | 컨트롤 크기 맞춤 늘림(바이큐빅 — 기본) |
+
+### 사용 예
+```rust
+const PNG_ADD: &[u8] = include_bytes!("../assets/rename/rename-add-32.png");
+const PNG_ADD_OFF: &[u8] = include_bytes!("../assets/rename/rename-add-disabled-32.png");
+let add = iconbutton::create_image(card, x, y, 15, ID_ADD, font,
+    PNG_ADD, PNG_ADD_OFF, iconbutton::ImageFit::Stretch, true, style);
+SendMessageW(add, iconbutton::NXIB_SETENABLE, Some(WPARAM(0)), None); // 회색 이미지 전환
+// (ID_ADD, iconbutton::NXIB_CLICK) => 실행
+```

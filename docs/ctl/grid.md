@@ -46,3 +46,57 @@
 ## 주의(원장)
 - **빈 문자열 셀은 그리지 않는다**(빈 Vec = 댕글링 → user32 AV — 07-18 진범).
 - 도형(체크·⊖·썸) = AA(DrawCtx)·텍스트 = GDI(+1px 하향).
+
+## 개발자 레퍼런스
+
+### 함수
+| 함수 | 설명 |
+|---|---|
+| `create(parent, x, y, w, h, id, font, cols, opts, style) -> HWND` | 그리드 생성. `cols: &[(&str, i32)]` = (헤더 제목, 초기 폭 px — 최소 40 클램프) |
+| `set_rows(hwnd, rows: Vec<GridRow>)` | 행 전체 교체(대량 데이터 — 메시지 마샬링 회피 직접 API). 선택/포커스/스크롤은 새 행 수로 클램프 유지 |
+| `row_check(hwnd, idx: usize) -> Option<bool>` | `idx` 행 체크 상태(`None` = 마크 없는 행) |
+| `sort_spec(hwnd) -> Vec<(usize, bool)>` | 정렬 상태 — 우선순위 순 (컬럼 인덱스, 내림차순 여부). `NXGR_SORT` 수신 시 읽는다 |
+| `selected_rows(hwnd) -> Vec<usize>` | 선택된 행 인덱스(오름차순) |
+
+### 프로퍼티 — `GridRow`
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `check` | `Option<bool>` | 마크 셀 상태. `None` = 마크 없음(무변경 행)·`Some(on)` = 체크/⊖ 표시 |
+| `cells` | `Vec<String>` | 텍스트 셀(체크 열 사용 시 컬럼 1부터 — `cells[k]` ↔ `cols[k+1]`) |
+
+### 프로퍼티 — `GridOpts` (전 필드 `Default`)
+| 필드 | 타입 | 기본 | 설명 |
+|---|---|---|---|
+| `no_header` | `bool` | false | 헤더 숨김(목록 모드 — 정렬/리사이즈 비활성) |
+| `zebra` | `bool` | false | 지브라 줄무늬(bg↔sel_bg 50% 블렌드·빈 슬롯 연속) |
+| `outline` | `bool` | false | 1px 외곽선(`style.border`) |
+| `row_h` | `i32` | 0 | 행 높이 px. `<= 0` = 자동(글꼴+8px) |
+| `mark` | `Mark` | `None` | 마크 셀 종류(아래) |
+
+### 프로퍼티 — `Mark`
+| 값 | 설명 |
+|---|---|
+| `None` | 순수 텍스트 그리드 |
+| `Check` | 컬럼 0 = 체크박스(클릭 토글 → `NXGR_TOGGLE`)·헤더 = 전체 토글(전체 ✓/부분 흐릿 ✓/해제) |
+| `Minus` | 행 우측 끝 빨간 ⊖(`style.danger`) — 클릭 = `NXGR_TOGGLE`(삭제 실행은 호스트) |
+
+### 사용 예 — 미리보기 그리드
+```rust
+let grid = grid::create(dlg, x, y, w, h, ID_PREV, font,
+    &[("", 29), ("이전", 240), ("이후", 240)],
+    grid::GridOpts { mark: grid::Mark::Check, row_h: 20, ..Default::default() },
+    Style::default());
+grid::set_rows(grid, rows);
+
+// WndProc — 통지 3종
+(ID_PREV, grid::NXGR_TOGGLE) => {
+    let row = SendMessageW(grid, grid::NXGR_GETROW, None, None).0;
+    if row == grid::NXGR_ROW_ALL { /* 헤더 전체 토글 — 전 행 재동기 */ }
+    else if row >= 0 { /* 단일 행 — row_check로 반영 */ }
+}
+(ID_PREV, grid::NXGR_SORT) => {
+    let keys = grid::sort_spec(grid);  // 비교 = 호스트 책임
+    /* keys로 재정렬 → set_rows */
+}
+(ID_PREV, grid::NXGR_SELCHANGE) => { let sel = grid::selected_rows(grid); }
+```
