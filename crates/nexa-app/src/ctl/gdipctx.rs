@@ -20,12 +20,11 @@ use windows::Win32::Graphics::GdiPlus::{
     FillModeAlternate, GdipAddPathArc, GdipClosePathFigure, GdipCreateFromHDC, GdipCreatePath,
     GdipCreatePen1, GdipCreateSolidFill, GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePath,
     GdipDeletePen, GdipDisposeImage, GdipDrawImageRectI, GdipDrawLines, GdipDrawPath,
-    GdipFillEllipse, GdipFillPath, GdipGetImageHeight, GdipGetImageWidth,
-    GdipLoadImageFromStream, GdipSetInterpolationMode,
-    GdipSetPenEndCap, GdipSetPenLineJoin, GdipSetPenStartCap, GdipSetSmoothingMode, GdiplusStartup,
-    GdiplusStartupInput, GdiplusStartupOutput, GpBrush, GpGraphics, GpImage, GpPath, GpPen,
-    GpSolidFill, InterpolationModeHighQualityBicubic, LineCapRound, LineJoinRound, PointF,
-    SmoothingModeAntiAlias, Unit,
+    GdipFillEllipse, GdipFillPath, GdipGetImageHeight, GdipGetImageWidth, GdipLoadImageFromStream,
+    GdipSetInterpolationMode, GdipSetPenEndCap, GdipSetPenLineJoin, GdipSetPenStartCap,
+    GdipSetSmoothingMode, GdiplusStartup, GdiplusStartupInput, GdiplusStartupOutput, GpBrush,
+    GpGraphics, GpImage, GpPath, GpPen, GpSolidFill, InterpolationModeHighQualityBicubic,
+    LineCapRound, LineJoinRound, PointF, SmoothingModeAntiAlias, Unit,
 };
 
 /// COLORREF → [`Color`](DrawCtx 인자 변환 — ctl 편의).
