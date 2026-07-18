@@ -21,7 +21,7 @@
 | `view-tree` | 트리 보기(CMD_VIEW_TREE) — **SVG 단독**(`view-tree.svg`, 사용자 제공 07-19 — 부모+└자식 2) | — |
 | `view-flat` | 플랫 보기(CMD_VIEW_FLAT) — **SVG 단독**(`view-flat.svg`, 사용자 제공 07-18 — PNG 제거, 전 크기 즉석 래스터) | — |
 | `view-tiles` | 타일 보기(CMD_VIEW_TILES) — **SVG 단독**(`view-tiles.svg`, 사용자 제공 07-19 — 2×2 라운드 사각) | — |
-| `refresh` | 새로고침(CMD_REFRESH) — 300° 호 + 접선 화살촉 | — |
+| `refresh` | 새로고침(CMD_REFRESH) — **SVG 단독**(`refresh.svg`, 사용자 제공 07-19 — A 원호+화살촉) | — |
 | `settings` | 설정(CMD_PREFS) — 톱니(도넛+치형 8) | — |
 | `hidden` | 숨김 파일 토글(CMD_TOGGLE_HIDDEN) — **SVG 단독**(`hidden.svg`, 사용자 제공 07-19 — 파일+HIDDEN 텍스트) | — |
 | `dotfiles` | 닷파일 토글(CMD_TOGGLE_DOTFILES) — **SVG 단독**(`dotfiles.svg`, 사용자 제공 07-19 — 파일+DOT 텍스트) | — |

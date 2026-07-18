@@ -174,7 +174,6 @@ pub mod shell {
         };
     }
     const EMBEDDED: &[(&str, &[u8])] = emb!(
-        "refresh",
         "settings",
     );
 
@@ -191,6 +190,7 @@ pub mod shell {
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
         ("colsync", include_str!("../assets/toolbar/colsync.svg")),
+        ("refresh", include_str!("../assets/toolbar/refresh.svg")),
         ("hidden", include_str!("../assets/toolbar/hidden.svg")),
         ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
     ];

@@ -188,6 +188,26 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
                                     );
                                     (cx, cy) = (e.0, e.1);
                                 }
+                                Seg::Arc {
+                                    cx: acx,
+                                    cy: acy,
+                                    r,
+                                    start,
+                                    sweep,
+                                } => {
+                                    let d = r * scale * 2.0;
+                                    let _ = GdipAddPathArc(
+                                        path,
+                                        sx(acx - r),
+                                        sy(acy - r),
+                                        d,
+                                        d,
+                                        start,
+                                        sweep,
+                                    );
+                                    let end = (start + sweep).to_radians();
+                                    (cx, cy) = (acx + r * end.cos(), acy + r * end.sin());
+                                }
                                 Seg::Close => {
                                     let _ = GdipClosePathFigure(path);
                                 }

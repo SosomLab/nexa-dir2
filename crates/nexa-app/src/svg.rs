@@ -7,7 +7,7 @@
 //!   속성(stroke 색·linecap 등)은 렌더러 고정 규약(라운드 캡/조인·단색 잉크).
 //! - 요소: `rect`(x/y/width/height/rx) · `circle`(cx/cy/r) ·
 //!   `line`(x1/y1/x2/y2) · `polyline`(points) ·
-//!   `path`(`d` = M/m·L/l·H/h·V/v·C/c·Z/z) ·
+//!   `path`(`d` = M/m·L/l·H/h·V/v·C/c·A/a[원형 한정]·Z/z) ·
 //!   `text`(x/y[베이스라인]/font-size/font-weight/text-anchor=middle —
 //!   글꼴 지정은 무시, 렌더러 고정 산세리프).
 //! - 도형 채색 = 루트 `fill` 지시(`none`/부재 = **스트로크**, 색 지정 =
@@ -23,6 +23,15 @@ pub enum Seg {
     LineTo(f32, f32),
     /// 3차 베지어(제어 1·제어 2·끝).
     CurveTo([(f32, f32); 3]),
+    /// 원호(파싱 시 중심 매개변수로 해석 완료 — SVG `A`는 **원형만**
+    /// 지원: rx=ry·회전 0). 각도 = 도(deg)·양수 = 시계방향(화면 좌표).
+    Arc {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        start: f32,
+        sweep: f32,
+    },
     Close,
 }
 
@@ -366,13 +375,57 @@ fn apply_cmd(
             }
             (n.len() >= 6 && n.len().is_multiple_of(6)).then_some(())
         }
+        'A' => {
+            // 원호(F.6.5 엔드포인트→중심 변환 — 원형 한정: rx=ry·회전 무시)
+            for p in n.chunks_exact(7) {
+                let (rx, ry) = (p[0].abs(), p[1].abs());
+                if (rx - ry).abs() > 0.01 || rx <= 0.0 {
+                    return None; // 타원 호 미지원 — 문서 §서브셋
+                }
+                let (fa, fs) = (p[3] != 0.0, p[4] != 0.0);
+                let (ex, ey) = if rel {
+                    (*cx + p[5], *cy + p[6])
+                } else {
+                    (p[5], p[6])
+                };
+                let (dx, dy) = ((*cx - ex) / 2.0, (*cy - ey) / 2.0);
+                let d2 = dx * dx + dy * dy;
+                if d2 <= 0.0 {
+                    return None; // 시작 = 끝(퇴화)
+                }
+                // 반지름이 두 점을 못 잇으면 SVG 규약대로 확대
+                let r = rx.max(d2.sqrt());
+                let sign = if fa != fs { 1.0 } else { -1.0 };
+                let k = sign * ((r * r - d2) / d2).max(0.0).sqrt();
+                let (ccx, ccy) = ((*cx + ex) / 2.0 + k * dy, (*cy + ey) / 2.0 - k * dx);
+                let th1 = (*cy - ccy).atan2(*cx - ccx).to_degrees();
+                let th2 = (ey - ccy).atan2(ex - ccx).to_degrees();
+                let mut sweep = th2 - th1;
+                // fs=1 = 양의 각(화면 시계방향), fs=0 = 음의 각
+                if fs && sweep < 0.0 {
+                    sweep += 360.0;
+                } else if !fs && sweep > 0.0 {
+                    sweep -= 360.0;
+                }
+                segs.push(Seg::Arc {
+                    cx: ccx,
+                    cy: ccy,
+                    r,
+                    start: th1,
+                    sweep,
+                });
+                *cx = ex;
+                *cy = ey;
+            }
+            (n.len() >= 7 && n.len().is_multiple_of(7)).then_some(())
+        }
         'Z' => {
             *cx = *sx;
             *cy = *sy;
             segs.push(Seg::Close);
             Some(())
         }
-        _ => None, // 미지원 명령(A/Q/S/T…) — 문서 §서브셋
+        _ => None, // 미지원 명령(Q/S/T…) — 문서 §서브셋
     }
 }
 
@@ -443,7 +496,27 @@ mod tests {
     #[test]
     fn rejects_missing_viewbox_or_unknown_path_cmd() {
         assert!(parse(r#"<svg width="8"><rect x="1" width="2" height="2"/></svg>"#).is_none());
-        assert!(parse(r#"<svg viewBox="0 0 8 8"><path d="M0 0 A 1 1 0 0 1 2 2"/></svg>"#).is_none());
+        assert!(parse(r#"<svg viewBox="0 0 8 8"><path d="M0 0 Q 1 1 2 2"/></svg>"#).is_none());
+        // 타원 호(rx≠ry)는 미지원
+        assert!(parse(r#"<svg viewBox="0 0 8 8"><path d="M0 0 A 2 1 0 0 1 2 2"/></svg>"#).is_none());
+    }
+
+    #[test]
+    fn circular_arc_resolves_center_params() {
+        // 07-19 refresh: M25.2 6.8 A13 13 0 1 0 29 16 — 중심 (16,16)·r 13
+        let svg = r#"<svg viewBox="0 0 32 32"><path d="M25.2 6.8 A13 13 0 1 0 29 16"/></svg>"#;
+        let doc = parse(svg).unwrap();
+        let Op::Path(segs) = &doc.ops[0].op else {
+            panic!("path")
+        };
+        assert_eq!(segs[0], Seg::MoveTo(25.2, 6.8));
+        let Seg::Arc { cx, cy, r, start, sweep } = segs[1] else {
+            panic!("arc")
+        };
+        assert!((cx - 16.0).abs() < 0.1 && (cy - 16.0).abs() < 0.1, "{cx},{cy}");
+        assert!((r - 13.0).abs() < 0.1);
+        assert!((start - -45.0).abs() < 1.0, "{start}");
+        assert!((sweep - -315.0).abs() < 1.5, "{sweep}"); // fs=0 = 반시계 315°
     }
 
     #[test]
