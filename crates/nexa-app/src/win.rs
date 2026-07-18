@@ -318,21 +318,53 @@ fn build_menus(
 
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
 /// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
-fn build_toolbar(show_hidden: bool, show_dotfiles: bool, view_mode: &str) -> Vec<ToolButton> {
+fn build_toolbar(
+    show_hidden: bool,
+    show_dotfiles: bool,
+    view_mode: &str,
+    panel_mode: &str,
+    col_width_sync: bool,
+) -> Vec<ToolButton> {
     // 그룹화(QA 07-14 — 원본 PR#10): [새로고침] | [설정] | [숨김·닷파일 토글] |
     // [보기 모드 라디오 3종 — 07-16: 트리/일반/타일, 활성 탭 기준 1개만 켜짐]
+    // 07-18: 전 버튼 임베드 16×16 이미지(`emb:` — icons::shell::EMBEDDED,
+    // 사용자: "도구 모음을 16x16 이미지 형태로"). 글리프는 미로드 폴백 텍스트.
     vec![
-        ToolButton::new(CMD_VIEW_TREE, "├─").toggled(view_mode == "tree"),
-        ToolButton::new(CMD_VIEW_FLAT, "☰").toggled(view_mode == "flat"),
-        ToolButton::new(CMD_VIEW_TILES, "▦").toggled(view_mode == "tiles"),
+        // 패널 모드 라디오 + 컬럼 동기(07-18 사용자: 싱글 상태에선 듀얼·컬럼
+        // 동기 선택 불가 — 비활성. 듀얼 복귀는 View 메뉴 경로 유지)
+        ToolButton::new(CMD_PANEL_DUAL, "▌▐")
+            .with_icon("emb:panel-dual", "")
+            .toggled(panel_mode == "dual")
+            .enable(panel_mode == "dual"),
+        ToolButton::new(CMD_PANEL_SINGLE, "■")
+            .with_icon("emb:panel-single", "")
+            .toggled(panel_mode == "single"),
+        ToolButton::new(CMD_COLW_SYNC, "⇔")
+            .with_icon("emb:colsync", "")
+            .toggled(col_width_sync)
+            .enable(panel_mode == "dual"),
         ToolButton::sep(),
-        ToolButton::new(CMD_REFRESH, "⟳"),
+        ToolButton::new(CMD_VIEW_TREE, "├─")
+            .with_icon("emb:view-tree", "")
+            .toggled(view_mode == "tree"),
+        ToolButton::new(CMD_VIEW_FLAT, "☰")
+            .with_icon("emb:view-flat", "")
+            .toggled(view_mode == "flat"),
+        ToolButton::new(CMD_VIEW_TILES, "▦")
+            .with_icon("emb:view-tiles", "")
+            .toggled(view_mode == "tiles"),
+        ToolButton::sep(),
+        ToolButton::new(CMD_REFRESH, "⟳").with_icon("emb:refresh", ""),
         ToolButton::sep(),
         // 설정 = MDL2 Settings 톱니바퀴(사용자 확정 07-18 - U+2699는 꽃처럼 렌더)
-        ToolButton::new(CMD_PREFS, ""),
+        ToolButton::new(CMD_PREFS, "").with_icon("emb:settings", ""),
         ToolButton::sep(),
-        ToolButton::new(CMD_TOGGLE_HIDDEN, "👁").toggled(show_hidden),
-        ToolButton::new(CMD_TOGGLE_DOTFILES, "…").toggled(show_dotfiles),
+        ToolButton::new(CMD_TOGGLE_HIDDEN, "👁")
+            .with_icon("emb:hidden", "")
+            .toggled(show_hidden),
+        ToolButton::new(CMD_TOGGLE_DOTFILES, "…")
+            .with_icon("emb:dotfiles", "")
+            .toggled(show_dotfiles),
         // ctl 갤러리 🃏 버튼 숨김(사용자 확정 07-18 — 개발 검증은
         // WM_APP_CTLDEMO(0x8009) 주입 경로만 유지)
     ]
@@ -852,6 +884,8 @@ pub fn run() -> Result<()> {
                 settings.show_hidden,
                 settings.show_dotfiles,
                 &settings.view_mode,
+                &settings.panel_mode,
+                settings.col_width_sync,
             ),
             m.row_h,
             m.pad_x,
@@ -2677,6 +2711,8 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.col_width_sync = !st.col_width_sync;
             st.menubar
                 .set_checked(CMD_COLW_SYNC, st.col_width_sync, &mut inv);
+            st.toolbar
+                .set_checked(CMD_COLW_SYNC, st.col_width_sync, &mut inv);
             if st.col_width_sync {
                 let w = st.panels[st.active].col_widths();
                 st.panels[1 - st.active].apply_col_widths(&w, &mut inv);
@@ -2701,6 +2737,16 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     .set_checked(CMD_PANEL_SINGLE, want == "single", &mut inv);
                 st.menubar
                     .set_checked(CMD_PANEL_DUAL, want == "dual", &mut inv);
+                st.toolbar
+                    .set_checked(CMD_PANEL_SINGLE, want == "single", &mut inv);
+                st.toolbar
+                    .set_checked(CMD_PANEL_DUAL, want == "dual", &mut inv);
+                // 싱글 = 듀얼·컬럼 동기 비활성(07-18 사용자 규칙 —
+                // 듀얼 복귀는 View 메뉴로)
+                st.toolbar
+                    .set_enabled(CMD_PANEL_DUAL, want == "dual", &mut inv);
+                st.toolbar
+                    .set_enabled(CMD_COLW_SYNC, want == "dual", &mut inv);
                 // 정보 라디오 = 효과 기준(싱글 패널이면 싱글 표시·선호값은 보존)
                 let ie = single_info(st);
                 st.menubar.set_checked(CMD_INFO_SINGLE, ie, &mut inv);

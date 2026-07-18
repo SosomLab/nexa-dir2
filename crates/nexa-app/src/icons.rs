@@ -157,6 +157,37 @@ pub mod shell {
     pub const BATCH: usize = 4;
     pub const TICK_MS: u32 = 80;
 
+    /// 임베드 툴바 아이콘(07-18 — 사용자: "도구 모음을 16x16 이미지 형태로").
+    /// 키 = `emb:<이름>:<크기>` — dw.rs [`draw_icon`](crate::dw)이 그리기 크기에 맞는
+    /// 버킷(16/20/32 = 100/125/200% DPI)을 골라 조회. 원본 64px 벡터에서 다운스케일
+    /// 생성([assets/toolbar](../assets/toolbar/README.md)) 후 exe에 임베드(포터블 규약).
+    macro_rules! emb {
+        ($($name:literal),+ $(,)?) => {
+            &[$(
+                (concat!("emb:", $name, ":16"),
+                 include_bytes!(concat!("../assets/toolbar/", $name, "-16.png")) as &[u8]),
+                (concat!("emb:", $name, ":20"),
+                 include_bytes!(concat!("../assets/toolbar/", $name, "-20.png")) as &[u8]),
+                (concat!("emb:", $name, ":32"),
+                 include_bytes!(concat!("../assets/toolbar/", $name, "-32.png")) as &[u8]),
+            )+]
+        };
+    }
+    const EMBEDDED: &[(&str, &[u8])] = emb!(
+        "panel-dual",
+        "panel-dual-disabled",
+        "panel-single",
+        "colsync",
+        "colsync-disabled",
+        "view-tree",
+        "view-flat",
+        "view-tiles",
+        "refresh",
+        "settings",
+        "hidden",
+        "dotfiles",
+    );
+
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);
     /// 워커 결과(PostMessage WPARAM으로 전달되는 Box): (키, HICON raw — 0=실패).
@@ -177,9 +208,21 @@ pub mod shell {
         }
 
         /// 캐시 조회 — 미스면 큐 등록 후 `None`(틱이 로드).
+        /// `emb:` 키는 임베드 PNG에서 **동기** 생성(디코드 1회 — 이후 캐시 히트,
+        /// LRU 축출돼도 다음 조회에서 재생성).
         pub fn get_or_request(&mut self, key: &str, hint: &str) -> Option<HICON> {
             if let Some(&h) = self.store.get(key) {
                 return Some(h);
+            }
+            if key.starts_with("emb:") {
+                let bytes = EMBEDDED.iter().find(|(k, _)| *k == key).map(|(_, b)| *b)?;
+                let icon = unsafe { crate::ctl::gdipctx::png_to_hicon(bytes) }?;
+                if let Some(old) = self.store.insert(key.to_string(), icon) {
+                    unsafe {
+                        let _ = DestroyIcon(old);
+                    }
+                }
+                return Some(icon);
             }
             self.store.request(key, hint);
             None

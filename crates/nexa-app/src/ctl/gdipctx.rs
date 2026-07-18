@@ -17,15 +17,17 @@ use nexa_gui::{Color, DrawCtx, Rect};
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Graphics::Gdi::HDC;
 use windows::Win32::Graphics::GdiPlus::{
-    FillModeAlternate, GdipAddPathArc, GdipClosePathFigure, GdipCreateFromHDC, GdipCreatePath,
-    GdipCreatePen1, GdipCreateSolidFill, GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePath,
-    GdipDeletePen, GdipDisposeImage, GdipDrawImageRectI, GdipDrawLines, GdipDrawPath,
-    GdipFillEllipse, GdipFillPath, GdipGetImageHeight, GdipGetImageWidth, GdipLoadImageFromStream,
-    GdipSetInterpolationMode, GdipSetPenEndCap, GdipSetPenLineJoin, GdipSetPenStartCap,
-    GdipSetSmoothingMode, GdiplusStartup, GdiplusStartupInput, GdiplusStartupOutput, GpBrush,
-    GpGraphics, GpImage, GpPath, GpPen, GpSolidFill, InterpolationModeHighQualityBicubic,
-    LineCapRound, LineJoinRound, PointF, SmoothingModeAntiAlias, Unit,
+    FillModeAlternate, GdipAddPathArc, GdipClosePathFigure, GdipCreateFromHDC,
+    GdipCreateHICONFromBitmap, GdipCreatePath, GdipCreatePen1, GdipCreateSolidFill,
+    GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePath, GdipDeletePen, GdipDisposeImage,
+    GdipDrawImageRectI, GdipDrawLines, GdipDrawPath, GdipFillEllipse, GdipFillPath,
+    GdipGetImageHeight, GdipGetImageWidth, GdipLoadImageFromStream, GdipSetInterpolationMode,
+    GdipSetPenEndCap, GdipSetPenLineJoin, GdipSetPenStartCap, GdipSetSmoothingMode, GdiplusStartup,
+    GdiplusStartupInput, GdiplusStartupOutput, GpBitmap, GpBrush, GpGraphics, GpImage, GpPath,
+    GpPen, GpSolidFill, InterpolationModeHighQualityBicubic, LineCapRound, LineJoinRound, PointF,
+    SmoothingModeAntiAlias, Unit,
 };
+use windows::Win32::UI::WindowsAndMessaging::HICON;
 
 /// COLORREF → [`Color`](DrawCtx 인자 변환 — ctl 편의).
 pub(crate) fn color(c: COLORREF) -> Color {
@@ -75,6 +77,22 @@ pub(crate) unsafe fn image_size(img: *mut GpImage) -> (i32, i32) {
     let _ = GdipGetImageWidth(img, &mut w);
     let _ = GdipGetImageHeight(img, &mut h);
     (w as i32, h as i32)
+}
+
+/// PNG 바이트 → `HICON`(알파 보존 — 07-18 툴바 임베드 아이콘).
+/// 반환 핸들은 호출자가 `DestroyIcon`으로 해제(아이콘 캐시 규약과 동일).
+///
+/// # Safety
+/// `bytes`는 유효한 이미지 인코딩이어야 한다(실패 시 `None` — 오류 격리).
+pub(crate) unsafe fn png_to_hicon(bytes: &[u8]) -> Option<HICON> {
+    let img = decode_png(bytes);
+    if img.is_null() {
+        return None;
+    }
+    let mut icon = HICON::default();
+    let st = GdipCreateHICONFromBitmap(img as *mut GpBitmap, &mut icon);
+    dispose_image(img);
+    (st.0 == 0 && !icon.is_invalid()).then_some(icon)
 }
 
 /// [`decode_png`] 이미지 해제(호스트 컨트롤 파괴 시).
