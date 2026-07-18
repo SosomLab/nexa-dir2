@@ -278,7 +278,7 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
                     let mut pen: *mut GpPen = std::ptr::null_mut();
                     let _ = GdipCreatePen1(
                         el_argb,
-                        (doc.stroke_width * scale).max(1.0),
+                        (el.width.unwrap_or(doc.stroke_width) * scale).max(1.0),
                         Unit(2 /* UnitPixel */),
                         &mut pen,
                     );

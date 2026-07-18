@@ -165,6 +165,7 @@ pub mod shell {
         // 켜짐(듀얼)은 접미 규칙 `-on` = 전체 accent 재렌더(사용자 재확정
         // 07-19: "toggle on은 전체 선이 모두 파란색" — 전용 시안 폐지)
         ("panel-toggle", include_str!("../assets/toolbar/panel-toggle.svg")),
+        ("info-toggle", include_str!("../assets/toolbar/info-toggle.svg")),
         ("view-tree", include_str!("../assets/toolbar/view-tree.svg")),
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),

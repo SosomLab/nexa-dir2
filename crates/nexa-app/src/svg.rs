@@ -66,6 +66,9 @@ pub struct Element {
     /// 색 지정 = `Some(true)`(채움), 부재 = `None`(루트 모드 상속).
     /// 07-19 hidden H 글자(스트로크 문서 안의 채움 요소).
     pub fill: Option<bool>,
+    /// 요소별 선 굵기 오버라이드(`stroke-width` — 부재 = 루트 상속).
+    /// 07-19 info-toggle i 기둥(3.4).
+    pub width: Option<f32>,
 }
 
 /// 파싱된 문서 — viewBox `(x, y, w, h)` + 루트 스트로크 폭 + 요소 목록.
@@ -125,6 +128,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                 },
                 color: elem_color(attrs),
                 fill: elem_fill(attrs),
+                width: elem_width(attrs),
             }),
             "circle" => doc.ops.push(Element {
                 op: Op::Circle {
@@ -134,6 +138,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                 },
                 color: elem_color(attrs),
                 fill: elem_fill(attrs),
+                width: elem_width(attrs),
             }),
             "line" => doc.ops.push(Element {
                 op: Op::Line {
@@ -144,6 +149,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                 },
                 color: elem_color(attrs),
                 fill: elem_fill(attrs),
+                width: elem_width(attrs),
             }),
             "polyline" => {
                 let pts: Vec<f32> = attr(attrs, "points")
@@ -159,6 +165,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                         op: Op::Polyline(pairs),
                         color: elem_color(attrs),
                         fill: elem_fill(attrs),
+                width: elem_width(attrs),
                     });
                 }
             }
@@ -170,6 +177,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                             op: Op::Path(segs),
                             color: elem_color(attrs),
                             fill: elem_fill(attrs),
+                width: elem_width(attrs),
                         });
                     }
                 }
@@ -192,6 +200,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                         },
                         color: elem_color(attrs),
                         fill: elem_fill(attrs),
+                width: elem_width(attrs),
                     });
                 }
             }
@@ -229,6 +238,11 @@ fn attr(attrs: &str, key: &str) -> Option<String> {
 /// 요소별 채움 오버라이드 — 문서의 [`Element::fill`] 규칙.
 fn elem_fill(attrs: &str) -> Option<bool> {
     attr(attrs, "fill").map(|v| v != "none")
+}
+
+/// 요소별 선 굵기 오버라이드(`stroke-width`).
+fn elem_width(attrs: &str) -> Option<f32> {
+    attr(attrs, "stroke-width").and_then(|v| v.parse().ok())
 }
 
 /// 요소 색 오버라이드 — `stroke`/`fill`의 `#RRGGBB`(6자리)만 인식.
@@ -570,6 +584,21 @@ mod tests {
         let doc = parse(svg).unwrap();
         assert_eq!(doc.ops[0].color, None);
         assert_eq!(doc.ops[1].color, Some(0x3D8BFF));
+    }
+
+    #[test]
+    fn element_stroke_width_override() {
+        // 07-19 info-toggle: i 기둥 stroke-width=3.4(루트 2)
+        let svg = concat!(
+            r##"<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2">"##,
+            r##"<path d="M16 2 V5"/>"##,
+            r##"<path d="M16 15 L14 21" stroke-width="3.4"/>"##,
+            "</svg>",
+        );
+        let doc = parse(svg).unwrap();
+        assert_eq!(doc.stroke_width, 2.0);
+        assert_eq!(doc.ops[0].width, None);
+        assert_eq!(doc.ops[1].width, Some(3.4));
     }
 
     #[test]

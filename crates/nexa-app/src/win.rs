@@ -153,6 +153,9 @@ const CMD_CTLDEMO: u32 = 62;
 const CMD_COLW_SYNC: u32 = 63;
 /// 패널 듀얼↔싱글 토글(07-19 — 툴바 단일 버튼: 켜짐 = 듀얼·accent 아이콘).
 const CMD_PANEL_TOGGLE: u32 = 64;
+/// 정보(도크) 듀얼↔싱글 토글(07-19 — 툴바 단일 버튼: 켜짐 = 듀얼 정보,
+/// 싱글 패널에선 비활성[정보 싱글 고정 규칙]).
+const CMD_INFO_TOGGLE: u32 = 65;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 
@@ -331,6 +334,7 @@ fn build_toolbar(
     view_mode: &str,
     panel_mode: &str,
     col_width_sync: bool,
+    info_dual: bool,
 ) -> Vec<ToolButton> {
     // 그룹화(QA 07-14 — 원본 PR#10): [새로고침] | [설정] | [숨김·닷파일 토글] |
     // [보기 모드 라디오 3종 — 07-16: 트리/일반/타일, 활성 탭 기준 1개만 켜짐]
@@ -348,6 +352,15 @@ fn build_toolbar(
                 tr("menu.view.panelSingle")
             })
             .toggled(panel_mode == "dual"),
+        ToolButton::new(CMD_INFO_TOGGLE, "ⓘ")
+            .with_icon("emb:info-toggle", "")
+            .with_tip(if info_dual {
+                tr("menu.view.infoDual")
+            } else {
+                tr("menu.view.infoSingle")
+            })
+            .toggled(info_dual)
+            .enable(panel_mode == "dual"),
         ToolButton::new(CMD_COLW_SYNC, "⇔")
             .with_icon("emb:colsync", "")
             .with_tip(tr("menu.view.colWidthSync"))
@@ -908,6 +921,7 @@ pub fn run() -> Result<()> {
                 &settings.view_mode,
                 &settings.panel_mode,
                 settings.col_width_sync,
+                !(settings.panel_mode == "single" || settings.info_mode == "single"),
             ),
             m.row_h,
             m.pad_x,
@@ -2773,6 +2787,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                         &st.view_mode,
                         &st.panel_mode,
                         st.col_width_sync,
+                        !single_info(st),
                     ),
                     &mut inv,
                 );
@@ -2788,16 +2803,18 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 update_status(hwnd, st);
             }
         }
-        CMD_INFO_SINGLE | CMD_INFO_DUAL => {
+        CMD_INFO_SINGLE | CMD_INFO_DUAL | CMD_INFO_TOGGLE => {
             // 정보(도크) 모드(07-16): 싱글 = 전폭 공유(활성 패널 추종).
             // **싱글 패널에서는 변경 불가**(싱글 고정 — 사용자 확정 규칙).
+            // CMD_INFO_TOGGLE = 툴바 단일 버튼(07-19) — 현재 모드 반전.
             if single_panel(st) {
                 update_title(hwnd, st, &tr("status.infoLocked"));
             } else {
-                let want = if id == CMD_INFO_SINGLE {
-                    "single"
-                } else {
-                    "dual"
+                let want = match id {
+                    CMD_INFO_SINGLE => "single",
+                    CMD_INFO_DUAL => "dual",
+                    _ if st.info_mode == "dual" => "single",
+                    _ => "dual",
                 };
                 if st.info_mode != want {
                     st.info_mode = want.into();
@@ -2805,6 +2822,18 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                         .set_checked(CMD_INFO_SINGLE, want == "single", &mut inv);
                     st.menubar
                         .set_checked(CMD_INFO_DUAL, want == "dual", &mut inv);
+                    // 툴바 재구성(07-19 — 정보 토글 checked·툴팁 갱신)
+                    st.toolbar.set_buttons(
+                        build_toolbar(
+                            st.show_hidden,
+                            st.show_dotfiles,
+                            &st.view_mode,
+                            &st.panel_mode,
+                            st.col_width_sync,
+                            want == "dual",
+                        ),
+                        &mut inv,
+                    );
                     layout(hwnd, st, &mut inv);
                     update_dock_info(st, &mut inv);
                     let settings = current_settings(st);
@@ -2941,6 +2970,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             &st.view_mode,
             &st.panel_mode,
             st.col_width_sync,
+            !single_info(st),
         ),
         inv,
     );
