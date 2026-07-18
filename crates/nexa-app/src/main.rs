@@ -50,6 +50,8 @@ mod shellpath;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod source;
 #[cfg(windows)]
+mod tip;
+#[cfg(windows)]
 mod uia;
 #[cfg(windows)]
 mod watcher;

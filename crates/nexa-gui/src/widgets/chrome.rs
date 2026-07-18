@@ -24,6 +24,8 @@ pub struct ToolButton {
     /// 활성 여부(사용자 확정 07-18 — 내비 이전/다음/상위): 비활성 = 흐린
     /// 글리프(text_dim)·hover/클릭 무시.
     pub enabled: bool,
+    /// 툴팁 텍스트(07-18 — i18n 문자열은 호출자가 주입). 빈 문자열 = 없음.
+    pub tip: String,
 }
 
 impl ToolButton {
@@ -35,6 +37,7 @@ impl ToolButton {
             checked: false,
             icon: None,
             enabled: true,
+            tip: String::new(),
         }
     }
 
@@ -47,6 +50,7 @@ impl ToolButton {
             checked: false,
             icon: None,
             enabled: true,
+            tip: String::new(),
         }
     }
 
@@ -64,6 +68,12 @@ impl ToolButton {
     /// 초기 활성 상태(빌더) — 런타임 변경은 [`Toolbar::set_enabled`].
     pub fn enable(mut self, on: bool) -> Self {
         self.enabled = on;
+        self
+    }
+
+    /// 툴팁 텍스트(빌더 — 07-18). 표시는 호스트 몫([`Toolbar::hover_tip`] 폴링).
+    pub fn with_tip(mut self, tip: impl Into<String>) -> Self {
+        self.tip = tip.into();
         self
     }
 }
@@ -136,6 +146,15 @@ impl Toolbar {
         inv.push(self.bounds);
     }
 
+    /// 버튼 목록 교체(07-18 — 언어 전환 시 툴팁 i18n 재주입). hover/pending 리셋.
+    pub fn set_buttons(&mut self, buttons: Vec<ToolButton>, inv: &mut Invalidations) {
+        self.buttons = buttons;
+        self.hover = None;
+        self.pending = None;
+        self.ranges.borrow_mut().clear();
+        inv.push(self.bounds);
+    }
+
     fn button_at(&self, x: i32, y: i32) -> Option<usize> {
         if !self.bounds.contains(Point { x, y }) {
             return None;
@@ -144,6 +163,22 @@ impl Toolbar {
             .borrow()
             .iter()
             .position(|&(lo, hi)| x >= lo && x < hi)
+    }
+
+    /// hover 중인 버튼의 툴팁(07-18) — `(id, 텍스트, 버튼 rect[클라이언트])`.
+    /// 툴팁 없는 버튼/hover 없음 = `None`. 표시·타이밍은 호스트가 관리.
+    pub fn hover_tip(&self) -> Option<(u32, String, Rect)> {
+        let i = self.hover?;
+        let b = self.buttons.get(i)?;
+        if b.separator || b.tip.is_empty() {
+            return None;
+        }
+        let (lo, hi) = *self.ranges.borrow().get(i)?;
+        Some((
+            b.id,
+            b.tip.clone(),
+            Rect::new(lo, self.bounds.y, (hi - lo).max(0), self.bounds.h),
+        ))
     }
 }
 

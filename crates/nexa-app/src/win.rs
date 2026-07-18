@@ -82,6 +82,11 @@ const TIMER_TERM_CARET: usize = 6;
 const TIMER_PROG_CLOSE: usize = 7;
 /// 세션 디바운스 자동 저장(사용자 요청 07-15 — 탭/경로 변경 폭주 시 마지막 상태 1회만).
 const TIMER_SESSION_SAVE: usize = 8;
+/// 툴바 툴팁 hover 추적(07-18) — 250ms 틱: 2틱(500ms) 후 표시, 커서 이탈
+/// 실측(GetCursorPos — 창 밖 이탈 시 WM_MOUSEMOVE 부재 대비) 시 파괴.
+const TIMER_TIP: usize = 9;
+const TIP_TICK_MS: u32 = 250;
+const TIP_SHOW_TICKS: u32 = 2;
 const SESSION_SAVE_DEBOUNCE_MS: u32 = 1_000;
 const JANITOR_TICK_MS: u32 = 10_000;
 const IDLE_TRIM_MS: u64 = 60_000;
@@ -334,35 +339,47 @@ fn build_toolbar(
         // 전환 가능 라디오, 컬럼 동기만 싱글에서 비활성)
         ToolButton::new(CMD_PANEL_DUAL, "▌▐")
             .with_icon("emb:panel-dual", "")
+            .with_tip(tr("menu.view.panelDual"))
             .toggled(panel_mode == "dual"),
         ToolButton::new(CMD_PANEL_SINGLE, "■")
             .with_icon("emb:panel-single", "")
+            .with_tip(tr("menu.view.panelSingle"))
             .toggled(panel_mode == "single"),
         ToolButton::new(CMD_COLW_SYNC, "⇔")
             .with_icon("emb:colsync", "")
+            .with_tip(tr("menu.view.colWidthSync"))
             .toggled(col_width_sync)
             .enable(panel_mode == "dual"),
         ToolButton::sep(),
         ToolButton::new(CMD_VIEW_TREE, "├─")
             .with_icon("emb:view-tree", "")
+            .with_tip(tr("menu.view.modeTree"))
             .toggled(view_mode == "tree"),
         ToolButton::new(CMD_VIEW_FLAT, "☰")
             .with_icon("emb:view-flat", "")
+            .with_tip(tr("menu.view.modeFlat"))
             .toggled(view_mode == "flat"),
         ToolButton::new(CMD_VIEW_TILES, "▦")
             .with_icon("emb:view-tiles", "")
+            .with_tip(tr("menu.view.modeTiles"))
             .toggled(view_mode == "tiles"),
         ToolButton::sep(),
-        ToolButton::new(CMD_REFRESH, "⟳").with_icon("emb:refresh", ""),
+        ToolButton::new(CMD_REFRESH, "⟳")
+            .with_icon("emb:refresh", "")
+            .with_tip(tr("menu.view.refresh")),
         ToolButton::sep(),
         // 설정 = MDL2 Settings 톱니바퀴(사용자 확정 07-18 - U+2699는 꽃처럼 렌더)
-        ToolButton::new(CMD_PREFS, "").with_icon("emb:settings", ""),
+        ToolButton::new(CMD_PREFS, "")
+            .with_icon("emb:settings", "")
+            .with_tip(tr("menu.file.prefs").trim_end_matches(['.', '…'])),
         ToolButton::sep(),
         ToolButton::new(CMD_TOGGLE_HIDDEN, "👁")
             .with_icon("emb:hidden", "")
+            .with_tip(tr("menu.view.hidden"))
             .toggled(show_hidden),
         ToolButton::new(CMD_TOGGLE_DOTFILES, "…")
             .with_icon("emb:dotfiles", "")
+            .with_tip(tr("menu.view.dot"))
             .toggled(show_dotfiles),
         // ctl 갤러리 🃏 버튼 숨김(사용자 확정 07-18 — 개발 검증은
         // WM_APP_CTLDEMO(0x8009) 주입 경로만 유지)
@@ -495,6 +512,9 @@ struct State {
     term_cols: i32,
     /// 대화상자 글꼴(확인창·진행 창 — dialog.rs 공유).
     dlg_font: crate::dialog::DlgFont,
+    /// 툴바 툴팁(07-18): 표시 중 팝업 · hover 추적(버튼 id, 경과 틱).
+    tip_win: Option<HWND>,
+    tip_armed: Option<(u32, u32)>,
     /// 상주 자니터(M2-8): 마지막 입력 활동 시각(now_ms 기준)·트림 완료 플래그.
     last_activity_ms: u64,
     trimmed: bool,
@@ -945,6 +965,8 @@ pub fn run() -> Result<()> {
             family: settings.dlg_font,
             size_pt: settings.dlg_font_size,
         },
+        tip_win: None,
+        tip_armed: None,
         last_activity_ms: 0,
         trimmed: false,
         uia_caret: None,
@@ -2900,11 +2922,91 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
         ),
         inv,
     );
+    // 툴바 재구성 — 툴팁 문자열 i18n 재주입(07-18, 아이콘/체크 상태는 재계산)
+    st.toolbar.set_buttons(
+        build_toolbar(
+            st.show_hidden,
+            st.show_dotfiles,
+            &st.view_mode,
+            &st.panel_mode,
+            st.col_width_sync,
+        ),
+        inv,
+    );
     let m = panel_metrics(st.dpi);
     let cols = columns(st.dpi);
     st.panels[0].set_metrics(m, cols.clone(), inv);
     st.panels[1].set_metrics(m, cols, inv);
     let _ = InvalidateRect(Some(hwnd), None, false);
+}
+
+/// 툴팁 해제 — 팝업 파괴·추적 중단(hover 이탈/클릭/타이머 판정 공용).
+unsafe fn tip_cancel(hwnd: HWND, st: &mut State) {
+    if st.tip_armed.take().is_some() {
+        let _ = KillTimer(Some(hwnd), TIMER_TIP);
+    }
+    crate::tip::hide(&mut st.tip_win);
+}
+
+/// WM_MOUSEMOVE — 툴바 hover 변화 추적: 새 버튼 = 무장(500ms 후 표시),
+/// 이탈 = 해제. 같은 버튼 유지 중엔 손대지 않음(타이머가 표시/유지 판정).
+unsafe fn tip_on_mousemove(hwnd: HWND, st: &mut State) {
+    match st.toolbar.hover_tip() {
+        Some((id, _, _)) => {
+            if st.tip_armed.map(|(a, _)| a) != Some(id) {
+                tip_cancel(hwnd, st);
+                st.tip_armed = Some((id, 0));
+                SetTimer(Some(hwnd), TIMER_TIP, TIP_TICK_MS, None);
+            }
+        }
+        None => {
+            if st.tip_armed.is_some() || st.tip_win.is_some() {
+                tip_cancel(hwnd, st);
+            }
+        }
+    }
+}
+
+/// TIMER_TIP 틱 — 커서가 버튼 화면 rect 안인지 실측(창 밖 이탈 포함) 후
+/// 2틱(500ms) 경과 시 버튼 하단에 표시. 이탈/불일치 = 해제.
+unsafe fn tip_tick(hwnd: HWND, st: &mut State) {
+    let Some((armed_id, ticks)) = st.tip_armed else {
+        tip_cancel(hwnd, st);
+        return;
+    };
+    let Some((id, text, rc)) = st.toolbar.hover_tip() else {
+        tip_cancel(hwnd, st);
+        return;
+    };
+    if id != armed_id {
+        tip_cancel(hwnd, st);
+        return;
+    }
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+    let mut tl = windows::Win32::Foundation::POINT { x: rc.x, y: rc.y };
+    let _ = windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut tl);
+    let inside =
+        pt.x >= tl.x && pt.x < tl.x + rc.w && pt.y >= tl.y && pt.y < tl.y + rc.h;
+    if !inside {
+        tip_cancel(hwnd, st);
+        return;
+    }
+    st.tip_armed = Some((armed_id, ticks + 1));
+    if ticks + 1 >= TIP_SHOW_TICKS && st.tip_win.is_none() {
+        st.tip_win = crate::tip::show(
+            hwnd,
+            tl.x,
+            tl.y + rc.h + 2,
+            &text,
+            &st.dlg_font,
+            crate::tip::TipStyle {
+                fg: crate::dw::colorref(st.theme.text),
+                bg: crate::dw::colorref(st.theme.chrome_bg),
+                border: crate::dw::colorref(st.theme.border),
+            },
+        );
+    }
 }
 
 /// 활성 패널 전환(클릭·Tab) — 탭 바 accent로 시각화.
@@ -3796,6 +3898,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_LBUTTONDOWN => {
             if let Some(st) = state_of(hwnd) {
+                tip_cancel(hwnd, st); // 클릭 = 툴팁 즉시 파괴(07-18)
                 let (x, y) = mouse_xy(lparam);
                 let shift = wparam.0 & MK_SHIFT != 0;
                 let ctrl = wparam.0 & MK_CONTROL != 0;
@@ -4155,6 +4258,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let ev = InputEvent::MouseMove { x, y };
                     st.menubar.on_event(&ev, &mut inv);
                     st.toolbar.on_event(&ev, &mut inv);
+                    tip_on_mousemove(hwnd, st); // 툴팁 hover 추적(07-18)
                     if st.launcherbar.bounds().h > 0 {
                         st.launcherbar.on_event(&ev, &mut inv); // hover(M5-1)
                     }
@@ -4778,6 +4882,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(st) = state_of(hwnd) {
                     let session = current_session(st);
                     let _ = config::save(&config::data_dir(), SESSION_FILE, &session.serialize());
+                }
+                return LRESULT(0);
+            }
+            if wparam.0 == TIMER_TIP {
+                if let Some(st) = state_of(hwnd) {
+                    tip_tick(hwnd, st);
                 }
                 return LRESULT(0);
             }
