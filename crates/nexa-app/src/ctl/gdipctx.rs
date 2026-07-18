@@ -19,10 +19,12 @@ use windows::Win32::Graphics::Gdi::HDC;
 use windows::Win32::Graphics::GdiPlus::{
     FillModeAlternate, GdipAddPathArc, GdipClosePathFigure, GdipCreateFromHDC, GdipCreatePath,
     GdipCreatePen1, GdipCreateSolidFill, GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePath,
-    GdipDeletePen, GdipDrawLines, GdipDrawPath, GdipFillEllipse, GdipFillPath, GdipSetPenEndCap,
-    GdipSetPenLineJoin, GdipSetPenStartCap, GdipSetSmoothingMode, GdiplusStartup,
-    GdiplusStartupInput, GdiplusStartupOutput, GpBrush, GpGraphics, GpPath, GpPen, GpSolidFill,
-    LineCapRound, LineJoinRound, PointF, SmoothingModeAntiAlias, Unit,
+    GdipDeletePen, GdipDisposeImage, GdipDrawImageRectI, GdipDrawLines, GdipDrawPath,
+    GdipFillEllipse, GdipFillPath, GdipLoadImageFromStream, GdipSetInterpolationMode,
+    GdipSetPenEndCap, GdipSetPenLineJoin, GdipSetPenStartCap, GdipSetSmoothingMode, GdiplusStartup,
+    GdiplusStartupInput, GdiplusStartupOutput, GpBrush, GpGraphics, GpImage, GpPath, GpPen,
+    GpSolidFill, InterpolationModeHighQualityBicubic, LineCapRound, LineJoinRound, PointF,
+    SmoothingModeAntiAlias, Unit,
 };
 
 /// COLORREF → [`Color`](DrawCtx 인자 변환 — ctl 편의).
@@ -41,6 +43,34 @@ pub(crate) fn rect(rc: &windows::Win32::Foundation::RECT) -> Rect {
 
 fn c_argb(c: Color) -> u32 {
     0xFF00_0000 | ((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32
+}
+
+/// PNG 등 이미지 바이트를 GDI+ 이미지로 디코드(알파 보존 — 07-18 리네임 ± 버튼).
+/// 실패 시 널. 반환 이미지는 [`dispose_image`]로 해제(호스트가 1회 디코드·캐시).
+///
+/// # Safety
+/// `bytes`는 유효한 이미지(PNG/BMP 등) 인코딩이어야 하며, GDI+ 초기화 전제.
+pub(crate) unsafe fn decode_png(bytes: &[u8]) -> *mut GpImage {
+    if !ensure_startup() {
+        return std::ptr::null_mut();
+    }
+    // SHCreateMemStream = 바이트 복사 스트림(shlwapi 인박스) → 호출 후 bytes 해제 무관
+    let Some(stream) = windows::Win32::UI::Shell::SHCreateMemStream(Some(bytes)) else {
+        return std::ptr::null_mut();
+    };
+    let mut img: *mut GpImage = std::ptr::null_mut();
+    let _ = GdipLoadImageFromStream(&stream, &mut img);
+    img
+}
+
+/// [`decode_png`] 이미지 해제(호스트 컨트롤 파괴 시).
+///
+/// # Safety
+/// `img`는 [`decode_png`]가 반환한 유효/널 포인터여야 한다.
+pub(crate) unsafe fn dispose_image(img: *mut GpImage) {
+    if !img.is_null() {
+        let _ = GdipDisposeImage(img);
+    }
 }
 
 /// GDI+ 1회 초기화(프로세스 수명 — 종료 시 OS 회수).
@@ -79,6 +109,19 @@ impl GdipCtx {
             }
         }
         GdipCtx { dc, g }
+    }
+
+    /// [`decode_png`] 이미지를 `rect`에 고품질 스케일로 그린다(알파 블렌드 —
+    /// 리네임 ± 버튼 raster). 초기화·널 이미지 시 no-op.
+    ///
+    /// # Safety
+    /// `img`는 [`decode_png`] 반환 포인터(현재 컨텍스트와 같은 GDI+ 세션).
+    pub(crate) unsafe fn draw_image(&mut self, img: *mut GpImage, rect: Rect) {
+        if self.g.is_null() || img.is_null() {
+            return;
+        }
+        let _ = GdipSetInterpolationMode(self.g, InterpolationModeHighQualityBicubic);
+        let _ = GdipDrawImageRectI(self.g, img, rect.x, rect.y, rect.w, rect.h);
     }
 
     unsafe fn brush(&self, color: Color) -> *mut GpSolidFill {

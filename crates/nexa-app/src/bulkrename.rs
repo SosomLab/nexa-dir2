@@ -50,6 +50,13 @@ const STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.
 const ID_KIND: u32 = 1;
 /// 적용 스코프(v2 — PF Apply to, ctl::combobox). Move/Ext 종류에선 숨김.
 const ID_SCOPE: u32 = 7;
+/// 카드 ± 버튼 raster(07-18 — 사용자 확정: 벡터 대신 이미지. 32px 임베드 →
+/// GDI+ 고품질 스케일). 추가 = 초록·삭제 = 빨강·비활성 = 회색(assets/rename).
+const PNG_ADD: &[u8] = include_bytes!("../assets/rename/rename-add-32.png");
+const PNG_ADD_OFF: &[u8] = include_bytes!("../assets/rename/rename-add-disabled-32.png");
+const PNG_DEL: &[u8] = include_bytes!("../assets/rename/rename-remove-32.png");
+const PNG_DEL_OFF: &[u8] = include_bytes!("../assets/rename/rename-remove-disabled-32.png");
+
 const ID_ADD: u32 = 2;
 const ID_DEL: u32 = 5;
 // 파라미터(종류별 패널)
@@ -550,25 +557,27 @@ unsafe fn make_card(dlg: HWND, font: HFONT, kind: usize) -> HWND {
         st_band,
     );
     let iy = trc.top + (trc.bottom - trc.top - ib) / 2;
-    crate::ctl::iconbutton::create(
+    crate::ctl::iconbutton::create_image(
         card,
         trc.right - 8 - ib * 2 - 6,
         iy,
         ib,
         ID_ADD,
         font,
-        crate::ctl::iconbutton::Icon::Plus,
+        PNG_ADD,
+        PNG_ADD_OFF,
         true,
         st_band,
     );
-    crate::ctl::iconbutton::create(
+    crate::ctl::iconbutton::create_image(
         card,
         trc.right - 8 - ib,
         iy,
         ib,
         ID_DEL,
         font,
-        crate::ctl::iconbutton::Icon::Minus,
+        PNG_DEL,
+        PNG_DEL_OFF,
         true,
         st_band,
     );
