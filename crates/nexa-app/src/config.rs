@@ -100,6 +100,9 @@ pub struct Settings {
     /// 컬럼 넓이 동기화(사용자 확정 07-18) — on = 좌/우 패널 폭 실시간 동기,
     /// off = 패널별 독립(탭은 패널 폭 상속).
     pub col_width_sync: bool,
+    /// 컬럼 auto-fit(경계 더블클릭) 최대 폭(px @96dpi — 07-19 사용자,
+    /// 50~2000 클램프).
+    pub col_autofit_max: i32,
     /// 패널 모드(사용자 요청 07-16 — 원본 FR-C1 단일↔듀얼): "dual"(기본)|"single"
     /// (우 패널 숨김 — 상태는 보존, 복귀 시 원복).
     pub panel_mode: String,
@@ -157,6 +160,7 @@ impl Default for Settings {
             typeahead_backspace: true,
             view_mode: "tree".into(),
             col_width_sync: true,
+            col_autofit_max: 400,
             panel_mode: "dual".into(),
             info_mode: "dual".into(),
             launcher: true,
@@ -287,6 +291,7 @@ impl Settings {
             "col_width_sync={}\n",
             u8::from(self.col_width_sync)
         ));
+        out.push_str(&format!("col_autofit_max={}\n", self.col_autofit_max));
         out.push_str(&format!(
             "typeahead_scope={}\ntypeahead_reset_ms={}\ntypeahead_pos={}\ntypeahead_special={}\ntypeahead_space={}\ntypeahead_backspace={}\n",
             self.typeahead_scope,
@@ -412,6 +417,11 @@ impl Settings {
                     s.nav_up_align = v.into()
                 }
                 "col_width_sync" => s.col_width_sync = v != "0",
+                "col_autofit_max" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.col_autofit_max = n.clamp(50, 2000);
+                    }
+                }
                 "view_mode" if matches!(v, "tree" | "flat" | "tiles") => {
                     s.view_mode = v.into() // 미지 값 = 기본(tree) 유지
                 }
@@ -654,6 +664,7 @@ mod tests {
             split: 0.62,
             dock: true,
             col_width_sync: false, // 기본 true — 왕복 검증 위해 반전
+            col_autofit_max: 640,
             dock_ratio: 0.42,
             dock_split: 0.61,
             term_font: "D2Coding, JetBrainsMono Nerd Font".into(),
@@ -719,6 +730,7 @@ mod tests {
         assert_eq!(parsed.term_font_size, 14);
         assert!(!parsed.term_wrap, "터미널 줄 바꿈 왕복(X-3)");
         assert_eq!(parsed.term_cols, 132, "터미널 고정 열 왕복(X-3)");
+        assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(
             Settings::parse("term_cols=20").term_cols,
             80,

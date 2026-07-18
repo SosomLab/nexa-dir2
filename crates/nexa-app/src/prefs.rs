@@ -49,6 +49,8 @@ pub struct PrefValues {
     pub term_font_size: i32,
     pub term_wrap: bool,
     pub term_cols: i32,
+    /// 컬럼 auto-fit 최대 폭(px @96dpi — 07-19).
+    pub col_autofit_max: i32,
     pub dlg_font: String,
     pub dlg_font_size: i32,
     /// 폰트 슬롯(X-12 — 07-16): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
@@ -146,6 +148,7 @@ const F_LIST_SIZE: u32 = 30;
 const F_FOLDER_BOLD: u32 = 31;
 const F_HDR_BOLD: u32 = 32;
 const F_HDR_ITALIC: u32 = 33;
+const F_COL_AUTOFIT: u32 = 34;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -382,6 +385,13 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.showDotfiles.desc",
             kind: Kind::CheckBox,
             field: F_DOTFILES,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.colAutofitMax",
+            desc_key: "pref.colAutofitMax.desc",
+            kind: Kind::Number,
+            field: F_COL_AUTOFIT,
         },
         Entry {
             cat: "list",
@@ -624,6 +634,7 @@ fn sanitize(v: &mut PrefValues) {
     }
     v.term_font_size = v.term_font_size.clamp(8, 32);
     v.term_cols = v.term_cols.clamp(80, 1000);
+    v.col_autofit_max = v.col_autofit_max.clamp(50, 2000);
     v.typeahead_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
     v.typeahead_pos = v.typeahead_pos.clamp(0, 8);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
@@ -970,6 +981,7 @@ impl PrefState {
                             F_TERM_FONT => self.values.term_font.clone(),
                             F_TERM_SIZE => self.values.term_font_size.to_string(),
                             F_TERM_COLS => self.values.term_cols.to_string(),
+                            F_COL_AUTOFIT => self.values.col_autofit_max.to_string(),
                             F_TA_RESET => self.values.typeahead_reset_ms.to_string(),
                             F_DLG_FONT => self.values.dlg_font.clone(),
                             F_DLG_SIZE => self.values.dlg_font_size.to_string(),
@@ -1086,6 +1098,7 @@ impl PrefState {
             F_FOLDERS_FIRST => v.sort_folders_first != d.sort_folders_first,
             F_TERM_WRAP => v.term_wrap != d.term_wrap,
             F_TERM_COLS => v.term_cols != d.term_cols,
+            F_COL_AUTOFIT => v.col_autofit_max != d.col_autofit_max,
             F_CASE_SORT => v.sort_case_sensitive != d.sort_case_sensitive,
             F_NAV_UP => v.nav_up_align != d.nav_up_align,
             F_TAB_DBL => v.tab_dblclick != d.tab_dblclick,
@@ -1175,6 +1188,9 @@ impl PrefState {
                     self.values.term_font_size = get_text(hw).trim().parse().unwrap_or(12)
                 }
                 F_TERM_COLS => self.values.term_cols = get_text(hw).trim().parse().unwrap_or(240),
+                F_COL_AUTOFIT => {
+                    self.values.col_autofit_max = get_text(hw).trim().parse().unwrap_or(400)
+                }
                 F_TA_RESET => {
                     self.values.typeahead_reset_ms = get_text(hw).trim().parse().unwrap_or(1000)
                 }

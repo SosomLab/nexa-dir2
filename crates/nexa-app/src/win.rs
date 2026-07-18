@@ -526,6 +526,8 @@ struct State {
     /// 터미널 줄 바꿈·고정 열(X-3 — 비줄바꿈이면 term_cols 고정+가로 스크롤).
     term_wrap: bool,
     term_cols: i32,
+    /// 컬럼 auto-fit 최대 폭(px @96dpi — 설정 영속, 07-19).
+    col_autofit_max: i32,
     /// 대화상자 글꼴(확인창·진행 창 — dialog.rs 공유).
     dlg_font: crate::dialog::DlgFont,
     /// 툴바 툴팁(07-18): 표시 중 팝업 · hover 추적(버튼 id, 경과 틱).
@@ -978,6 +980,7 @@ pub fn run() -> Result<()> {
         term_font_size: settings.term_font_size,
         term_wrap: settings.term_wrap,
         term_cols: settings.term_cols,
+        col_autofit_max: settings.col_autofit_max,
         dlg_font: crate::dialog::DlgFont {
             family: settings.dlg_font,
             size_pt: settings.dlg_font_size,
@@ -3232,6 +3235,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 term_font_size: st.term_font_size,
                 term_wrap: st.term_wrap,
                 term_cols: st.term_cols,
+        col_autofit_max: st.col_autofit_max,
                 dlg_font: st.dlg_font.family.clone(),
                 dlg_font_size: st.dlg_font.size_pt,
                 base_font: st.base_font.clone(),
@@ -3421,6 +3425,9 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         flush_invalidations(hwnd, &mut inv);
     }
     // 터미널 줄 바꿈·고정 열(X-3) — 다음 페인트에서 cols 재계산·PTY resize
+    if v.col_autofit_max != st.col_autofit_max {
+        st.col_autofit_max = v.col_autofit_max.clamp(50, 2000);
+    }
     if v.term_wrap != st.term_wrap || v.term_cols != st.term_cols {
         st.term_wrap = v.term_wrap;
         st.term_cols = v.term_cols.clamp(80, 1000);
@@ -3563,6 +3570,33 @@ fn current_session(st: &mut State) -> Session {
 /// 의존하면 비정상 종료 시 유실(언어 변경 유실 사고).
 /// 컬럼 리사이즈 후 폭 동기(사용자 확정 07-18): 같은 패널 전 탭 = 상속,
 /// `col_width_sync`면 반대 패널도 동일 폭. 마우스 디스패치 뒤 폴링.
+/// 컬럼 auto-fit(07-19 사용자 — 경계 더블클릭): **가시 행 + 헤더**의 콘텐츠
+/// 폭을 List 폰트로 실측한 최대값으로 컬럼 폭 설정. 상한 =
+/// `col_autofit_max`(px @96dpi — DPI 스케일), 하한 = 컬럼 min_width.
+/// 반영 후 [`sync_col_widths`]로 좌우 동기/탭 상속 규약 그대로 전파.
+fn autofit_column(st: &mut State, panel: usize, col: usize, inv: &mut Invalidations) {
+    let samples = st.panels[panel].rows().autofit_texts(col);
+    if samples.is_empty() {
+        return;
+    }
+    let Some(back) = &st.dw else { return };
+    let mut ctx = DwCtx {
+        back,
+        icons: &st.icons,
+    };
+    use nexa_gui::DrawCtx as _;
+    ctx.select_font(nexa_gui::FontSlot::List, false, false);
+    let mut need = 0;
+    for (text, extra) in &samples {
+        need = need.max(ctx.text_width(text) + extra);
+    }
+    let max = (st.col_autofit_max * st.dpi as i32) / 96;
+    st.panels[panel]
+        .rows_mut()
+        .set_col_width(col, need.min(max), inv);
+    sync_col_widths(st, inv); // 패널 탭 상속 + (설정 on 시) 반대 패널 동기
+}
+
 fn sync_col_widths(st: &mut State, inv: &mut Invalidations) {
     for i in 0..2 {
         if st.panels[i].take_col_resized() {
@@ -3619,6 +3653,7 @@ fn current_settings(st: &State) -> Settings {
         term_font_size: st.term_font_size,
         term_wrap: st.term_wrap,
         term_cols: st.term_cols,
+        col_autofit_max: st.col_autofit_max,
         dlg_font: st.dlg_font.family.clone(),
         dlg_font_size: st.dlg_font.size_pt,
         launcher: st.launcher_visible,
@@ -4420,6 +4455,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.panels[idx].new_tab(ctx, &mut inv);
                         flush_invalidations(hwnd, &mut inv);
                         update_title(hwnd, st, "");
+                        return LRESULT(0);
+                    }
+                    // 컬럼 경계 더블클릭 = 콘텐츠 auto-fit(07-19 사용자 —
+                    // 최대 폭 = 설정 col_autofit_max)
+                    if let Some(cidx) = st.panels[idx].rows().autofit_col_at(x, y) {
+                        let mut inv = Invalidations::default();
+                        autofit_column(st, idx, cidx, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
                         return LRESULT(0);
                     }
                     let rows = st.panels[idx].rows();

@@ -955,6 +955,65 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
+    /// 더블클릭 auto-fit 대상(07-19 사용자): 헤더 **리사이즈 핸들** 좌표면
+    /// 해당 컬럼 index(타일 보기 = 헤더 없음 — 제외).
+    pub fn autofit_col_at(&self, x: i32, y: i32) -> Option<usize> {
+        if self.mode == ViewMode::Tiles {
+            return None;
+        }
+        match self.header_hit(x, y) {
+            Some((i, true)) if self.columns[i].resizable => Some(i),
+            _ => None,
+        }
+    }
+
+    /// auto-fit 측정 자료(07-19): 대상 컬럼의 **가시 행 + 헤더** 텍스트와
+    /// 텍스트 외 부가 폭(들여쓰기·아이콘·패딩) 목록 — 폭 실측은 호스트
+    /// (DwCtx text_width, List 폰트)가 수행.
+    pub fn autofit_texts(&self, col: usize) -> Vec<(String, i32)> {
+        let Some(c) = self.columns.get(col) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        // 헤더 라벨(정렬 화살표·순번 포함)
+        out.push((self.header_label(c), self.pad_x * 2));
+        let first = self.scroll_row;
+        let count = self
+            .visible_rows()
+            .min(self.src.len().saturating_sub(first));
+        for i in 0..count {
+            let row = first + i;
+            if c.key == 0 {
+                // 트리 셀: paint_tree_cell 배치 재현 — pad + depth·마커 존 +
+                // (아이콘 폭 + pad/2) + 텍스트 + 우측 pad
+                let item = self.src.row(row);
+                let mut extra =
+                    self.pad_x + item.depth as i32 * self.indent_w + self.indent_w + self.pad_x;
+                if self.src.icon(row).is_some() {
+                    extra += self.indent_w + self.pad_x / 2;
+                }
+                out.push((item.text, extra));
+            } else {
+                out.push((self.src.cell(row, c.key), self.pad_x * 2));
+            }
+        }
+        out
+    }
+
+    /// 단일 컬럼 폭 적용(min 클램프·`col_resized` 마크 — auto-fit 07-19).
+    /// 최대 제한은 호스트가 설정값으로 적용 후 호출.
+    pub fn set_col_width(&mut self, col: usize, w: i32, inv: &mut Invalidations) {
+        if let Some(c) = self.columns.get_mut(col) {
+            let w = w.max(c.min_width);
+            if c.width != w {
+                c.width = w;
+                self.col_resized = true;
+                self.clamp_scroll_x();
+                inv.push(self.bounds);
+            }
+        }
+    }
+
     /// 헤더 셀 제목: ▲/▼는 이름 앞, 정렬 순번(①②…)은 이름 뒤(원본 docs/23 §4).
     /// 순번은 **정렬 시작부터 상시 표시**(사용자 확정 07-18 — 단일 정렬 = ①,
     /// Ctrl/Shift로 추가한 컬럼 = ② 순차).
