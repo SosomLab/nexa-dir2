@@ -9,8 +9,13 @@ PNG 버킷 기구 폐지): `include_str!` 임베드 → [svg.rs](../../src/svg.r
 
 - **32 viewBox · 콘텐츠 1..31(꽉 참) · stroke 2 · currentColor** —
   단, 16px 정합이 중요한 스트로크는 정수 픽셀 정렬(panel-toggle 2..30).
-- 잉크: 활성 `SVG_INK #2B3036`(어두운 회색) · 비활성 = 알파 38% ·
-  켜짐 강조 = accent `#3D8BFF`(`-on` 접미 — 전체 재렌더).
+- **잉크 색상표(사용자 확정 07-19 — SSOT = [icons.rs](../../src/icons.rs) 상수)**:
+
+  | 상태 | 색 | ARGB 상수 | 비고 |
+  | --- | --- | --- | --- |
+  | 기본(활성) | `#2B3036` | `SVG_INK = 0xFF2B_3036` | 어두운 회색(3차 확정) |
+  | 토글 켜짐(선택) | `#3D8BFF` | `SVG_INK_ACCENT = 0xFF3D_8BFF` | 테마 accent 동일 — `-on` 접미 전체 재렌더 |
+  | 비활성(disable) | `#2B3036` + 알파 38% | `SVG_INK_DIM = 0x612B_3036` | `-disabled` 접미 — 배경 무관 흐림 |
 - 지원 서브셋(초과 시 전체 무효 → 글리프 폴백): rect(rx)/circle/line/
   polyline/path(M·L·H·V·C·**A[원형 한정]**·Z)/text — 요소별 `stroke`/`fill`
   색·채움 오버라이드.
