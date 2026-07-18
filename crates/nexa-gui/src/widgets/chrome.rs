@@ -261,10 +261,16 @@ impl Widget for Toolbar {
                     .unwrap_or_else(|| ctx.text_width(&btn.glyph) + self.pad_x * 2)
             };
             let cell = Rect::new(x, b.y, w.min((b.right() - x).max(0)), b.h);
-            // 토글 켜짐 = **연한 강조 배경만**(QA 07-16 — 하단 accent 줄 제거,
-            // 배경[sel_bg = 테마 선택색]으로 충분하다는 사용자 확정)
+            // 토글 켜짐 배경 = **accent 38% 블렌드**(07-19 사용자 — sel_bg는
+            // chrome_bg와 명도가 유사해 켜짐 식별 곤란. 라이트 ≈ #ABCAF9·
+            // 다크 ≈ #2A4A7A로 뚜렷하게)
+            let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * 0.38) as u8;
             let bg = if btn.checked {
-                theme.sel_bg
+                crate::theme::Color {
+                    r: mix(theme.chrome_bg.r, theme.accent.r),
+                    g: mix(theme.chrome_bg.g, theme.accent.g),
+                    b: mix(theme.chrome_bg.b, theme.accent.b),
+                }
             } else if self.hover == Some(i) && btn.enabled {
                 theme.header_bg
             } else {
