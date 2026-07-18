@@ -330,12 +330,11 @@ fn build_toolbar(
     // 07-18: 전 버튼 임베드 16×16 이미지(`emb:` — icons::shell::EMBEDDED,
     // 사용자: "도구 모음을 16x16 이미지 형태로"). 글리프는 미로드 폴백 텍스트.
     vec![
-        // 패널 모드 라디오 + 컬럼 동기(07-18 사용자: 싱글 상태에선 듀얼·컬럼
-        // 동기 선택 불가 — 비활성. 듀얼 복귀는 View 메뉴 경로 유지)
+        // 패널 모드 라디오 + 컬럼 동기(07-18 사용자 정정: 듀얼↔싱글은 상호
+        // 전환 가능 라디오, 컬럼 동기만 싱글에서 비활성)
         ToolButton::new(CMD_PANEL_DUAL, "▌▐")
             .with_icon("emb:panel-dual", "")
-            .toggled(panel_mode == "dual")
-            .enable(panel_mode == "dual"),
+            .toggled(panel_mode == "dual"),
         ToolButton::new(CMD_PANEL_SINGLE, "■")
             .with_icon("emb:panel-single", "")
             .toggled(panel_mode == "single"),
@@ -2741,10 +2740,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     .set_checked(CMD_PANEL_SINGLE, want == "single", &mut inv);
                 st.toolbar
                     .set_checked(CMD_PANEL_DUAL, want == "dual", &mut inv);
-                // 싱글 = 듀얼·컬럼 동기 비활성(07-18 사용자 규칙 —
-                // 듀얼 복귀는 View 메뉴로)
-                st.toolbar
-                    .set_enabled(CMD_PANEL_DUAL, want == "dual", &mut inv);
+                // 싱글 = 컬럼 동기만 비활성(07-18 정정 — 듀얼↔싱글 상호 전환)
                 st.toolbar
                     .set_enabled(CMD_COLW_SYNC, want == "dual", &mut inv);
                 // 정보 라디오 = 효과 기준(싱글 패널이면 싱글 표시·선호값은 보존)

@@ -175,7 +175,6 @@ pub mod shell {
     }
     const EMBEDDED: &[(&str, &[u8])] = emb!(
         "panel-dual",
-        "panel-dual-disabled",
         "panel-single",
         "colsync",
         "colsync-disabled",

@@ -16,7 +16,7 @@
 
 | 이름 | 기능(명령) | 비활성 변형 |
 | --- | --- | --- |
-| `panel-dual` | 듀얼 파일 패널(CMD_PANEL_DUAL) | ○ (싱글 모드에서 선택 불가) |
+| `panel-dual` | 듀얼 파일 패널(CMD_PANEL_DUAL) | 파일만 보관(07-18 정정 — 듀얼↔싱글 상호 전환, 임베드 제외) |
 | `panel-single` | 싱글 파일 패널(CMD_PANEL_SINGLE) | — |
 | `colsync` | 컬럼 넓이 동기화(CMD_COLW_SYNC) | ○ (싱글 모드에서 선택 불가) |
 | `view-tree` | 트리 보기(CMD_VIEW_TREE) | — |
