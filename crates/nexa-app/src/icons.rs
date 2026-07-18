@@ -195,8 +195,9 @@ pub mod shell {
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
     ];
 
-    /// 임베드 아이콘 잉크(PNG 세트와 동일 — 라이트/다크 겸용 `#6E747C`).
-    const SVG_INK: u32 = 0xFF6E_747C;
+    /// SVG 아이콘 잉크 — 사용자 확정 07-19 "더 진하게"(2차): `#40464E`
+    /// (PNG 세트 `#6E747C` 대비 두 단계 어두운 회색).
+    const SVG_INK: u32 = 0xFF40_464E;
 
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);
