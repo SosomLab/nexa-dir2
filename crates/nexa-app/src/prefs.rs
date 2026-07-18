@@ -1242,8 +1242,10 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     SetBkMode(dis.hDC, TRANSPARENT);
     // 그룹 디스클로저 = **파일 목록과 동일 MDL2 셰브론**(E76C 접힘/E70D 펼침 —
     // 사용자 확정 07-18: 텍스트 ▸/▾ 폐기). 검색 중 = 강제 펼침 표시.
+    // 마커 존 = **고정 폭 상시 예약**(사용자 확정 07-18 — 파일뷰 규약 동일):
+    // 하위 유무와 무관하게 같은 레벨의 라벨 x가 일치한다(그룹만 글리프 표시).
     let base_left = dis.rcItem.left + 10 + depth * 14;
-    let mut text_left = base_left;
+    let text_left = base_left + 14;
     if tree_has_children(node) {
         let glyph = if st.expanded[node] || !st.query.is_empty() {
             "\u{E70D}" // ChevronDown(펼침)
@@ -1265,7 +1267,6 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
         SelectObject(dis.hDC, prev);
-        text_left = base_left + 14;
     }
     let mut label = tr(label_key);
     if !st.query.is_empty() {
