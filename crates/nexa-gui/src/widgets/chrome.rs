@@ -278,9 +278,10 @@ impl Widget for Toolbar {
             };
             if cell.w > 0 {
                 if let Some((key, hint)) = &btn.icon {
-                    // 16×16 상당(바 높이 − 상하 4px 여백) 아이콘을 정사각 셀 중앙에.
+                    // 16×16 상당(바 높이 − 상하 5px 여백 — 07-19 바 26px에서
+                    // 아이콘 16px 유지) 아이콘을 정사각 셀 중앙에.
                     ctx.fill_rect(cell, bg);
-                    let isz = (b.h - 8).max(8);
+                    let isz = (b.h - 10).max(8);
                     // 상태 변형 키: 비활성 = `#dis`(흐림) · accent 켜짐 = `#on`
                     // (강조 잉크) — dw.rs가 임베드 변형으로 해석, 없으면 미로드
                     // 폴백 글리프

@@ -1106,7 +1106,8 @@ unsafe fn splitter_x(hwnd: HWND, st: &State) -> i32 {
 unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     let rc = client_rect(hwnd);
     let s = |v: i32| (v * st.dpi as i32) / 96;
-    let (menu_h, tool_h, status_h) = (s(22), s(24), s(22));
+    // 도구 모음 = 26px(07-19 사용자: 16px 아이콘 상하 1px 여유 추가 — 24→26)
+    let (menu_h, tool_h, status_h) = (s(22), s(26), s(22));
     st.menubar
         .set_bounds(GRect::new(0, 0, rc.w, menu_h.min(rc.h)), inv);
     st.toolbar

@@ -184,14 +184,9 @@ pub mod shell {
     /// (view-flat PNG 제거 — 사용자 확정 07-18); 실패 시 PNG 버킷이 있으면
     /// 폴백, 없으면 글리프 폴백.
     const EMBEDDED_SVG: &[(&str, &str)] = &[
+        // 켜짐(듀얼)은 접미 규칙 `-on` = 전체 accent 재렌더(사용자 재확정
+        // 07-19: "toggle on은 전체 선이 모두 파란색" — 전용 시안 폐지)
         ("panel-toggle", include_str!("../assets/toolbar/panel-toggle.svg")),
-        // 켜짐(듀얼) 전용 시안 — 테두리 = currentColor(잉크)·가운데 선 =
-        // #3D8BFF(요소 색 오버라이드). 사용자 확정 07-19: "border 색은
-        // 이전과 동일, 선만 푸른계열".
-        (
-            "panel-toggle-on",
-            include_str!("../assets/toolbar/panel-toggle-on.svg"),
-        ),
         ("view-tree", include_str!("../assets/toolbar/view-tree.svg")),
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),

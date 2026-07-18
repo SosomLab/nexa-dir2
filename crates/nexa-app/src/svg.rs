@@ -391,12 +391,13 @@ mod tests {
         assert_eq!(doc.ops.len(), 6, "rect 3 + path 3");
         assert_eq!(
             doc.ops[0].op,
-            Op::Rect { x: 4.0, y: 4.0, w: 6.0, h: 6.0, rx: 1.0 }
+            // 07-19 최대 크기 판(사용자: "view 모두 최대 크기") — 1.25배 확장
+            Op::Rect { x: 1.0, y: 1.0, w: 7.5, h: 7.5, rx: 1.25 }
         );
         assert_eq!(doc.ops[0].color, None, "currentColor = 잉크");
         assert_eq!(
             doc.ops[1].op,
-            Op::Path(vec![Seg::MoveTo(15.0, 7.0), Seg::LineTo(28.0, 7.0)])
+            Op::Path(vec![Seg::MoveTo(14.75, 4.75), Seg::LineTo(31.0, 4.75)])
         );
     }
 
