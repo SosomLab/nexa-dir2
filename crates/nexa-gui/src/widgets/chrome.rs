@@ -249,8 +249,15 @@ impl Widget for Toolbar {
                             bg,
                         );
                     }
-                } else if self.button_w.is_some() {
-                    // 고정 폭(네비 버튼) — 큰 글리프를 셀 중앙에(방향 가시성, 사용자 지시)
+                } else if self.button_w.is_some()
+                    || btn
+                        .glyph
+                        .chars()
+                        .next()
+                        .is_some_and(|c| ('\u{E700}'..='\u{E8FF}').contains(&c))
+                {
+                    // 고정 폭(네비) 또는 **MDL2 PUA 글리프**(설정 ⚙ 등 — 07-18:
+                    // 본문 폰트 경로는 tofu) — 글리프 렌더로 셀 중앙에
                     ctx.glyph_opaque(cell, &btn.glyph, fg, bg);
                 } else {
                     ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, fg, bg);

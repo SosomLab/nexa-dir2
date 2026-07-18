@@ -328,13 +328,13 @@ fn build_toolbar(show_hidden: bool, show_dotfiles: bool, view_mode: &str) -> Vec
         ToolButton::sep(),
         ToolButton::new(CMD_REFRESH, "⟳"),
         ToolButton::sep(),
-        ToolButton::new(CMD_PREFS, "⚙"),
+        // 설정 = MDL2 Settings 톱니바퀴(사용자 확정 07-18 - U+2699는 꽃처럼 렌더)
+        ToolButton::new(CMD_PREFS, ""),
         ToolButton::sep(),
         ToolButton::new(CMD_TOGGLE_HIDDEN, "👁").toggled(show_hidden),
         ToolButton::new(CMD_TOGGLE_DOTFILES, "…").toggled(show_dotfiles),
-        ToolButton::sep(),
-        // 임시(07-17): ctl 갤러리 — GroupCard 검증용. X-23 재편 완료 시 제거.
-        ToolButton::new(CMD_CTLDEMO, "🃏"),
+        // ctl 갤러리 🃏 버튼 숨김(사용자 확정 07-18 — 개발 검증은
+        // WM_APP_CTLDEMO(0x8009) 주입 경로만 유지)
     ]
 }
 

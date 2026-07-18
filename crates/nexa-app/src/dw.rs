@@ -734,6 +734,27 @@ impl DrawCtx for DwCtx<'_> {
         }
         unsafe {
             let ppd = self.back.pixels_per_dip();
+            // MDL2 PUA 글리프(설정 ⚙ 등 — 07-18): 본문 폰트엔 없어 폭 0으로
+            // 측정되던 문제 — glyph_opaque와 동일하게 MDL2 포맷으로 측정
+            if text
+                .chars()
+                .next()
+                .is_some_and(|c| ('\u{E700}'..='\u{E8FF}').contains(&c))
+            {
+                let wtext: Vec<u16> = text.encode_utf16().collect();
+                if let Ok(l) = self.back.factory.CreateTextLayout(
+                    &wtext,
+                    &self.back.mdl2_format,
+                    1000.0,
+                    100.0,
+                ) {
+                    let mut m = DWRITE_TEXT_METRICS::default();
+                    if l.GetMetrics(&mut m).is_ok() {
+                        return (m.widthIncludingTrailingWhitespace * ppd).ceil() as i32;
+                    }
+                }
+                return 0;
+            }
             let Some(layout) = self.back.layout_for(text, MEASURE_W, 1000.0) else {
                 return 0;
             };
