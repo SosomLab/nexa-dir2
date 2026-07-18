@@ -329,6 +329,7 @@ fn build_menus(
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
 /// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
 fn build_toolbar(
+    order: &str,
     show_hidden: bool,
     show_dotfiles: bool,
     view_mode: &str,
@@ -336,70 +337,87 @@ fn build_toolbar(
     col_width_sync: bool,
     info_dual: bool,
 ) -> Vec<ToolButton> {
-    // 그룹화(QA 07-14 — 원본 PR#10): [새로고침] | [설정] | [숨김·닷파일 토글] |
-    // [보기 모드 라디오 3종 — 07-16: 트리/일반/타일, 활성 탭 기준 1개만 켜짐]
-    // 07-18: 전 버튼 임베드 16×16 이미지(`emb:` — icons::shell::EMBEDDED,
-    // 사용자: "도구 모음을 16x16 이미지 형태로"). 글리프는 미로드 폴백 텍스트.
-    vec![
-        // 패널 모드 = 단일 토글 버튼(07-19 사용자 재확정: 라디오 2개 폐지 —
-        // 켜짐 = 듀얼·accent 아이콘, 꺼짐 = 싱글·기본 잉크) + 컬럼 동기
-        // (싱글에서 비활성)
-        ToolButton::new(CMD_PANEL_TOGGLE, "▌▐")
-            .with_icon("emb:panel-toggle", "")
-            .with_tip(if panel_mode == "dual" {
-                tr("menu.view.panelDual")
-            } else {
-                tr("menu.view.panelSingle")
-            })
-            .toggled(panel_mode == "dual"),
-        ToolButton::new(CMD_INFO_TOGGLE, "ⓘ")
-            .with_icon("emb:info-toggle", "")
-            .with_tip(if info_dual {
-                tr("menu.view.infoDual")
-            } else {
-                tr("menu.view.infoSingle")
-            })
-            .toggled(info_dual)
-            .enable(panel_mode == "dual"),
-        ToolButton::new(CMD_COLW_SYNC, "⇔")
-            .with_icon("emb:colsync", "")
-            .with_tip(tr("menu.view.colWidthSync"))
-            .toggled(col_width_sync)
-            .enable(panel_mode == "dual"),
-        ToolButton::sep(),
-        ToolButton::new(CMD_VIEW_TREE, "├─")
-            .with_icon("emb:view-tree", "")
-            .with_tip(tr("menu.view.modeTree"))
-            .toggled(view_mode == "tree"),
-        ToolButton::new(CMD_VIEW_FLAT, "☰")
-            .with_icon("emb:view-flat", "")
-            .with_tip(tr("menu.view.modeFlat"))
-            .toggled(view_mode == "flat"),
-        ToolButton::new(CMD_VIEW_TILES, "▦")
-            .with_icon("emb:view-tiles", "")
-            .with_tip(tr("menu.view.modeTiles"))
-            .toggled(view_mode == "tiles"),
-        ToolButton::sep(),
-        ToolButton::new(CMD_REFRESH, "⟳")
-            .with_icon("emb:refresh", "")
-            .with_tip(tr("menu.view.refresh")),
-        ToolButton::sep(),
-        // 설정 = MDL2 Settings 톱니바퀴(사용자 확정 07-18 - U+2699는 꽃처럼 렌더)
-        ToolButton::new(CMD_PREFS, "")
-            .with_icon("emb:settings", "")
-            .with_tip(tr("menu.file.prefs").trim_end_matches(['.', '…'])),
-        ToolButton::sep(),
-        ToolButton::new(CMD_TOGGLE_HIDDEN, "👁")
-            .with_icon("emb:hidden", "")
-            .with_tip(tr("menu.view.hidden"))
-            .toggled(show_hidden),
-        ToolButton::new(CMD_TOGGLE_DOTFILES, "…")
-            .with_icon("emb:dotfiles", "")
-            .with_tip(tr("menu.view.dot"))
-            .toggled(show_dotfiles),
-        // ctl 갤러리 🃏 버튼 숨김(사용자 확정 07-18 — 개발 검증은
-        // WM_APP_CTLDEMO(0x8009) 주입 경로만 유지)
-    ]
+    // 그룹화(QA 07-14) 유지 — 블록 사이 구분선. **순서 = 설정 toolbar_order**
+    // (07-19 사용자 — prefs 트리 편집·config::parse_toolbar_order가 검증/보충).
+    // 전 버튼 임베드 SVG 아이콘(emb:)·글리프 = 미로드 폴백 텍스트.
+    let button = |block: &str, item: &str| -> Option<ToolButton> {
+        Some(match (block, item) {
+            ("panel", "toggle") => ToolButton::new(CMD_PANEL_TOGGLE, "▌▐")
+                .with_icon("emb:panel-toggle", "")
+                .with_tip(if panel_mode == "dual" {
+                    tr("menu.view.panelDual")
+                } else {
+                    tr("menu.view.panelSingle")
+                })
+                .toggled(panel_mode == "dual"),
+            ("panel", "info") => ToolButton::new(CMD_INFO_TOGGLE, "ⓘ")
+                .with_icon("emb:info-toggle", "")
+                .with_tip(if info_dual {
+                    tr("menu.view.infoDual")
+                } else {
+                    tr("menu.view.infoSingle")
+                })
+                .toggled(info_dual)
+                .enable(panel_mode == "dual"),
+            ("panel", "colsync") => ToolButton::new(CMD_COLW_SYNC, "⇔")
+                .with_icon("emb:colsync", "")
+                .with_tip(tr("menu.view.colWidthSync"))
+                .toggled(col_width_sync)
+                .enable(panel_mode == "dual"),
+            ("view", "tree") => ToolButton::new(CMD_VIEW_TREE, "├─")
+                .with_icon("emb:view-tree", "")
+                .with_tip(tr("menu.view.modeTree"))
+                .toggled(view_mode == "tree"),
+            ("view", "flat") => ToolButton::new(CMD_VIEW_FLAT, "☰")
+                .with_icon("emb:view-flat", "")
+                .with_tip(tr("menu.view.modeFlat"))
+                .toggled(view_mode == "flat"),
+            ("view", "tiles") => ToolButton::new(CMD_VIEW_TILES, "▦")
+                .with_icon("emb:view-tiles", "")
+                .with_tip(tr("menu.view.modeTiles"))
+                .toggled(view_mode == "tiles"),
+            ("refresh", _) => ToolButton::new(CMD_REFRESH, "⟳")
+                .with_icon("emb:refresh", "")
+                .with_tip(tr("menu.view.refresh")),
+            ("settings", _) => ToolButton::new(CMD_PREFS, "\u{E713}")
+                .with_icon("emb:settings", "")
+                .with_tip(tr("menu.file.prefs").trim_end_matches(['.', '…'])),
+            ("show", "hidden") => ToolButton::new(CMD_TOGGLE_HIDDEN, "👁")
+                .with_icon("emb:hidden", "")
+                .with_tip(tr("menu.view.hidden"))
+                .toggled(show_hidden),
+            ("show", "dot") => ToolButton::new(CMD_TOGGLE_DOTFILES, "…")
+                .with_icon("emb:dotfiles", "")
+                .with_tip(tr("menu.view.dot"))
+                .toggled(show_dotfiles),
+            _ => return None,
+        })
+    };
+    let mut out: Vec<ToolButton> = Vec::new();
+    for (block, items) in config::parse_toolbar_order(order) {
+        let start = out.len();
+        if !out.is_empty() {
+            out.push(ToolButton::sep());
+        }
+        if items.is_empty() {
+            match button(&block, "") {
+                Some(b) => out.push(b),
+                None => out.truncate(start),
+            }
+        } else {
+            let mut any = false;
+            for it in &items {
+                if let Some(b) = button(&block, it) {
+                    out.push(b);
+                    any = true;
+                }
+            }
+            if !any {
+                out.truncate(start);
+            }
+        }
+    }
+    out
 }
 
 /// 퀵 런처 바 버튼(M5-1) — **exe 셸 아이콘 16×16 정사각 버튼**(원본 썸네일 대응 —
@@ -528,6 +546,8 @@ struct State {
     term_cols: i32,
     /// 컬럼 auto-fit 최대 폭(px @96dpi — 설정 영속, 07-19).
     col_autofit_max: i32,
+    /// 도구모음 순서 문자열(설정 영속 — 07-19 prefs 트리 편집).
+    toolbar_order: String,
     /// 대화상자 글꼴(확인창·진행 창 — dialog.rs 공유).
     dlg_font: crate::dialog::DlgFont,
     /// 툴바 툴팁(07-18): 표시 중 팝업 · hover 추적(버튼 id, 경과 틱).
@@ -918,6 +938,7 @@ pub fn run() -> Result<()> {
         ),
         toolbar: Toolbar::new(
             build_toolbar(
+                &settings.toolbar_order,
                 settings.show_hidden,
                 settings.show_dotfiles,
                 &settings.view_mode,
@@ -981,6 +1002,7 @@ pub fn run() -> Result<()> {
         term_wrap: settings.term_wrap,
         term_cols: settings.term_cols,
         col_autofit_max: settings.col_autofit_max,
+        toolbar_order: settings.toolbar_order.clone(),
         dlg_font: crate::dialog::DlgFont {
             family: settings.dlg_font,
             size_pt: settings.dlg_font_size,
@@ -2785,6 +2807,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 // [현재 모드명] 일괄 갱신)
                 st.toolbar.set_buttons(
                     build_toolbar(
+                        &st.toolbar_order,
                         st.show_hidden,
                         st.show_dotfiles,
                         &st.view_mode,
@@ -2828,6 +2851,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     // 툴바 재구성(07-19 — 정보 토글 checked·툴팁 갱신)
                     st.toolbar.set_buttons(
                         build_toolbar(
+                            &st.toolbar_order,
                             st.show_hidden,
                             st.show_dotfiles,
                             &st.view_mode,
@@ -2968,6 +2992,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     // 툴바 재구성 — 툴팁 문자열 i18n 재주입(07-18, 아이콘/체크 상태는 재계산)
     st.toolbar.set_buttons(
         build_toolbar(
+            &st.toolbar_order,
             st.show_hidden,
             st.show_dotfiles,
             &st.view_mode,
@@ -3236,6 +3261,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 term_wrap: st.term_wrap,
                 term_cols: st.term_cols,
         col_autofit_max: st.col_autofit_max,
+        toolbar_order: st.toolbar_order.clone(),
                 dlg_font: st.dlg_font.family.clone(),
                 dlg_font_size: st.dlg_font.size_pt,
                 base_font: st.base_font.clone(),
@@ -3427,6 +3453,24 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     // 터미널 줄 바꿈·고정 열(X-3) — 다음 페인트에서 cols 재계산·PTY resize
     if v.col_autofit_max != st.col_autofit_max {
         st.col_autofit_max = v.col_autofit_max.clamp(50, 2000);
+    }
+    // 도구모음 순서(07-19 — prefs 트리 편집 즉시 반영)
+    if v.toolbar_order != st.toolbar_order {
+        st.toolbar_order = v.toolbar_order.clone();
+        let mut inv = Invalidations::default();
+        st.toolbar.set_buttons(
+            build_toolbar(
+                &st.toolbar_order,
+                st.show_hidden,
+                st.show_dotfiles,
+                &st.view_mode,
+                &st.panel_mode,
+                st.col_width_sync,
+                !single_info(st),
+            ),
+            &mut inv,
+        );
+        flush_invalidations(hwnd, &mut inv);
     }
     if v.term_wrap != st.term_wrap || v.term_cols != st.term_cols {
         st.term_wrap = v.term_wrap;
@@ -3654,6 +3698,7 @@ fn current_settings(st: &State) -> Settings {
         term_wrap: st.term_wrap,
         term_cols: st.term_cols,
         col_autofit_max: st.col_autofit_max,
+        toolbar_order: st.toolbar_order.clone(),
         dlg_font: st.dlg_font.family.clone(),
         dlg_font_size: st.dlg_font.size_pt,
         launcher: st.launcher_visible,

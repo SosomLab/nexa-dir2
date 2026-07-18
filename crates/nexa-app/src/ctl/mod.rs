@@ -42,6 +42,7 @@ pub mod grid;
 pub mod groupcard;
 pub mod iconbutton;
 pub mod label;
+pub mod ordertree;
 pub mod menubutton;
 pub mod searchbox;
 pub mod segmented;

@@ -212,6 +212,15 @@ pref.dlgFont.desc = 대화상자(확인창·진행 창) 글꼴.
 pref.dlgFontSize.desc = 대화상자 글꼴 크기(pt, 7~24).
 pref.showHidden.desc = 숨김 속성 파일·폴더를 표시합니다.
 pref.showDotfiles.desc = 이름이 점(.)으로 시작하는 파일·폴더를 표시합니다.
+pref.colAutofitMax = 컬럼 자동 맞춤 최대 폭 (50-2000)
+pref.colAutofitMax.desc = 컬럼 경계를 더블클릭해 내용에 맞출 때 허용되는 최대 폭(px).
+pref.toolbarOrder = 도구 모음 순서
+pref.toolbarOrder.desc = 도구 모음 버튼 순서를 바꿉니다. 그룹/항목을 선택하고 위/아래 버튼 사용 — 그룹은 통째로, 항목은 그룹 안에서만 이동(Shift 클릭 = 연속 다중 선택).
+pref.tbo.grpPanel = 패널 제어
+pref.tbo.grpView = 보기 모드
+pref.tbo.grpShow = 표시 항목
+pref.tbo.panelToggle = 패널 토글
+pref.tbo.infoToggle = 정보 패널 토글
 pref.dock.desc = 하단 도크(정보·미리보기·터미널)를 표시합니다.
 pref.sortFoldersFirst = 폴더 우선 정렬
 pref.sortFoldersFirst.desc = 정렬 방향과 무관하게 폴더를 파일보다 앞에 모읍니다.

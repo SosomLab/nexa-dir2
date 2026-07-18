@@ -103,6 +103,10 @@ pub struct Settings {
     /// 컬럼 auto-fit(경계 더블클릭) 최대 폭(px @96dpi — 07-19 사용자,
     /// 50~2000 클램프).
     pub col_autofit_max: i32,
+    /// 도구모음 블록/자식 순서(07-19 사용자 — prefs 트리 편집).
+    /// 형식 = [`serialize_toolbar_order`], 읽기 = [`parse_toolbar_order`]
+    /// (검증·누락 보충 — 전방 호환).
+    pub toolbar_order: String,
     /// 패널 모드(사용자 요청 07-16 — 원본 FR-C1 단일↔듀얼): "dual"(기본)|"single"
     /// (우 패널 숨김 — 상태는 보존, 복귀 시 원복).
     pub panel_mode: String,
@@ -161,6 +165,7 @@ impl Default for Settings {
             view_mode: "tree".into(),
             col_width_sync: true,
             col_autofit_max: 400,
+            toolbar_order: default_toolbar_order(),
             panel_mode: "dual".into(),
             info_mode: "dual".into(),
             launcher: true,
@@ -292,6 +297,7 @@ impl Settings {
             u8::from(self.col_width_sync)
         ));
         out.push_str(&format!("col_autofit_max={}\n", self.col_autofit_max));
+        out.push_str(&format!("toolbar_order={}\n", self.toolbar_order));
         out.push_str(&format!(
             "typeahead_scope={}\ntypeahead_reset_ms={}\ntypeahead_pos={}\ntypeahead_special={}\ntypeahead_space={}\ntypeahead_backspace={}\n",
             self.typeahead_scope,
@@ -421,6 +427,10 @@ impl Settings {
                     if let Ok(n) = v.parse::<i32>() {
                         s.col_autofit_max = n.clamp(50, 2000);
                     }
+                }
+                // 재직렬화로 정규화(미지 토큰 제거·누락 보충 — 전방 호환)
+                "toolbar_order" => {
+                    s.toolbar_order = serialize_toolbar_order(&parse_toolbar_order(v))
                 }
                 "view_mode" if matches!(v, "tree" | "flat" | "tiles") => {
                     s.view_mode = v.into() // 미지 값 = 기본(tree) 유지
@@ -650,6 +660,104 @@ pub fn purge_legacy(dir: &Path) {
     let _ = fs::remove_file(dir.join(SESSION_FILE_OLD));
 }
 
+/// 도구모음 블록 정의(순서 편집 SSOT — 07-19): `(블록 key, 자식 key 목록)`.
+/// 빈 자식 = 단일 버튼 블록. key는 [`Settings::toolbar_order`] 직렬화 토큰.
+pub const TOOLBAR_BLOCKS: &[(&str, &[&str])] = &[
+    ("panel", &["toggle", "info", "colsync"]),
+    ("view", &["tree", "flat", "tiles"]),
+    ("refresh", &[]),
+    ("settings", &[]),
+    ("show", &["hidden", "dot"]),
+];
+
+/// 기본 순서 문자열(= [`TOOLBAR_BLOCKS`] 정의 순).
+pub fn default_toolbar_order() -> String {
+    serialize_toolbar_order(
+        &TOOLBAR_BLOCKS
+            .iter()
+            .map(|(b, items)| (b.to_string(), items.iter().map(|i| i.to_string()).collect()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// 순서 직렬화 — `블록[자식,자식]|블록|…`(단일 블록 = 대괄호 생략).
+pub fn serialize_toolbar_order(order: &[(String, Vec<String>)]) -> String {
+    order
+        .iter()
+        .map(|(b, items)| {
+            if items.is_empty() {
+                b.clone()
+            } else {
+                format!("{b}[{}]", items.join(","))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// 순서 파싱 + 검증 — 미지 블록/자식·중복은 버리고, **누락분은 기본 정의
+/// 순으로 보충**(전방 호환: 새 버튼이 추가돼도 기존 설정이 유효).
+pub fn parse_toolbar_order(s: &str) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for tok in s.split('|') {
+        let tok = tok.trim();
+        let (name, inner) = match tok.split_once('[') {
+            Some((n, rest)) => (n.trim(), Some(rest.trim_end_matches(']'))),
+            None => (tok, None),
+        };
+        let Some((_, def_items)) = TOOLBAR_BLOCKS.iter().find(|(b, _)| *b == name) else {
+            continue; // 미지 블록
+        };
+        if out.iter().any(|(b, _)| b == name) {
+            continue; // 중복 블록
+        }
+        let mut items: Vec<String> = Vec::new();
+        if let Some(inner) = inner {
+            for it in inner.split(',') {
+                let it = it.trim();
+                if def_items.contains(&it) && !items.iter().any(|x| x == it) {
+                    items.push(it.to_string());
+                }
+            }
+        }
+        // 누락 자식 보충(기본 정의 순)
+        for d in *def_items {
+            if !items.iter().any(|x| x == d) {
+                items.push(d.to_string());
+            }
+        }
+        out.push((name.to_string(), items));
+    }
+    // 누락 블록 보충(기본 정의 순)
+    for (b, def_items) in TOOLBAR_BLOCKS {
+        if !out.iter().any(|(n, _)| n == b) {
+            out.push((b.to_string(), def_items.iter().map(|i| i.to_string()).collect()));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod toolbar_order_tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_and_merge() {
+        let d = default_toolbar_order();
+        assert_eq!(serialize_toolbar_order(&parse_toolbar_order(&d)), d, "기본 왕복");
+        // 재배열 왕복
+        let s = "view[tiles,tree,flat]|refresh|panel[colsync,toggle,info]|show[dot,hidden]|settings";
+        assert_eq!(serialize_toolbar_order(&parse_toolbar_order(s)), s, "재배열 보존");
+        // 미지 토큰 제거 + 누락 보충
+        let s = "view[tiles,junk]|bogus|panel[toggle]";
+        let norm = serialize_toolbar_order(&parse_toolbar_order(s));
+        assert_eq!(
+            norm,
+            "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,6 +773,7 @@ mod tests {
             dock: true,
             col_width_sync: false, // 기본 true — 왕복 검증 위해 반전
             col_autofit_max: 640,
+            toolbar_order: "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]".into(),
             dock_ratio: 0.42,
             dock_split: 0.61,
             term_font: "D2Coding, JetBrainsMono Nerd Font".into(),
@@ -731,6 +840,11 @@ mod tests {
         assert!(!parsed.term_wrap, "터미널 줄 바꿈 왕복(X-3)");
         assert_eq!(parsed.term_cols, 132, "터미널 고정 열 왕복(X-3)");
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
+        assert_eq!(
+            parsed.toolbar_order,
+            "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]",
+            "도구모음 순서 왕복(07-19)"
+        );
         assert_eq!(
             Settings::parse("term_cols=20").term_cols,
             80,
