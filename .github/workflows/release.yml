@@ -31,13 +31,13 @@ jobs:
       - name: 예산 B3 — 임포트 DLL 화이트리스트 게이트 (docs/18 §6)
         shell: pwsh
         run: pwsh scripts/budget-b3.ps1
-      - name: 배포 산출물 이름 — NexaDir2-<버전>-win-x64.exe (포터블 단일 exe, DR-3)
+      - name: 배포 산출물 이름 — NexaDir-<버전>-win-x64.exe (포터블 단일 exe, DR-3)
         shell: pwsh
         run: |
           $ver = "${{ github.ref_name }}".TrimStart("v")
           if ("${{ github.ref_type }}" -ne "tag") { $ver = "dev" }
-          Copy-Item target/release/nexa-app.exe "NexaDir2-$ver-win-x64.exe"
-          Write-Output "산출물: NexaDir2-$ver-win-x64.exe"
+          Copy-Item target/release/nexa-app.exe "NexaDir-$ver-win-x64.exe"
+          Write-Output "산출물: NexaDir-$ver-win-x64.exe"
       - name: 설치형 exe 빌드 — Inno Setup (보조 채널, DR-3 개정 07-16)
         shell: pwsh
         run: |
@@ -46,20 +46,20 @@ jobs:
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           & $iscc /DAppVersion=$ver /DExePath="$PWD\target\release\nexa-app.exe" installer\nexa.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 실패: $LASTEXITCODE" }
-          Get-Item installer\out\NexaDir2-Setup-*.exe | ForEach-Object {
+          Get-Item installer\out\NexaDir-Setup-*.exe | ForEach-Object {
             Write-Output "설치형: $($_.Name) = $([math]::Round($_.Length / 1MB, 2)) MB"
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: NexaDir2-win-x64
+          name: NexaDir-win-x64
           path: |
-            NexaDir2-*-win-x64.exe
-            installer/out/NexaDir2-Setup-*.exe
+            NexaDir-*-win-x64.exe
+            installer/out/NexaDir-Setup-*.exe
       - name: GitHub Release 생성·포터블+설치형 첨부 (태그 push에서만)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            NexaDir2-*-win-x64.exe
-            installer/out/NexaDir2-Setup-*.exe
+            NexaDir-*-win-x64.exe
+            installer/out/NexaDir-Setup-*.exe
           generate_release_notes: true

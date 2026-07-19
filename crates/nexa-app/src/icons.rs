@@ -165,23 +165,34 @@ pub mod shell {
         // 켜짐(듀얼)은 접미 규칙 `-on` = 전체 accent 재렌더(사용자 재확정
         // 07-19: "toggle on은 전체 선이 모두 파란색" — 전용 시안 폐지)
         ("panel-toggle", include_str!("../assets/toolbar/panel-toggle.svg")),
+        ("panel-toggle-dark", include_str!("../assets/toolbar/panel-toggle-dark.svg")),
         ("info-toggle", include_str!("../assets/toolbar/info-toggle.svg")),
+        ("info-toggle-dark", include_str!("../assets/toolbar/info-toggle-dark.svg")),
         ("dock", include_str!("../assets/toolbar/dock.svg")),
+        // 다크 전용 변형(사용자 제공 — 흰 채움 타일+검은 바 홈). 다크 테마에서
+        // chrome이 `#dark` 신호 → make_embedded가 `<이름>-dark` 에셋을 원색 그대로 렌더.
+        ("dock-dark", include_str!("../assets/toolbar/dock-dark.svg")),
         ("view-tree", include_str!("../assets/toolbar/view-tree.svg")),
+        ("view-tree-dark", include_str!("../assets/toolbar/view-tree-dark.svg")),
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
+        ("view-flat-dark", include_str!("../assets/toolbar/view-flat-dark.svg")),
         ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
+        ("view-tiles-dark", include_str!("../assets/toolbar/view-tiles-dark.svg")),
         ("colsync", include_str!("../assets/toolbar/colsync.svg")),
+        ("colsync-dark", include_str!("../assets/toolbar/colsync-dark.svg")),
         ("refresh", include_str!("../assets/toolbar/refresh.svg")),
+        ("refresh-dark", include_str!("../assets/toolbar/refresh-dark.svg")),
         ("settings", include_str!("../assets/toolbar/settings.svg")),
+        ("settings-dark", include_str!("../assets/toolbar/settings-dark.svg")),
         ("hidden", include_str!("../assets/toolbar/hidden.svg")),
+        ("hidden-dark", include_str!("../assets/toolbar/hidden-dark.svg")),
         ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
+        ("dotfiles-dark", include_str!("../assets/toolbar/dotfiles-dark.svg")),
     ];
 
-    /// SVG 아이콘 잉크 — 사용자 확정 07-19(4차, macOS 시안 기준):
-    /// **기본 = 검정**(배경 없음).
+    /// SVG 아이콘 잉크 폴백(잉크 토큰 없는 구형 키 — 검정). 실제 잉크는
+    /// 테마 본문색을 chrome→dw.rs가 키에 실어 전달(다크=밝은 선/라이트=검은 선).
     const SVG_INK: u32 = 0xFF00_0000;
-    /// 비활성 잉크 = 검정 알파 38%(`<이름>-disabled` 키 — 원본 SVG 재렌더).
-    const SVG_INK_DIM: u32 = 0x6100_0000;
 
     /// 워커 요청: (키, 경로, 대상 창 raw, 통지 메시지).
     type Req = (String, String, isize, u32);
@@ -225,23 +236,40 @@ pub mod shell {
         /// 임베드 키(`emb:<이름>:<크기>`) → SVG 래스터 HICON.
         /// 미지 키/파싱 실패 = `None`(글리프 폴백).
         fn make_embedded(key: &str) -> Option<HICON> {
-            if let Some((name, sz)) = key["emb:".len()..].rsplit_once(':') {
-                if let Some(px) = sz.parse::<i32>().ok().filter(|p| *p > 0) {
-                    // 접미 규칙: `-disabled` = 원본을 흐림(알파 38%)으로 재렌더
-                    // (켜짐 상태 변형은 07-19 재확정으로 폐지 — 검정 유지)
-                    let (base, ink) = match name.strip_suffix("-disabled") {
-                        Some(b) if !EMBEDDED_SVG.iter().any(|(n, _)| *n == name) => {
-                            (b, SVG_INK_DIM)
-                        }
-                        _ => (name, SVG_INK),
-                    };
-                    let (_, src) = EMBEDDED_SVG.iter().find(|(n, _)| *n == base)?;
-                    return crate::svg::parse(src).and_then(|doc| unsafe {
-                        crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink)
-                    });
+            // 키 = `emb:<이름>:<버킷>:<ARGB8hex>`(dw.rs 구성 — 잉크 = 테마 본문색,
+            // 알파 = 활성/비활성). 잉크 토큰 없는 구형 `emb:<이름>:<버킷>`도 호환(검정).
+            let rest = key.strip_prefix("emb:")?;
+            let (head, last) = rest.rsplit_once(':')?;
+            let (name, sz, ink) = if last.len() == 8 {
+                match (head.rsplit_once(':'), u32::from_str_radix(last, 16)) {
+                    (Some((name, sz)), Ok(ink)) => (name, sz, ink),
+                    _ => (head, last, SVG_INK),
                 }
-            }
-            None
+            } else {
+                (head, last, SVG_INK)
+            };
+            let px = sz.parse::<i32>().ok().filter(|p| *p > 0)?;
+            // `@dark` 마커: 다크 테마 → `<이름>-dark` 변형 에셋이 있으면 우선(원색
+            // 그대로 렌더 — 하드코딩 색 SVG). 없으면 기본 에셋을 잉크로 재색.
+            let name = match name.strip_suffix("@dark") {
+                Some(base) => {
+                    let dark = format!("{base}-dark");
+                    if EMBEDDED_SVG.iter().any(|(n, _)| *n == dark) {
+                        return EMBEDDED_SVG
+                            .iter()
+                            .find(|(n, _)| *n == dark)
+                            .and_then(|(_, src)| crate::svg::parse(src))
+                            .and_then(|doc| unsafe {
+                                crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink)
+                            });
+                    }
+                    base
+                }
+                None => name,
+            };
+            let (_, src) = EMBEDDED_SVG.iter().find(|(n, _)| *n == name)?;
+            crate::svg::parse(src)
+                .and_then(|doc| unsafe { crate::ctl::gdipctx::svg_to_hicon(&doc, px, ink) })
         }
 
         pub fn has_pending(&self) -> bool {

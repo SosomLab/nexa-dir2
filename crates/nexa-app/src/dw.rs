@@ -848,10 +848,27 @@ impl DrawCtx for DwCtx<'_> {
             } else {
                 16
             };
-            emb_key = match key.strip_suffix("#dis") {
-                Some(base) => format!("{base}-disabled:{bucket}"),
-                None => format!("{key}:{bucket}"),
+            // chrome가 붙인 접미 해석: `#RRGGBB`(잉크=테마 본문색)·`#dis`(비활성).
+            // 잉크 없는 구형 키는 검정 폴백. 최종 키 = `emb:<이름>:<버킷>:<ARGB8>`
+            // (테마·활성별로 캐시 분리 — 다크/라이트 아이콘 공존).
+            let (core, rgb) = match key.rsplit_once('#') {
+                Some((c, hex)) if hex.len() == 6 => (
+                    c,
+                    u32::from_str_radix(hex, 16).unwrap_or(0x0000_0000),
+                ),
+                _ => (key, 0x0000_0000),
             };
+            let (core, alpha) = match core.strip_suffix("#dis") {
+                Some(b) => (b, 0x61u32), // 비활성 = 알파 38%
+                None => (core, 0xFFu32),
+            };
+            // `#dark` = 다크 테마(→ make_embedded가 `<이름>-dark` 변형 선호).
+            let (base, dark) = match core.strip_suffix("#dark") {
+                Some(b) => (b, "@dark"),
+                None => (core, ""),
+            };
+            let argb = (alpha << 24) | rgb;
+            emb_key = format!("{base}{dark}:{bucket}:{argb:08X}");
             &emb_key
         } else {
             key

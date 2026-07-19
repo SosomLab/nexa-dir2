@@ -1087,7 +1087,7 @@ pub fn run() -> Result<()> {
         let hwnd = CreateWindowExW(
             Default::default(),
             class_name,
-            w!("Nexa Dir 2"),
+            w!("Nexa Dir"), // 배포명(사용자 확정 — 내부 프로젝트는 nexa-dir2)
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -1280,7 +1280,7 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
         root.display().to_string()
     };
     let text = format!(
-        "Nexa Dir 2 — [{side}] {} [{}{} · {} · {}{}]{}\0",
+        "Nexa Dir — [{side}] {} [{}{} · {} · {}{}]{}\0",
         root_disp,
         trf("status.itemCount", &[&p.rows().source().len().to_string()]),
         sel_txt,

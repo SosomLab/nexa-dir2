@@ -13,7 +13,8 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+# 배포 버전과 일치(exe VERSIONINFO·@app). 릴리스 태그 라인 = 0.7.x.
+version = "0.7.0"
 edition = "2021"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 authors = ["Sangyong Bae <kiros33@gmail.com>"]

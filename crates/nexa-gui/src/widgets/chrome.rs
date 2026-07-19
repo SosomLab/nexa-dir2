@@ -284,16 +284,21 @@ impl Widget for Toolbar {
                     // 아이콘 16px 유지) 아이콘을 정사각 셀 중앙에.
                     ctx.fill_rect(cell, bg);
                     let isz = (b.h - 10).max(8);
-                    // 상태 변형 키: 비활성 = `#dis`(흐림 — dw.rs가 임베드
-                    // 변형으로 해석). 켜짐도 아이콘은 기본 검정 유지
-                    // (07-19 재확정 — 배경 블렌드만으로 식별).
-                    let var_key;
-                    let key = if !btn.enabled {
-                        var_key = format!("{key}#dis");
-                        var_key.as_str()
+                    // 상태 변형 키: 잉크 = 현재 테마 본문색(`#RRGGBB` 접미 —
+                    // 다크=밝은 선/라이트=검은 선, dw.rs가 해석). 비활성 = `#dis`
+                    // (알파 38% 흐림). 켜짐도 아이콘 색은 본문색 유지(배경 블렌드로 식별).
+                    let ink = ((theme.text.r as u32) << 16)
+                        | ((theme.text.g as u32) << 8)
+                        | theme.text.b as u32;
+                    // 다크 테마 신호(`#dark`) — dw.rs가 `<이름>-dark` 변형 에셋이
+                    // 있으면 그것을 원색 렌더, 없으면 잉크로 재색.
+                    let dk = if theme.is_dark { "#dark" } else { "" };
+                    let var_key = if !btn.enabled {
+                        format!("{key}{dk}#dis#{ink:06X}")
                     } else {
-                        key.as_str()
+                        format!("{key}{dk}#{ink:06X}")
                     };
+                    let key = var_key.as_str();
                     let drew = ctx.draw_icon(
                         cell.x + (cell.w - isz) / 2,
                         b.y + (b.h - isz) / 2,

@@ -53,6 +53,8 @@ pub struct Theme {
     pub sel_bg: Color,
     /// 비활성 패널의 선택 행 배경 (신설 — 탐색기 관례: 포커스 없는 쪽은 무채색 하이라이트)
     pub sel_bg_inactive: Color,
+    /// 다크 팔레트 여부 (아이콘 다크 변형 선택 등에 사용).
+    pub is_dark: bool,
 }
 
 impl Theme {
@@ -74,6 +76,7 @@ impl Theme {
             text_dim: Color::from_hex(0x8A919C),
             sel_bg: Color::from_hex(0x24405F), // accent 30% over panel_bg
             sel_bg_inactive: Color::from_hex(0x2C313A), // gray 20% over panel_bg
+            is_dark: true,
         }
     }
 
@@ -95,6 +98,7 @@ impl Theme {
             text_dim: Color::from_hex(0x6B7280),
             sel_bg: Color::from_hex(0xD8E8FF), // accent 20% over panel_bg
             sel_bg_inactive: Color::from_hex(0xE6E9EE), // gray 10% over panel_bg
+            is_dark: false,
         }
     }
 }
