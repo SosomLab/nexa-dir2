@@ -7,9 +7,11 @@
 //! - 선택: 클릭 = 단일 · Shift = **같은 레벨·같은 부모 형제 범위만**
 //!   (혼합 차단). 통지 [`NXOT_SELCHANGE`].
 //! - 체크: 박스 클릭 = 토글 → [`NXOT_TOGGLE`](행 = [`take_toggled`]).
+//!   **첫 컬럼 고정**(레벨 무관 x — 사용자 확정 07-19).
 //! - **펼침/닫음(07-19)**: 그룹 행 셰브론(E76C 닫힘/E70D 펼침 — 파일뷰
-//!   규약) 클릭 = 접기 토글, 기본 = 전부 펼침. 접힘 상태는 라벨 기준
-//!   유지([`set_rows`] 재구성에도 보존)·접힌 그룹 자식 선택은 해제.
+//!   규약, **체크 뒤·하위 있는 그룹만**) 클릭 = 접기 토글, 기본 = 전부
+//!   펼침. 접힘 상태는 라벨 기준 유지([`set_rows`] 재구성에도 보존)·접힌
+//!   그룹 자식 선택은 해제.
 //! - **드래그 이동(07-19)**: 선택 블록(그룹 = 자식 포함)을 끌어 **같은 부모
 //!   안에서만** 이동 — 스냅 시 라이브 미리보기·커서 추종 **고스트 박스**
 //!   (컬럼 이동 규약 차용)·가장자리 **자동 스크롤** · ESC = [`cancel_drag`].
@@ -46,6 +48,8 @@ pub const NXOT_DRAGMOVE: u32 = 3;
 const ROW_H: i32 = 22;
 /// 그룹 셰브론 마커 존 폭(파일뷰 규약 — 상시 예약).
 const MARK_W: i32 = 16;
+/// 표시 체크 컬럼 폭(첫 컬럼 고정 — 레벨 무관, 사용자 확정 07-19).
+const CHECK_COL: i32 = 18;
 /// 레벨당 들여쓰기(px).
 const INDENT: i32 = 18;
 /// 자동 스크롤 가장자리 폭·타이머(드래그 중 — 07-19).
@@ -618,17 +622,20 @@ unsafe fn on_lbutton_down(hwnd: HWND, lp: LPARAM) {
         return;
     }
     let Some(i) = st.row_at(y) else { return };
-    // 그룹 셰브론 존 클릭 = 접기 토글(07-19 — 파일뷰 규약)
-    if st.rows[i].1 == 0 && x < 2 + MARK_W {
+    // 셰브론 존(체크 뒤) 클릭 = 접기 토글 — 하위가 있는 그룹만(사용자 확정 07-19)
+    if st.rows[i].1 == 0
+        && st.rows.get(i + 1).is_some_and(|r| r.1 == 1)
+        && (2 + CHECK_COL..2 + CHECK_COL + MARK_W).contains(&x)
+    {
         st.toggle_collapse(i);
         st.clamp_scroll(ch);
         let _ = InvalidateRect(Some(hwnd), None, false);
         super::base::notify(hwnd, NXOT_SELCHANGE);
         return;
     }
-    // 체크 존 클릭 = 표시 토글(07-19 — 부모 그룹 해제 시 비활성)
+    // 체크 존(첫 컬럼 고정 — 레벨 무관) 클릭 = 표시 토글(부모 그룹 해제 시 비활성)
     if let Some(on) = st.rows[i].2 {
-        let bx = 2 + MARK_W + st.rows[i].1 as i32 * INDENT;
+        let bx = 6;
         if x >= bx - 2 && x < bx + 16 {
             if check_disabled(&st.rows, i) {
                 return; // 비활성 — 클릭 무시
@@ -791,32 +798,16 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
                 st.style.text_dim
             },
         );
-        // 마커 존(상시 예약 — 파일뷰 정렬 규약): 그룹 = 셰브론
-        if *level == 0 {
-            let closed = st.collapsed.contains(label);
-            let mold = SelectObject(dc, st.marker_font.into());
-            let mut m16: Vec<u16> = if closed { "\u{E76C}" } else { "\u{E70D}" }
-                .encode_utf16()
-                .collect();
-            let mut mrc = RECT {
-                left: row.left + 4,
-                top: row.top,
-                right: row.left + 4 + MARK_W,
-                bottom: row.bottom,
-            };
-            SetTextColor(dc, st.style.text_dim);
-            DrawTextW(dc, &mut m16, &mut mrc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-            SelectObject(dc, mold);
-        }
-        let mut tx = row.left + 2 + MARK_W + *level as i32 * INDENT;
         let dis = check_disabled(&st.rows, i);
+        // 표시 체크(첫 컬럼 고정 — 레벨 무관, 사용자 확정 07-19)
         if let Some(on) = check {
             let bs = 12;
+            let bx = row.left + 5;
             let by = top + (ROW_H - bs) / 2;
             let brc = RECT {
-                left: tx,
+                left: bx,
                 top: by,
-                right: tx + bs,
+                right: bx + bs,
                 bottom: by + bs,
             };
             // 부모 그룹 해제 = 자식 체크 비활성(값 유지·흐림 — 07-19)
@@ -827,9 +818,9 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
             );
             if *on {
                 let irc = RECT {
-                    left: tx + 3,
+                    left: bx + 3,
                     top: by + 3,
-                    right: tx + bs - 3,
+                    right: bx + bs - 3,
                     bottom: by + bs - 3,
                 };
                 fill(
@@ -838,8 +829,26 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
                     if dis { st.style.text_dim } else { st.style.accent },
                 );
             }
-            tx += bs + 6;
         }
+        // 셰브론 존(체크 뒤): 하위가 있는 그룹만 표시(사용자 확정 07-19)
+        if *level == 0 && st.rows.get(i + 1).is_some_and(|r| r.1 == 1) {
+            let closed = st.collapsed.contains(label);
+            let mold = SelectObject(dc, st.marker_font.into());
+            let mut m16: Vec<u16> = if closed { "\u{E76C}" } else { "\u{E70D}" }
+                .encode_utf16()
+                .collect();
+            let mut mrc = RECT {
+                left: row.left + 2 + CHECK_COL,
+                top: row.top,
+                right: row.left + 2 + CHECK_COL + MARK_W,
+                bottom: row.bottom,
+            };
+            SetTextColor(dc, st.style.text_dim);
+            DrawTextW(dc, &mut m16, &mut mrc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            SelectObject(dc, mold);
+            SetTextColor(dc, st.style.text); // 그룹 라벨 색 복원
+        }
+        let tx = row.left + 2 + CHECK_COL + MARK_W + 2 + *level as i32 * INDENT;
         if dis {
             SetTextColor(dc, st.style.text_dim); // 라벨도 흐림
         }
