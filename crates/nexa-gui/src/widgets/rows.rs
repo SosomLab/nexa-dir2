@@ -139,7 +139,9 @@ pub enum ScrollAlign {
 }
 
 /// 헤더 드래그 재배열 상태(07-19 사용자 — 탭 드래그와 동일 UX).
-#[derive(Clone, Copy, Debug)]
+/// 활성 중엔 **라이브 미리보기**(스냅 위치로 실제 재배열해 표시)·커서 추종
+/// 고스트 헤더·ESC 취소([`VirtualRows::cancel_col_drag`] — orig로 복원).
+#[derive(Clone, Debug)]
 struct ColDrag {
     col: usize,
     press_x: i32,
@@ -147,6 +149,8 @@ struct ColDrag {
     /// 임계(5px) 초과 이동 후 활성 — 활성 전 MouseUp = 정렬 클릭.
     active: bool,
     shift: bool,
+    /// 드래그 시작 시 key 순서(ESC 취소 복원용).
+    orig: Vec<u32>,
 }
 
 /// 리사이즈 드래그 상태.
@@ -971,6 +975,29 @@ impl<S: RowSource> VirtualRows<S> {
         best
     }
 
+    /// ESC = 드래그 취소(07-19 사용자) — 시작 시 순서(orig)로 복원.
+    /// 활성 드래그가 있었으면 `true`(호스트가 키 소비).
+    pub fn cancel_col_drag(&mut self, inv: &mut Invalidations) -> bool {
+        let Some(d) = self.col_drag.take() else {
+            return false;
+        };
+        if !d.active {
+            return false;
+        }
+        // orig key 순서로 재배열(폭 등 Column 값은 그대로 이동)
+        let mut restored: Vec<Column> = Vec::with_capacity(self.columns.len());
+        for k in &d.orig {
+            if let Some(pos) = self.columns.iter().position(|c| c.key == *k) {
+                restored.push(self.columns.remove(pos));
+            }
+        }
+        restored.append(&mut self.columns); // 방어(orig에 없던 열)
+        self.columns = restored;
+        self.clamp_scroll_x();
+        inv.push(self.bounds);
+        true
+    }
+
     /// 컬럼 순서 드래그 변경 수거(1회성 — 호스트가 탭 상속/좌우 동기, 07-19).
     pub fn take_col_reordered(&mut self) -> bool {
         std::mem::take(&mut self.col_reordered)
@@ -995,6 +1022,14 @@ impl<S: RowSource> VirtualRows<S> {
             self.clamp_scroll_x();
             inv.push(self.bounds);
         }
+    }
+
+    /// 좌표가 헤더 행인가(07-19 — 우클릭 컬럼 설정 팝업 판정).
+    pub fn header_area(&self, x: i32, y: i32) -> bool {
+        self.mode != ViewMode::Tiles
+            && !self.columns.is_empty()
+            && self.bounds.contains(Point { x, y })
+            && y < self.body_top()
     }
 
     /// 더블클릭 auto-fit 대상(07-19 사용자): 헤더 **리사이즈 핸들** 좌표면
@@ -1412,6 +1447,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             cur_x: x,
                             active: false,
                             shift,
+                            orig: self.columns.iter().map(|c| c.key).collect(),
                         });
                     }
                 } else if let Some(row) = self.row_at(x, y) {
@@ -1489,15 +1525,25 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             inv.push(self.bounds);
                         }
                     }
-                } else if let Some(mut d) = self.col_drag {
+                } else if let Some(mut d) = self.col_drag.take() {
                     d.cur_x = x;
                     if !d.active && (x - d.press_x).abs() > 5 {
                         d.active = true; // 임계 초과 — 재배열 모드 진입
                     }
-                    self.col_drag = Some(d);
                     if d.active {
-                        inv.push(self.bounds); // 삽입 인디케이터 갱신
+                        // 라이브 미리보기(07-19 사용자): 스냅 위치로 즉시
+                        // 재배열해 "옮겨진 것처럼" 표시 — 확정은 MouseUp,
+                        // 취소는 ESC(orig 복원)
+                        let ins = self.nearest_boundary(x);
+                        let to = if ins > d.col { ins - 1 } else { ins };
+                        if to != d.col && to < self.columns.len() {
+                            let c = self.columns.remove(d.col);
+                            self.columns.insert(to, c);
+                            d.col = to;
+                        }
+                        inv.push(self.bounds); // 고스트·미리보기 갱신
                     }
+                    self.col_drag = Some(d);
                 } else if let Some(mut band) = self.band {
                     band.cx = x;
                     band.cy = y;
@@ -1548,13 +1594,9 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 self.resize = None;
                 if let Some(d) = self.col_drag.take() {
                     if d.active {
-                        // 경계선 근처 드롭 = 그 위치로 이동(07-19 — 가장 가까운
-                        // 컬럼 경계로 스냅)
-                        let ins = self.nearest_boundary(d.cur_x);
-                        let to = if ins > d.col { ins - 1 } else { ins };
-                        if to != d.col && to < self.columns.len() {
-                            let c = self.columns.remove(d.col);
-                            self.columns.insert(to, c);
+                        // 미리보기 확정(07-19) — 이동이 있었으면 호스트 동기
+                        let now: Vec<u32> = self.columns.iter().map(|c| c.key).collect();
+                        if now != d.orig {
                             self.col_reordered = true; // 호스트 동기 폴링
                             self.clamp_scroll_x();
                         }
@@ -1709,19 +1751,6 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             );
         }
 
-        // 컬럼 드래그 삽입 인디케이터(07-19 — 경계 근처 스냅 시각화)
-        if let Some(d) = self.col_drag {
-            if d.active {
-                let ins = self.nearest_boundary(d.cur_x);
-                let bx = if ins < self.columns.len() {
-                    self.col_x(ins)
-                } else {
-                    self.columns_right()
-                };
-                ctx.fill_rect(Rect::new(bx - 1, b.y, 2, b.h), theme.accent);
-            }
-        }
-
         // ── 헤더(본문 위에 그려 스크롤과 무관하게 고정) ──
         if !self.columns.is_empty() {
             // 헤더 장식(X-12 — 굵게/이탤릭)
@@ -1755,6 +1784,38 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     Rect::new(cols_right, hy, b.right() - cols_right, self.row_h),
                     theme.header_bg,
                 );
+            }
+            // 드래그 고스트 헤더(07-19 사용자): 커서 x 추종·세로 = 헤더 행
+            // 고정 — 헤더 셀 모양(배경+테두리+라벨) 복제. 본체는 이미
+            // 미리보기 위치에 렌더된다.
+            if let Some(d) = &self.col_drag {
+                if d.active {
+                    let col = &self.columns[d.col];
+                    let w = col.width;
+                    let gx = (d.cur_x - w / 2)
+                        .clamp(b.x, (b.right() - w).max(b.x));
+                    let cell = Rect::new(gx, hy, w, self.row_h);
+                    ctx.fill_rect(cell, theme.header_bg);
+                    // 1px 테두리(시안 — 떠 있는 헤더 박스)
+                    ctx.fill_rect(Rect::new(cell.x, cell.y, cell.w, 1), theme.border);
+                    ctx.fill_rect(
+                        Rect::new(cell.x, cell.bottom() - 1, cell.w, 1),
+                        theme.border,
+                    );
+                    ctx.fill_rect(Rect::new(cell.x, cell.y, 1, cell.h), theme.border);
+                    ctx.fill_rect(
+                        Rect::new(cell.right() - 1, cell.y, 1, cell.h),
+                        theme.border,
+                    );
+                    ctx.text_opaque(
+                        cell.x + self.pad_x,
+                        hty,
+                        Rect::new(cell.x + 1, cell.y + 1, (cell.w - 2).max(0), cell.h - 2),
+                        &self.header_label(col),
+                        theme.text,
+                        theme.header_bg,
+                    );
+                }
             }
             ctx.select_font(crate::FontSlot::List, false, false); // 장식 복원
         }

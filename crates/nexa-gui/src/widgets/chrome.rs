@@ -166,6 +166,12 @@ impl Toolbar {
             .position(|&(lo, hi)| x >= lo && x < hi)
     }
 
+    /// 좌표가 버튼(구분선 제외) 위인가(07-19 — 빈 영역 우클릭 팝업 판정).
+    pub fn is_button_at(&self, x: i32, y: i32) -> bool {
+        self.button_at(x, y)
+            .is_some_and(|i| !self.buttons[i].separator)
+    }
+
     /// hover 중인 버튼의 툴팁(07-18) — `(id, 텍스트, 버튼 rect[클라이언트])`.
     /// 툴팁 없는 버튼/hover 없음 = `None`. 표시·타이밍은 호스트가 관리.
     pub fn hover_tip(&self) -> Option<(u32, String, Rect)> {

@@ -101,6 +101,13 @@ const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
 const WM_APP_ICON: u32 = 0x8004; // WM_APP + 4
 /// 설정 창 열기 지연 실행(QA 07-14 — run_command의 State 차용과 모달 재진입 분리).
 const WM_APP_PREFS: u32 = 0x8005; // WM_APP + 5
+/// 도구 모음/컬럼 편집 창 지연 실행(07-19 — 우클릭 팝업. 모달은 State 차용
+/// 밖에서 — WM_APP_PREFS 재진입 규약 동일).
+const WM_APP_EDIT_TOOLBAR: u32 = 0x800A;
+const WM_APP_EDIT_COLS: u32 = 0x800B;
+/// main 소유 편집 창의 field 태그(ordereditor WM_APP_ORDER_EDIT wparam).
+const ORDER_FIELD_TOOLBAR: u32 = 1;
+const ORDER_FIELD_COLS: u32 = 2;
 /// 일괄 이름변경 창 열기 지연 실행(M5-1 — WM_APP_PREFS와 동일 재진입 규약).
 /// 0x8006=prefs 적용·0x8007=UIA 선택(uia.rs) 다음.
 const WM_APP_BULK: u32 = 0x8008; // WM_APP + 8
@@ -3282,6 +3289,69 @@ unsafe fn invalidate_dock(hwnd: HWND, st: &State, panel: usize) {
     let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
 }
 
+/// 우클릭 팝업(07-19). 도구 모음 빈 영역은 순서 편집과 설정 항목을,
+/// 컬럼 헤더는 파일 컬럼 항목을 표시한다. 편집 창은 지연 실행(재진입 규약).
+unsafe fn show_bar_popup(hwnd: HWND, toolbar: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenuEx, MF_STRING,
+        TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    };
+    let Ok(menu) = CreatePopupMenu() else { return };
+    if toolbar {
+        let t1 = windows::core::HSTRING::from(format!("{}...", tr("pref.toolbarOrder")));
+        let _ = AppendMenuW(menu, MF_STRING, 1, windows::core::PCWSTR(t1.as_ptr()));
+        let t2 = windows::core::HSTRING::from(tr("menu.file.prefs"));
+        let _ = AppendMenuW(menu, MF_STRING, 2, windows::core::PCWSTR(t2.as_ptr()));
+    } else {
+        let t1 = windows::core::HSTRING::from(format!("{}...", tr("pref.colLayout")));
+        let _ = AppendMenuW(menu, MF_STRING, 1, windows::core::PCWSTR(t1.as_ptr()));
+    }
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+    let cmd = TrackPopupMenuEx(
+        menu,
+        (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
+        pt.x,
+        pt.y,
+        hwnd,
+        None,
+    );
+    let _ = DestroyMenu(menu);
+    match (toolbar, cmd.0 as u32) {
+        (true, 1) => {
+            let _ = PostMessageW(Some(hwnd), WM_APP_EDIT_TOOLBAR, WPARAM(0), LPARAM(0));
+        }
+        (true, 2) => {
+            let _ = PostMessageW(Some(hwnd), WM_APP_PREFS, WPARAM(0), LPARAM(0));
+        }
+        (false, 1) => {
+            let _ = PostMessageW(Some(hwnd), WM_APP_EDIT_COLS, WPARAM(0), LPARAM(0));
+        }
+        _ => {}
+    }
+}
+
+/// 편집 창 모달 실행(지연 — State 차용 분리). `field` = ORDER_FIELD_*.
+unsafe fn open_order_editor(hwnd: HWND, field: u32) {
+    let Some((value, font_spec)) = state_of(hwnd).map(|st| {
+        let v = match field {
+            ORDER_FIELD_COLS => panel_col_layout(&st.panels[st.active]),
+            _ => st.toolbar_order.clone(),
+        };
+        (v, st.dlg_font.clone())
+    }) else {
+        return;
+    };
+    let spec = match field {
+        ORDER_FIELD_COLS => crate::prefs::col_editor_spec(),
+        _ => crate::prefs::toolbar_editor_spec(),
+    };
+    let font = crate::dialog::make_font_pub(hwnd, &font_spec);
+    crate::ordereditor::show(hwnd, &spec, &value, field, font);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(font.into());
+}
+
 /// 설정 창 열기(S6 — Ctrl+, 원본 docs/40): 현재 값 스냅샷 → 모달(State 참조 차단 —
 /// 재진입 규약) → 저장 시 적용(테마/언어=기존 명령 경로 재사용·글꼴=백엔드 재생성)
 /// + settings.cfg 즉시 저장(원본 PREF 영속 규율).
@@ -4323,6 +4393,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONDOWN => {
+            // 도구 모음 빈 영역/컬럼 헤더 우클릭 팝업(07-19 사용자)
+            if let Some(st) = state_of(hwnd) {
+                let (x, y) = mouse_xy(lparam);
+                if st
+                    .toolbar
+                    .bounds()
+                    .contains(nexa_gui::Point { x, y })
+                    && !st.toolbar.is_button_at(x, y)
+                {
+                    show_bar_popup(hwnd, true);
+                    return LRESULT(0);
+                }
+                if let Some(idx) = st.panel_at(x) {
+                    if st.panels[idx].rows().header_area(x, y) {
+                        set_active(hwnd, st, idx);
+                        show_bar_popup(hwnd, false);
+                        return LRESULT(0);
+                    }
+                }
+            }
             let mut tab_menu: Option<(usize, usize)> = None;
             if let Some(st) = state_of(hwnd) {
                 let (x, y) = mouse_xy(lparam);
@@ -4753,6 +4843,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     flush_invalidations(hwnd, &mut inv);
                     return LRESULT(0);
                 }
+                if vk == VK_ESCAPE.0
+                    && (st.panels[0].rows_mut().cancel_col_drag(&mut inv)
+                        || st.panels[1].rows_mut().cancel_col_drag(&mut inv))
+                {
+                    // 컬럼 드래그 취소(07-19 사용자) — ESC 소비
+                    flush_invalidations(hwnd, &mut inv);
+                    return LRESULT(0);
+                }
                 if vk == VK_ESCAPE.0 && st.transfer.is_some() {
                     // Esc = 진행 중 전송 취소(원본 CancellationToken 대응)
                     if let Some(j) = &st.transfer {
@@ -4950,6 +5048,54 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         m if m == WM_APP_PREFS => {
             open_prefs(hwnd); // 설정 창(S6) — State 차용 없는 시점에서 모달
+            LRESULT(0)
+        }
+        m if m == WM_APP_EDIT_TOOLBAR => {
+            open_order_editor(hwnd, ORDER_FIELD_TOOLBAR); // 우클릭 팝업 경유(07-19)
+            LRESULT(0)
+        }
+        m if m == WM_APP_EDIT_COLS => {
+            open_order_editor(hwnd, ORDER_FIELD_COLS);
+            LRESULT(0)
+        }
+        // 편집 창 실시간 값(07-19 — main 소유 편집: 우클릭 팝업 경유)
+        m if m == crate::ordereditor::WM_APP_ORDER_EDIT => {
+            if let Some(v) = (lparam.0 as *const String).as_ref() {
+                let v = v.clone();
+                if let Some(st) = state_of(hwnd) {
+                    let mut inv = Invalidations::default();
+                    match wparam.0 as u32 {
+                        ORDER_FIELD_TOOLBAR => {
+                            st.toolbar_order = config::serialize_toolbar_order(
+                                &config::parse_toolbar_order(&v),
+                            );
+                            st.toolbar.set_buttons(
+                                build_toolbar(
+                                    &st.toolbar_order,
+                                    st.show_hidden,
+                                    st.show_dotfiles,
+                                    &st.view_mode,
+                                    &st.panel_mode,
+                                    st.col_width_sync,
+                                    !single_info(st),
+                                ),
+                                &mut inv,
+                            );
+                            persist_settings(st);
+                        }
+                        ORDER_FIELD_COLS => {
+                            let a = st.active;
+                            apply_col_layout_str(&mut st.panels[a], &v, &mut inv);
+                            if st.col_width_sync {
+                                let cols = st.panels[a].columns_snapshot();
+                                st.panels[1 - a].apply_columns(&cols, &mut inv);
+                            }
+                        }
+                        _ => {}
+                    }
+                    flush_invalidations(hwnd, &mut inv);
+                }
+            }
             LRESULT(0)
         }
         m if m == WM_APP_BULK => {

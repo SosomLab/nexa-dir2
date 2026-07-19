@@ -148,6 +148,7 @@ pref.cat.appearance = Appearance
 pref.cat.fonts = Fonts
 pref.cat.terminal = Terminal
 pref.cat.list = File list
+pref.cat.ctxmenu = Context menu
 pref.cat.dock = Bottom dock
 pref.cat.lang = Language
 pref.search.placeholder = Search settings

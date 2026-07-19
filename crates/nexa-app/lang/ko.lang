@@ -147,6 +147,7 @@ pref.cat.appearance = 모양
 pref.cat.fonts = 글꼴
 pref.cat.terminal = 터미널
 pref.cat.list = 파일 목록
+pref.cat.ctxmenu = 컨텍스트 메뉴
 pref.cat.dock = 하단 도크
 pref.cat.lang = 언어
 pref.search.placeholder = 설정 검색

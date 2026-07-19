@@ -683,11 +683,12 @@ pub fn purge_legacy(dir: &Path) {
 /// 도구모음 블록 정의(순서 편집 SSOT — 07-19): `(블록 key, 자식 key 목록)`.
 /// 빈 자식 = 단일 버튼 블록. key는 [`Settings::toolbar_order`] 직렬화 토큰.
 pub const TOOLBAR_BLOCKS: &[(&str, &[&str])] = &[
+    // 기본 순서 = 사용자 확정 07-19("현재 순서를 기본값으로")
+    ("refresh", &[]),
     ("panel", &["toggle", "info", "colsync"]),
     ("view", &["tree", "flat", "tiles"]),
-    ("refresh", &[]),
-    ("settings", &[]),
     ("show", &["hidden", "dot"]),
+    ("settings", &[]),
 ];
 
 /// 기본 순서 문자열(정의 순·전부 표시 — vis 포함 문법).
@@ -834,7 +835,7 @@ mod toolbar_order_tests {
         let norm = serialize_toolbar_order(&parse_toolbar_order(s));
         assert_eq!(
             norm,
-            "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]"
+            "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|show[hidden,dot]|settings"
         );
     }
 }

@@ -175,6 +175,7 @@ const TREE: &[(&str, &str, i32)] = &[
     ("filelist", "pref.cat.list", 0),
     ("list", "pref.cat.listGeneral", 1),
     ("typeahead", "pref.cat.typeahead", 1),
+    ("ctxmenu", "pref.cat.ctxmenu", 1),
     ("tabs", "pref.cat.tabs", 0),
     ("panel", "pref.grp.panel", 0),
     ("dock", "pref.cat.dock", 1),
@@ -421,7 +422,7 @@ fn registry() -> Vec<Entry> {
             field: F_COL_LAYOUT,
         },
         Entry {
-            cat: "list",
+            cat: "ctxmenu",
             label_key: "pref.ctxMenuOrder",
             desc_key: "pref.ctxMenuOrder.desc",
             kind: Kind::OrderDialog,
@@ -683,6 +684,30 @@ fn sanitize(v: &mut PrefValues) {
     v.typeahead_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
     v.typeahead_pos = v.typeahead_pos.clamp(0, 8);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
+}
+
+/// 도구 모음 편집 창 스펙(공용 — prefs·툴바 우클릭 팝업 07-19).
+pub(crate) fn toolbar_editor_spec() -> crate::ordereditor::EditorSpec {
+    crate::ordereditor::EditorSpec {
+        title: tr("pref.toolbarOrder"),
+        defs: crate::config::TOOLBAR_BLOCKS,
+        with_vis: false,
+        flat: false,
+        locked: &[],
+        label: tbo_label,
+    }
+}
+
+/// 파일 컬럼 편집 창 스펙(공용 — prefs·헤더 우클릭 팝업 07-19).
+pub(crate) fn col_editor_spec() -> crate::ordereditor::EditorSpec {
+    crate::ordereditor::EditorSpec {
+        title: tr("pref.colLayout"),
+        defs: crate::config::COLUMN_BLOCKS,
+        with_vis: true,
+        flat: true,
+        locked: &["name"],
+        label: col_label,
+    }
 }
 
 /// 컬럼 key → 표시 라벨(컬럼 편집 창 — 07-19).
@@ -1523,17 +1548,7 @@ unsafe extern "system" fn prefs_proc(
                     let s = &mut *st;
                     let field = i - ID_FIELD_BASE;
                     let (spec, value) = match field {
-                        F_COL_LAYOUT => (
-                            crate::ordereditor::EditorSpec {
-                                title: tr("pref.colLayout"),
-                                defs: crate::config::COLUMN_BLOCKS,
-                                with_vis: true,
-                                flat: true,
-                                locked: &["name"],
-                                label: col_label,
-                            },
-                            s.values.col_layout.clone(),
-                        ),
+                        F_COL_LAYOUT => (col_editor_spec(), s.values.col_layout.clone()),
                         F_CTX_MENU => (
                             crate::ordereditor::EditorSpec {
                                 title: tr("pref.ctxMenuOrder"),
@@ -1545,17 +1560,7 @@ unsafe extern "system" fn prefs_proc(
                             },
                             s.values.ctx_menu_order.clone(),
                         ),
-                        _ => (
-                            crate::ordereditor::EditorSpec {
-                                title: tr("pref.toolbarOrder"),
-                                defs: crate::config::TOOLBAR_BLOCKS,
-                                with_vis: false,
-                                flat: false,
-                                locked: &[],
-                                label: tbo_label,
-                            },
-                            s.values.toolbar_order.clone(),
-                        ),
+                        _ => (toolbar_editor_spec(), s.values.toolbar_order.clone()),
                     };
                     crate::ordereditor::show(hwnd, &spec, &value, field, s.font);
                     let _ = InvalidateRect(Some(hwnd), None, false);
