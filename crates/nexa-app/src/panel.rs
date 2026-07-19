@@ -48,7 +48,11 @@ impl Tab {
         }
         match p.file_name() {
             Some(n) => n.to_string_lossy().into_owned(),
-            None => p.to_string_lossy().into_owned(), // 드라이브 루트 등
+            // 드라이브 루트: "D:\" → "D:"(사용자 확정 07-19 — 후행 \ 제거)
+            None => p
+                .to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .to_string(),
         }
     }
 }
