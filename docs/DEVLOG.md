@@ -8,6 +8,7 @@
 
 ## 2026-07-19
 
+- **Chocolatey `nexa-dir.portable` 0.8.1 게시(사용자 실행)**: 수동 `pack-and-push.ps1` → `choco push` 성공 — **모더레이션 대기**(자동 검사 3종 Pending·신규 패키지 사람 검토 — 승인까지 며칠~2주). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **Chocolatey 포터블 패키지 `nexa-dir.portable`(사용자 요청)**: 신규 ID라 **기존 0.8.1 릴리스를 재사용**(재빌드·새 태그 불필요 — choco가 막는 건 같은 ID+버전 재push뿐). `.portable` 접미사 = choco 관례(`git.install`/`git.portable`), 설치형은 모더레이션 중이라 개명 없이 `nexa-dir` 유지. `Get-ChocolateyWebFile` + **`NexaDir.exe.gui` 마커**(GUI shim). release.yml 2패키지 루프 확장 + **Windows 전용 `pack-and-push.ps1`** 신설(태그 소진 버전용, try/finally 원본 복원). 한계: 제거 시 데이터 소멸(winget portable과 동일). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **winget 포터블 변형 `SosomLab.NexaDir.Portable` 0.8.1(사용자 요청)**: 명명은 **점 구분 변형 세그먼트** 채택(Authoring.md + `calibre.calibre.portable`·`Neovim.Neovim.Nightly` 선례 확인 — 붙여 쓰면 검색에서 형제로 안 묶임). `InstallerType: portable` + `PortableCommandAlias: nexadir`. **주의: winget portable은 제거 시 폴더째 삭제 = 사용자 데이터 소멸**(설치형의 보존 규칙 미적용 — 문서·locale 명시). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **winget 등록 `SosomLab.NexaDir` 0.8.1(사용자 요청)**: 매니페스트 3종(스키마 1.12.0) 작성 → microsoft/winget-pkgs PR. **user·machine 두 스코프**(`/CURRENTUSER`·`/ALLUSERS` — Chocolatey 때의 iss `commandline` 허용 재사용) · `ProductCode = {AppId}_is1` · SHA-256은 Release 자산 직접 다운로드로 대조. 설계 [21 §8](21-distribution.md). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).

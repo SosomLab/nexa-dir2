@@ -1,6 +1,14 @@
 # STATUS — Nexa Dir 2 진행 현황
 
-> **갱신: 2026-07-19 (KST, 4차)** — **릴리스 `0.8.0`**: ① **GitHub Wiki
+> **갱신: 2026-07-19 (KST, 5차)** — **배포 채널 확장 + `0.8.1`**: ①
+> **winget** — `SosomLab.NexaDir`(설치형)·`SosomLab.NexaDir.Portable`
+> 매니페스트 PR 제출(winget-pkgs#404528 외) ② **Chocolatey** —
+> `nexa-dir`(설치형·CI 자동)·`nexa-dir.portable`(수동 pack-and-push)
+> 0.8.1 게시 완료, **모더레이션 대기**(자동 검사 3종 → 사람 검토 —
+> 승인까지 며칠~2주) ③ 릴리스 `0.8.1` = Chocolatey 최초 게시용 코드
+> 무변 승격(자산 NexaDir-0.8.1-*).
+>
+> **직전(07-19 4차)** — **릴리스 `0.8.0`**: ① **GitHub Wiki
 > 신설**(소개·기능 매뉴얼·개발자 매뉴얼 19페이지 — 소스 = docs/wiki) ②
 > **다크모드 툴바 아이콘**(잉크 = 테마 본문색·`-dark` 전용 에셋 11종·svg
 > 파서 루트 색 상속·4배 슈퍼샘플) ③ **exe 리소스 아이콘/버전정보**
