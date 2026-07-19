@@ -7,6 +7,9 @@
 //! - 선택: 클릭 = 단일 · Shift = **같은 레벨·같은 부모 형제 범위만**
 //!   (혼합 차단). 통지 [`NXOT_SELCHANGE`].
 //! - 체크: 박스 클릭 = 토글 → [`NXOT_TOGGLE`](행 = [`take_toggled`]).
+//! - **펼침/닫음(07-19)**: 그룹 행 셰브론(E76C 닫힘/E70D 펼침 — 파일뷰
+//!   규약) 클릭 = 접기 토글, 기본 = 전부 펼침. 접힘 상태는 라벨 기준
+//!   유지([`set_rows`] 재구성에도 보존)·접힌 그룹 자식 선택은 해제.
 //! - **드래그 이동(07-19)**: 선택 블록(그룹 = 자식 포함)을 끌어 **같은 부모
 //!   안에서만** 이동 — 스냅 시 라이브 미리보기·커서 추종 **고스트 박스**
 //!   (컬럼 이동 규약 차용)·가장자리 **자동 스크롤** · ESC = [`cancel_drag`].
@@ -41,6 +44,8 @@ pub const NXOT_DRAGMOVE: u32 = 3;
 
 /// 행 높이(px @96dpi).
 const ROW_H: i32 = 22;
+/// 그룹 셰브론 마커 존 폭(파일뷰 규약 — 상시 예약).
+const MARK_W: i32 = 16;
 /// 레벨당 들여쓰기(px).
 const INDENT: i32 = 18;
 /// 자동 스크롤 가장자리 폭·타이머(드래그 중 — 07-19).
@@ -78,12 +83,57 @@ struct OtState {
     scroll_y: i32,
     /// 스크롤 썸 드래그(시작 y·시작 scroll_y).
     sb_drag: Option<(i32, i32)>,
+    /// 접힌 그룹(라벨 기준 — 이동/재구성에도 유지, 07-19).
+    collapsed: std::collections::HashSet<String>,
     font: HFONT,
+    /// 셰브론 마커 폰트(Segoe MDL2 Assets — 소유·Drop 해제).
+    marker_font: HFONT,
     style: Style,
+}
+
+impl Drop for OtState {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Graphics::Gdi::DeleteObject(self.marker_font.into());
+        }
+    }
+}
+
+/// 셰브론 마커 폰트(Segoe MDL2 Assets 9px — 파일뷰/설정 트리 규약).
+fn make_marker_font() -> HFONT {
+    use windows::Win32::Graphics::Gdi::{
+        CreateFontW, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_QUALITY, FF_DONTCARE,
+        FW_NORMAL, OUT_DEFAULT_PRECIS,
+    };
+    unsafe {
+        CreateFontW(
+            -12,
+            0,
+            0,
+            0,
+            FW_NORMAL.0 as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
+            FF_DONTCARE.0 as u32,
+            windows::core::w!("Segoe MDL2 Assets"),
+        )
+    }
 }
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("Nexa.NxOrderTree");
+
+/// 하위 체크 비활성 여부(07-19 사용자): 부모 그룹 체크가 해제면 자식
+/// 체크는 **값 유지 + 비활성**(흐림·클릭/Space 무시).
+fn check_disabled(rows: &[Row], i: usize) -> bool {
+    let p = parent_of(rows, i);
+    p >= 0 && rows[p as usize].2 == Some(false)
+}
 
 /// 부모 index(-1 = 최상위) — 순서 유도: 레벨 1 행은 직전 레벨 0 행 소속.
 fn parent_of(rows: &[Row], i: usize) -> i32 {
@@ -98,8 +148,28 @@ fn parent_of(rows: &[Row], i: usize) -> i32 {
 }
 
 impl OtState {
+    /// 표시 행 목록(절대 index) — 접힌 그룹의 자식 제외(07-19).
+    fn visible(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.rows.len());
+        let mut hide = false;
+        for (i, (label, level, _)) in self.rows.iter().enumerate() {
+            if *level == 0 {
+                hide = self.collapsed.contains(label);
+                out.push(i);
+            } else if !hide {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    /// 절대 index → 표시 위치(접힘 시 None).
+    fn vis_pos(&self, row: usize) -> Option<usize> {
+        self.visible().iter().position(|&r| r == row)
+    }
+
     fn content_h(&self) -> i32 {
-        self.rows.len() as i32 * ROW_H + 2
+        self.visible().len() as i32 * ROW_H + 2
     }
 
     fn clamp_scroll(&mut self, client_h: i32) {
@@ -112,8 +182,22 @@ impl OtState {
         if yy < 0 {
             return None;
         }
-        let i = (yy / ROW_H) as usize;
-        (i < self.rows.len()).then_some(i)
+        let d = (yy / ROW_H) as usize;
+        self.visible().get(d).copied()
+    }
+
+    /// 접기 토글(그룹 라벨 기준) — 접힌 자식 선택은 해제.
+    fn toggle_collapse(&mut self, row: usize) {
+        let label = self.rows[row].0.clone();
+        if !self.collapsed.remove(&label) {
+            self.collapsed.insert(label);
+            // 접힌 그룹의 자식이 선택에 있으면 해제
+            let vis = self.visible();
+            self.sel.retain(|s| vis.contains(s));
+            if self.anchor.is_some_and(|a| !vis.contains(&a)) {
+                self.anchor = self.sel.first().copied();
+            }
+        }
     }
 
     /// 블록 범위: 선택 형제 + (레벨 0이면) 마지막 그룹의 자식들 포함.
@@ -248,7 +332,9 @@ pub unsafe fn create(
                 drag_delta: 0,
                 scroll_y: 0,
                 sb_drag: None,
+                collapsed: std::collections::HashSet::new(), // 기본 = 전부 펼침
                 font,
+                marker_font: make_marker_font(),
                 style,
             }),
         );
@@ -280,10 +366,11 @@ pub unsafe fn selection(hwnd: HWND) -> Vec<usize> {
 
 /// 행 가시 스크롤 보정(선택/키 이동 공용).
 unsafe fn ensure_visible(hwnd: HWND, st: &mut OtState, row: usize) {
+    let Some(d) = st.vis_pos(row) else { return };
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
     let ch = rc.bottom - rc.top;
-    let top = 1 + row as i32 * ROW_H - st.scroll_y;
+    let top = 1 + d as i32 * ROW_H - st.scroll_y;
     if top < 0 {
         st.scroll_y += top;
     } else if top + ROW_H > ch {
@@ -314,21 +401,26 @@ pub unsafe fn key_move(hwnd: HWND, up: bool) {
     if st.rows.is_empty() {
         return;
     }
+    let vis = st.visible();
+    if vis.is_empty() {
+        return;
+    }
     let cur = st.anchor.or_else(|| st.sel.first().copied());
-    let next = match cur {
+    let next = match cur.and_then(|c| st.vis_pos(c)) {
         None => {
             if up {
-                st.rows.len() - 1
+                *vis.last().unwrap()
             } else {
-                0
+                vis[0]
             }
         }
-        Some(c) => {
-            if up {
-                c.saturating_sub(1)
+        Some(d) => {
+            let nd = if up {
+                d.saturating_sub(1)
             } else {
-                (c + 1).min(st.rows.len() - 1)
-            }
+                (d + 1).min(vis.len() - 1)
+            };
+            vis[nd]
         }
     };
     if st.sel == vec![next] {
@@ -390,6 +482,9 @@ pub unsafe fn key_toggle(hwnd: HWND) {
         return;
     }
     let i = st.sel[0];
+    if check_disabled(&st.rows, i) {
+        return; // 부모 그룹 해제 — 비활성(07-19)
+    }
     if let Some(on) = st.rows[i].2 {
         st.rows[i].2 = Some(!on);
         st.toggled = Some(i);
@@ -523,10 +618,21 @@ unsafe fn on_lbutton_down(hwnd: HWND, lp: LPARAM) {
         return;
     }
     let Some(i) = st.row_at(y) else { return };
-    // 체크 존 클릭 = 표시 토글(07-19)
+    // 그룹 셰브론 존 클릭 = 접기 토글(07-19 — 파일뷰 규약)
+    if st.rows[i].1 == 0 && x < 2 + MARK_W {
+        st.toggle_collapse(i);
+        st.clamp_scroll(ch);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+        super::base::notify(hwnd, NXOT_SELCHANGE);
+        return;
+    }
+    // 체크 존 클릭 = 표시 토글(07-19 — 부모 그룹 해제 시 비활성)
     if let Some(on) = st.rows[i].2 {
-        let bx = 2 + 8 + st.rows[i].1 as i32 * INDENT;
+        let bx = 2 + MARK_W + st.rows[i].1 as i32 * INDENT;
         if x >= bx - 2 && x < bx + 16 {
+            if check_disabled(&st.rows, i) {
+                return; // 비활성 — 클릭 무시
+            }
             st.rows[i].2 = Some(!on);
             st.toggled = Some(i);
             let _ = InvalidateRect(Some(hwnd), None, false);
@@ -658,8 +764,9 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
     frame(dc, &rc, st.style.border);
     let old = SelectObject(dc, st.font.into());
     SetBkMode(dc, TRANSPARENT);
-    for (i, (label, level, check)) in st.rows.iter().enumerate() {
-        let top = 1 + i as i32 * ROW_H - st.scroll_y;
+    for (d, &i) in st.visible().iter().enumerate() {
+        let (label, level, check) = &st.rows[i];
+        let top = 1 + d as i32 * ROW_H - st.scroll_y;
         if top + ROW_H < 0 {
             continue;
         }
@@ -684,7 +791,25 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
                 st.style.text_dim
             },
         );
-        let mut tx = row.left + 8 + *level as i32 * INDENT;
+        // 마커 존(상시 예약 — 파일뷰 정렬 규약): 그룹 = 셰브론
+        if *level == 0 {
+            let closed = st.collapsed.contains(label);
+            let mold = SelectObject(dc, st.marker_font.into());
+            let mut m16: Vec<u16> = if closed { "\u{E76C}" } else { "\u{E70D}" }
+                .encode_utf16()
+                .collect();
+            let mut mrc = RECT {
+                left: row.left + 4,
+                top: row.top,
+                right: row.left + 4 + MARK_W,
+                bottom: row.bottom,
+            };
+            SetTextColor(dc, st.style.text_dim);
+            DrawTextW(dc, &mut m16, &mut mrc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            SelectObject(dc, mold);
+        }
+        let mut tx = row.left + 2 + MARK_W + *level as i32 * INDENT;
+        let dis = check_disabled(&st.rows, i);
         if let Some(on) = check {
             let bs = 12;
             let by = top + (ROW_H - bs) / 2;
@@ -694,7 +819,12 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
                 right: tx + bs,
                 bottom: by + bs,
             };
-            frame(dc, &brc, st.style.border);
+            // 부모 그룹 해제 = 자식 체크 비활성(값 유지·흐림 — 07-19)
+            frame(
+                dc,
+                &brc,
+                if dis { st.style.text_dim } else { st.style.border },
+            );
             if *on {
                 let irc = RECT {
                     left: tx + 3,
@@ -702,9 +832,16 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
                     right: tx + bs - 3,
                     bottom: by + bs - 3,
                 };
-                fill(dc, &irc, st.style.accent);
+                fill(
+                    dc,
+                    &irc,
+                    if dis { st.style.text_dim } else { st.style.accent },
+                );
             }
             tx += bs + 6;
+        }
+        if dis {
+            SetTextColor(dc, st.style.text_dim); // 라벨도 흐림
         }
         let mut w16: Vec<u16> = label.encode_utf16().collect();
         if w16.is_empty() {
