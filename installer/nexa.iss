@@ -28,7 +28,9 @@ DefaultDirName={autopf}\Nexa Dir
 DefaultGroupName=Nexa Dir
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; commandline = Chocolatey 패키지가 /ALLUSERS로 머신 전역 설치를 강제하기 위해 필요
+; (choco는 관리자로 돌지만 lowest 기본값은 사용자별 설치로 판정된다 — packaging/chocolatey).
+PrivilegesRequiredOverridesAllowed=commandline dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=out

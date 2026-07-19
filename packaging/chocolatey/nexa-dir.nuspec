@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Nexa Dir — Chocolatey 패키지(3번째 배포 채널, docs/21-distribution.md §7).
+  설계: nupkg는 바이너리를 동봉하지 않고 GitHub Release의 설치형 exe를 내려받아 설치한다
+        (PolyForm NC = 비-FOSS → 커뮤니티 저장소 재배포 규정상 공식 URL 다운로드가 정석).
+  버전/체크섬은 release.yml이 태그 빌드 시점에 주입한다 — 수동 편집 금지.
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>nexa-dir</id>
+    <version>0.0.0</version>
+    <packageSourceUrl>https://github.com/SosomLab/nexa-dir2/tree/main/packaging/chocolatey</packageSourceUrl>
+    <owners>SosomLab</owners>
+
+    <title>Nexa Dir</title>
+    <authors>SosomLab</authors>
+    <projectUrl>https://sosomlab.com/apps/nexa-dir/</projectUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/SosomLab/nexa-dir2@0.8.0/crates/nexa-app/assets/nexa-dir-1024.png</iconUrl>
+    <copyright>Copyright (c) 2026 SosomLab</copyright>
+    <licenseUrl>https://github.com/SosomLab/nexa-dir2/blob/main/LICENSE.md</licenseUrl>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/SosomLab/nexa-dir2</projectSourceUrl>
+    <docsUrl>https://github.com/SosomLab/nexa-dir2/tree/main/docs</docsUrl>
+    <bugTrackerUrl>https://github.com/SosomLab/nexa-dir2/issues</bugTrackerUrl>
+    <tags>nexa-dir file-manager explorer windows rust portable admin</tags>
+    <summary>Lightweight, keyboard-first file explorer for Windows — a single native exe.</summary>
+    <description><![CDATA[
+**Nexa Dir** is a lightweight file explorer for Windows, built as a single native
+executable in pure Rust on the Win32 API — no managed runtime, no UI framework,
+no external DLLs beyond the OS inbox set.
+
+### Highlights
+
+* **Single portable exe** — under 10 MB, idle memory footprint under 30 MB.
+* **Dense, dark, keyboard-first UI** — designed for fast navigation over the mouse.
+* **Virtualized tree/list** — smooth over 100k+ entries.
+* **Bulk rename** with reusable presets, built-in preview, dual-language UI (English/Korean).
+
+### Notes
+
+* This package installs the machine-wide (all users) build via the official
+  installer downloaded from the project's GitHub Releases.
+* Settings and session data live next to the exe under `data\`, falling back to
+  `%LOCALAPPDATA%\NexaDir2\data` when the install directory is not writable.
+  **Uninstalling keeps your data** so a reinstall restores your settings.
+
+### License
+
+Nexa Dir is released under the **PolyForm Noncommercial License 1.0.0** — free for
+personal and other noncommercial use. **Commercial use requires a separate paid
+license**: kiros33@sosomlab.com / https://sosomlab.com
+
+Product home: https://sosomlab.com/apps/nexa-dir/
+]]></description>
+    <releaseNotes>https://github.com/SosomLab/nexa-dir2/releases</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
