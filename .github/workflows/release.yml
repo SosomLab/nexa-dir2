@@ -52,20 +52,27 @@ jobs:
           Get-Item installer\out\NexaDir-Setup-*.exe | ForEach-Object {
             Write-Output "설치형: $($_.Name) = $([math]::Round($_.Length / 1MB, 2)) MB"
           }
-      - name: Chocolatey nupkg 팩 — 버전·체크섬 주입 (3채널, docs/21 §7)
+      - name: Chocolatey nupkg 팩 — 버전·체크섬 주입 (2패키지, docs/21 §7)
         if: github.ref_type == 'tag'
         shell: pwsh
         run: |
           $ver = "${{ github.ref_name }}".TrimStart("v")
-          $setup = Get-Item installer\out\NexaDir-Setup-$ver.exe
-          $sha = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower()
-          Write-Output "설치형 SHA-256 = $sha"
-          # nupkg는 바이너리 미동봉 — 설치 시 이 Release 자산을 내려받는다.
-          $ps1 = "packaging\chocolatey\tools\chocolateyinstall.ps1"
-          (Get-Content $ps1 -Raw).Replace("{{VERSION}}", $ver).Replace("{{CHECKSUM64}}", $sha) |
-            Set-Content $ps1 -NoNewline
-          choco pack packaging\chocolatey\nexa-dir.nuspec --version $ver --outputdirectory packaging\chocolatey\out
-          if ($LASTEXITCODE -ne 0) { throw "choco pack 실패: $LASTEXITCODE" }
+          # nupkg는 바이너리 미동봉 — 설치 시 각자의 Release 자산을 내려받는다.
+          # nexa-dir = 설치형 exe · nexa-dir.portable = 포터블 단일 exe.
+          $pkgs = @(
+            @{ Id = "nexa-dir";          Asset = "installer\out\NexaDir-Setup-$ver.exe" }
+            @{ Id = "nexa-dir.portable"; Asset = "NexaDir-$ver-win-x64.exe" }
+          )
+          foreach ($p in $pkgs) {
+            $sha = (Get-FileHash -Algorithm SHA256 (Get-Item $p.Asset)).Hash.ToLower()
+            Write-Output "$($p.Id): $($p.Asset) SHA-256 = $sha"
+            $ps1 = "packaging\chocolatey\$($p.Id)\tools\chocolateyinstall.ps1"
+            (Get-Content $ps1 -Raw).Replace("{{VERSION}}", $ver).Replace("{{CHECKSUM64}}", $sha) |
+              Set-Content $ps1 -NoNewline
+            choco pack "packaging\chocolatey\$($p.Id)\$($p.Id).nuspec" --version $ver `
+              --outputdirectory packaging\chocolatey\out
+            if ($LASTEXITCODE -ne 0) { throw "choco pack 실패($($p.Id)): $LASTEXITCODE" }
+          }
           Get-Item packaging\chocolatey\out\*.nupkg | ForEach-Object { Write-Output "nupkg: $($_.Name)" }
 
       - name: Chocolatey 커뮤니티 저장소 push (CHOCO_API_KEY 시크릿 있을 때만)
@@ -73,9 +80,11 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ github.ref_name }}".TrimStart("v")
-          choco push packaging\chocolatey\out\nexa-dir.$ver.nupkg `
-            --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
-          if ($LASTEXITCODE -ne 0) { throw "choco push 실패: $LASTEXITCODE" }
+          foreach ($id in @("nexa-dir", "nexa-dir.portable")) {
+            choco push "packaging\chocolatey\out\$id.$ver.nupkg" `
+              --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+            if ($LASTEXITCODE -ne 0) { throw "choco push 실패($id): $LASTEXITCODE" }
+          }
 
       - uses: actions/upload-artifact@v4
         with:

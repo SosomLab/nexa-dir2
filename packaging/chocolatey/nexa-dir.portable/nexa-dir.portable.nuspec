@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Nexa Dir 포터블 — Chocolatey 패키지(docs/21-distribution.md §7).
+  ID = nexa-dir.portable (Chocolatey의 .install/.portable 접미사 관례).
+  설치형 래퍼 nexa-dir과 달리 설치기를 거치지 않고 포터블 단일 exe를
+  패키지 tools\에 내려받아 shim으로 노출한다.
+  버전/체크섬은 release.yml이 주입한다 — 수동 편집 금지.
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>nexa-dir.portable</id>
+    <version>0.0.0</version>
+    <packageSourceUrl>https://github.com/SosomLab/nexa-dir2/tree/main/packaging/chocolatey</packageSourceUrl>
+    <owners>SosomLab</owners>
+
+    <title>Nexa Dir (Portable)</title>
+    <authors>SosomLab</authors>
+    <projectUrl>https://sosomlab.com/apps/nexa-dir/</projectUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/SosomLab/nexa-dir2@0.8.0/crates/nexa-app/assets/nexa-dir-1024.png</iconUrl>
+    <copyright>Copyright (c) 2026 SosomLab</copyright>
+    <licenseUrl>https://github.com/SosomLab/nexa-dir2/blob/main/LICENSE.md</licenseUrl>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/SosomLab/nexa-dir2</projectSourceUrl>
+    <docsUrl>https://github.com/SosomLab/nexa-dir2/tree/main/docs</docsUrl>
+    <bugTrackerUrl>https://github.com/SosomLab/nexa-dir2/issues</bugTrackerUrl>
+    <tags>nexa-dir file-manager explorer windows rust portable admin</tags>
+    <summary>Lightweight, keyboard-first file explorer for Windows — portable single exe.</summary>
+    <description><![CDATA[
+**Nexa Dir** is a lightweight file explorer for Windows, built as a single native
+executable in pure Rust on the Win32 API — no managed runtime, no UI framework,
+no external DLLs beyond the OS inbox set.
+
+This is the **portable** edition: one executable, no installer, no Start Menu
+entry. For the installed edition, use the `nexa-dir` package instead.
+
+### Highlights
+
+* **Single portable exe** — under 10 MB, idle memory footprint under 30 MB.
+* **Dense, dark, keyboard-first UI** — designed for fast navigation over the mouse.
+* **Virtualized tree/list** — smooth over 100k+ entries.
+* **Bulk rename** with reusable presets, built-in preview, dual-language UI (English/Korean).
+
+### Notes
+
+* The executable is placed in the package's `tools` folder and exposed on PATH
+  through a Chocolatey shim, so you can launch it by running `NexaDir`.
+* The portable build keeps its settings and session in a `data\` folder next to
+  the executable. Because that folder lives inside the package directory,
+  **`choco uninstall` removes your settings along with the package.** Use the
+  `nexa-dir` package if you want settings preserved across uninstalls.
+
+### License
+
+Nexa Dir is released under the **PolyForm Noncommercial License 1.0.0** — free for
+personal and other noncommercial use. **Commercial use requires a separate paid
+license**: kiros33@sosomlab.com / https://sosomlab.com
+
+Product home: https://sosomlab.com/apps/nexa-dir/
+]]></description>
+    <releaseNotes>https://github.com/SosomLab/nexa-dir2/releases</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

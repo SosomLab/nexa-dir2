@@ -4,6 +4,8 @@
 
 # 로컬 산출물
 /dist/
+/installer/out/
+/packaging/chocolatey/out/
 
 # OS
 .DS_Store

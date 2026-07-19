@@ -1,0 +1,45 @@
+VERIFICATION
+------------
+Verification is intended to assist the Chocolatey moderators and community in
+verifying that this package's contents are trustworthy.
+
+This package embeds no binaries. At install time it downloads the official
+portable executable published by the software vendor (SosomLab, who also
+maintains this package) on the project's GitHub Releases page:
+
+  https://github.com/SosomLab/nexa-dir2/releases
+
+The download URL and its SHA-256 checksum are written into
+tools\chocolateyinstall.ps1 by the project's release pipeline
+(.github/workflows/release.yml), which builds the executable and computes the
+checksum in the same GitHub Actions run that publishes the release asset.
+
+To verify the download yourself:
+
+  1. Read $url64 and the checksum from tools\chocolateyinstall.ps1.
+  2. Download that URL from the GitHub Releases page above.
+  3. Compare the checksums:
+
+       Get-FileHash -Algorithm SHA256 .\NexaDir-<version>-win-x64.exe
+
+     or, with the Chocolatey checksum utility:
+
+       checksum -t sha256 -f .\NexaDir-<version>-win-x64.exe
+
+The file's SHA-256 digest is also shown by the GitHub Releases API for each
+asset, independently of this package.
+
+The empty NexaDir.exe.gui file is a Chocolatey shim marker. It tells shimgen
+that the executable is a GUI application so the shim does not wait for the
+process to exit.
+
+LICENSE
+-------
+Nexa Dir is licensed under the PolyForm Noncommercial License 1.0.0 — free for
+noncommercial use; commercial use requires a separate paid license.
+
+  https://github.com/SosomLab/nexa-dir2/blob/main/LICENSE.md
+  https://polyformproject.org/licenses/noncommercial/1.0.0
+
+The vendor (SosomLab) is the maintainer of this Chocolatey package and permits
+its distribution through the Chocolatey Community Repository.
