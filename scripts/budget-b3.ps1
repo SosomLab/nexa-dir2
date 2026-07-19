@@ -14,7 +14,9 @@ $whitelist = @(
   "dwmapi.dll",                    # M2-4 다크 타이틀바(DwmSetWindowAttribute)
   "advapi32.dll",                  # M2-4 테마 감지(RegGetValueW)
   "imm32.dll",                     # M2-7 IME 조합 창 위치(ImmSetCompositionWindow)
-  "uiautomationcore.dll"           # M2-7 UIA 프로바이더(UiaReturnRawElementProvider)
+  "uiautomationcore.dll",          # M2-7 UIA 프로바이더(UiaReturnRawElementProvider)
+  "gdiplus.dll",                   # 07-17 Nx 컨트롤 AA 백엔드·07-18 SVG 래스터(gdipctx — GDI+ 유일 접점)
+  "shlwapi.dll"                    # 07-17 SHCreateMemStream(gdipctx 이미지 바이트 스트림)
 )
 
 if (-not (Test-Path $Exe)) { throw "exe 없음: $Exe — cargo build --release 먼저" }
