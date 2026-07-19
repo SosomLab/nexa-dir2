@@ -97,7 +97,7 @@ pub struct Settings {
     pub typeahead_backspace: bool,
     /// 보기 모드(사용자 요청 07-16): "tree"(계층 — 기본)|"flat"(일반 폴더)|"tiles"(타일).
     pub view_mode: String,
-    /// 컬럼 넓이 동기화(사용자 확정 07-18) — on = 좌/우 패널 폭 실시간 동기,
+    /// 컬럼 너비 동기화(사용자 확정 07-18) — on = 좌/우 패널 폭 실시간 동기,
     /// off = 패널별 독립(탭은 패널 폭 상속).
     pub col_width_sync: bool,
     /// 컬럼 auto-fit(경계 더블클릭) 최대 폭(px @96dpi — 07-19 사용자,

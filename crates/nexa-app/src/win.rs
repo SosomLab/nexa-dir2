@@ -156,7 +156,7 @@ const CMD_BULK_RENAME: u32 = 61;
 /// ctl 갤러리(GroupCard 검증 — **임시** 도구 모음 버튼, 사용자 요청 07-17.
 /// 카드 재편(X-23) 완료 시 버튼 제거).
 const CMD_CTLDEMO: u32 = 62;
-/// 컬럼 넓이 동기화 토글(사용자 확정 07-18 — 보기 메뉴 패널 모드 4종 하단).
+/// 컬럼 너비 동기화 토글(사용자 확정 07-18 — 보기 메뉴 패널 모드 4종 하단).
 const CMD_COLW_SYNC: u32 = 63;
 /// 패널 듀얼↔싱글 토글(07-19 — 툴바 단일 버튼: 켜짐 = 듀얼·accent 아이콘).
 const CMD_PANEL_TOGGLE: u32 = 64;
@@ -276,7 +276,7 @@ fn build_menus(
             .checked(panel_mode == "single"),
         MenuItem::new(CMD_INFO_DUAL, tr("menu.view.infoDual"), "").checked(!info_single_eff),
         MenuItem::new(CMD_INFO_SINGLE, tr("menu.view.infoSingle"), "").checked(info_single_eff),
-        // 컬럼 넓이 동기화(사용자 확정 07-18 — 모드 4종 하단·기본 on·영속)
+        // 컬럼 너비 동기화(사용자 확정 07-18 — 모드 4종 하단·기본 on·영속)
         MenuItem::new(CMD_COLW_SYNC, tr("menu.view.colWidthSync"), "").checked(col_width_sync),
         MenuItem::separator(),
         MenuItem::new(CMD_TOGGLE_HIDDEN, tr("menu.view.hidden"), "Ctrl+H").checked(show_hidden),
@@ -371,7 +371,7 @@ fn build_toolbar(
                     tr("menu.view.infoSingle")
                 })
                 .toggled(info_dual)
-                // 하단 패널 꺼짐 = 정보 모드 설정 무의미 → 비활성(사용자 07-19)
+                // 하단 도크 꺼짐 = 정보 패널 설정 무의미 → 비활성(사용자 07-19)
                 .enable(panel_mode == "dual" && dock),
             ("panel", "colsync") => ToolButton::new(CMD_COLW_SYNC, "⇔")
                 .with_icon("emb:colsync", "")
@@ -518,7 +518,7 @@ struct State {
     list_folder_bold: bool,
     header_bold: bool,
     header_italic: bool,
-    /// 컬럼 넓이 동기화(07-18) — on = 좌/우 패널 실시간 동기(영속).
+    /// 컬럼 너비 동기화(07-18) — on = 좌/우 패널 실시간 동기(영속).
     col_width_sync: bool,
     /// 세션 복원 컬럼 폭(07-18) — DPI set_metrics(기본 폭 리셋) **이후** 적용
     /// 하려고 보류(WM_NCCREATE에서 소비).
@@ -2829,7 +2829,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let _ = InvalidateRect(Some(hwnd), None, false);
         }
         CMD_COLW_SYNC => {
-            // 컬럼 넓이 동기화 토글(사용자 확정 07-18 — 영속·on 전환 시 활성
+            // 컬럼 너비 동기화 토글(사용자 확정 07-18 — 영속·on 전환 시 활성
             // 패널 폭으로 반대 패널 즉시 정렬)
             st.col_width_sync = !st.col_width_sync;
             st.menubar
