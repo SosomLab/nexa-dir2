@@ -261,25 +261,27 @@ pub unsafe fn show(owner: HWND, spec: &EditorSpec, value: &str, field: u32, font
     };
     let style = Style::default();
     let tree = ctl::ordertree::create(dlg, PAD, PAD, tree_w, tree_h, ID_TREE, font, style);
-    let _ = ctl::iconbutton::create(
+    // ▲▼ = 사용자 제공 SVG 이미지 16px(07-19 — assets/ui, 원형 벡터 폐지·
+    // 잉크 = 기본 텍스트색)
+    let _ = ctl::iconbutton::create_svg(
         dlg,
         PAD + tree_w + 10,
         PAD + 2,
-        22,
+        16,
         ID_UP,
         font,
-        ctl::iconbutton::Icon::Up,
+        include_str!("../assets/ui/arrow-up.svg"),
         true,
         style,
     );
-    let _ = ctl::iconbutton::create(
+    let _ = ctl::iconbutton::create_svg(
         dlg,
         PAD + tree_w + 10,
-        PAD + 30,
-        22,
+        PAD + 26,
+        16,
         ID_DOWN,
         font,
-        ctl::iconbutton::Icon::Down,
+        include_str!("../assets/ui/arrow-down.svg"),
         true,
         style,
     );

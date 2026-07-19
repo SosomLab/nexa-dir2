@@ -87,6 +87,26 @@ pub(crate) unsafe fn image_size(img: *mut GpImage) -> (i32, i32) {
 /// # Safety
 /// GDI+ 초기화 전제(내부에서 보장). 실패 시 `None`(오류 격리 — 아이콘 공백).
 pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<HICON> {
+    let bmp = render_svg_bitmap(doc, px, argb)?;
+    let mut h = HICON::default();
+    let ok = GdipCreateHICONFromBitmap(bmp, &mut h).0 == 0 && !h.is_invalid();
+    let _ = GdipDisposeImage(bmp as *mut GpImage);
+    ok.then_some(h)
+}
+
+/// SVG 문서 → GDI+ 이미지(07-19 — 이미지 버튼 등 GpImage 소비자용).
+/// 널 = 실패. 반환 이미지는 [`dispose_image`]로 해제.
+///
+/// # Safety
+/// GDI+ 초기화 전제(내부 보장).
+pub(crate) unsafe fn svg_to_image(doc: &crate::svg::Doc, px: i32, argb: u32) -> *mut GpImage {
+    render_svg_bitmap(doc, px, argb)
+        .map(|b| b as *mut GpImage)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// SVG 렌더 공통부 — 오프스크린 32bpp ARGB [`GpBitmap`].
+unsafe fn render_svg_bitmap(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<*mut GpBitmap> {
     use crate::svg::{Op, Seg};
     use windows::Win32::Graphics::GdiPlus::{
         GdipAddPathBezier, GdipAddPathEllipse, GdipAddPathLine, GdipAddPathString,
@@ -294,12 +314,11 @@ pub(crate) unsafe fn svg_to_hicon(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
             }
         }
         let _ = GdipDeleteGraphics(g);
-        let mut h = HICON::default();
-        if GdipCreateHICONFromBitmap(bmp, &mut h).0 == 0 && !h.is_invalid() {
-            icon = Some(h);
-        }
+        icon = Some(bmp);
     }
-    let _ = GdipDisposeImage(bmp as *mut GpImage);
+    if icon.is_none() {
+        let _ = GdipDisposeImage(bmp as *mut GpImage);
+    }
     icon
 }
 

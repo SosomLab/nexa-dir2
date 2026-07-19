@@ -60,9 +60,12 @@ pub enum Icon {
     Minus,
     /// ? (도움말 — 글자는 GDI 텍스트: 텍스트 = GDI 규약, 07-17)
     Help,
-    /// ∧ (위로 — 순서 이동, 07-19 도구모음 순서 편집)
+    /// ∧ (위로 — 07-19 순서 편집. 현재 사용처는 SVG 이미지([`create_svg`])로
+    /// 대체 — 벡터 변형은 라이브러리 옵션으로 유지)
+    #[allow(dead_code)]
     Up,
     /// ∨ (아래로)
+    #[allow(dead_code)]
     Down,
 }
 
@@ -168,6 +171,40 @@ pub unsafe fn create_image(
         st.img_off = super::gdipctx::decode_png(disabled);
         st.fit = fit;
         let _ = InvalidateRect(Some(hwnd), None, true);
+    }
+    hwnd
+}
+
+/// SVG 이미지 버튼(07-19 — 순서 편집 ▲▼ 등): 컨트롤 크기 2배로 래스터 후
+/// Stretch 표시(AA 다운스케일). 비활성 이미지는 알파 38% 잉크 재렌더.
+/// SVG 파싱 실패 시 벡터 아이콘([`Icon::Plus`]) 폴백.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn create_svg(
+    parent: HWND,
+    x: i32,
+    y: i32,
+    d: i32,
+    id: u32,
+    font: windows::Win32::Graphics::Gdi::HFONT,
+    svg: &str,
+    enabled: bool,
+    style: Style,
+) -> HWND {
+    let hwnd = create(parent, x, y, d, id, font, Icon::Plus, enabled, style);
+    if let Some(doc) = crate::svg::parse(svg) {
+        if let Some(st) = state(hwnd).as_mut() {
+            let px = (d.max(12)) * 2;
+            // 잉크 = 컨트롤 기본 텍스트색(사용자 확정 07-19 "선 색은 기본 색")
+            let c = style.text.0;
+            let ink = 0xFF00_0000
+                | ((c & 0xFF) << 16)
+                | (c & 0xFF00)
+                | ((c >> 16) & 0xFF);
+            st.img_on = super::gdipctx::svg_to_image(&doc, px, ink);
+            st.img_off = super::gdipctx::svg_to_image(&doc, px, (ink & 0x00FF_FFFF) | 0x6100_0000);
+            st.fit = ImageFit::Stretch;
+            let _ = InvalidateRect(Some(hwnd), None, true);
+        }
     }
     hwnd
 }
