@@ -8,6 +8,7 @@
 
 ## 2026-07-19
 
+- **Chocolatey 배포 채널 등록(`feat/chocolatey-packaging` — 사용자 요청)**: `packaging/chocolatey/` 신설(nuspec + install/uninstall/VERIFICATION) — **바이너리 미동봉**, 설치 시 Release의 설치형 exe를 **SHA-256 검증 후 다운로드**(PolyForm NC = 비-FOSS → 공식 URL 정석). 함정 2건 해소: ① choco의 관리자 권한만으로는 `PrivilegesRequired=lowest`가 *사용자별* 설치로 새어 **`/ALLUSERS` 명시 + iss `commandline` 허용** 추가 ② step `if`에서 `secrets` 미인식 → job env 승격. release.yml = 체크섬 주입 → `choco pack` → 시크릿 있을 때만 `choco push`. **잔여: API 키 발급·`CHOCO_API_KEY` 시크릿 등록·첫 패키지 모더레이션 심사**. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **릴리스 `0.8.0`(사용자 요청)**: 0.7.0 이후분 — **GitHub Wiki 신설**(19페이지 + docs/wiki 소스 미러) · **다크모드 툴바 아이콘**(테마 본문색 잉크·`-dark` 전용 에셋 11종·svg 파서 **루트 색 상속** 수정·**4배 슈퍼샘플** — 외곽선 흐림 해소) · **exe 리소스 아이콘/VERSIONINFO**(build.rs+rc.exe, 작업표시줄 고정 빈 아이콘 해소) · **배포명 "Nexa Dir"**(창 제목·installer·NexaDir-* 산출물·버전 동기). 게이트: B2 1.43MB·B3 17종. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **릴리스 `0.7.0`(사용자 요청 — 태그 push → GitHub Release)**: **B3 원장 수리** — 07-17 GDI+ 백엔드·07-18 SVG 파이프라인의 gdiplus.dll·shlwapi.dll(SHCreateMemStream) 화이트리스트 누락으로 **main CI 적색** 발견 → 근거 등재로 해소. 게이트 실측(B2 1.40MB·B3 인박스 17종)·@app 0.7.0. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **하단 도크 기본 표시 승격(main 직커밋 — 사용자 요청)**: 실행 중 설정 대조 — 도구모음 순서·표시는 기본값과 이미 일치, 차이는 dock뿐 → `Settings::default` dock=true(테마/언어/글꼴 등 개인 설정은 제외 — DR-5 다크 기본 유지). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).

@@ -49,6 +49,8 @@ cargo build --release -p nexa-app
    `installer/nexa.iss` 컴파일(`/DAppVersion` 주입) → `NexaDir2-Setup-<버전>.exe`
 5. **GitHub Release 자동 생성**(자동 릴리스 노트) + **포터블·설치형 2종 첨부**
    (설계 상세 = [21-distribution.md](21-distribution.md))
+6. **Chocolatey**(3채널): 설치형 SHA-256 주입 → `choco pack` → `CHOCO_API_KEY`
+   시크릿이 있으면 `choco push`([21 §7](21-distribution.md) — 최초 1회 등록 절차 포함)
 
 ```sh
 # 릴리스 절차(예: 0.6.0) — main green 확인 후
