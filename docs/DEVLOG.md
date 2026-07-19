@@ -8,6 +8,7 @@
 
 ## 2026-07-19
 
+- **winget 포터블 변형 `SosomLab.NexaDir.Portable` 0.8.1(사용자 요청)**: 명명은 **점 구분 변형 세그먼트** 채택(Authoring.md + `calibre.calibre.portable`·`Neovim.Neovim.Nightly` 선례 확인 — 붙여 쓰면 검색에서 형제로 안 묶임). `InstallerType: portable` + `PortableCommandAlias: nexadir`. **주의: winget portable은 제거 시 폴더째 삭제 = 사용자 데이터 소멸**(설치형의 보존 규칙 미적용 — 문서·locale 명시). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **winget 등록 `SosomLab.NexaDir` 0.8.1(사용자 요청)**: 매니페스트 3종(스키마 1.12.0) 작성 → microsoft/winget-pkgs PR. **user·machine 두 스코프**(`/CURRENTUSER`·`/ALLUSERS` — Chocolatey 때의 iss `commandline` 허용 재사용) · `ProductCode = {AppId}_is1` · SHA-256은 Release 자산 직접 다운로드로 대조. 설계 [21 §8](21-distribution.md). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **릴리스 `0.8.1` — Chocolatey 최초 게시(사용자 `CHOCO_API_KEY` 등록 후)**: 0.8.0은 태그 소진으로 재실행 불가 → **코드 변경 없는 버전 승격**으로 파이프라인을 돌려 `choco push`를 최초 발생시킴. 맥 검증 194 green + Windows 타깃 check green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **Chocolatey 배포 채널 등록(`feat/chocolatey-packaging` — 사용자 요청)**: `packaging/chocolatey/` 신설(nuspec + install/uninstall/VERIFICATION) — **바이너리 미동봉**, 설치 시 Release의 설치형 exe를 **SHA-256 검증 후 다운로드**(PolyForm NC = 비-FOSS → 공식 URL 정석). 함정 2건 해소: ① choco의 관리자 권한만으로는 `PrivilegesRequired=lowest`가 *사용자별* 설치로 새어 **`/ALLUSERS` 명시 + iss `commandline` 허용** 추가 ② step `if`에서 `secrets` 미인식 → job env 승격. release.yml = 체크섬 주입 → `choco pack` → 시크릿 있을 때만 `choco push`. **잔여: API 키 발급·`CHOCO_API_KEY` 시크릿 등록·첫 패키지 모더레이션 심사**. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
