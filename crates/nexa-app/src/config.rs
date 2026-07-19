@@ -699,6 +699,7 @@ pub fn default_order(defs: OrderDefs) -> String {
             .map(|(b, items)| {
                 (
                     b.to_string(),
+                    true,
                     items.iter().map(|i| (i.to_string(), true)).collect(),
                 )
             })
@@ -707,18 +708,16 @@ pub fn default_order(defs: OrderDefs) -> String {
     )
 }
 
-/// 기본 순서 문자열(= [`TOOLBAR_BLOCKS`] 정의 순).
+/// 기본 순서 문자열(= [`TOOLBAR_BLOCKS`] 정의 순·전부 표시).
 pub fn default_toolbar_order() -> String {
-    serialize_toolbar_order(
-        &TOOLBAR_BLOCKS
-            .iter()
-            .map(|(b, items)| (b.to_string(), items.iter().map(|i| i.to_string()).collect()))
-            .collect::<Vec<_>>(),
-    )
+    default_order(TOOLBAR_BLOCKS)
 }
 
 /// 순서 정의 타입(SSOT) — `(블록 key, 자식 key 목록)`, 빈 자식 = 단일 블록.
 pub type OrderDefs = &'static [(&'static str, &'static [&'static str])];
+
+/// 파싱된 순서 블록 — `(블록 key, 블록 표시, 자식[(key, 표시)])`(07-19).
+pub type OrderBlock = (String, bool, Vec<(String, bool)>);
 
 /// 파일 목록 컬럼 정의(07-19 — key 순서 = 기본 표시 순서. name = 상시 표시).
 pub const COLUMN_BLOCKS: OrderDefs = &[("cols", &["name", "ext", "size", "modified", "kind"])];
@@ -729,14 +728,23 @@ pub const CTXMENU_BLOCKS: OrderDefs = &[
     ("bg", &["paste", "undo", "redo"]),
 ];
 
-/// 제네릭 순서 직렬화 — `블록[자식:vis,…]|블록|…`(단일 블록 = 대괄호 생략).
-/// `with_vis` = 표시 여부 포함(`:0`/`:1` — 컬럼·컨텍스트 메뉴).
-pub fn serialize_order_with(order: &[(String, Vec<(String, bool)>)], with_vis: bool) -> String {
+/// 제네릭 순서 직렬화 — `블록:vis[자식:vis,…]|블록:vis|…`(단일 블록 =
+/// 대괄호 생략). `with_vis` = 표시 여부 포함. **블록 vis(07-19)**: 그룹
+/// 숨김 = 통째 비표시(자식 상태는 보존).
+pub fn serialize_order_with(
+    order: &[OrderBlock],
+    with_vis: bool,
+) -> String {
     order
         .iter()
-        .map(|(b, items)| {
-            if items.is_empty() {
+        .map(|(b, bv, items)| {
+            let head = if with_vis {
+                format!("{b}:{}", u8::from(*bv))
+            } else {
                 b.clone()
+            };
+            if items.is_empty() {
+                head
             } else {
                 let inner: Vec<String> = items
                     .iter()
@@ -748,7 +756,7 @@ pub fn serialize_order_with(order: &[(String, Vec<(String, bool)>)], with_vis: b
                         }
                     })
                     .collect();
-                format!("{b}[{}]", inner.join(","))
+                format!("{head}[{}]", inner.join(","))
             }
         })
         .collect::<Vec<_>>()
@@ -757,18 +765,23 @@ pub fn serialize_order_with(order: &[(String, Vec<(String, bool)>)], with_vis: b
 
 /// 제네릭 순서 파싱 + 검증 — 미지 블록/자식·중복은 버리고, **누락분은 기본
 /// 정의 순으로 보충**(전방 호환). `자식:0/1` = 표시 여부(생략 = 표시).
-pub fn parse_order_with(defs: OrderDefs, s: &str) -> Vec<(String, Vec<(String, bool)>)> {
-    let mut out: Vec<(String, Vec<(String, bool)>)> = Vec::new();
+pub fn parse_order_with(defs: OrderDefs, s: &str) -> Vec<OrderBlock> {
+    let mut out: Vec<OrderBlock> = Vec::new();
     for tok in s.split('|') {
         let tok = tok.trim();
-        let (name, inner) = match tok.split_once('[') {
+        let (head, inner) = match tok.split_once('[') {
             Some((n, rest)) => (n.trim(), Some(rest.trim_end_matches(']'))),
             None => (tok, None),
+        };
+        // 블록 vis(07-19): `이름:0` — 생략 = 표시(구형 호환)
+        let (name, bvis) = match head.split_once(':') {
+            Some((n, v)) => (n.trim(), v.trim() != "0"),
+            None => (head, true),
         };
         let Some((_, def_items)) = defs.iter().find(|(b, _)| *b == name) else {
             continue; // 미지 블록
         };
-        if out.iter().any(|(b, _)| b == name) {
+        if out.iter().any(|(b, _, _)| b == name) {
             continue; // 중복 블록
         }
         let mut items: Vec<(String, bool)> = Vec::new();
@@ -789,12 +802,13 @@ pub fn parse_order_with(defs: OrderDefs, s: &str) -> Vec<(String, Vec<(String, b
                 items.push((d.to_string(), true)); // 누락 자식 보충(표시)
             }
         }
-        out.push((name.to_string(), items));
+        out.push((name.to_string(), bvis, items));
     }
     for (b, def_items) in defs {
-        if !out.iter().any(|(n, _)| n == b) {
+        if !out.iter().any(|(n, _, _)| n == b) {
             out.push((
                 b.to_string(),
+                true,
                 def_items.iter().map(|i| (i.to_string(), true)).collect(),
             ));
         }
@@ -802,21 +816,15 @@ pub fn parse_order_with(defs: OrderDefs, s: &str) -> Vec<(String, Vec<(String, b
     out
 }
 
-/// 순서 직렬화(툴바 호환 — vis 없음).
-pub fn serialize_toolbar_order(order: &[(String, Vec<String>)]) -> String {
-    let with_vis: Vec<(String, Vec<(String, bool)>)> = order
-        .iter()
-        .map(|(b, items)| (b.clone(), items.iter().map(|i| (i.clone(), true)).collect()))
-        .collect();
-    serialize_order_with(&with_vis, false)
+/// 순서 직렬화(툴바 — 07-19 표시 여부 공통화로 vis 포함).
+pub fn serialize_toolbar_order(order: &[OrderBlock]) -> String {
+    serialize_order_with(order, true)
 }
 
-/// 순서 파싱(툴바 호환 래퍼 — [`parse_order_with`] + [`TOOLBAR_BLOCKS`]).
-pub fn parse_toolbar_order(s: &str) -> Vec<(String, Vec<String>)> {
+/// 순서 파싱(툴바 래퍼 — [`parse_order_with`] + [`TOOLBAR_BLOCKS`].
+/// 구형 vis 없는 문자열도 호환 — 생략 = 표시).
+pub fn parse_toolbar_order(s: &str) -> Vec<OrderBlock> {
     parse_order_with(TOOLBAR_BLOCKS, s)
-        .into_iter()
-        .map(|(b, items)| (b, items.into_iter().map(|(k, _)| k).collect()))
-        .collect()
 }
 
 #[cfg(test)]
@@ -827,15 +835,15 @@ mod toolbar_order_tests {
     fn roundtrip_and_merge() {
         let d = default_toolbar_order();
         assert_eq!(serialize_toolbar_order(&parse_toolbar_order(&d)), d, "기본 왕복");
-        // 재배열 왕복
-        let s = "view[tiles,tree,flat]|refresh|panel[colsync,toggle,info]|show[dot,hidden]|settings";
-        assert_eq!(serialize_toolbar_order(&parse_toolbar_order(s)), s, "재배열 보존");
-        // 미지 토큰 제거 + 누락 보충
-        let s = "view[tiles,junk]|bogus|panel[toggle]";
+        // 재배열 + 표시 여부 왕복(07-19 — 블록/자식 vis 공통)
+        let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,info:1]|show:1[dot:1,hidden:1]|settings:1";
+        assert_eq!(serialize_toolbar_order(&parse_toolbar_order(s)), s, "재배열/표시 보존");
+        // 구형(vis 생략) 호환 + 미지 토큰 제거 + 누락 보충
+        let s = "view[tiles,junk]|bogus|panel[toggle:0]";
         let norm = serialize_toolbar_order(&parse_toolbar_order(s));
         assert_eq!(
             norm,
-            "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|show[hidden,dot]|settings"
+            "view:1[tiles:1,tree:1,flat:1]|panel:1[toggle:0,info:1,colsync:1]|refresh:1|show:1[hidden:1,dot:1]|settings:1"
         );
     }
 }
@@ -855,8 +863,8 @@ mod tests {
             dock: true,
             col_width_sync: false, // 기본 true — 왕복 검증 위해 반전
             col_autofit_max: 640,
-            toolbar_order: "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]".into(),
-            ctx_menu_order: "row[copyName:1,deletePermanent:0,pasteInto:1]|bg[paste:1,undo:1,redo:1]".into(),
+            toolbar_order: "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]".into(),
+            ctx_menu_order: "row:1[copyName:1,deletePermanent:0,pasteInto:1]|bg:0[paste:1,undo:1,redo:1]".into(),
             dock_ratio: 0.42,
             dock_split: 0.61,
             term_font: "D2Coding, JetBrainsMono Nerd Font".into(),
@@ -925,12 +933,12 @@ mod tests {
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(
             parsed.toolbar_order,
-            "view[tiles,tree,flat]|panel[toggle,info,colsync]|refresh|settings|show[hidden,dot]",
-            "도구모음 순서 왕복(07-19)"
+            "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]",
+            "도구모음 순서/표시 왕복(07-19)"
         );
         assert_eq!(
             parsed.ctx_menu_order,
-            "row[copyName:1,deletePermanent:0,pasteInto:1]|bg[paste:1,undo:1,redo:1]",
+            "row:1[copyName:1,deletePermanent:0,pasteInto:1]|bg:0[paste:1,undo:1,redo:1]",
             "컨텍스트 메뉴 순서/표시 왕복(07-19)"
         );
         assert_eq!(
@@ -1020,7 +1028,7 @@ mod tests {
                     pinned: vec![true, false], // 탭0 고정 — 07-15 왕복
                     modes: vec!["tiles".into(), "tree".into()], // 탭별 보기 모드 — 07-16 왕복
                     col_widths: vec![320, 64, 96], // 패널 컬럼 폭 — 07-18 왕복
-                    col_layout: "cols[ext:1,name:1,size:0,modified:1,kind:1]".into(),
+                    col_layout: "cols:1[ext:1,name:1,size:0,modified:1,kind:1]".into(),
                 },
                 PanelSession {
                     tabs: vec![PathBuf::from("C:\\")],

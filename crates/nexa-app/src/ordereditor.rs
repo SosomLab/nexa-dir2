@@ -47,7 +47,7 @@ pub struct EditorSpec {
 }
 
 struct EdCtx {
-    model: Vec<(String, Vec<(String, bool)>)>,
+    model: Vec<config::OrderBlock>,
     with_vis: bool,
     flat: bool,
     locked: &'static [&'static str],
@@ -61,7 +61,7 @@ impl EdCtx {
     /// 트리 행 구성 — [`row_map`]과 index 정렬 일치.
     fn rows(&self) -> Vec<(String, u8, Option<bool>)> {
         let mut rows = Vec::new();
-        for (block, items) in &self.model {
+        for (block, bvis, items) in &self.model {
             if self.flat {
                 for (k, vis) in items {
                     rows.push((
@@ -71,7 +71,12 @@ impl EdCtx {
                     ));
                 }
             } else {
-                rows.push(((self.label)(block, None), 0, None));
+                // 그룹 체크(07-19 사용자): 해제 = 통째 숨김·자식 상태 보존
+                rows.push((
+                    (self.label)(block, None),
+                    0,
+                    self.with_vis.then_some(*bvis),
+                ));
                 for (k, vis) in items {
                     rows.push((
                         (self.label)(block, Some(k)),
@@ -87,7 +92,7 @@ impl EdCtx {
     /// 행 index → (블록 index, 자식 index — 그룹 헤더 행 = None).
     fn row_map(&self) -> Vec<(usize, Option<usize>)> {
         let mut map = Vec::new();
-        for (bi, (_, items)) in self.model.iter().enumerate() {
+        for (bi, (_, _, items)) in self.model.iter().enumerate() {
             if !self.flat {
                 map.push((bi, None));
             }
@@ -125,7 +130,7 @@ impl EdCtx {
             Some(_) => {
                 let bi = moved[0].0;
                 let iis: Vec<usize> = moved.iter().filter_map(|(_, i)| *i).collect();
-                shift_range(&mut self.model[bi].1, &iis, up)
+                shift_range(&mut self.model[bi].2, &iis, up)
             }
         };
         if !ok {
@@ -190,20 +195,29 @@ impl EdCtx {
             return;
         };
         let map = self.row_map();
-        let Some(&(bi, Some(ii))) = map.get(row) else {
-            // 그룹 헤더(체크 없음) — 방어
-            ctl::ordertree::set_rows(self.tree, self.rows());
-            return;
-        };
-        let key = self.model[bi].1[ii].0.clone();
-        if self.locked.contains(&key.as_str()) {
-            ctl::ordertree::set_rows(self.tree, self.rows()); // 잠금 — 원복
-            return;
-        }
         let checks = ctl::ordertree::checks(self.tree);
-        if let Some(Some(on)) = checks.get(row) {
-            self.model[bi].1[ii].1 = *on;
-            self.emit();
+        match map.get(row) {
+            Some(&(bi, Some(ii))) => {
+                let key = self.model[bi].2[ii].0.clone();
+                if self.locked.contains(&key.as_str()) {
+                    ctl::ordertree::set_rows(self.tree, self.rows()); // 잠금 — 원복
+                    return;
+                }
+                if let Some(Some(on)) = checks.get(row) {
+                    self.model[bi].2[ii].1 = *on;
+                    self.emit();
+                }
+            }
+            Some(&(bi, None)) => {
+                // 그룹 체크(07-19): 통째 표시/숨김 — 자식 상태는 유지
+                if let Some(Some(on)) = checks.get(row) {
+                    self.model[bi].1 = *on;
+                    self.emit();
+                }
+            }
+            None => {
+                ctl::ordertree::set_rows(self.tree, self.rows()); // 방어
+            }
         }
     }
 }
@@ -252,7 +266,7 @@ pub unsafe fn show(owner: HWND, spec: &EditorSpec, value: &str, field: u32, font
     let model = config::parse_order_with(spec.defs, value);
     let row_count = model
         .iter()
-        .map(|(_, items)| items.len() + usize::from(!spec.flat))
+        .map(|(_, _, items)| items.len() + usize::from(!spec.flat))
         .sum::<usize>();
     const PAD: i32 = 14;
     let tree_w = 260;

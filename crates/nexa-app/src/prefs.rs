@@ -691,7 +691,7 @@ pub(crate) fn toolbar_editor_spec() -> crate::ordereditor::EditorSpec {
     crate::ordereditor::EditorSpec {
         title: tr("pref.toolbarOrder"),
         defs: crate::config::TOOLBAR_BLOCKS,
-        with_vis: false,
+        with_vis: true, // 표시 여부 공통(사용자 확정 07-19)
         flat: false,
         locked: &[],
         label: tbo_label,

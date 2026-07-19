@@ -401,7 +401,10 @@ fn build_toolbar(
         })
     };
     let mut out: Vec<ToolButton> = Vec::new();
-    for (block, items) in config::parse_toolbar_order(order) {
+    for (block, bvis, items) in config::parse_toolbar_order(order) {
+        if !bvis {
+            continue; // 그룹 숨김(07-19) — 자식 상태는 직렬화에 보존
+        }
         let start = out.len();
         if !out.is_empty() {
             out.push(ToolButton::sep());
@@ -413,14 +416,17 @@ fn build_toolbar(
             }
         } else {
             let mut any = false;
-            for it in &items {
+            for (it, vis) in &items {
+                if !vis {
+                    continue; // 표시 해제(07-19 — 툴바도 체크 공통)
+                }
                 if let Some(b) = button(&block, it) {
                     out.push(b);
                     any = true;
                 }
             }
             if !any {
-                out.truncate(start);
+                out.truncate(start); // 블록 전체 숨김 = 구분선도 제거
             }
         }
     }
@@ -1798,8 +1804,9 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
         let ord = config::parse_order_with(config::CTXMENU_BLOCKS, &st.ctx_menu_order);
         let bg_items = ord
             .iter()
-            .find(|(b, _)| b == "bg")
-            .map(|(_, i)| i.clone())
+            .find(|(b, _, _)| b == "bg")
+            .filter(|(_, bv, _)| *bv) // 그룹 숨김 = 고유 항목 전부 제외(07-19)
+            .map(|(_, _, i)| i.clone())
             .unwrap_or_default();
         let mut custom = Vec::new();
         for (k, vis) in &bg_items {
@@ -1912,8 +1919,9 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         let ord = config::parse_order_with(config::CTXMENU_BLOCKS, &st.ctx_menu_order);
         let row_items = ord
             .iter()
-            .find(|(b, _)| b == "row")
-            .map(|(_, i)| i.clone())
+            .find(|(b, _, _)| b == "row")
+            .filter(|(_, bv, _)| *bv) // 그룹 숨김 = 고유 항목 전부 제외(07-19)
+            .map(|(_, _, i)| i.clone())
             .unwrap_or_default();
         let mut custom = Vec::new();
         for (k, vis) in &row_items {
@@ -3804,13 +3812,13 @@ fn panel_col_layout(p: &crate::panel::Panel) -> String {
             }
         }
     }
-    config::serialize_order_with(&[("cols".to_string(), items)], true)
+    config::serialize_order_with(&[("cols".to_string(), true, items)], true)
 }
 
 /// 레이아웃 문자열을 패널에 적용(07-19 — 폭 보존은 [`crate::panel::Panel::apply_col_layout`]).
 fn apply_col_layout_str(p: &mut crate::panel::Panel, layout: &str, inv: &mut Invalidations) {
     let parsed = config::parse_order_with(config::COLUMN_BLOCKS, layout);
-    let Some((_, items)) = parsed.first() else {
+    let Some((_, _, items)) = parsed.first() else {
         return;
     };
     let spec: Vec<(u32, bool)> = items
