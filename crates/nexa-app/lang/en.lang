@@ -4,7 +4,7 @@
 @name = English
 @name.en = English
 @author = SosomLab
-@app = 0.7.0
+@app = 0.8.0
 @fallback = en
 
 # ── Menu bar ──

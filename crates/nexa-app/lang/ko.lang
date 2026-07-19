@@ -3,7 +3,7 @@
 @name = 한국어
 @name.en = Korean
 @author = SosomLab
-@app = 0.7.0
+@app = 0.8.0
 @fallback = en
 
 # ── 메뉴 바 ──
