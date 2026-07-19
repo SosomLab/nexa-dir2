@@ -742,6 +742,7 @@ fn tbo_label(block: &str, item: Option<&str>) -> String {
     match (block, item) {
         ("panel", None) => tr("pref.tbo.grpPanel"),
         ("panel", Some("toggle")) => tr("pref.tbo.panelToggle"),
+        ("panel", Some("dock")) => tr("menu.view.dock"),
         ("panel", Some("info")) => tr("pref.tbo.infoToggle"),
         ("panel", Some("colsync")) => tr("menu.view.colWidthSync"),
         ("view", None) => tr("pref.tbo.grpView"),

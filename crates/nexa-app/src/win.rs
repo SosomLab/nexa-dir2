@@ -335,6 +335,7 @@ fn build_menus(
 
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
 /// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
+#[allow(clippy::too_many_arguments)]
 fn build_toolbar(
     order: &str,
     show_hidden: bool,
@@ -343,6 +344,7 @@ fn build_toolbar(
     panel_mode: &str,
     col_width_sync: bool,
     info_dual: bool,
+    dock: bool,
 ) -> Vec<ToolButton> {
     // 그룹화(QA 07-14) 유지 — 블록 사이 구분선. **순서 = 설정 toolbar_order**
     // (07-19 사용자 — prefs 트리 편집·config::parse_toolbar_order가 검증/보충).
@@ -357,6 +359,10 @@ fn build_toolbar(
                     tr("menu.view.panelSingle")
                 })
                 .toggled(panel_mode == "dual"),
+            ("panel", "dock") => ToolButton::new(CMD_TOGGLE_DOCK, "▂")
+                .with_icon("emb:dock", "")
+                .with_tip(tr("menu.view.dock"))
+                .toggled(dock),
             ("panel", "info") => ToolButton::new(CMD_INFO_TOGGLE, "ⓘ")
                 .with_icon("emb:info-toggle", "")
                 .with_tip(if info_dual {
@@ -365,7 +371,8 @@ fn build_toolbar(
                     tr("menu.view.infoSingle")
                 })
                 .toggled(info_dual)
-                .enable(panel_mode == "dual"),
+                // 하단 패널 꺼짐 = 정보 모드 설정 무의미 → 비활성(사용자 07-19)
+                .enable(panel_mode == "dual" && dock),
             ("panel", "colsync") => ToolButton::new(CMD_COLW_SYNC, "⇔")
                 .with_icon("emb:colsync", "")
                 .with_tip(tr("menu.view.colWidthSync"))
@@ -962,6 +969,7 @@ pub fn run() -> Result<()> {
                 &settings.panel_mode,
                 settings.col_width_sync,
                 !(settings.panel_mode == "single" || settings.info_mode == "single"),
+                settings.dock,
             ),
             m.row_h,
             m.pad_x,
@@ -2865,6 +2873,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                         &st.panel_mode,
                         st.col_width_sync,
                         !single_info(st),
+                        st.panels[0].dock_visible(),
                     ),
                     &mut inv,
                 );
@@ -2909,6 +2918,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                             &st.panel_mode,
                             st.col_width_sync,
                             want == "dual",
+                            st.panels[0].dock_visible(),
                         ),
                         &mut inv,
                     );
@@ -2927,6 +2937,20 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.panels[0].set_dock_visible(on, &mut inv);
             st.panels[1].set_dock_visible(on, &mut inv);
             st.menubar.set_checked(CMD_TOGGLE_DOCK, on, &mut inv);
+            // 툴바 도크 토글 checked 갱신(07-19)
+            st.toolbar.set_buttons(
+                build_toolbar(
+                    &st.toolbar_order,
+                    st.show_hidden,
+                    st.show_dotfiles,
+                    &st.view_mode,
+                    &st.panel_mode,
+                    st.col_width_sync,
+                    !single_info(st),
+                    on,
+                ),
+                &mut inv,
+            );
             layout(hwnd, st, &mut inv); // 도크는 전폭 밴드 — 호스트 재배치(X-6)
             update_dock_info(st, &mut inv);
             persist_settings(st);
@@ -3050,6 +3074,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             &st.panel_mode,
             st.col_width_sync,
             !single_info(st),
+            st.panels[0].dock_visible(),
         ),
         inv,
     );
@@ -3599,6 +3624,7 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
                 &st.panel_mode,
                 st.col_width_sync,
                 !single_info(st),
+                st.panels[0].dock_visible(),
             ),
             &mut inv,
         );
@@ -5086,6 +5112,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                     &st.panel_mode,
                                     st.col_width_sync,
                                     !single_info(st),
+                                    st.panels[0].dock_visible(),
                                 ),
                                 &mut inv,
                             );

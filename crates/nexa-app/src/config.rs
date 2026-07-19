@@ -685,7 +685,7 @@ pub fn purge_legacy(dir: &Path) {
 pub const TOOLBAR_BLOCKS: &[(&str, &[&str])] = &[
     // 기본 순서 = 사용자 확정 07-19("현재 순서를 기본값으로")
     ("refresh", &[]),
-    ("panel", &["toggle", "info", "colsync"]),
+    ("panel", &["toggle", "dock", "info", "colsync"]),
     ("view", &["tree", "flat", "tiles"]),
     ("show", &["hidden", "dot"]),
     ("settings", &[]),
@@ -797,9 +797,16 @@ pub fn parse_order_with(defs: OrderDefs, s: &str) -> Vec<OrderBlock> {
                 }
             }
         }
-        for d in *def_items {
+        for (di, d) in def_items.iter().enumerate() {
             if !items.iter().any(|(x, _)| x == d) {
-                items.push((d.to_string(), true)); // 누락 자식 보충(표시)
+                // 누락 자식 보충(표시) — 정의상 앞 형제 뒤에 삽입(07-19:
+                // 신규 버튼이 저장된 구 순서에서도 의도 위치에 들어가도록)
+                let pos = def_items[..di]
+                    .iter()
+                    .rev()
+                    .find_map(|prev| items.iter().position(|(x, _)| x == prev).map(|p| p + 1))
+                    .unwrap_or(0);
+                items.insert(pos, (d.to_string(), true));
             }
         }
         out.push((name.to_string(), bvis, items));
@@ -836,14 +843,15 @@ mod toolbar_order_tests {
         let d = default_toolbar_order();
         assert_eq!(serialize_toolbar_order(&parse_toolbar_order(&d)), d, "기본 왕복");
         // 재배열 + 표시 여부 왕복(07-19 — 블록/자식 vis 공통)
-        let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,info:1]|show:1[dot:1,hidden:1]|settings:1";
+        let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,dock:1,info:1]|show:1[dot:1,hidden:1]|settings:1";
         assert_eq!(serialize_toolbar_order(&parse_toolbar_order(s)), s, "재배열/표시 보존");
-        // 구형(vis 생략) 호환 + 미지 토큰 제거 + 누락 보충
+        // 구형(vis 생략) 호환 + 미지 토큰 제거 + 누락 보충(정의 위치 삽입 —
+        // 07-19: tree/flat이 정의상 tiles 앞이므로 앞에 들어간다)
         let s = "view[tiles,junk]|bogus|panel[toggle:0]";
         let norm = serialize_toolbar_order(&parse_toolbar_order(s));
         assert_eq!(
             norm,
-            "view:1[tiles:1,tree:1,flat:1]|panel:1[toggle:0,info:1,colsync:1]|refresh:1|show:1[hidden:1,dot:1]|settings:1"
+            "view:1[tree:1,flat:1,tiles:1]|panel:1[toggle:0,dock:1,info:1,colsync:1]|refresh:1|show:1[hidden:1,dot:1]|settings:1"
         );
     }
 }
@@ -863,7 +871,7 @@ mod tests {
             dock: true,
             col_width_sync: false, // 기본 true — 왕복 검증 위해 반전
             col_autofit_max: 640,
-            toolbar_order: "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]".into(),
+            toolbar_order: "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]".into(),
             ctx_menu_order: "row:1[copyName:1,deletePermanent:0,pasteInto:1]|bg:0[paste:1,undo:1,redo:1]".into(),
             dock_ratio: 0.42,
             dock_split: 0.61,
@@ -933,7 +941,7 @@ mod tests {
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(
             parsed.toolbar_order,
-            "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]",
+            "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]",
             "도구모음 순서/표시 왕복(07-19)"
         );
         assert_eq!(
