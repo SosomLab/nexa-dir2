@@ -8,6 +8,7 @@
 
 ## 2026-07-19
 
+- **배포 채널 검토 + 제품명 정리(사용자)**: ① **제품명 nexa-dir2→nexa-dir 전면 정리**(저장소만 nexa-dir2 유지 — 창 클래스 NexaDirMain·데이터 경로 NexaDir[rename 마이그레이션]·산출물·문서·위키). ② **배포 4종 큐 상태**: winget 2 PR = Azure 검증 통과·partiallySucceeded는 **MS Guardian 내부 인프라 경고**(매니페스트 무관)·`@wingetbot run`은 신규 기여자 권한 없음→거부, **모더레이터 검토 대기**. Chocolatey 2 = 이메일 수정 repush 후 자동 검사 Pending→모더레이션. **우리 측 추가 조치 없음**(전부 서드파티 큐 대기). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **Chocolatey `nexa-dir.portable` 0.8.1 게시(사용자 실행)**: 수동 `pack-and-push.ps1` → `choco push` 성공 — **모더레이션 대기**(자동 검사 3종 Pending·신규 패키지 사람 검토 — 승인까지 며칠~2주). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **Chocolatey 포터블 패키지 `nexa-dir.portable`(사용자 요청)**: 신규 ID라 **기존 0.8.1 릴리스를 재사용**(재빌드·새 태그 불필요 — choco가 막는 건 같은 ID+버전 재push뿐). `.portable` 접미사 = choco 관례(`git.install`/`git.portable`), 설치형은 모더레이션 중이라 개명 없이 `nexa-dir` 유지. `Get-ChocolateyWebFile` + **`NexaDir.exe.gui` 마커**(GUI shim). release.yml 2패키지 루프 확장 + **Windows 전용 `pack-and-push.ps1`** 신설(태그 소진 버전용, try/finally 원본 복원). 한계: 제거 시 데이터 소멸(winget portable과 동일). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **winget 포터블 변형 `SosomLab.NexaDir.Portable` 0.8.1(사용자 요청)**: 명명은 **점 구분 변형 세그먼트** 채택(Authoring.md + `calibre.calibre.portable`·`Neovim.Neovim.Nightly` 선례 확인 — 붙여 쓰면 검색에서 형제로 안 묶임). `InstallerType: portable` + `PortableCommandAlias: nexadir`. **주의: winget portable은 제거 시 폴더째 삭제 = 사용자 데이터 소멸**(설치형의 보존 규칙 미적용 — 문서·locale 명시). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).

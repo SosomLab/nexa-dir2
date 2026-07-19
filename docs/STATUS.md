@@ -1,6 +1,16 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-19 (KST, 5차)** — **배포 채널 확장 + `0.8.1`**: ①
+> **갱신: 2026-07-19 (KST, 6차)** — **제품명 정리 + 배포 채널 검토**: ①
+> **제품명 "2" 제거** — 저장소만 nexa-dir2, 그 외(창 클래스 NexaDirMain·
+> 데이터 경로 NexaDir[마이그레이션]·산출물·문서·위키) 전부 nexa-dir/Nexa Dir.
+> ② **배포 채널 4종 큐 대기(우리 조치 불요)**: winget `SosomLab.NexaDir`(#404528)·
+> `.Portable`(#404533) = **Azure 검증 통과**, partiallySucceeded는 **MS 내부
+> Guardian 인프라 경고**(매니페스트 무관)·신규 기여자는 재실행 권한 없어
+> **모더레이터 검토 대기**. Chocolatey `nexa-dir`·`nexa-dir.portable` =
+> 이메일 수정 repush 후 **자동 검사 3종 Pending → 모더레이션 대기**. 승인까지
+> 수일~2주.
+>
+> **직전(07-19 5차)** — **배포 채널 확장 + `0.8.1`**: ①
 > **winget** — `SosomLab.NexaDir`(설치형)·`SosomLab.NexaDir.Portable`
 > 매니페스트 PR 제출(winget-pkgs#404528 외) ② **Chocolatey** —
 > `nexa-dir`(설치형·CI 자동)·`nexa-dir.portable`(수동 pack-and-push)
