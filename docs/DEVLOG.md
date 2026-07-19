@@ -8,6 +8,11 @@
 
 ## 2026-07-19
 
+- **순서 편집 창 완성(main 직커밋 — 사용자 요청 연속)**: NxOrderTree **블록 드래그 이동**(그룹 = 자식 포함·같은 부모 한정·스왑 미리보기·고스트 박스·가장자리 자동 스크롤·ESC 취소 — 확정 = delta 통지로 모델 정합) · **오버레이 스크롤**(휠+썸 — 그리드 차용·12행 캡) · **키보드 내비**(↑/↓ 단일·Shift 다중[형제 한정]·Ctrl 순서 이동·Space 체크) · ▲▼ = **사용자 SVG 16px**(iconbutton `create_svg`·gdipctx `svg_to_image`·잉크 = style.text) + **선택 없으면 비활성**. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
+- **우클릭 설정 팝업 + 기본 순서 승격(main 직커밋)**: 도구모음 빈 영역 = [순서 편집…][설정…]·컬럼 헤더 = [파일 컬럼…](main 소유 ordereditor 경로·prefs 스펙 공용화) · Context 설정 = prefs **ctxmenu 서브메뉴** 분리 · TOOLBAR_BLOCKS 기본 = **refresh|panel|view|show|settings**(사용자 배치 승격). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
+- **컬럼 드래그 재배열 고도화(main 직커밋)**: 활성 드래그 = **라이브 미리보기 + 고스트 헤더**(커서 추종·세로 고정)·**ESC 취소**(win ESC 체인 선두). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
+- **컬럼 auto-fit·정보 패널 토글(main 직커밋)**: 컬럼 경계 **더블클릭 = 콘텐츠 auto-fit**(가시 행+헤더 실측·상한 = 설정 `col_autofit_max` 400px 기본) · **듀얼 정보 패널 토글 버튼**(CMD_INFO_TOGGLE — 사용자 SVG·요소별 stroke-width 확장·싱글 패널 비활성). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
+- **툴바 아이콘 SVG 완결(main 직커밋 — 사용자 SVG 연속 제공)**: colsync(fill+text 확장)·dotfiles·hidden(요소별 fill)·refresh(**원호 A 명령** 지원)·settings(톱니) 전환으로 **9종 전부 SVG** — PNG 버킷 기구(emb!/EMBEDDED/png_to_hicon) 폐지. 잉크 3상태 확정(기본 검정/켜짐 = accent 38% 블렌드 배경 + 검정 유지/비활성 알파 38%)·규격 통일(32vb·여백 1·stroke 2)·최대 크기 판·도구 모음 26px. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **트리 보기 SVG 전환(main 직커밋 — 사용자 SVG 제공)**: view-tree.svg 등록(EMBEDDED_SVG 3호)·PNG 3종 제거 — **보기 모드 3종 전부 SVG 단독** 완결. 194 green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **설정 편집기 3종 공통 창 + 컬럼 기능(`feat/order-editors` — 사용자 요청 3건)**: **ordereditor 공통 모달**(EditorSpec 어댑터 — config 제네릭 순서 문법·NxOrderTree 체크 열) → 툴바/파일 컬럼/컨텍스트 메뉴 설정을 **각각 별도 창**으로(prefs = [편집…] 버튼·실시간 적용). **컬럼 헤더 드래그 재배열**(무드래그 = 정렬·인디케이터·colsync 연동·세션 `panel{i}.cols`)·컨텍스트 메뉴 표시/순서 반영. 실기 QA 전 항목·196+ green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
 - **타일 보기 SVG 전환(main 직커밋 — 사용자 SVG 제공)**: view-tiles.svg 등록(EMBEDDED_SVG 2호)·PNG 3종 제거(SVG = 전 크기 즉석 래스터). 릴리스 재빌드·캡처 확인. 194 green. 상세 [journal/2026-07-19.md](journal/2026-07-19.md).

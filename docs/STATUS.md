@@ -1,6 +1,21 @@
 # STATUS — Nexa Dir 2 진행 현황
 
-> **갱신: 2026-07-18 (KST)** — ① **NxGrid(ctl 14호)**: 컬럼 리사이즈·체크 마크
+> **갱신: 2026-07-19 (KST)** — ① **툴바 전면 개편**: 아이콘 9종 **SVG 단일
+> 파이프라인**(svg.rs 서브셋 파서[rect/circle/line/polyline/path M·L·H·V·C·A·
+> Z/text·요소별 색/채움/굵기 오버라이드]·gdipctx 래스터·PNG 기구 폐지)·
+> 패널 듀얼↔싱글/정보 패널 **토글 버튼**·컬럼 동기(SYNC)·**툴팁 i18n**·
+> 도구 모음 26px·기본 순서 = refresh|panel|view|show|settings.
+> ② **순서/표시 편집 공통 창**(ordereditor + NxOrderTree[ctl 15호]):
+> 도구모음/파일 컬럼/컨텍스트 메뉴 각각 별도 창(prefs [편집…]·우클릭 팝업
+> 경유) — 그룹/자식 이동 규칙·Shift 다중(형제 한정)·**드래그 이동**(고스트·
+> 미리보기·자동 스크롤·ESC)·**키보드 내비**·체크 = 표시 여부(name 잠금)·
+> 오버레이 스크롤. ③ **컬럼**: 헤더 **드래그 재배열**(고스트+미리보기+ESC)·
+> **경계 더블클릭 auto-fit**(상한 설정)·표시/순서 세션 영속(`panel{i}.cols`)·
+> colsync 연동(off = 독립·재켜짐 = 포커스 기준). ④ 컨텍스트 메뉴 항목
+> 표시/순서 설정(`ctx_menu_order`). 실기 QA 전 항목·전체 green·clippy 0·
+> exe 1.32MB·유휴 RSS 22.8MB(게이트 통과).
+>
+> **직전(07-18)** — ① **NxGrid(ctl 14호)**: 컬럼 리사이즈·체크 마크
 > 열·**오버레이 스크롤바 세로/가로**(macOS — 얇은 썸 페이드↔드래그 시 일반 바,
 > 픽셀 실측)·**행 선택 파일 목록 규약**(Shift/Ctrl/Ctrl+방향키+Space/Ctrl+A·
 > 포커스 프레임·NXGR_SELCHANGE)·**GridOpts**(무헤더·지브라·외곽선·
