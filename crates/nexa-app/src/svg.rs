@@ -78,6 +78,11 @@ pub struct Doc {
     pub stroke_width: f32,
     /// 루트 `fill` 채움 모드(true = 도형 채움·false = 스트로크).
     pub fill: bool,
+    /// 루트 `stroke`/`fill` 색(`#RRGGBB`) — 요소가 자체 색을 안 주면 상속.
+    /// 없으면 `None`(렌더러 잉크). 07-19: 다크 전용 에셋의 흰 외곽선(요소별
+    /// stroke 없이 루트 `stroke="#FFFFFF"` 상속)이 잉크로 잘못 그려지던 것 수정.
+    pub root_stroke: Option<u32>,
+    pub root_fill: Option<u32>,
     pub ops: Vec<Element>,
 }
 
@@ -87,6 +92,8 @@ pub fn parse(svg: &str) -> Option<Doc> {
         viewbox: (0.0, 0.0, 0.0, 0.0),
         stroke_width: 1.0,
         fill: false,
+        root_stroke: None,
+        root_fill: None,
         ops: Vec::new(),
     };
     let mut seen_root = false;
@@ -116,6 +123,9 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     doc.stroke_width = sw;
                 }
                 doc.fill = attr(attrs, "fill").is_some_and(|f| f != "none");
+                // 루트 stroke/fill 색(요소가 자체 색 미지정 시 상속).
+                doc.root_stroke = hex_color(attr(attrs, "stroke").as_deref());
+                doc.root_fill = hex_color(attr(attrs, "fill").as_deref());
                 seen_root = true;
             }
             "rect" => doc.ops.push(Element {
@@ -126,7 +136,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     h: num(attrs, "height"),
                     rx: num(attrs, "rx"),
                 },
-                color: elem_color(attrs),
+                color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                 fill: elem_fill(attrs),
                 width: elem_width(attrs),
             }),
@@ -136,7 +146,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     cy: num(attrs, "cy"),
                     r: num(attrs, "r"),
                 },
-                color: elem_color(attrs),
+                color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                 fill: elem_fill(attrs),
                 width: elem_width(attrs),
             }),
@@ -147,7 +157,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     x2: num(attrs, "x2"),
                     y2: num(attrs, "y2"),
                 },
-                color: elem_color(attrs),
+                color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                 fill: elem_fill(attrs),
                 width: elem_width(attrs),
             }),
@@ -163,7 +173,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                 if pairs.len() >= 2 {
                     doc.ops.push(Element {
                         op: Op::Polyline(pairs),
-                        color: elem_color(attrs),
+                        color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                         fill: elem_fill(attrs),
                 width: elem_width(attrs),
                     });
@@ -175,7 +185,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     if !segs.is_empty() {
                         doc.ops.push(Element {
                             op: Op::Path(segs),
-                            color: elem_color(attrs),
+                            color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                             fill: elem_fill(attrs),
                 width: elem_width(attrs),
                         });
@@ -198,7 +208,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                             middle: attr(attrs, "text-anchor").is_some_and(|a| a == "middle"),
                             content,
                         },
-                        color: elem_color(attrs),
+                        color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                         fill: elem_fill(attrs),
                 width: elem_width(attrs),
                     });
@@ -245,21 +255,36 @@ fn elem_width(attrs: &str) -> Option<f32> {
     attr(attrs, "stroke-width").and_then(|v| v.parse().ok())
 }
 
-/// 요소 색 오버라이드 — `stroke`/`fill`의 `#RRGGBB`(6자리)만 인식.
-/// `currentColor`·`none`·부재 = `None`(렌더러 잉크).
+/// `#RRGGBB`(6자리) → `Some(rgb)`. `currentColor`·`none`·부재·형식 오류 = `None`.
+fn hex_color(v: Option<&str>) -> Option<u32> {
+    let hex = v?.strip_prefix('#')?;
+    (hex.len() == 6)
+        .then(|| u32::from_str_radix(hex, 16).ok())
+        .flatten()
+}
+
+/// 요소 색 오버라이드 — 요소 자체 `stroke`/`fill`의 `#RRGGBB`만.
 fn elem_color(attrs: &str) -> Option<u32> {
-    for key in ["stroke", "fill"] {
-        if let Some(v) = attr(attrs, key) {
-            if let Some(hex) = v.strip_prefix('#') {
-                if hex.len() == 6 {
-                    if let Ok(rgb) = u32::from_str_radix(hex, 16) {
-                        return Some(rgb);
-                    }
-                }
-            }
-        }
+    hex_color(attr(attrs, "stroke").as_deref()).or_else(|| hex_color(attr(attrs, "fill").as_deref()))
+}
+
+/// 요소 색 해석 — 자체 색 → 없으면 루트 상속(채움 요소는 루트 `fill`,
+/// 스트로크 요소는 루트 `stroke`) → 없으면 `None`(렌더러 잉크).
+fn resolve_color(
+    attrs: &str,
+    root_stroke: Option<u32>,
+    root_fill: Option<u32>,
+    root_fill_mode: bool,
+) -> Option<u32> {
+    if let Some(c) = elem_color(attrs) {
+        return Some(c);
     }
-    None
+    let filled = elem_fill(attrs).unwrap_or(root_fill_mode);
+    if filled {
+        root_fill
+    } else {
+        root_stroke
+    }
 }
 
 fn num(attrs: &str, key: &str) -> f32 {

@@ -105,8 +105,38 @@ pub(crate) unsafe fn svg_to_image(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
         .unwrap_or(std::ptr::null_mut())
 }
 
-/// SVG 렌더 공통부 — 오프스크린 32bpp ARGB [`GpBitmap`].
+/// SVG 래스터 — 얇은 선 선명화를 위해 **4배 슈퍼샘플 후 고품질 축소**(직접
+/// px 렌더는 1px 스트로크가 AA로 반투명 회색처럼 퍼져 다크 배경에 묻힘, 07-19).
 unsafe fn render_svg_bitmap(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<*mut GpBitmap> {
+    use windows::Win32::Graphics::GdiPlus::{
+        GdipCreateBitmapFromScan0, GdipGetImageGraphicsContext,
+    };
+    if px <= 0 {
+        return None;
+    }
+    let hi = (px * 4).min(256);
+    if hi <= px {
+        return render_svg_at(doc, px, argb);
+    }
+    let big = render_svg_at(doc, hi, argb)?;
+    const PXF_32ARGB: i32 = 0x0026_200A;
+    let mut small: *mut GpBitmap = std::ptr::null_mut();
+    if GdipCreateBitmapFromScan0(px, px, 0, PXF_32ARGB, None, &mut small).0 != 0 || small.is_null() {
+        return Some(big); // 축소 실패 시 큰 비트맵 그대로(호출자 DrawIconEx가 축소)
+    }
+    let mut g: *mut GpGraphics = std::ptr::null_mut();
+    let _ = GdipGetImageGraphicsContext(small as *mut GpImage, &mut g);
+    if !g.is_null() {
+        let _ = GdipSetInterpolationMode(g, InterpolationModeHighQualityBicubic);
+        let _ = GdipDrawImageRectI(g, big as *mut GpImage, 0, 0, px, px);
+        let _ = GdipDeleteGraphics(g);
+    }
+    let _ = GdipDisposeImage(big as *mut GpImage);
+    Some(small)
+}
+
+/// SVG 렌더 공통부 — 오프스크린 32bpp ARGB [`GpBitmap`]를 지정 크기로 래스터.
+unsafe fn render_svg_at(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<*mut GpBitmap> {
     use crate::svg::{Op, Seg};
     use windows::Win32::Graphics::GdiPlus::{
         GdipAddPathBezier, GdipAddPathEllipse, GdipAddPathLine, GdipAddPathString,
