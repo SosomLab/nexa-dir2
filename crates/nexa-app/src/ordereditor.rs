@@ -159,6 +159,31 @@ impl EdCtx {
         self.emit();
     }
 
+    /// 드래그 확정(07-19) — delta(형제 칸)를 단일 스텝 이동으로 반복 적용
+    /// (모델·행·선택·통지는 move_sel 재사용 — 뷰는 이미 원상 복원됨).
+    unsafe fn apply_drag(&mut self) {
+        let delta = ctl::ordertree::take_drag_delta(self.tree);
+        for _ in 0..delta.abs() {
+            self.move_sel(delta < 0);
+        }
+    }
+
+    /// ▲▼ 활성 동기(07-19 사용자: 선택 없으면 비활성).
+    unsafe fn sync_buttons(&self, dlg: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::GetDlgItem;
+        let on = !ctl::ordertree::selection(self.tree).is_empty();
+        for id in [ID_UP, ID_DOWN] {
+            if let Ok(b) = GetDlgItem(Some(dlg), id as i32) {
+                SendMessageW(
+                    b,
+                    ctl::iconbutton::NXIB_SETENABLE,
+                    Some(WPARAM(usize::from(on))),
+                    Some(LPARAM(0)),
+                );
+            }
+        }
+    }
+
     /// 체크 토글 반영(잠금 key = 거부 — 트리 재설정으로 원복).
     unsafe fn on_toggle(&mut self) {
         let Some(row) = ctl::ordertree::take_toggled(self.tree) else {
@@ -231,7 +256,8 @@ pub unsafe fn show(owner: HWND, spec: &EditorSpec, value: &str, field: u32, font
         .sum::<usize>();
     const PAD: i32 = 14;
     let tree_w = 260;
-    let tree_h = ctl::ordertree::height_for(row_count);
+    // 12행 초과 = 내부 스크롤(오버레이 썸 — 07-19)
+    let tree_h = ctl::ordertree::height_for(row_count.min(12));
     let (w0, h0) = (PAD * 2 + tree_w + 40, PAD * 2 + 24 + tree_h + 8);
     let mut orc = windows::Win32::Foundation::RECT::default();
     let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(owner, &mut orc);
@@ -271,7 +297,7 @@ pub unsafe fn show(owner: HWND, spec: &EditorSpec, value: &str, field: u32, font
         ID_UP,
         font,
         include_str!("../assets/ui/arrow-up.svg"),
-        true,
+        false, // 선택 전 비활성(사용자 확정 07-19)
         style,
     );
     let _ = ctl::iconbutton::create_svg(
@@ -282,7 +308,7 @@ pub unsafe fn show(owner: HWND, spec: &EditorSpec, value: &str, field: u32, font
         ID_DOWN,
         font,
         include_str!("../assets/ui/arrow-down.svg"),
-        true,
+        false, // 선택 전 비활성(사용자 확정 07-19)
         style,
     );
     let mut ctx = Box::new(EdCtx {
@@ -319,9 +345,23 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     ID_UP if code == ctl::iconbutton::NXIB_CLICK => ctx.move_sel(true),
                     ID_DOWN if code == ctl::iconbutton::NXIB_CLICK => ctx.move_sel(false),
                     ID_TREE if code == ctl::ordertree::NXOT_TOGGLE => ctx.on_toggle(),
+                    ID_TREE if code == ctl::ordertree::NXOT_DRAGMOVE => ctx.apply_drag(),
                     _ => {}
                 }
+                ctx.sync_buttons(hwnd); // 선택 유무 = ▲▼ 활성(07-19)
             }
+            LRESULT(0)
+        }
+        m if m == windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN
+            && wp.0 as u16 == windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE.0 =>
+        {
+            // ESC = 드래그 취소(있으면) → 없으면 창 닫기(대화상자 관례)
+            if let Some(ctx) = ctx.as_ref() {
+                if ctl::ordertree::cancel_drag(ctx.tree) {
+                    return LRESULT(0);
+                }
+            }
+            let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
         WM_CLOSE => {
