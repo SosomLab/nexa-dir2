@@ -134,7 +134,7 @@ impl Default for Settings {
             show_hidden: true,
             show_dotfiles: true,
             split: 0.5,
-            dock: false,
+            dock: true, // 기본 표시(사용자 확정 07-19 — 현 배치 승격)
             dock_ratio: 0.3,
             dock_split: 0.5,
             term_font: "Consolas".into(),
