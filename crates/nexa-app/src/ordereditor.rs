@@ -324,6 +324,7 @@ pub unsafe fn show(owner: HWND, spec: &EditorSpec, value: &str, field: u32, font
     ctl::ordertree::set_rows(tree, ctx.rows());
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *ctx as *mut EdCtx as isize);
     let _ = EnableWindow(owner, false);
+    let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(dlg)); // 키보드(07-19)
     let mut msg = MSG::default();
     while IsWindow(Some(dlg)).as_bool() && GetMessageW(&mut msg, None, 0, 0).as_bool() {
         let _ = TranslateMessage(&msg);
@@ -352,16 +353,48 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             }
             LRESULT(0)
         }
-        m if m == windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN
-            && wp.0 as u16 == windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE.0 =>
-        {
-            // ESC = 드래그 취소(있으면) → 없으면 창 닫기(대화상자 관례)
-            if let Some(ctx) = ctx.as_ref() {
-                if ctl::ordertree::cancel_drag(ctx.tree) {
-                    return LRESULT(0);
+        m if m == windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN => {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                GetKeyState, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_SHIFT, VK_SPACE, VK_UP,
+            };
+            let vk = wp.0 as u16;
+            if vk == VK_ESCAPE.0 {
+                // ESC = 드래그 취소(있으면) → 없으면 창 닫기(대화상자 관례)
+                if let Some(ctx) = ctx.as_ref() {
+                    if ctl::ordertree::cancel_drag(ctx.tree) {
+                        return LRESULT(0);
+                    }
                 }
+                let _ = DestroyWindow(hwnd);
+                return LRESULT(0);
             }
-            let _ = DestroyWindow(hwnd);
+            // 키보드 이동(07-19 사용자): ↑/↓ = 선택 · Shift = 형제 범위 확장 ·
+            // Ctrl = 순서 이동(▲▼ 동일) · Space = 체크 토글. 트리 통지는
+            // WM_COMMAND arm이 처리(중첩 차용 회피 — tree 핸들만 복사).
+            if vk == VK_UP.0 || vk == VK_DOWN.0 {
+                let up = vk == VK_UP.0;
+                let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
+                let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                if ctrl {
+                    if let Some(ctx) = ctx.as_mut() {
+                        ctx.move_sel(up);
+                        ctx.sync_buttons(hwnd);
+                    }
+                } else if let Some(tree) = ctx.as_ref().map(|c| c.tree) {
+                    if shift {
+                        ctl::ordertree::key_extend(tree, up);
+                    } else {
+                        ctl::ordertree::key_move(tree, up);
+                    }
+                }
+                return LRESULT(0);
+            }
+            if vk == VK_SPACE.0 {
+                if let Some(tree) = ctx.as_ref().map(|c| c.tree) {
+                    ctl::ordertree::key_toggle(tree);
+                }
+                return LRESULT(0);
+            }
             LRESULT(0)
         }
         WM_CLOSE => {

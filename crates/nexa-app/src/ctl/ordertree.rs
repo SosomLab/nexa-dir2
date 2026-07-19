@@ -278,6 +278,20 @@ pub unsafe fn selection(hwnd: HWND) -> Vec<usize> {
         .unwrap_or_default()
 }
 
+/// 행 가시 스크롤 보정(선택/키 이동 공용).
+unsafe fn ensure_visible(hwnd: HWND, st: &mut OtState, row: usize) {
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+    let ch = rc.bottom - rc.top;
+    let top = 1 + row as i32 * ROW_H - st.scroll_y;
+    if top < 0 {
+        st.scroll_y += top;
+    } else if top + ROW_H > ch {
+        st.scroll_y += top + ROW_H - ch;
+    }
+    st.clamp_scroll(ch);
+}
+
 /// 선택 설정(범위 검증 없음 — 호스트가 형제 집합을 보장) + 가시 스크롤.
 pub unsafe fn set_selection(hwnd: HWND, sel: &[usize]) {
     if let Some(st) = super::base::state::<OtState>(hwnd).as_mut() {
@@ -285,18 +299,102 @@ pub unsafe fn set_selection(hwnd: HWND, sel: &[usize]) {
         st.sel.sort_unstable();
         st.anchor = st.sel.first().copied();
         if let Some(&first) = st.sel.first() {
-            let mut rc = RECT::default();
-            let _ = GetClientRect(hwnd, &mut rc);
-            let ch = rc.bottom - rc.top;
-            let top = 1 + first as i32 * ROW_H - st.scroll_y;
-            if top < 0 {
-                st.scroll_y += top;
-            } else if top + ROW_H > ch {
-                st.scroll_y += top + ROW_H - ch;
-            }
-            st.clamp_scroll(ch);
+            ensure_visible(hwnd, st, first);
         }
         let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+}
+
+/// 키보드 선택 이동(07-19 사용자): 이전/다음 행 단일 선택 + 가시 스크롤.
+/// 선택 없음 = 첫/마지막 행 선택. 변경 시 [`NXOT_SELCHANGE`].
+pub unsafe fn key_move(hwnd: HWND, up: bool) {
+    let Some(st) = super::base::state::<OtState>(hwnd).as_mut() else {
+        return;
+    };
+    if st.rows.is_empty() {
+        return;
+    }
+    let cur = st.anchor.or_else(|| st.sel.first().copied());
+    let next = match cur {
+        None => {
+            if up {
+                st.rows.len() - 1
+            } else {
+                0
+            }
+        }
+        Some(c) => {
+            if up {
+                c.saturating_sub(1)
+            } else {
+                (c + 1).min(st.rows.len() - 1)
+            }
+        }
+    };
+    if st.sel == vec![next] {
+        return;
+    }
+    st.sel = vec![next];
+    st.anchor = Some(next);
+    ensure_visible(hwnd, st, next);
+    let _ = InvalidateRect(Some(hwnd), None, false);
+    super::base::notify(hwnd, NXOT_SELCHANGE);
+}
+
+/// Shift+방향(07-19): 같은 레벨·같은 부모 **형제로만** 범위 확장/축소
+/// (클릭 Shift 규약과 동일 — 혼합 차단).
+pub unsafe fn key_extend(hwnd: HWND, up: bool) {
+    let Some(st) = super::base::state::<OtState>(hwnd).as_mut() else {
+        return;
+    };
+    let Some(a) = st.anchor else {
+        key_move(hwnd, up);
+        return;
+    };
+    // 현재 범위 끝(앵커 반대편)에서 방향으로 다음 형제 탐색
+    let cur_end = if up {
+        st.sel.first().copied().unwrap_or(a)
+    } else {
+        st.sel.last().copied().unwrap_or(a)
+    };
+    let (lv, pa) = (st.rows[a].1, parent_of(&st.rows, a));
+    let target = if up {
+        (0..cur_end)
+            .rev()
+            .find(|&j| st.rows[j].1 == lv && parent_of(&st.rows, j) == pa)
+    } else {
+        (cur_end + 1..st.rows.len())
+            .find(|&j| st.rows[j].1 == lv && parent_of(&st.rows, j) == pa)
+    };
+    // 축소 방향(앵커 쪽으로 되돌아옴)도 자연 처리: target 없으면 유지
+    let t = match target {
+        Some(t) => t,
+        None => return,
+    };
+    let (lo, hi) = (a.min(t), a.max(t));
+    st.sel = (lo..=hi)
+        .filter(|&j| st.rows[j].1 == lv && parent_of(&st.rows, j) == pa)
+        .collect();
+    ensure_visible(hwnd, st, t);
+    let _ = InvalidateRect(Some(hwnd), None, false);
+    super::base::notify(hwnd, NXOT_SELCHANGE);
+}
+
+/// Space = 선택 행 체크 토글(단일 선택·체크 열 행 — 07-19).
+/// 토글 시 [`NXOT_TOGGLE`](행 = [`take_toggled`]).
+pub unsafe fn key_toggle(hwnd: HWND) {
+    let Some(st) = super::base::state::<OtState>(hwnd).as_mut() else {
+        return;
+    };
+    if st.sel.len() != 1 {
+        return;
+    }
+    let i = st.sel[0];
+    if let Some(on) = st.rows[i].2 {
+        st.rows[i].2 = Some(!on);
+        st.toggled = Some(i);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+        super::base::notify(hwnd, NXOT_TOGGLE);
     }
 }
 
