@@ -785,7 +785,7 @@ fn at_fields(at: InsertAt) -> String {
 
 /// 파이프라인 → 프리셋 텍스트(라인 순서 = 적용 순서). 파일 I/O는 앱(`data\renames\`).
 pub fn serialize_ops(ops: &[RenameOp]) -> String {
-    let mut out = String::from("# nexa-dir2 rename preset v2\n");
+    let mut out = String::from("# nexa-dir rename preset v2\n");
     for op in ops {
         let line = match op {
             RenameOp::Replace {

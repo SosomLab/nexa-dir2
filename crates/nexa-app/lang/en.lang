@@ -1,4 +1,4 @@
-# Nexa Dir 2 language file — format: original nexa-dir docs/42 §3 (properties style)
+# Nexa Dir language file — format: original nexa-dir docs/42 §3 (properties style)
 # Lines: '#' comment · '@key = value' metadata · 'key = value' string. Escapes: \n \t \\
 @code = en
 @name = English

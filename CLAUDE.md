@@ -1,11 +1,11 @@
-# CLAUDE.md — Nexa Dir 2 프로젝트 컨텍스트 (이식용 메모리)
+# CLAUDE.md — Nexa Dir 프로젝트 컨텍스트 (이식용 메모리)
 
 > 이 파일은 **다른 PC에서 clone 시 즉시 컨텍스트를 공유**하기 위한 휴대용 프로젝트 메모리다.
 > **먼저 읽기:** [docs/STATUS.md](docs/STATUS.md)(현황) → [docs/10-decision-record.md](docs/10-decision-record.md)(결정).
 
 ## 1. 이 프로젝트는
 
-**Nexa Dir 2** = 원본 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어+WinUI 3/C#)의 기능을
+**Nexa Dir** = 원본 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어+WinUI 3/C#)의 기능을
 **포터블 단일 exe · 초저메모리(RSS ≤30MB) · unmanaged 올 러스트**로 재구축하는 Windows 파일 탐색기.
 원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`. 현 단계: **M5(마감) 진행** — M0(`0.1.0`)~M4(`0.5.0`) 완료.
 
@@ -17,7 +17,7 @@
 | --- | --- |
 | DR-1 | **올 러스트 단일 바이너리** — Win32(windows-rs)+커스텀 드로잉(GDI→DirectWrite interop). 관리 런타임·UI 프레임워크 금지 (ADR-0001) |
 | DR-2 | **예산 게이트**: 유휴 RSS ≤30MB · exe ≤10MB · 임포트=OS 인박스 DLL만 — 초과 시 main 병합 금지 |
-| DR-3 | **개정(07-16)**: 배포 = 포터블 단일 exe **기본** + **설치형 exe(Inno Setup) 보조** 2채널 — 영속물은 exe 옆 `data\`(쓰기 불가 위치는 `%LOCALAPPDATA%\NexaDir2\data` 폴백, [docs/21](docs/21-distribution.md)) |
+| DR-3 | **개정(07-16)**: 배포 = 포터블 단일 exe **기본** + **설치형 exe(Inno Setup) 보조** 2채널 — 영속물은 exe 옆 `data\`(쓰기 불가 위치는 `%LOCALAPPDATA%\NexaDir\data` 폴백, [docs/21](docs/21-distribution.md)) |
 | DR-4 | 원본 nexa-core/vfs/tree **rlib 이식**(cdylib/FFI/ABI 폐지) |
 | DR-5 | 원본 M1 기능 패리티 + 디자인 규약(고밀도·다크·키보드 우선) 계승 |
 | DR-6 | PolyForm NC + 의존성 **퍼미시브 온리**(GPL 금지 — Slint 배제 근거) |

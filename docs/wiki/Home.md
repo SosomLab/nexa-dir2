@@ -1,16 +1,16 @@
-# Nexa Dir 2 Wiki
+# Nexa Dir Wiki
 
 > **포터블 단일 exe · 초저메모리 · 순수 네이티브(올 러스트)** Windows 파일 탐색기
 
-**Nexa Dir 2**는 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어 + WinUI 3/C#)의 기능 경험을 **unmanaged 올 러스트**(Win32 직접 호출 + 커스텀 드로잉)로 다시 지은 파일 탐색기입니다. 관리 런타임도 UI 프레임워크도 없이 **exe 파일 하나**로 동작하며, 유휴 메모리 30MB 이하 · 실행 파일 10MB 이하의 예산을 마일스톤마다 실측으로 지킵니다.
+**Nexa Dir**는 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어 + WinUI 3/C#)의 기능 경험을 **unmanaged 올 러스트**(Win32 직접 호출 + 커스텀 드로잉)로 다시 지은 파일 탐색기입니다. 관리 런타임도 UI 프레임워크도 없이 **exe 파일 하나**로 동작하며, 유휴 메모리 30MB 이하 · 실행 파일 10MB 이하의 예산을 마일스톤마다 실측으로 지킵니다.
 
-![Nexa Dir 2 메인 화면](https://raw.githubusercontent.com/wiki/SosomLab/nexa-dir2/images/01-main-overview.png)
+![Nexa Dir 메인 화면](https://raw.githubusercontent.com/wiki/SosomLab/nexa-dir2/images/01-main-overview.png)
 
 ---
 
 ## 이 위키는
 
-이 위키는 **Nexa Dir 2의 공식 기본 매뉴얼**입니다. 세 부분으로 구성됩니다.
+이 위키는 **Nexa Dir의 공식 기본 매뉴얼**입니다. 세 부분으로 구성됩니다.
 
 ### 📖 [프로젝트 소개](프로젝트-소개)
 왜 만들었는지, 어떤 원칙으로 개발되는지, 어떤 길을 걸어왔는지.
@@ -31,7 +31,7 @@
 
 ---
 
-## 한눈에 보는 Nexa Dir 2
+## 한눈에 보는 Nexa Dir
 
 | 항목 | 내용 |
 | --- | --- |

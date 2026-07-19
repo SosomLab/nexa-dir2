@@ -1067,7 +1067,7 @@ pub fn run() -> Result<()> {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         let hinstance = GetModuleHandleW(None)?;
-        let class_name = w!("NexaDir2Main");
+        let class_name = w!("NexaDirMain");
         let wc = WNDCLASSW {
             style: CS_DBLCLKS,
             hInstance: hinstance.into(),
@@ -1087,7 +1087,7 @@ pub fn run() -> Result<()> {
         let hwnd = CreateWindowExW(
             Default::default(),
             class_name,
-            w!("Nexa Dir"), // 배포명(사용자 확정 — 내부 프로젝트는 nexa-dir2)
+            w!("Nexa Dir"), // 제품명(사용자 확정 — 저장소만 nexa-dir2)
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

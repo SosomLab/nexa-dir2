@@ -1,6 +1,6 @@
 # docs/wiki — GitHub Wiki 소스
 
-이 폴더는 **Nexa Dir 2 GitHub Wiki**(<https://github.com/SosomLab/nexa-dir2/wiki>)의 소스 미러입니다. 위키 콘텐츠를 저장소에서 버전 관리하고, 여기서 GitHub Wiki로 발행합니다.
+이 폴더는 **Nexa Dir GitHub Wiki**(<https://github.com/SosomLab/nexa-dir2/wiki>)의 소스 미러입니다. 위키 콘텐츠를 저장소에서 버전 관리하고, 여기서 GitHub Wiki로 발행합니다.
 
 ## 구성
 
@@ -35,7 +35,7 @@ cp -r docs/wiki/images /tmp/nd2wiki/
 # 커밋·push
 cd /tmp/nd2wiki
 git add -A
-git commit -m "Nexa Dir 2 위키 발행"
+git commit -m "Nexa Dir 위키 발행"
 git push
 ```
 

@@ -1,4 +1,4 @@
-# STATUS — Nexa Dir 2 진행 현황
+# STATUS — Nexa Dir 진행 현황
 
 > **갱신: 2026-07-19 (KST, 5차)** — **배포 채널 확장 + `0.8.1`**: ①
 > **winget** — `SosomLab.NexaDir`(설치형)·`SosomLab.NexaDir.Portable`

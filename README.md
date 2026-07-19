@@ -1,8 +1,8 @@
-# Nexa Dir 2 — 포터블 단일 exe 네이티브 탐색기
+# Nexa Dir — 포터블 단일 exe 네이티브 탐색기
 
 > Portable, single-exe, ultra-lightweight native file explorer for Windows.
 
-**Nexa Dir 2**는 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어 + WinUI 3)의 기능 경험을
+**Nexa Dir**는 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어 + WinUI 3)의 기능 경험을
 **unmanaged 올 러스트**(Win32 직접 호출 + 커스텀 드로잉)로 재구축하는 프로젝트입니다.
 
 ## 설계 원칙

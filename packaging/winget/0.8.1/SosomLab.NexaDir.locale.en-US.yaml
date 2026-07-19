@@ -27,7 +27,7 @@ Description: |-
   - Dual-language UI (English and Korean).
 
   Settings and session data live next to the executable under data\, falling back
-  to %LOCALAPPDATA%\NexaDir2\data when the install directory is not writable.
+  to %LOCALAPPDATA%\NexaDir\data when the install directory is not writable.
   Uninstalling keeps your data so a reinstall restores your settings.
 
   Nexa Dir is free for personal and other noncommercial use under the PolyForm

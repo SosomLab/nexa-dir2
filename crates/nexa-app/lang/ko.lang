@@ -1,4 +1,4 @@
-# Nexa Dir 2 언어 파일 — 포맷: 원본 nexa-dir docs/42 §3 (properties 스타일)
+# Nexa Dir 언어 파일 — 포맷: 원본 nexa-dir docs/42 §3 (properties 스타일)
 @code = ko
 @name = 한국어
 @name.en = Korean

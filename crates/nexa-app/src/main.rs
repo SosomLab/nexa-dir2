@@ -1,4 +1,4 @@
-//! Nexa Dir 2 — 앱 진입점.
+//! Nexa Dir — 앱 진입점.
 //! Windows 전용 UI는 `#[cfg(windows)]`로 격리한다(설계: docs/01 §1·docs/11).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]

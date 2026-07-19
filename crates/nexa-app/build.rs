@@ -3,8 +3,8 @@
 //! rc.exe를 못 찾으면 **경고 후 스킵**(빌드 실패 없음 — 아이콘만 빠진 exe).
 //!
 //! - 아이콘: `assets/nexa-dir.ico`(리소스 ID 1 = 탐색기/작업표시줄 표시 아이콘).
-//! - 버전정보: 배포명 **"Nexa Dir"**(ProductName·FileDescription) — 내부 프로젝트는
-//!   nexa-dir2지만 외부 배포는 Nexa Dir(사용자 확정).
+//! - 버전정보: 제품명 **"Nexa Dir"**(ProductName·FileDescription) — 저장소만
+//!   nexa-dir2, 제품·산출물·데이터 경로는 Nexa Dir/nexa-dir(사용자 확정).
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, process::Command};

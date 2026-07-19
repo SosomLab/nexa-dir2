@@ -44,9 +44,9 @@ cargo build --release -p nexa-app
 
 1. windows-latest에서 `cargo test` + `cargo build --release`
 2. **예산 게이트**(B2 exe ≤10MB · B3 임포트 화이트리스트 — CI와 동일 스크립트) 통과 필수
-3. 산출물을 `NexaDir2-<버전>-win-x64.exe`로 개명(포터블 단일 exe — DR-3 기본 채널)
+3. 산출물을 `NexaDir-<버전>-win-x64.exe`로 개명(포터블 단일 exe — DR-3 기본 채널)
 4. **설치형 빌드**(DR-3 개정 07-16 — 보조 채널): 러너 내장 Inno Setup 6 `ISCC`로
-   `installer/nexa.iss` 컴파일(`/DAppVersion` 주입) → `NexaDir2-Setup-<버전>.exe`
+   `installer/nexa.iss` 컴파일(`/DAppVersion` 주입) → `NexaDir-Setup-<버전>.exe`
 5. **GitHub Release 자동 생성**(자동 릴리스 노트) + **포터블·설치형 2종 첨부**
    (설계 상세 = [21-distribution.md](21-distribution.md))
 6. **Chocolatey**(3채널, **2패키지** `nexa-dir`·`nexa-dir.portable`): 각 자산의

@@ -1,4 +1,4 @@
-# Nexa Dir 2 — 올 러스트 워크스페이스 (포터블 단일 exe)
+# Nexa Dir — 올 러스트 워크스페이스 (포터블 단일 exe)
 # 코어는 맥/Windows/Linux 빌드·테스트, nexa-app의 Windows부는 #[cfg(windows)] 격리.
 [workspace]
 resolver = "2"

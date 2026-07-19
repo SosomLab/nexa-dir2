@@ -41,7 +41,7 @@ no external DLLs beyond the OS inbox set.
 * This package installs the machine-wide (all users) build via the official
   installer downloaded from the project's GitHub Releases.
 * Settings and session data live next to the exe under `data\`, falling back to
-  `%LOCALAPPDATA%\NexaDir2\data` when the install directory is not writable.
+  `%LOCALAPPDATA%\NexaDir\data` when the install directory is not writable.
   **Uninstalling keeps your data** so a reinstall restores your settings.
 
 ### License

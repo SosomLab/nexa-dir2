@@ -209,7 +209,7 @@ pub struct Session {
 
 /// 영속 디렉터리(DR-3 개정 07-16 — 포터블 우선 + 설치형 폴백):
 /// **exe 옆 `data\`가 기본**(포터블 — 기존 동작 그대로). 설치형(Program Files 등
-/// **쓰기 불가 위치**)이면 `%LOCALAPPDATA%\NexaDir2\data`로 폴백.
+/// **쓰기 불가 위치**)이면 `%LOCALAPPDATA%\NexaDir\data`로 폴백.
 /// 판정은 프로세스당 1회(OnceLock — 매 저장마다 쓰기 프로브 방지).
 pub fn data_dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -225,14 +225,30 @@ pub fn data_dir() -> PathBuf {
 }
 
 /// 포터블/설치형 선택 규칙(테스트 분리용): 후보에 **디렉터리 생성+쓰기 프로브**가
-/// 성공하면 그대로(포터블), 실패하면 `%LOCALAPPDATA%\NexaDir2\data`(설치형).
+/// 성공하면 그대로(포터블), 실패하면 `%LOCALAPPDATA%\NexaDir\data`(설치형).
 /// LOCALAPPDATA조차 없으면 후보 유지(기존 폴백 동작 보존).
+/// **마이그레이션(07-19 제품명 정리 nexa-dir2→nexa-dir)**: 구 폴백
+/// `%LOCALAPPDATA%\NexaDir2\data`가 있으면 신 경로로 rename(실패 시 구 경로 유지 —
+/// 데이터 무손실). 신 경로가 이미 있으면 마이그레이션 생략.
 fn choose_data_dir(exe_side: PathBuf) -> PathBuf {
     if dir_writable(&exe_side) {
         return exe_side;
     }
     match std::env::var_os("LOCALAPPDATA") {
-        Some(la) => PathBuf::from(la).join("NexaDir2").join("data"),
+        Some(la) => {
+            let base = PathBuf::from(&la);
+            let new = base.join("NexaDir").join("data");
+            let old = base.join("NexaDir2").join("data");
+            if !new.exists() && old.exists() {
+                if let Some(parent) = new.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if fs::rename(&old, &new).is_err() {
+                    return old; // rename 실패 시 구 경로 그대로 사용(데이터 보존)
+                }
+            }
+            new
+        }
         None => exe_side,
     }
 }
@@ -267,7 +283,7 @@ fn kv_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
 impl Settings {
     pub fn serialize(&self) -> String {
         let mut out = format!(
-            "# nexa-dir2 settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\ndock_ratio={:.3}\ndock_split={:.3}\nterm_font={}\nterm_font_size={}\ndlg_font={}\ndlg_font_size={}\nlauncher={}\n",
+            "# nexa-dir settings v1\ntheme={}\nlang={}\nshow_hidden={}\nshow_dotfiles={}\nsplit={:.3}\ndock={}\ndock_ratio={:.3}\ndock_split={:.3}\nterm_font={}\nterm_font_size={}\ndlg_font={}\ndlg_font_size={}\nlauncher={}\n",
             self.theme,
             self.lang,
             u8::from(self.show_hidden),
@@ -510,7 +526,7 @@ impl Settings {
 impl Session {
     /// 탭 경로 구분자 `|` — Windows 경로에 등장 불가 문자.
     pub fn serialize(&self) -> String {
-        let mut out = String::from("# nexa-dir2 session v1\n");
+        let mut out = String::from("# nexa-dir session v1\n");
         out.push_str(&format!("active_panel={}\n", self.active_panel));
         for (i, p) in self.panels.iter().enumerate() {
             let tabs: Vec<String> = p
@@ -1089,7 +1105,7 @@ mod tests {
         let picked = choose_data_dir(bad.clone());
         match std::env::var_os("LOCALAPPDATA") {
             Some(_) => assert!(
-                picked.ends_with(Path::new("NexaDir2").join("data")),
+                picked.ends_with(Path::new("NexaDir").join("data")),
                 "설치형 폴백: {picked:?}"
             ),
             None => assert_eq!(picked, bad, "LOCALAPPDATA 부재 = 후보 유지"),
