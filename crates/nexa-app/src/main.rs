@@ -3,6 +3,8 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+#[cfg(windows)]
+mod about;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod config;
 #[cfg(windows)]

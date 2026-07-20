@@ -29,6 +29,18 @@ menu.view.theme.system = 테마: 시스템
 menu.view.theme.light = 테마: 라이트
 menu.view.theme.dark = 테마: 다크
 menu.view.lang.system = 언어: 시스템
+menu.help = 도움말
+menu.help.about = Nexa Dir 정보
+
+# ── About(X-26 ③) ──
+about.title = Nexa Dir 정보
+about.desc = 초저메모리 포터블 Windows 파일 탐색기
+about.version = 버전
+about.link.repo = Nexa Dir 저장소 (GitHub)
+about.link.releases = 다운로드 (GitHub Releases)
+about.license = 라이선스: PolyForm Noncommercial 1.0.0
+about.copyright = © 2026 SosomLab · Sangyong Bae
+about.ok = 확인
 
 # ── 컬럼 ──
 col.name = 이름
@@ -118,6 +130,7 @@ panel.right = 우
 tab.lock = 탭 잠금
 tab.unlock = 탭 잠금 해제
 tab.duplicate = 탭 복제
+tab.new = 새 탭
 tab.close = 탭 닫기
 ops.applyAll = (예=모두 덮어쓰기 · 아니오=모두 건너뛰기 · 취소=중단 — 선택은 남은 충돌 전체에 적용됩니다)
 
@@ -180,6 +193,7 @@ bulk.conflict.empty = 빈 이름
 bulk.conflict.invalid = 금지 문자
 bulk.conflict.dup = 중복
 bulk.conflict.exists = 이미 존재
+bulk.conflict.nested = 상위 폴더와 함께 선택됨
 bulk.done = 이름변경 {0}
 bulk.fail = 실패 {0}
 bulk.noSelection = 선택 없음

@@ -113,6 +113,8 @@ const ORDER_FIELD_COLS: u32 = 2;
 const WM_APP_BULK: u32 = 0x8008; // WM_APP + 8
 /// ctl 갤러리(개발 검증 전용 — 메뉴 비노출, 주입으로만 연다. ctldemo.rs).
 const WM_APP_CTLDEMO: u32 = 0x8009; // WM_APP + 9
+/// About 창 지연 실행(X-26 ③ — 모달 재진입 규약 WM_APP_PREFS 동일. 0x800A/B=편집 창).
+const WM_APP_ABOUT: u32 = 0x800C;
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -163,6 +165,8 @@ const CMD_PANEL_TOGGLE: u32 = 64;
 /// 정보(도크) 듀얼↔싱글 토글(07-19 — 툴바 단일 버튼: 켜짐 = 듀얼 정보,
 /// 싱글 패널에선 비활성[정보 싱글 고정 규칙]).
 const CMD_INFO_TOGGLE: u32 = 65;
+/// About 창(X-26 ③ — 도움말 메뉴, 07-20).
+const CMD_ABOUT: u32 = 66;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 
@@ -329,6 +333,11 @@ fn build_menus(
         Menu {
             title: tr("menu.view"),
             items: view_items,
+        },
+        Menu {
+            // 도움말(X-26 ③ — 07-20): About. 홈페이지 항목은 X-26 ①② 완성 시.
+            title: tr("menu.help"),
+            items: vec![MenuItem::new(CMD_ABOUT, tr("menu.help.about"), "")],
         },
     ]
 }
@@ -2701,6 +2710,14 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
     }
     let _ = EndPaint(hwnd, &ps);
 
+    // 멀티라인 탭(07-20): 탭 바 필요 줄 수는 paint가 측정 — 줄 수가 바뀌었으면
+    // 재레이아웃 후 무효화(다음 WM_PAINT에서 새 높이로 수렴·1프레임 지연)
+    if st.panels.iter().any(|p| p.tabbar.take_lines_changed()) {
+        let mut inv = Invalidations::default();
+        layout(hwnd, st, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+    }
+
     if st.icons.borrow().has_pending() {
         SetTimer(Some(hwnd), TIMER_ICONS, crate::icons::shell::TICK_MS, None);
     }
@@ -2992,6 +3009,10 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         CMD_CTLDEMO => {
             // 임시(07-17): ctl 갤러리(GroupCard 검증) — X-23 재편 완료 시 제거
             let _ = PostMessageW(Some(hwnd), WM_APP_CTLDEMO, WPARAM(0), LPARAM(0));
+        }
+        CMD_ABOUT => {
+            // About 모달(X-26 ③) — 동일 재진입 규약
+            let _ = PostMessageW(Some(hwnd), WM_APP_ABOUT, WPARAM(0), LPARAM(0));
         }
         CMD_UNDO | CMD_REDO => {
             do_undo_redo(hwnd, st, id == CMD_REDO);
@@ -3956,6 +3977,7 @@ unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
     const CMD_DUP: usize = 2;
     const CMD_CLOSE: usize = 3;
     const CMD_PIN: usize = 4;
+    const CMD_NEW: usize = 5;
     let (locked, pinned, count) = match state_of(hwnd) {
         Some(st) if tab < st.panels[panel].tab_count() => (
             st.panels[panel].tab_locked(tab),
@@ -3993,6 +4015,7 @@ unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
         true,
     );
     append(CMD_DUP, &tr("tab.duplicate"), true);
+    append(CMD_NEW, &tr("tab.new"), true); // 새 탭 — 닫기 위(사용자 요청 07-20)
     append(CMD_CLOSE, &tr("tab.close"), !locked && count > 1);
     let mut pt = windows::Win32::Foundation::POINT::default();
     let _ = GetCursorPos(&mut pt);
@@ -4013,6 +4036,11 @@ unsafe fn show_tab_menu(hwnd: HWND, panel: usize, tab: usize) {
         CMD_DUP => {
             let ctx = st.nav_ctx();
             st.panels[panel].duplicate_tab(tab, ctx, &mut inv);
+        }
+        CMD_NEW => {
+            // 새 탭(07-20 — Ctrl+T·[+] 동일 경로: 활성 탭 경로 복제)
+            let ctx = st.nav_ctx();
+            st.panels[panel].new_tab(ctx, &mut inv);
         }
         CMD_CLOSE => st.panels[panel].close_tab(tab, &mut inv),
         _ => {}
@@ -5141,6 +5169,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // ctl 갤러리(개발 검증 전용 — 07-17 GroupCard)
             if let Some(st) = state_of(hwnd) {
                 let _ = crate::ctldemo::show(hwnd, &st.dlg_font.clone());
+            }
+            LRESULT(0)
+        }
+        m if m == WM_APP_ABOUT => {
+            // About 모달(X-26 ③ — 07-20): State 차용 밖에서 표시(재진입 규약)
+            if let Some(st) = state_of(hwnd) {
+                let font = st.dlg_font.clone();
+                crate::about::show(hwnd, &font);
             }
             LRESULT(0)
         }

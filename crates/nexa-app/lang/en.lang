@@ -30,6 +30,18 @@ menu.view.theme.system = Theme: System
 menu.view.theme.light = Theme: Light
 menu.view.theme.dark = Theme: Dark
 menu.view.lang.system = Language: System
+menu.help = Help
+menu.help.about = About Nexa Dir
+
+# ── About (X-26 (3)) ──
+about.title = About Nexa Dir
+about.desc = Ultra-low-memory portable file explorer for Windows
+about.version = Version
+about.link.repo = Nexa Dir repository (GitHub)
+about.link.releases = Download (GitHub Releases)
+about.license = License: PolyForm Noncommercial 1.0.0
+about.copyright = © 2026 SosomLab · Sangyong Bae
+about.ok = OK
 
 # ── Columns (original col.* keys) ──
 col.name = Name
@@ -119,6 +131,7 @@ panel.right = R
 tab.lock = Lock tab
 tab.unlock = Unlock tab
 tab.duplicate = Duplicate tab
+tab.new = New tab
 tab.close = Close tab
 ops.applyAll = (Yes=overwrite all / No=skip all / Cancel=abort - the choice applies to all remaining conflicts)
 
@@ -181,6 +194,7 @@ bulk.conflict.empty = empty name
 bulk.conflict.invalid = invalid characters
 bulk.conflict.dup = duplicate
 bulk.conflict.exists = already exists
+bulk.conflict.nested = selected with its parent folder
 bulk.done = renamed {0}
 bulk.fail = failed {0}
 bulk.noSelection = no selection

@@ -149,6 +149,7 @@ impl Panel {
             pending_tab_menu: None,
             focused: true,
         };
+        p.tabbar.set_line_height(m.tab_h, &mut inv); // 멀티라인 줄 높이(07-20)
         p.sync_chrome(&mut inv);
         p
     }
@@ -332,9 +333,11 @@ impl Panel {
     // ── 레이아웃·표시 ───────────────────────────────────────────
 
     /// 탭 바(상단) → 네비 바([←][→][↑] + 경로 바) → 리스트(잔여) 수직 배치(docs/20 §1·§2).
+    /// 탭 바 높이 = tab_h × **필요 줄 수**(멀티라인 07-20 — paint가 측정한 캐시.
+    /// 줄 수 변경은 호스트가 take_lines_changed로 감지해 재레이아웃).
     pub fn set_bounds(&mut self, bounds: Rect, inv: &mut Invalidations) {
         self.bounds = bounds;
-        let tab_h = self.m.tab_h.min(bounds.h);
+        let tab_h = (self.m.tab_h * self.tabbar.lines().max(1) as i32).min(bounds.h);
         let bar_h = self.m.bar_h.min((bounds.h - tab_h).max(0));
         self.tabbar
             .set_bounds(Rect::new(bounds.x, bounds.y, bounds.w, tab_h), inv);
@@ -395,6 +398,7 @@ impl Panel {
         self.m = m;
         self.base_columns = columns.clone();
         self.tabbar.set_metrics(m.row_h, m.pad_x, inv);
+        self.tabbar.set_line_height(m.tab_h, inv); // 멀티라인 줄 높이(07-20)
         self.navbtns.set_metrics(m.row_h, m.pad_x, inv);
         self.navbtns.set_button_width(Some(nav_btn_w(&m)), inv);
         self.pathbar.set_metrics(m.row_h, m.pad_x, inv);
