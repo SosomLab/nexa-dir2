@@ -268,7 +268,9 @@ impl Widget for Toolbar {
                     b: mix(theme.chrome_bg.b, theme.accent.b),
                 }
             } else if self.hover == Some(i) && btn.enabled {
-                theme.header_bg
+                // hover = sel_bg(X-27 — 경로 바 세그먼트 hover와 동일 토큰.
+                // 종전 header_bg는 chrome_bg와 명도 차가 없어 식별 불가)
+                theme.sel_bg
             } else {
                 theme.chrome_bg
             };
