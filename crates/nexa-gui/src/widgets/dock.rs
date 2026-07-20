@@ -29,10 +29,29 @@ pub struct InfoDock {
     goto_range: std::cell::Cell<(i32, i32)>,
     /// 호스트 패널 포커스 — 비활성 패널은 강조색(accent·sel_bg)을 무채색으로 낮춘다.
     focused: bool,
-    /// 내용 라인 선택(드래그 — QA 07-15: Info/Preview 텍스트 복사). (앵커, 현재) 라인.
-    sel: Option<(usize, usize)>,
+    /// 내용 텍스트 선택(드래그 — QA 07-15 라인 → **문자 단위**로 보완 07-20:
+    /// Info/Preview 영역 선택 복사). (앵커, 현재) = (라인, 문자 경계).
+    sel: Option<((usize, usize), (usize, usize))>,
     /// 선택 드래그 중(MouseDown 시작 → MouseUp 종료, 선택은 유지).
     sel_drag: bool,
+    /// paint 캐시: 그려진 라인별 문자 경계 x 오프셋(원점 = bounds.x+pad_x 접두 폭 —
+    /// edit.rs 캐시 규약). 내용/지표/크기 변경 시 비움(paint가 재계산). 폭 초과
+    /// 문자는 측정 중단(클릭 가능 영역 상한 = 보이는 폭).
+    offsets: std::cell::RefCell<Vec<Vec<i32>>>,
+}
+
+/// 클릭 x(원점 상대) → 최근접 문자 경계 인덱스(edit.rs index_at 규약).
+fn nearest_boundary(offs: &[i32], rel: i32) -> usize {
+    let mut best = 0usize;
+    let mut bd = i32::MAX;
+    for (i, o) in offs.iter().enumerate() {
+        let d = (o - rel).abs();
+        if d < bd {
+            bd = d;
+            best = i;
+        }
+    }
+    best
 }
 
 impl InfoDock {
@@ -51,6 +70,7 @@ impl InfoDock {
             focused: false,
             sel: None,
             sel_drag: false,
+            offsets: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -67,11 +87,42 @@ impl InfoDock {
         (i < self.lines.len()).then_some(i)
     }
 
-    /// 선택 텍스트(라인 범위 — Ctrl+C 복사용, QA 07-15). 선택 없으면 `None`.
+    /// 선택 텍스트(문자 단위 영역 — Ctrl+C 복사용, QA 07-15 → 07-20 보완).
+    /// 선택 없음·빈 범위 = `None`.
     pub fn selected_text(&self) -> Option<String> {
-        let (a, b) = self.sel?;
-        let (lo, hi) = (a.min(b), a.max(b).min(self.lines.len().saturating_sub(1)));
-        Some(self.lines[lo..=hi].join("\r\n"))
+        let (a, c) = self.sel?;
+        let (lo, hi) = if a <= c { (a, c) } else { (c, a) };
+        if lo == hi || lo.0 >= self.lines.len() {
+            return None;
+        }
+        let chars_of = |l: usize| self.lines[l].chars().collect::<Vec<char>>();
+        let (ll, lc) = lo;
+        let (hl, hc) = (hi.0.min(self.lines.len() - 1), hi.1);
+        if ll == hl {
+            let cs = chars_of(ll);
+            let (a, b) = (lc.min(cs.len()), hc.min(cs.len()));
+            return (b > a).then(|| cs[a..b].iter().collect());
+        }
+        let mut parts = Vec::with_capacity(hl - ll + 1);
+        let f = chars_of(ll);
+        parts.push(f[lc.min(f.len())..].iter().collect::<String>());
+        for l in ll + 1..hl {
+            parts.push(self.lines[l].clone());
+        }
+        let t = chars_of(hl);
+        parts.push(t[..hc.min(t.len())].iter().collect::<String>());
+        Some(parts.join("\r\n"))
+    }
+
+    /// 클릭 좌표 → (라인, 최근접 문자 경계) — paint 오프셋 캐시 역참조(paint 전 = None).
+    fn char_at(&self, x: i32, y: i32) -> Option<(usize, usize)> {
+        let i = self.line_at(x, y)?;
+        let offs = self.offsets.borrow();
+        let line = offs.get(i)?;
+        if line.is_empty() {
+            return Some((i, 0));
+        }
+        Some((i, nearest_boundary(line, x - (self.bounds.x + self.pad_x))))
     }
 
     /// 선택 해제(다른 영역 클릭 시 호스트가 호출).
@@ -124,6 +175,7 @@ impl InfoDock {
     pub fn set_metrics(&mut self, row_h: i32, pad_x: i32, inv: &mut Invalidations) {
         self.row_h = row_h.max(1);
         self.pad_x = pad_x;
+        self.offsets.borrow_mut().clear(); // 폰트/지표 변경 = 문자 폭 캐시 무효(07-20)
         inv.push(self.bounds);
     }
 
@@ -134,6 +186,7 @@ impl InfoDock {
             self.lines = lines;
             self.sel = None;
             self.sel_drag = false;
+            self.offsets.borrow_mut().clear();
             inv.push(self.bounds);
         }
     }
@@ -156,6 +209,7 @@ impl Widget for InfoDock {
         if self.bounds != bounds {
             let old = self.bounds;
             self.bounds = bounds;
+            self.offsets.borrow_mut().clear(); // 폭 변경 = 측정 상한 무효(07-20)
             inv.push(old.union(&bounds));
         }
     }
@@ -189,9 +243,9 @@ impl Widget for InfoDock {
                             inv.push(self.bounds);
                         }
                     }
-                } else if let Some(i) = self.line_at(x, y) {
-                    // 내용 라인 드래그 선택 시작(QA 07-15 — Info/Preview 텍스트 복사)
-                    self.sel = Some((i, i));
+                } else if let Some(pos) = self.char_at(x, y) {
+                    // 내용 드래그 선택 시작(QA 07-15 → 07-20 **문자 단위** 앵커)
+                    self.sel = Some((pos, pos));
                     self.sel_drag = true;
                     inv.push(self.bounds);
                 } else {
@@ -200,18 +254,26 @@ impl Widget for InfoDock {
             }
             InputEvent::MouseMove { x, y } => {
                 if self.sel_drag {
-                    // 내용 영역 밖은 첫/끝 라인으로 클램프(엣지 드래그)
+                    // 내용 영역 밖은 첫/끝 라인·문자 경계로 클램프(엣지 드래그 — 07-20)
+                    let offs = self.offsets.borrow();
+                    if offs.is_empty() {
+                        return;
+                    }
                     let top = self.bounds.y + 1 + self.row_h.min((self.bounds.h - 1).max(0));
-                    let i = if y < top {
+                    let li = if y < top {
                         0
                     } else {
-                        (((y - top) / self.row_h).max(0) as usize)
-                            .min(self.lines.len().saturating_sub(1))
+                        (((y - top) / self.row_h).max(0) as usize).min(offs.len() - 1)
                     };
-                    let _ = x;
+                    let ci = if offs[li].is_empty() {
+                        0
+                    } else {
+                        nearest_boundary(&offs[li], x - (self.bounds.x + self.pad_x))
+                    };
+                    drop(offs);
                     if let Some((a, cur)) = self.sel {
-                        if cur != i {
-                            self.sel = Some((a, i));
+                        if cur != (li, ci) {
+                            self.sel = Some((a, (li, ci)));
                             inv.push(self.bounds);
                         }
                     }
@@ -219,6 +281,11 @@ impl Widget for InfoDock {
             }
             InputEvent::MouseUp { .. } => {
                 self.sel_drag = false; // 선택은 유지(Ctrl+C 복사 — 터미널 규약 동일)
+                if let Some((a, c)) = self.sel {
+                    if a == c {
+                        self.sel = None; // 이동 없는 단순 클릭 = 선택 없음(edit.rs 규약)
+                    }
+                }
             }
             _ => {}
         }
@@ -290,23 +357,48 @@ impl Widget for InfoDock {
             ctx.draw_image(area, img);
             return;
         }
-        // 내용 라인들 — 드래그 선택 라인은 하이라이트(QA 07-15, Ctrl+C 복사 대상)
-        let sel = self.sel.map(|(a, b2)| (a.min(b2), a.max(b2)));
+        // 내용 라인들 — 드래그 선택 **문자 구간** 하이라이트(QA 07-15 → 07-20 보완,
+        // Ctrl+C 복사 대상). 문자 경계 오프셋은 여기서 캐시(히트 테스트 역참조 —
+        // edit.rs paint_field 규약. 무효화된 경우에만 재측정)
+        let sel = self.sel.map(|(a, c)| if a <= c { (a, c) } else { (c, a) });
+        let rebuild = self.offsets.borrow().is_empty() && !self.lines.is_empty();
+        let x0 = b.x + self.pad_x;
+        let max_w = (b.w - self.pad_x).max(0);
         let mut y = strip.bottom();
         for (i, line) in self.lines.iter().enumerate() {
             if y >= b.bottom() {
                 break;
             }
-            let bg = if sel.is_some_and(|(lo, hi)| i >= lo && i <= hi) {
-                theme.sel_bg
-            } else {
-                theme.panel_bg
-            };
-            let cell = Rect::new(b.x, y, b.w, self.row_h.min(b.bottom() - y));
-            if bg != theme.panel_bg {
-                ctx.fill_rect(cell, bg);
+            if rebuild {
+                let mut offs = vec![0];
+                let mut prefix = String::new();
+                for c in line.chars() {
+                    prefix.push(c);
+                    let w = ctx.text_width(&prefix);
+                    offs.push(w);
+                    if w > max_w {
+                        break; // 보이는 폭 밖 = 클릭 불가(측정 상한)
+                    }
+                }
+                self.offsets.borrow_mut().push(offs);
             }
-            ctx.text_opaque(cell.x + self.pad_x, ty(cell), cell, line, theme.text, bg);
+            let cell = Rect::new(b.x, y, b.w, self.row_h.min(b.bottom() - y));
+            if let Some(((ll, lc), (hl, hc))) = sel.filter(|&((ll, _), (hl, _))| ll <= i && i <= hl)
+            {
+                let offs = self.offsets.borrow();
+                if let Some(o) = offs.get(i) {
+                    let last = o.len().saturating_sub(1);
+                    let cs = if i == ll { lc.min(last) } else { 0 };
+                    let ce = if i == hl { hc.min(last) } else { last };
+                    if ce > cs {
+                        ctx.fill_rect(
+                            Rect::new(x0 + o[cs], cell.y, o[ce] - o[cs], cell.h),
+                            theme.sel_bg,
+                        );
+                    }
+                }
+            }
+            ctx.text(cell.x + self.pad_x, ty(cell), cell, line, theme.text);
             y += self.row_h;
         }
         // 잔여 배경
@@ -328,6 +420,59 @@ mod tests {
         fn text_width(&mut self, text: &str) -> i32 {
             text.chars().count() as i32 * 8
         }
+    }
+
+    #[test]
+    fn drag_selects_char_region_and_click_alone_clears() {
+        // 문자 단위 영역 선택(07-20 — 미리보기 텍스트 복사 보완). Probe = 8px/문자.
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        d.set_lines(vec!["abcdef".into(), "01234".into()], &mut inv);
+        d.paint(&mut Probe, &Theme::dark());
+        // 내용 top = 100+1+20 = 121. 라인0 문자경계2(x=6+16) 프레스 →
+        // 라인1 문자경계3(x=6+24)까지 드래그
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: 6 + 16,
+                y: 121,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        d.on_event(&InputEvent::MouseMove { x: 6 + 24, y: 141 }, &mut inv);
+        d.on_event(&InputEvent::MouseUp { x: 6 + 24, y: 141 }, &mut inv);
+        assert_eq!(
+            d.selected_text().as_deref(),
+            Some("cdef\r\n012"),
+            "문자 단위 다중 라인 영역"
+        );
+        // 같은 라인 안 부분 선택
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: 6 + 8,
+                y: 121,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        d.on_event(&InputEvent::MouseMove { x: 6 + 32, y: 121 }, &mut inv);
+        d.on_event(&InputEvent::MouseUp { x: 6 + 32, y: 121 }, &mut inv);
+        assert_eq!(d.selected_text().as_deref(), Some("bcd"));
+        // 이동 없는 단순 클릭 = 선택 없음(edit.rs 규약)
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: 6 + 16,
+                y: 121,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        d.on_event(&InputEvent::MouseUp { x: 6 + 16, y: 121 }, &mut inv);
+        assert_eq!(d.selected_text(), None);
     }
 
     #[test]
