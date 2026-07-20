@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-20
+
+- **백로그 등록 3건(사용자 요청)**: ① **X-25 일괄 이름변경 조상·자손 동시 선택 처리** — 코드 확인 결과 결함 재현: 트리에서 상위 폴더와 그 하위 항목을 함께 선택하면 [`open_bulk_rename`](crates/nexa-app/src/win.rs) 순차 rename 루프가 부모를 먼저 개명할 때 자손 `old_path`가 소멸(선택 순서 = `selected_paths()` 삽입 순서라 비결정적) → 부모 우선 = 자손 실패·자손 우선 = undo/`rename_expanded` 경로 추적 손상, [`conflicts()`](crates/nexa-ops/src/batch_rename.rs)도 미감지. 대응 = 1차 감지 후 차단(`Nested` 충돌)·2차 경로 rebase 완전 지원(차후). ② **X-26 SosomLab·제품 홈페이지 + About 화면**. ③ **X-27 툴바 내비(이전/다음/상위) 버튼 mouseover 배경색** — 경로 바 세그먼트 hover 색 재사용. 문서 반영만(코드 무변). 상세 [journal/2026-07-20.md](journal/2026-07-20.md).
+
 ## 2026-07-19
 
 - **배포 채널 검토 + 제품명 정리(사용자)**: ① **제품명 nexa-dir2→nexa-dir 전면 정리**(저장소만 nexa-dir2 유지 — 창 클래스 NexaDirMain·데이터 경로 NexaDir[rename 마이그레이션]·산출물·문서·위키). ② **배포 4종 큐 상태**: winget 2 PR = Azure 검증 통과·partiallySucceeded는 **MS Guardian 내부 인프라 경고**(매니페스트 무관)·`@wingetbot run`은 신규 기여자 권한 없음→거부, **모더레이터 검토 대기**. Chocolatey 2 = 이메일 수정 repush 후 자동 검사 Pending→모더레이션. **우리 측 추가 조치 없음**(전부 서드파티 큐 대기). 상세 [journal/2026-07-19.md](journal/2026-07-19.md).
