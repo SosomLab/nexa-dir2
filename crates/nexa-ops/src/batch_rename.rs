@@ -257,6 +257,10 @@ pub enum Conflict {
     Duplicate,
     /// 대상 경로에 파일이 이미 존재(자기 자신 제외).
     Exists,
+    /// 개명 예정인 **조상 폴더가 같은 배치에 선택**됨(X-25 1차 — 07-20): 조상이 먼저
+    /// 개명되면 이 항목의 old_path가 디스크에서 소멸(순서 비결정 = undo·경로 추적
+    /// 부정합) → 감지 후 적용 차단. 경로 rebase 완전 지원(2차)은 후속.
+    Nested,
 }
 
 // ── 날짜 포맷(순수 — 외부 crate 0) ─────────────────────────────────
@@ -697,6 +701,21 @@ pub fn conflicts(
         .map(|(i, (parent, old, new))| {
             if new == old {
                 return Conflict::None; // 무변경 — 적용 제외 대상
+            }
+            // 조상-자손 동시 선택(X-25 1차): 개명 예정(new≠old)인 다른 항목의 전체
+            // 경로(부모+현재 이름)가 이 항목 부모의 경로 접두이면 자손 = Nested.
+            // 문자열 동등만 보던 기존 검사로는 미감지(경로 계층 비교 — 대소문자 무시).
+            let norm = |s: &str| s.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+            let parent_n = norm(parent);
+            let nested = items.iter().enumerate().any(|(j, (p, o, n))| {
+                if j == i || n == o {
+                    return false;
+                }
+                let full = format!("{}\\{}", norm(p), lower(o));
+                parent_n == full || parent_n.starts_with(&format!("{full}\\"))
+            });
+            if nested {
+                return Conflict::Nested;
             }
             if new.trim().is_empty() {
                 return Conflict::Empty;
@@ -1383,6 +1402,37 @@ mod tests {
         assert_eq!(
             conflicts(&[("p".into(), "x".into(), "  ".into())], &exists),
             vec![Conflict::Empty]
+        );
+    }
+
+    #[test]
+    fn nested_selection_blocks_descendants() {
+        // X-25 1차(07-20): 조상 폴더와 자손을 함께 선택 — 조상이 개명 예정이면
+        // 자손 = Nested(적용 차단). 접두 유사 형제(parents)는 오탐 없음.
+        let exists = |_: &str, _: &str| false;
+        let items: Vec<(String, String, String)> = vec![
+            ("C:\\d".into(), "parent".into(), "parent2".into()),
+            ("C:\\d\\parent".into(), "a.txt".into(), "b.txt".into()),
+            ("C:\\d\\Parent\\sub".into(), "c.txt".into(), "d.txt".into()),
+            ("C:\\d\\parents".into(), "e.txt".into(), "f.txt".into()),
+        ];
+        assert_eq!(
+            conflicts(&items, &exists),
+            vec![
+                Conflict::None,
+                Conflict::Nested, // 직계 자손(대소문자 무시)
+                Conflict::Nested, // 깊은 자손
+                Conflict::None,   // 접두 유사 형제
+            ]
+        );
+        // 조상이 무변경이면 자손은 안전 — 충돌 없음
+        let safe: Vec<(String, String, String)> = vec![
+            ("C:\\d".into(), "parent".into(), "parent".into()),
+            ("C:\\d\\parent".into(), "a.txt".into(), "b.txt".into()),
+        ];
+        assert_eq!(
+            conflicts(&safe, &exists),
+            vec![Conflict::None, Conflict::None]
         );
     }
 }

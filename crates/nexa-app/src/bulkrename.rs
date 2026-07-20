@@ -362,6 +362,7 @@ fn conflict_label(c: Conflict) -> String {
         Conflict::Invalid => tr("bulk.conflict.invalid"),
         Conflict::Duplicate => tr("bulk.conflict.dup"),
         Conflict::Exists => tr("bulk.conflict.exists"),
+        Conflict::Nested => tr("bulk.conflict.nested"),
     }
 }
 
