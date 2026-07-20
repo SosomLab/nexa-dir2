@@ -1,6 +1,15 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-21 (KST)** — **릴리스 배포 보류 방침(사용자)**: Chocolatey
+> **갱신: 2026-07-21 2차 (KST)** — **배포 채널 상태 실측 점검**: ①
+> **Chocolatey 진전** — `nexa-dir`·`nexa-dir.portable` 0.8.1 자동 검사 3종
+> **완료**(Validation/Verification **Passing**, Package Scan **Flagged Note**
+> = 참고성 플래그·차단 아님) → `awaiting moderation`. 07-19 기록의 "3종
+> Pending"은 정정됨. ② **winget 변동 없음** — #404528·#404533 모두 `OPEN`,
+> `Azure-Pipeline-Passed` 라벨 유지·07-19 14:07 이후 무변동(신규 기여자
+> 재실행 권한 없음 → 모더레이터 검토 대기). **양 채널 우리 측 조치 불요.**
+> [journal/2026-07-21.md](journal/2026-07-21.md).
+>
+> **직전(07-21 1차)** — **릴리스 배포 보류 방침(사용자)**: Chocolatey
 > 모더레이션 **승인 전까지 새 버전 태그·Release 배포 보류**(대기 중 이중 큐
 > 회피 — 첫 승인 후 후속 버전은 심사 가속). 실기 QA는 로컬 릴리즈 빌드로
 > 계속. [journal/2026-07-21.md](journal/2026-07-21.md).

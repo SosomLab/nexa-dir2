@@ -8,6 +8,7 @@
 
 ## 2026-07-21
 
+- **배포 채널 등록 상태 실측 점검(사용자)**: ① **Chocolatey 진전** — `nexa-dir`·`nexa-dir.portable` 0.8.1 자동 검사 3종이 **Pending에서 완료로 전환**(Validation·Verification **Passing**, Package Scan **Flagged Note** = 참고성 플래그·차단 아님) → `awaiting moderation`. 07-19 기록의 "3종 Pending" 서술 정정. 미승인 패키지는 community OData 피드에 안 뜨므로 상태 확인은 패키지 페이지로 해야 함(조회 노하우). ② **winget 변동 없음** — #404528·#404533 모두 `OPEN`·`Azure-Pipeline-Passed` 유지, 07-19 14:07 `@wingetbot run` 권한 거부 이후 신규 코멘트 0 = 모더레이터 검토 대기 지속. **양 채널 우리 측 조치 불요.** 상세 [journal/2026-07-21.md](journal/2026-07-21.md).
 - **릴리스 배포 보류 방침(사용자)**: **Chocolatey 모더레이션 승인 전까지 새 버전 태그·GitHub Release 배포 보류** — 대기 중 새 버전 push 시 두 버전이 각자 큐에 쌓이는 것을 회피(첫 승인 후 후속 버전은 심사 가속). 실기 QA는 로컬 릴리즈 빌드로 계속(07-20분 exe 1.45MB). 상세 [journal/2026-07-21.md](journal/2026-07-21.md).
 
 ## 2026-07-20
