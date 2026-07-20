@@ -8,6 +8,7 @@
 
 ## 2026-07-20
 
+- **탭 UX·미리보기 선택 + 오늘 백로그 구현(사용자 요청 5건)**: ① **X-28 탭 바 UX** — 우클릭 메뉴 New Tab(닫기 위) + **멀티라인 탭**(폭 초과 줄바꿈 — 줄 수는 paint 측정 `lines()`→호스트 재레이아웃 1프레임 수렴) + 상하 드래그 이동(x 중간점 규칙이 교차 줄에 그대로 성립) ② **X-29 도크 텍스트 문자 단위 선택 복사** — 정보/미리보기 드래그 = (라인,문자) 영역 선택(edit.rs 오프셋 캐시 규약)·Ctrl+C 무변 ③ **X-27 ✅** 툴바 hover=`sel_bg` 통일(종전 header_bg는 chrome_bg와 명도 차 없음) ④ **X-25 1차 ✅** `Conflict::Nested`(개명 예정 조상의 경로 접두 검출)로 자손 표기·적용 차단 ⑤ **X-26 ③ ✅** About 창(about.rs — dialog.rs 규약·도움말 메뉴 신설·링크 3종은 홈페이지 확정 전 GitHub). 전 테스트 green·clippy 0 — 실기 QA 대기. 상세 [journal/2026-07-20.md](journal/2026-07-20.md).
 - **백로그 등록 3건(사용자 요청)**: ① **X-25 일괄 이름변경 조상·자손 동시 선택 처리** — 코드 확인 결과 결함 재현: 트리에서 상위 폴더와 그 하위 항목을 함께 선택하면 [`open_bulk_rename`](crates/nexa-app/src/win.rs) 순차 rename 루프가 부모를 먼저 개명할 때 자손 `old_path`가 소멸(선택 순서 = `selected_paths()` 삽입 순서라 비결정적) → 부모 우선 = 자손 실패·자손 우선 = undo/`rename_expanded` 경로 추적 손상, [`conflicts()`](crates/nexa-ops/src/batch_rename.rs)도 미감지. 대응 = 1차 감지 후 차단(`Nested` 충돌)·2차 경로 rebase 완전 지원(차후). ② **X-26 SosomLab·제품 홈페이지 + About 화면**. ③ **X-27 툴바 내비(이전/다음/상위) 버튼 mouseover 배경색** — 경로 바 세그먼트 hover 색 재사용. 문서 반영만(코드 무변). 상세 [journal/2026-07-20.md](journal/2026-07-20.md).
 
 ## 2026-07-19
