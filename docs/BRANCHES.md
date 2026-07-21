@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/transfer-progress-ux` | 2026-07-21 | —(실기 QA 후 병합 대기) | — | 7 | **X-30 전송 진행 UX 개편**(사용자 요청 5건) — "1 B" 오표기 수정(set_done 실제 바이트 유지)·설정 `transfer_close_ms`(ms 단위·0=창 미표시)·B~TB 단위+파일 수 표기·항목별 크기 비례 세그먼트 바(nexa-ops Event 프로토콜)·전송 중 대상 실행/드래그 잠금 | [2026-07-21](journal/2026-07-21.md) |
 | `feat/svg-icons` | 2026-07-18 | 2026-07-18 (`aad2b93`) | 2026-07-18 | 1 | **SVG 아이콘 파이프라인**(사용자 요청·SVG 제공) — svg.rs 서브셋 파서(중립·테스트 6·crate 0)+gdipctx svg_to_hicon(ARGB 오프스크린·요청 크기 즉석 래스터)+icons EMBEDDED_SVG(PNG 우선순위 역전·폴백). 1호 view-flat.svg. 193 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/order-editors` | 2026-07-19 | 2026-07-19 (병합) | 2026-07-19 | 1 | **설정 편집기 3종 공통 창 + 컬럼 기능**(사용자 요청) — ordereditor 공통 모달(어댑터)·NxOrderTree 체크·config 제네릭 문법·prefs OrderDialog 3항목·컬럼 드래그 재배열/표시·colsync 연동·세션·ctx 메뉴 반영. 실기 QA 전 항목 | [2026-07-19](journal/2026-07-19.md) |
 | `feat/toolbar-tips` | 2026-07-18 | 2026-07-18 (`033ac02`) | 2026-07-18 | 1 | **도구 모음 툴팁 i18n**(사용자 요청) — tip.rs 팝업(NOACTIVATE·테마 색·dlg_font)+chrome hover_tip/set_buttons+win TIMER_TIP(500ms 표시·커서 실측 이탈 해제·클릭 파괴). 기존 메뉴 키 재사용(신규 키 0)·언어 전환 즉시 반영. 실기 en/ko·187 green | [2026-07-18](journal/2026-07-18.md) |

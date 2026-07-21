@@ -14,8 +14,8 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColorBrush,
     InvalidateRect, SelectObject, SetBkMode, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, DEFAULT_CHARSET,
-    DEFAULT_QUALITY, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD, HBRUSH, HFONT,
-    OUT_DEFAULT_PRECIS, TRANSPARENT,
+    DEFAULT_QUALITY, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD,
+    HBRUSH, HFONT, OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -90,6 +90,8 @@ pub struct PrefValues {
     pub typeahead_special: bool,
     pub typeahead_space: bool,
     pub typeahead_backspace: bool,
+    /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 07-21).
+    pub transfer_close_ms: i32,
 }
 
 /// 설정 항목 종류(편집 컨트롤 형태) — 레지스트리 최소 단위.
@@ -162,6 +164,7 @@ const F_COL_AUTOFIT: u32 = 34;
 const F_TOOLBAR_ORDER: u32 = 35;
 const F_COL_LAYOUT: u32 = 36;
 const F_CTX_MENU: u32 = 37;
+const F_TRANSFER_CLOSE: u32 = 38;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -176,6 +179,7 @@ const TREE: &[(&str, &str, i32)] = &[
     ("list", "pref.cat.listGeneral", 1),
     ("typeahead", "pref.cat.typeahead", 1),
     ("ctxmenu", "pref.cat.ctxmenu", 1),
+    ("transfer", "pref.cat.transfer", 1),
     ("tabs", "pref.cat.tabs", 0),
     ("panel", "pref.grp.panel", 0),
     ("dock", "pref.cat.dock", 1),
@@ -427,6 +431,13 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.ctxMenuOrder.desc",
             kind: Kind::OrderDialog,
             field: F_CTX_MENU,
+        },
+        Entry {
+            cat: "transfer",
+            label_key: "pref.transferClose",
+            desc_key: "pref.transferClose.desc",
+            kind: Kind::Number,
+            field: F_TRANSFER_CLOSE,
         },
         Entry {
             cat: "list",
@@ -683,6 +694,7 @@ fn sanitize(v: &mut PrefValues) {
     );
     v.typeahead_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
     v.typeahead_pos = v.typeahead_pos.clamp(0, 8);
+    v.transfer_close_ms = v.transfer_close_ms.clamp(0, 10_000);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
 }
 
@@ -817,7 +829,7 @@ impl PrefState {
             self.title_font,
             w!("STATIC"),
             &title,
-            0,
+            0x0080, // SS_NOPREFIX — '&' 그대로 표시(View & Sort)
             x0,
             PAD - self.scroll_y,
             pane_w,
@@ -844,7 +856,7 @@ impl PrefState {
                     self.font,
                     w!("STATIC"),
                     &tr(lk),
-                    0x0100, // SS_NOTIFY — STN_CLICKED로 이동
+                    0x0180, // SS_NOTIFY | SS_NOPREFIX — 클릭 이동·'&' 그대로
                     x0,
                     y,
                     pane_w,
@@ -903,7 +915,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y + 3,
                             pane_w - 90,
@@ -933,7 +945,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y,
                             pane_w,
@@ -1001,7 +1013,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y,
                             pane_w,
@@ -1067,7 +1079,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y,
                             pane_w,
@@ -1133,6 +1145,7 @@ impl PrefState {
                             F_TERM_COLS => self.values.term_cols.to_string(),
                             F_COL_AUTOFIT => self.values.col_autofit_max.to_string(),
                             F_TA_RESET => self.values.typeahead_reset_ms.to_string(),
+                            F_TRANSFER_CLOSE => self.values.transfer_close_ms.to_string(),
                             F_DLG_FONT => self.values.dlg_font.clone(),
                             F_DLG_SIZE => self.values.dlg_font_size.to_string(),
                             _ => String::new(),
@@ -1158,7 +1171,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0 + EDIT_W + 8,
                             y + 3,
                             (pane_w - EDIT_W - 8).max(40),
@@ -1179,7 +1192,7 @@ impl PrefState {
                         self.font,
                         w!("STATIC"),
                         &desc,
-                        0,
+                        0x0080,
                         x0 + 2,
                         y,
                         pane_w - 2,
@@ -1259,6 +1272,7 @@ impl PrefState {
             F_TAB_DBL => v.tab_dblclick != d.tab_dblclick,
             F_TA_SCOPE => v.typeahead_scope != d.typeahead_scope,
             F_TA_RESET => v.typeahead_reset_ms != d.typeahead_reset_ms,
+            F_TRANSFER_CLOSE => v.transfer_close_ms != d.transfer_close_ms,
             F_TA_POS => v.typeahead_pos != d.typeahead_pos,
             F_BASE_FONT => v.base_font != d.base_font,
             F_BASE_SIZE => v.base_font_size != d.base_font_size,
@@ -1348,6 +1362,9 @@ impl PrefState {
                 }
                 F_TA_RESET => {
                     self.values.typeahead_reset_ms = get_text(hw).trim().parse().unwrap_or(1000)
+                }
+                F_TRANSFER_CLOSE => {
+                    self.values.transfer_close_ms = get_text(hw).trim().parse().unwrap_or(2000)
                 }
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),
@@ -1452,11 +1469,12 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
         right: dis.rcItem.right - 4,
         bottom: dis.rcItem.bottom,
     };
+    // DT_NOPREFIX — 라벨의 '&'를 접두(밑줄)로 해석하지 않음(View & Sort — QA 07-21)
     DrawTextW(
         dis.hDC,
         &mut wide,
         &mut rc,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
     );
     SelectObject(dis.hDC, old);
 }

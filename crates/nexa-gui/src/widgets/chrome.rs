@@ -76,7 +76,6 @@ impl ToolButton {
         self.tip = tip.into();
         self
     }
-
 }
 
 pub struct Toolbar {

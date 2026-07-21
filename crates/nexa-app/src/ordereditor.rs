@@ -72,11 +72,7 @@ impl EdCtx {
                 }
             } else {
                 // 그룹 체크(07-19 사용자): 해제 = 통째 숨김·자식 상태 보존
-                rows.push((
-                    (self.label)(block, None),
-                    0,
-                    self.with_vis.then_some(*bvis),
-                ));
+                rows.push(((self.label)(block, None), 0, self.with_vis.then_some(*bvis)));
                 for (k, vis) in items {
                     rows.push((
                         (self.label)(block, Some(k)),
@@ -285,7 +281,9 @@ pub unsafe fn show(owner: HWND, spec: &EditorSpec, value: &str, field: u32, font
         w!("NexaOrderEditor"),
         windows::core::PCWSTR(title.as_ptr()),
         WINDOW_STYLE(
-            WS_POPUP.0 | WS_BORDER.0 | windows::Win32::UI::WindowsAndMessaging::WS_CAPTION.0
+            WS_POPUP.0
+                | WS_BORDER.0
+                | windows::Win32::UI::WindowsAndMessaging::WS_CAPTION.0
                 | windows::Win32::UI::WindowsAndMessaging::WS_SYSMENU.0,
         ) | WS_VISIBLE,
         cx,

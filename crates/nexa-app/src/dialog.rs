@@ -307,6 +307,24 @@ unsafe fn center_over(owner: HWND, w: i32, h: i32, dy: i32) -> (i32, i32) {
 
 // ── 전송 진행 창(비모달 — UI 스레드 소유) ────────────────────────
 
+/// 항목(파일/폴더) 세그먼트 상태(07-21 — 전체 바를 항목 크기 비례로 분할 표시).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SegStatus {
+    Pending,
+    Active,
+    Done,
+    Skipped,
+    Failed,
+}
+
+/// 항목 1개의 진행(크기·완료 바이트·상태) — 워커가 채우고 UI가 스냅샷으로 받는다.
+#[derive(Clone, Copy)]
+pub struct SegItem {
+    pub size: u64,
+    pub done: u64,
+    pub status: SegStatus,
+}
+
 /// 진행 창 상태(GWLP_USERDATA — [`Progress`]가 Box 소유).
 struct ProgState {
     /// 완료 카운트다운(초 — Some이면 닫기 모드: 버튼 [닫기 (N)]·0=자동 닫힘, 07-15).
@@ -315,6 +333,11 @@ struct ProgState {
     btn: HWND,
     done: u64,
     total: u64,
+    /// 항목별 세그먼트(07-21) — 빈 목록 = 계획 미도착(단색 바 폴백).
+    items: Vec<SegItem>,
+    /// 표시용 현재 항목 번호(1-기반)·총 항목 수(07-21 — "파일 {0}/{1}").
+    cur_item: usize,
+    item_count: usize,
     label: Vec<u16>,
     font: HFONT,
     line_h: i32,
@@ -333,6 +356,122 @@ unsafe fn set_btn_countdown(btn: HWND, n: i32) {
     let label = format!("{} ({n})", crate::i18n::tr("ops.close"));
     let w = windows::core::HSTRING::from(label);
     let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(btn, PCWSTR(w.as_ptr()));
+}
+
+/// 파일별 진행색 5색 순환 팔레트(사용자 요청 07-21 — 항목 인덱스 % 5).
+/// 1색 = 앱 accent 근사(기존 단색 바와 동일), 이후 초록/주황/보라/분홍(BGR).
+const SEG_PALETTE: [COLORREF; 5] = [
+    COLORREF(0x00D47B26), // 파랑(앱 accent 근사)
+    COLORREF(0x0059C734), // 초록
+    COLORREF(0x000A9FFF), // 주황
+    COLORREF(0x00DE52AF), // 보라
+    COLORREF(0x005F37FF), // 분홍
+];
+
+/// 세그먼트 진행 바(07-21): 항목별 크기 비례 구간 + 파일별 순환 팔레트색(완료=전체·
+/// 진행=부분 채움) + 건너뜀=회색·실패=적색 + 구간 경계선. **모든 항목 최소 3px 보장**
+/// (QA 07-21 — 작은 파일 구간이 반올림으로 소멸해 4파일이 3구간으로 보이던 문제:
+/// 부족분은 가장 넓은 구간에서 차감). 계획 미도착/항목 과다(>512)는 단색 바 폴백.
+unsafe fn paint_segments(
+    hdc: windows::Win32::Graphics::Gdi::HDC,
+    inner: &RECT,
+    items: &[SegItem],
+    done: u64,
+    total: u64,
+) {
+    const SKIP: COLORREF = COLORREF(0x00A0A0A0); // 건너뜀 회색
+    const FAIL: COLORREF = COLORREF(0x003C3CDC); // 실패 적색(BGR)
+    const MIN_W: i32 = 3; // 구간 최소 가시 폭(경계선 1px + 본체)
+    let w = (inner.right - inner.left) as i64;
+    let fill = |rc: &RECT, c: COLORREF| {
+        if rc.right > rc.left {
+            let b = CreateSolidBrush(c);
+            FillRect(hdc, rc, b);
+            let _ = DeleteObject(b.into());
+        }
+    };
+    if total == 0 || items.is_empty() || items.len() > 512 {
+        // 폴백 — 단색 바(전체 백분율)
+        let pct = if total > 0 {
+            (done as f64 / total as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let rc = RECT {
+            right: inner.left + (w as f64 * pct) as i32,
+            ..*inner
+        };
+        fill(&rc, SEG_PALETTE[0]);
+        return;
+    }
+    // 1) 크기 비례 폭(누적 경계 — 오차 비누적) → 2) 최소 폭 보정(공간이 허락할 때):
+    // 작은/0바이트 항목도 자기 구간이 보이도록 부족분을 가장 넓은 구간에서 가져온다.
+    let n = items.len();
+    let mut widths: Vec<i32> = Vec::with_capacity(n);
+    let mut cum = 0u64;
+    let mut prev_x = 0i32;
+    for it in items {
+        cum += it.size;
+        let x = (w * cum as i64 / total as i64) as i32;
+        widths.push(x - prev_x);
+        prev_x = x;
+    }
+    if (n as i64) * ((MIN_W + 1) as i64) <= w {
+        for i in 0..n {
+            while widths[i] < MIN_W {
+                // 가장 넓은 구간에서 1px씩 차감(단순·항목 수 소규모 전제)
+                let Some(j) = (0..n)
+                    .filter(|&j| j != i && widths[j] > MIN_W)
+                    .max_by_key(|&j| widths[j])
+                else {
+                    break;
+                };
+                widths[j] -= 1;
+                widths[i] += 1;
+            }
+        }
+    }
+    let mut x0 = inner.left;
+    for (k, it) in items.iter().enumerate() {
+        let x1 = x0 + widths[k];
+        if x1 <= x0 {
+            continue; // 최소 폭 보정 불능(항목 과다) — 표시 생략
+        }
+        let seg = RECT {
+            left: x0,
+            right: x1,
+            ..*inner
+        };
+        let color = SEG_PALETTE[k % SEG_PALETTE.len()];
+        match it.status {
+            SegStatus::Done => fill(&seg, color),
+            SegStatus::Skipped => fill(&seg, SKIP),
+            SegStatus::Failed => fill(&seg, FAIL),
+            SegStatus::Active => {
+                let frac = if it.size > 0 {
+                    (it.done as f64 / it.size as f64).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let rc = RECT {
+                    right: x0 + ((x1 - x0) as f64 * frac) as i32,
+                    ..seg
+                };
+                fill(&rc, color);
+            }
+            SegStatus::Pending => {}
+        }
+        // 구간 경계선(왼쪽 변)
+        if k > 0 {
+            let div = RECT {
+                left: x0,
+                right: x0 + 1,
+                ..*inner
+            };
+            fill(&div, COLORREF(0x00808080));
+        }
+        x0 = x1;
+    }
 }
 
 unsafe extern "system" fn prog_proc(
@@ -367,7 +506,8 @@ unsafe extern "system" fn prog_proc(
             LRESULT(0)
         }
         WM_TIMER => {
-            // 완료 카운트다운(07-15) — [닫기 (N)] 재라벨, 0 = 자동 닫힘
+            // 완료 카운트다운(07-15) — [닫기 (N)] 재라벨, 0 = 자동 닫힘.
+            // 첫 틱은 ms 나머지 간격(set_done — 07-21 ms 정밀), 이후 1초 주기로 재무장.
             if !state.is_null() {
                 if let Some(n) = (*state).closing {
                     let left = n - 1;
@@ -377,6 +517,7 @@ unsafe extern "system" fn prog_proc(
                     } else {
                         (*state).closing = Some(left);
                         set_btn_countdown((*state).btn, left);
+                        SetTimer(Some(hwnd), 1, 1_000, None); // 같은 id = 간격 재설정
                     }
                 }
             }
@@ -395,6 +536,8 @@ unsafe extern "system" fn prog_proc(
                 let (done, total) = ((*state).done, (*state).total);
                 let pct = if total > 0 {
                     ((done as f64 / total as f64) * 100.0) as i32
+                } else if (*state).closing.is_some() {
+                    100 // 0바이트 전송 완료(빈 파일 등) — 0%로 닫히지 않게(07-21)
                 } else {
                     0
                 };
@@ -406,7 +549,20 @@ unsafe extern "system" fn prog_proc(
                 };
                 let mut label = (*state).label.clone();
                 DrawTextW(hdc, &mut label, &mut rc, DT_LEFT);
-                let info = format!("{} / {}  ({pct}%)", fmt_bytes(done), fmt_bytes(total));
+                // 정보 줄(바 바로 위 — 07-21): 진행/전체 용량(B~TB 적응)·백분율·파일 수
+                let mut info = format!("{} / {}  ({pct}%)", fmt_bytes(done), fmt_bytes(total));
+                if (*state).item_count > 0 {
+                    info.push_str(&format!(
+                        "  ·  {}",
+                        crate::i18n::trf(
+                            "ops.fileCount",
+                            &[
+                                &(*state).cur_item.to_string(),
+                                &(*state).item_count.to_string()
+                            ]
+                        )
+                    ));
+                }
                 let mut info_w: Vec<u16> = info.encode_utf16().collect();
                 let mut rc2 = RECT {
                     left: PAD,
@@ -434,16 +590,7 @@ unsafe extern "system" fn prog_proc(
                 let bg = CreateSolidBrush(COLORREF(0x00F0F0F0));
                 FillRect(hdc, &inner, bg);
                 let _ = DeleteObject(bg.into());
-                let fill_w = ((inner.right - inner.left) as i64 * pct as i64 / 100) as i32;
-                if fill_w > 0 {
-                    let fill = RECT {
-                        right: inner.left + fill_w,
-                        ..inner
-                    };
-                    let fb = CreateSolidBrush(COLORREF(0x00D47B26)); // 앱 accent 근사(BGR)
-                    FillRect(hdc, &fill, fb);
-                    let _ = DeleteObject(fb.into());
-                }
+                paint_segments(hdc, &inner, &(*state).items, done, total);
                 SelectObject(hdc, old);
             }
             let _ = EndPaint(hwnd, &ps);
@@ -511,6 +658,9 @@ impl Progress {
             btn: HWND::default(),
             done: 0,
             total: 0,
+            items: Vec::new(),
+            cur_item: 0,
+            item_count: 0,
             label: label.encode_utf16().collect(),
             font,
             line_h,
@@ -566,9 +716,20 @@ impl Progress {
     }
 
     /// 진행 값 갱신 + 다시 그리기(WM_APP_TRANSFER 통지에서 호출).
-    pub unsafe fn update(&mut self, done: u64, total: u64) {
+    /// `items` = 항목별 세그먼트 스냅샷·`cur`/`count` = 파일 {cur}/{count} 표기(07-21).
+    pub unsafe fn update(
+        &mut self,
+        done: u64,
+        total: u64,
+        items: Vec<SegItem>,
+        cur: usize,
+        count: usize,
+    ) {
         self.state.done = done;
         self.state.total = total;
+        self.state.items = items;
+        self.state.cur_item = cur;
+        self.state.item_count = count;
         // erase=true — WM_PAINT가 TRANSPARENT로 그려 이전 텍스트가 중첩(QA 07-15)
         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
     }
@@ -579,16 +740,22 @@ impl Progress {
     }
 
     /// 완료 표시(원본 PROG-WIN — **커스텀 카운트다운 닫기 버튼**, 사용자 요청 07-15):
-    /// 라벨 교체 + 바 100% + [취소]→[닫기 (2)] 전환. 창 자체 타이머가 1초마다 (N)을
+    /// 라벨 교체 + [취소]→[닫기 (N)] 전환. 창 자체 타이머가 1초마다 (N)을
     /// 줄이고 0이 되거나 버튼 클릭 시 창을 닫는다(닫기 트리거 = 버튼). 호스트는
-    /// 백스톱 타이머로 구조체만 지연 해제.
-    pub unsafe fn set_done(&mut self, label: &str) {
+    /// 백스톱 타이머로 구조체만 지연 해제. `ms` = 닫기 대기(설정 `transfer_close_ms`).
+    ///
+    /// 진행값은 실제 바이트를 유지한다(07-21 — 1/1로 강제하던 것이 "1 B / 1 B" 오표기
+    /// 원인이었음). 취소·실패로 미완료면 바도 부분 진행 그대로 남는다(정직 표기).
+    pub unsafe fn set_done(&mut self, label: &str, ms: i32) {
         self.state.label = label.encode_utf16().collect();
-        self.state.done = 1;
-        self.state.total = 1;
-        self.state.closing = Some(2);
-        set_btn_countdown(self.state.btn, 2);
-        SetTimer(Some(self.hwnd), 1, 1_000, None);
+        // ms 정밀(설정 단위 ms — 07-21 2차): 버튼 표시는 올림 초 [닫기 (N)],
+        // 첫 틱 = ms 나머지 간격(이후 wndproc가 1초 주기 재무장) → 총 대기 = 정확히 ms.
+        let ms = ms.max(1);
+        let n = (ms + 999) / 1_000; // 올림 초(div_ceil — 고정 툴체인 미안정이라 수동)
+        self.state.closing = Some(n);
+        set_btn_countdown(self.state.btn, n);
+        let first = (ms - (n - 1) * 1_000).max(50); // 1..=1000ms(과소 방지 하한)
+        SetTimer(Some(self.hwnd), 1, first as u32, None);
         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
     }
 }
@@ -603,17 +770,18 @@ impl Drop for Progress {
     }
 }
 
-/// 사람이 읽는 바이트 표기(진행 창 — KB/MB/GB).
+/// 사람이 읽는 바이트 표기(진행 창 — B/KB/MB/GB/TB 적응, 07-21 TB 추가).
 fn fmt_bytes(b: u64) -> String {
     const K: f64 = 1024.0;
-    let bf = b as f64;
-    if bf >= K * K * K {
-        format!("{:.1} GB", bf / (K * K * K))
-    } else if bf >= K * K {
-        format!("{:.1} MB", bf / (K * K))
-    } else if bf >= K {
-        format!("{:.1} KB", bf / K)
-    } else {
-        format!("{b} B")
+    if b < 1024 {
+        return format!("{b} B");
     }
+    let mut v = b as f64 / K;
+    for unit in ["KB", "MB", "GB"] {
+        if v < K {
+            return format!("{v:.1} {unit}");
+        }
+        v /= K;
+    }
+    format!("{v:.1} TB")
 }

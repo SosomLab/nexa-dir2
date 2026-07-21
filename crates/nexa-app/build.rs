@@ -37,7 +37,11 @@ fn main() {
     // 버전 = Cargo 패키지 버전(x.y.z → x,y,z,0).
     let ver = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
     let mut p = ver.split('.').map(|s| s.parse::<u16>().unwrap_or(0));
-    let (v0, v1, v2) = (p.next().unwrap_or(0), p.next().unwrap_or(0), p.next().unwrap_or(0));
+    let (v0, v1, v2) = (
+        p.next().unwrap_or(0),
+        p.next().unwrap_or(0),
+        p.next().unwrap_or(0),
+    );
 
     // .rc 생성(ico 절대경로 — 백슬래시 이스케이프).
     let ico_esc = ico.to_string_lossy().replace('\\', "\\\\");
@@ -108,7 +112,9 @@ fn find_rc() -> Option<PathBuf> {
     for pf in ["ProgramFiles(x86)", "ProgramFiles"] {
         let Ok(base) = env::var(pf) else { continue };
         let bin = Path::new(&base).join("Windows Kits").join("10").join("bin");
-        let Ok(entries) = fs::read_dir(&bin) else { continue };
+        let Ok(entries) = fs::read_dir(&bin) else {
+            continue;
+        };
         let mut vers: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())

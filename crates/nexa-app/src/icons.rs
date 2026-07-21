@@ -164,30 +164,69 @@ pub mod shell {
     const EMBEDDED_SVG: &[(&str, &str)] = &[
         // 켜짐(듀얼)은 접미 규칙 `-on` = 전체 accent 재렌더(사용자 재확정
         // 07-19: "toggle on은 전체 선이 모두 파란색" — 전용 시안 폐지)
-        ("panel-toggle", include_str!("../assets/toolbar/panel-toggle.svg")),
-        ("panel-toggle-dark", include_str!("../assets/toolbar/panel-toggle-dark.svg")),
-        ("info-toggle", include_str!("../assets/toolbar/info-toggle.svg")),
-        ("info-toggle-dark", include_str!("../assets/toolbar/info-toggle-dark.svg")),
+        (
+            "panel-toggle",
+            include_str!("../assets/toolbar/panel-toggle.svg"),
+        ),
+        (
+            "panel-toggle-dark",
+            include_str!("../assets/toolbar/panel-toggle-dark.svg"),
+        ),
+        (
+            "info-toggle",
+            include_str!("../assets/toolbar/info-toggle.svg"),
+        ),
+        (
+            "info-toggle-dark",
+            include_str!("../assets/toolbar/info-toggle-dark.svg"),
+        ),
         ("dock", include_str!("../assets/toolbar/dock.svg")),
         // 다크 전용 변형(사용자 제공 — 흰 채움 타일+검은 바 홈). 다크 테마에서
         // chrome이 `#dark` 신호 → make_embedded가 `<이름>-dark` 에셋을 원색 그대로 렌더.
         ("dock-dark", include_str!("../assets/toolbar/dock-dark.svg")),
         ("view-tree", include_str!("../assets/toolbar/view-tree.svg")),
-        ("view-tree-dark", include_str!("../assets/toolbar/view-tree-dark.svg")),
+        (
+            "view-tree-dark",
+            include_str!("../assets/toolbar/view-tree-dark.svg"),
+        ),
         ("view-flat", include_str!("../assets/toolbar/view-flat.svg")),
-        ("view-flat-dark", include_str!("../assets/toolbar/view-flat-dark.svg")),
-        ("view-tiles", include_str!("../assets/toolbar/view-tiles.svg")),
-        ("view-tiles-dark", include_str!("../assets/toolbar/view-tiles-dark.svg")),
+        (
+            "view-flat-dark",
+            include_str!("../assets/toolbar/view-flat-dark.svg"),
+        ),
+        (
+            "view-tiles",
+            include_str!("../assets/toolbar/view-tiles.svg"),
+        ),
+        (
+            "view-tiles-dark",
+            include_str!("../assets/toolbar/view-tiles-dark.svg"),
+        ),
         ("colsync", include_str!("../assets/toolbar/colsync.svg")),
-        ("colsync-dark", include_str!("../assets/toolbar/colsync-dark.svg")),
+        (
+            "colsync-dark",
+            include_str!("../assets/toolbar/colsync-dark.svg"),
+        ),
         ("refresh", include_str!("../assets/toolbar/refresh.svg")),
-        ("refresh-dark", include_str!("../assets/toolbar/refresh-dark.svg")),
+        (
+            "refresh-dark",
+            include_str!("../assets/toolbar/refresh-dark.svg"),
+        ),
         ("settings", include_str!("../assets/toolbar/settings.svg")),
-        ("settings-dark", include_str!("../assets/toolbar/settings-dark.svg")),
+        (
+            "settings-dark",
+            include_str!("../assets/toolbar/settings-dark.svg"),
+        ),
         ("hidden", include_str!("../assets/toolbar/hidden.svg")),
-        ("hidden-dark", include_str!("../assets/toolbar/hidden-dark.svg")),
+        (
+            "hidden-dark",
+            include_str!("../assets/toolbar/hidden-dark.svg"),
+        ),
         ("dotfiles", include_str!("../assets/toolbar/dotfiles.svg")),
-        ("dotfiles-dark", include_str!("../assets/toolbar/dotfiles-dark.svg")),
+        (
+            "dotfiles-dark",
+            include_str!("../assets/toolbar/dotfiles-dark.svg"),
+        ),
     ];
 
     /// SVG 아이콘 잉크 폴백(잉크 토큰 없는 구형 키 — 검정). 실제 잉크는

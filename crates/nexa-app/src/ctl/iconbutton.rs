@@ -196,10 +196,7 @@ pub unsafe fn create_svg(
             let px = (d.max(12)) * 2;
             // 잉크 = 컨트롤 기본 텍스트색(사용자 확정 07-19 "선 색은 기본 색")
             let c = style.text.0;
-            let ink = 0xFF00_0000
-                | ((c & 0xFF) << 16)
-                | (c & 0xFF00)
-                | ((c >> 16) & 0xFF);
+            let ink = 0xFF00_0000 | ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF);
             st.img_on = super::gdipctx::svg_to_image(&doc, px, ink);
             st.img_off = super::gdipctx::svg_to_image(&doc, px, (ink & 0x00FF_FFFF) | 0x6100_0000);
             st.fit = ImageFit::Stretch;

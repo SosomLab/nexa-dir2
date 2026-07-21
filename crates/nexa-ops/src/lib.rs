@@ -321,21 +321,48 @@ pub struct Progress {
     pub item_count: usize,
 }
 
+/// 항목 종결 상태(진행 창 세그먼트 바 — 07-21).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ItemStatus {
+    Done,
+    Skipped,
+    Failed,
+}
+
+/// 전송 이벤트(07-21 — 세그먼트 진행 바·전송 중 대상 잠금을 위해 바이트 진행에서 확장).
+#[derive(Debug)]
+pub enum Event<'a> {
+    /// 전송 시작 전 계획 — 항목별 크기(세그먼트 비율)·총 바이트. 정확히 1회.
+    Plan { sizes: &'a [u64], total_bytes: u64 },
+    /// 항목 쓰기 시작 — 실제 대상 경로(완료 전 열기/이동 차단용).
+    ItemStart { index: usize, dest: &'a Path },
+    /// 바이트 진행(4MB 청크 단위 — `done_bytes`는 전체 누적).
+    Bytes(Progress),
+    /// 항목 종결(성공/건너뜀/실패·취소).
+    ItemEnd { index: usize, status: ItemStatus },
+}
+
 /// **전송 단일 경로**(원본 TransferPathsInto 이식) — 모든 복사/이동 진입점이 이 함수로 수렴.
 ///
 /// 보장(docs/33): 같은 폴더 규칙(이동=무동작·복사=순번 복제) · 다른 폴더 충돌은 `resolve`로
-/// **충돌 항목만 순차** 확인(Overwrite/Skip) · 바이트 진행률(`on_progress`) · 취소(`cancel`) ·
-/// 항목 실패 개별 격리. 호출 측(워커 스레드)이 완료 후 재로드를 수행한다.
+/// **충돌 항목만 순차** 확인(Overwrite/Skip) · 이벤트 통지(`on_event` — 계획/항목/바이트) ·
+/// 취소(`cancel`) · 항목 실패 개별 격리. 호출 측(워커 스레드)이 완료 후 재로드를 수행한다.
 pub fn transfer(
     sources: &[PathBuf],
     dest_dir: &Path,
     op: Op,
     resolve: &mut dyn FnMut(&Path) -> Conflict,
-    on_progress: &mut dyn FnMut(Progress, &Path),
+    on_event: &mut dyn FnMut(Event),
     cancel: &AtomicBool,
 ) -> Outcome {
     let mut out = Outcome::default();
-    let total_bytes: u64 = sources.iter().map(|p| size_of(p)).sum();
+    let sizes: Vec<u64> = sources.iter().map(|p| size_of(p)).collect();
+    let total_bytes: u64 = sizes.iter().sum();
+    on_event(Event::Plan {
+        sizes: &sizes,
+        total_bytes,
+    });
+    let item_count = sources.len();
     let mut done = 0u64;
     for (i, src) in sources.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -347,20 +374,6 @@ pub fn transfer(
             .parent()
             .is_some_and(|parent| path_equals(parent, dest_dir));
 
-        // 진행 보고 클로저 — done 누적 + 스냅샷 통지
-        let mut progress = |delta: u64, done: &mut u64| {
-            *done += delta;
-            on_progress(
-                Progress {
-                    done_bytes: *done,
-                    total_bytes,
-                    item_index: i,
-                    item_count: sources.len(),
-                },
-                src,
-            );
-        };
-
         let result: io::Result<Option<PathBuf>> = (|| {
             if same_folder {
                 return match op {
@@ -368,11 +381,23 @@ pub fn transfer(
                     Op::Copy => {
                         // 같은 폴더 복사 = 순번 복제(" (2)"…)
                         let dest = unique_dest(dest_dir, &leaf_name(src), is_dir);
+                        on_event(Event::ItemStart {
+                            index: i,
+                            dest: &dest,
+                        });
                         copy_onto_with_progress(
                             src,
                             &dest,
                             false,
-                            &mut |d| progress(d, &mut done),
+                            &mut |d| {
+                                done += d;
+                                on_event(Event::Bytes(Progress {
+                                    done_bytes: done,
+                                    total_bytes,
+                                    item_index: i,
+                                    item_count,
+                                }));
+                            },
                             cancel,
                         )?;
                         Ok(Some(dest))
@@ -391,25 +416,32 @@ pub fn transfer(
             } else {
                 false
             };
+            on_event(Event::ItemStart {
+                index: i,
+                dest: &natural,
+            });
+            let mut bytes = |d: u64| {
+                done += d;
+                on_event(Event::Bytes(Progress {
+                    done_bytes: done,
+                    total_bytes,
+                    item_index: i,
+                    item_count,
+                }));
+            };
             match op {
-                Op::Copy => copy_onto_with_progress(
-                    src,
-                    &natural,
-                    overwrite,
-                    &mut |d| progress(d, &mut done),
-                    cancel,
-                )?,
-                Op::Move => move_onto_with_progress(
-                    src,
-                    &natural,
-                    overwrite,
-                    &mut |d| progress(d, &mut done),
-                    cancel,
-                )?,
+                Op::Copy => copy_onto_with_progress(src, &natural, overwrite, &mut bytes, cancel)?,
+                Op::Move => move_onto_with_progress(src, &natural, overwrite, &mut bytes, cancel)?,
             }
             Ok(Some(natural))
         })();
 
+        let status = match &result {
+            Ok(Some(_)) => ItemStatus::Done,
+            Ok(None) => ItemStatus::Skipped,
+            Err(_) => ItemStatus::Failed,
+        };
+        on_event(Event::ItemEnd { index: i, status });
         match result {
             Ok(Some(dest)) => out.transferred.push((src.clone(), dest)),
             Ok(None) => out.skipped.push(src.clone()),
@@ -446,7 +478,7 @@ mod tests {
         resolve: &mut dyn FnMut(&Path) -> Conflict,
     ) -> Outcome {
         let cancel = AtomicBool::new(false);
-        transfer(sources, dest, op, resolve, &mut |_, _| {}, &cancel)
+        transfer(sources, dest, op, resolve, &mut |_| {}, &cancel)
     }
 
     #[test]
@@ -583,12 +615,20 @@ mod tests {
         fs::write(a.join("f.bin"), vec![7u8; 100_000]).unwrap();
         let cancel = AtomicBool::new(false);
         let mut last = None;
+        let mut plan: Option<(Vec<u64>, u64)> = None;
+        let mut starts: Vec<(usize, PathBuf)> = Vec::new();
+        let mut ends: Vec<(usize, ItemStatus)> = Vec::new();
         let out = transfer(
             &[a.join("f.bin")],
             &b,
             Op::Copy,
             &mut no_conflict,
-            &mut |p, _| last = Some(p),
+            &mut |ev| match ev {
+                Event::Plan { sizes, total_bytes } => plan = Some((sizes.to_vec(), total_bytes)),
+                Event::ItemStart { index, dest } => starts.push((index, dest.to_path_buf())),
+                Event::Bytes(p) => last = Some(p),
+                Event::ItemEnd { index, status } => ends.push((index, status)),
+            },
             &cancel,
         );
         assert_eq!(out.transferred.len(), 1);
@@ -596,6 +636,42 @@ mod tests {
         assert_eq!(p.done_bytes, 100_000);
         assert_eq!(p.total_bytes, 100_000);
         assert_eq!((p.item_index, p.item_count), (0, 1));
+        // 이벤트 프로토콜(07-21): 계획(항목 크기·총합) → 시작(대상 경로) → 종결(Done)
+        assert_eq!(plan, Some((vec![100_000], 100_000)), "Plan 1회·크기 정확");
+        assert_eq!(starts, vec![(0, b.join("f.bin"))], "ItemStart = 실제 대상");
+        assert_eq!(ends, vec![(0, ItemStatus::Done)]);
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn item_events_report_skip_per_item() {
+        let d = fixture("itemevents");
+        let (a, b) = (d.join("a"), d.join("b"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::write(a.join("f.txt"), "새값").unwrap();
+        fs::write(b.join("f.txt"), "옛값").unwrap();
+        fs::write(a.join("g.txt"), "g").unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut ends = Vec::new();
+        let out = transfer(
+            &[a.join("f.txt"), a.join("g.txt")],
+            &b,
+            Op::Copy,
+            &mut |_| Conflict::Skip,
+            &mut |ev| {
+                if let Event::ItemEnd { index, status } = ev {
+                    ends.push((index, status));
+                }
+            },
+            &cancel,
+        );
+        assert_eq!(out.skipped.len(), 1);
+        assert_eq!(
+            ends,
+            vec![(0, ItemStatus::Skipped), (1, ItemStatus::Done)],
+            "건너뜀/성공이 항목별로 보고"
+        );
         fs::remove_dir_all(&d).unwrap();
     }
 
@@ -613,7 +689,11 @@ mod tests {
             &b,
             Op::Copy,
             &mut no_conflict,
-            &mut |_, _| cancel.store(true, Ordering::Relaxed),
+            &mut |ev| {
+                if matches!(ev, Event::Bytes(_)) {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
             &cancel,
         );
         assert!(out.canceled);

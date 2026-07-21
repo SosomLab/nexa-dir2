@@ -710,6 +710,15 @@ impl Panel {
         self.sync_chrome(inv);
     }
 
+    /// 삭제 낙관 반영(07-21 QA — 휴지통 워커가 느려도 화면에서 즉시 제거):
+    /// 활성 탭에서 대상 경로 행을 표시 제외. FS 무변 — 실패 시 완료 재로드가 원복.
+    pub fn hide_paths(&mut self, paths: &[PathBuf], inv: &mut Invalidations) {
+        let rows = self.rows_mut();
+        if rows.source_mut().tree_mut().remove_paths(paths) > 0 {
+            inv.push(rows.bounds());
+        }
+    }
+
     /// 이름변경을 펼침 집합에 반영(원본 UpdateExpandedPaths) — 폴더 자신+하위 접두사 치환.
     pub fn rename_expanded(&mut self, old: &Path, new: &Path) {
         let ok = expand_key(old);

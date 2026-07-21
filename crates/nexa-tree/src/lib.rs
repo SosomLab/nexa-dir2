@@ -454,6 +454,46 @@ impl Tree {
         }
     }
 
+    /// 경로 목록의 노드(+펼친 하위 전체)를 표시에서 제외한다(07-21 — 삭제 낙관 반영:
+    /// FS 무변·워커 완료 전 화면 선반영, 실패 시 재로드가 원복). 노드는 arena에 남고
+    /// roots/visible/children/선택에서만 빠진다(잔여 id 안정성 유지). 반환 = 매치 수.
+    pub fn remove_paths(&mut self, paths: &[impl AsRef<Path>]) -> usize {
+        fn norm(p: &Path) -> String {
+            p.to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .to_lowercase()
+        }
+        let wanted: HashSet<String> = paths.iter().map(|p| norm(p.as_ref())).collect();
+        let matched: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|n| wanted.contains(&norm(&n.path)))
+            .map(|n| n.id)
+            .collect();
+        if matched.is_empty() {
+            return 0;
+        }
+        // 하위 포함 제거 집합(DFS)
+        let mut dead: HashSet<NodeId> = HashSet::new();
+        let mut stack = matched.clone();
+        while let Some(id) = stack.pop() {
+            if dead.insert(id) {
+                stack.extend(self.nodes[id as usize].children.iter().copied());
+            }
+        }
+        self.roots.retain(|id| !dead.contains(id));
+        self.visible.retain(|id| !dead.contains(id));
+        self.sel_order.retain(|id| !dead.contains(id));
+        self.sel_set.retain(|id| !dead.contains(id));
+        if self.anchor.is_some_and(|a| dead.contains(&a)) {
+            self.anchor = None;
+        }
+        for n in &mut self.nodes {
+            n.children.retain(|id| !dead.contains(id));
+        }
+        matched.len()
+    }
+
     /// 가시 인덱스의 셀 렌더용 **경량 참조 뷰**(X-16 핫패스) — `row()`와 달리 이름을
     /// 클론하지 않는다. 셀/아이콘 조회는 프레임당 가시 행×열로 호출되므로 통 [`VisibleRow`]
     /// 클론(힙 String 포함)은 행당 수 회의 낭비 할당이었다.
@@ -1027,6 +1067,31 @@ mod tests {
             RangeChange::NONE
         );
         assert_eq!(t.expand_path("no/such").unwrap(), RangeChange::NONE);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn remove_paths_hides_node_and_descendants() {
+        let base = make_fixture("removepaths");
+        let mut t = Tree::open(&base).unwrap();
+        t.expand_path(&base.join("dirA").to_string_lossy()).unwrap();
+        assert_eq!(
+            names(&t),
+            vec!["dirA", "dirB", "x.txt", "y.txt", "file1.txt"]
+        );
+        // 파일 1개 제거 — 선택 상태도 함께 정리
+        let x_id = t.row(2).unwrap().id;
+        t.select(x_id, SelectMode::Single);
+        // 플랫폼 구분자로 조립(index_of_path 테스트와 동일 규약 — 내부 '/' 불일치 회피)
+        assert_eq!(t.remove_paths(&[base.join("dirA").join("x.txt")]), 1);
+        assert_eq!(names(&t), vec!["dirA", "dirB", "y.txt", "file1.txt"]);
+        assert!(t.selected_paths().is_empty(), "제거 노드 선택 해제");
+        // 폴더 제거 = 펼친 하위 포함 소멸
+        assert_eq!(t.remove_paths(&[base.join("dirA")]), 1);
+        assert_eq!(names(&t), vec!["file1.txt"]);
+        // 무매치 = 무변경
+        assert_eq!(t.remove_paths(&[base.join("없는 경로")]), 0);
+        assert_eq!(t.visible_len(), 1);
         fs::remove_dir_all(&base).unwrap();
     }
 

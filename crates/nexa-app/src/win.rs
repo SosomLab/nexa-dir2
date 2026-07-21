@@ -115,6 +115,9 @@ const WM_APP_BULK: u32 = 0x8008; // WM_APP + 8
 const WM_APP_CTLDEMO: u32 = 0x8009; // WM_APP + 9
 /// About 창 지연 실행(X-26 ③ — 모달 재진입 규약 WM_APP_PREFS 동일. 0x800A/B=편집 창).
 const WM_APP_ABOUT: u32 = 0x800C;
+/// 휴지통 삭제 워커 완료 통지(07-21 QA — SHFileOperationW가 UI 스레드를 3~4초
+/// 블로킹하던 것을 워커로 이관). wparam=성공 여부(1/0) — 대상은 `pending_delete`.
+const WM_APP_DELETE: u32 = 0x800D;
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -595,9 +598,14 @@ struct State {
     uia_struct: Option<(usize, String, usize)>,
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
-    /// 완료 후 자동 닫기 대기 중인 진행 창(2초 — TIMER_PROG_CLOSE가 drop).
+    /// 완료 후 자동 닫기 대기 중인 진행 창(TIMER_PROG_CLOSE가 drop).
     transfer_close: Option<crate::dialog::Progress>,
     transfer_gen: u64,
+    /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 설정 07-21).
+    transfer_close_ms: i32,
+    /// 진행 중 휴지통 삭제 대상(07-21 QA — SHFileOperationW 워커 이관·동시 1잡).
+    /// Some = 워커 실행 중(완료 통지 WM_APP_DELETE에서 undo 기록·재로드에 사용).
+    pending_delete: Option<Vec<PathBuf>>,
     /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
     drag_press: Option<(i32, i32)>,
     /// 직전 행 클릭 (패널, 경로, 시각) — 기선택 항목 느린 재클릭=이름 바꾸기 판정(탐색기 관례).
@@ -715,6 +723,10 @@ struct TransferShared {
     done_bytes: AtomicU64,
     total_bytes: AtomicU64,
     outcome: Mutex<Option<nexa_ops::Outcome>>,
+    /// 항목별 세그먼트 진행(07-21 — Plan 수신 시 고정 길이로 채워짐. 진행 창 표시용).
+    items: Mutex<Vec<crate::dialog::SegItem>>,
+    /// 현재 쓰는 중인 대상 경로(07-21) — 완료 전 더블클릭 실행/드래그 이동 차단.
+    in_flight: Mutex<Option<PathBuf>>,
 }
 
 struct TransferJob {
@@ -723,7 +735,10 @@ struct TransferJob {
     /// 완료 시 히스토리 기록용(M3-3) — Move/Copy에 따라 역연산이 다르다.
     op: nexa_ops::Op,
     /// 진행 창(QA 07-14 — 커스텀 프로그레스·취소 버튼). Drop=창 닫기.
+    /// 설정 `transfer_close_ms=0`이면 None(창 미표시 — 07-21).
     progress: Option<crate::dialog::Progress>,
+    /// 전송 항목 수(Plan 도착 전 표시용 — 07-21).
+    item_count: usize,
 }
 
 impl State {
@@ -1055,6 +1070,8 @@ pub fn run() -> Result<()> {
         transfer: None,
         transfer_close: None,
         transfer_gen: 0,
+        transfer_close_ms: settings.transfer_close_ms,
+        pending_delete: None,
         drag_press: None,
         slow_click: None,
         rename_on_up: false,
@@ -2235,34 +2252,78 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
             return;
         }
     }
-    let (mut ok, mut fail) = (0usize, 0usize);
-    if permanent {
-        for p in &targets {
-            match nexa_ops::delete_permanent(p) {
-                Ok(()) => ok += 1,
-                Err(_) => fail += 1, // 개별 격리(원본)
-            }
+    if !permanent {
+        // 휴지통 삭제 = 워커 스레드(07-21 QA): SHFileOperationW가 소파일 몇 개에도
+        // 3~4초 걸릴 수 있어(셸 네임스페이스·휴지통 메타데이터) UI 스레드 동기 호출이
+        // 앱 전체를 멈추던 문제. 완료는 WM_APP_DELETE로 통지(undo 기록·재로드).
+        if st.pending_delete.is_some() {
+            return; // 동시 1잡 — 진행 중이면 무시(대상 소실 경합 방지)
         }
-    } else if delete_to_recycle_bin(&targets) {
-        ok = targets.len();
-        // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
-        st.history.push(Box::new(DeleteBatchOp {
-            description: trf("del.recycleOp", &[&ok.to_string()]),
-            paths: targets,
-        }));
-    } else {
-        fail = targets.len();
+        st.pending_delete = Some(targets.clone());
+        let hwnd_raw = hwnd.0 as isize;
+        let worker_targets = targets.clone();
+        std::thread::spawn(move || unsafe {
+            // 셸 확장 대비 COM 초기화(STA — SHFileOperation 권고. 실패해도 진행)
+            let hr = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED
+                    | windows::Win32::System::Com::COINIT_DISABLE_OLE1DDE,
+            );
+            let ok = delete_to_recycle_bin(&worker_targets);
+            if hr.is_ok() {
+                windows::Win32::System::Com::CoUninitialize();
+            }
+            let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+            let _ = PostMessageW(Some(hwnd), WM_APP_DELETE, WPARAM(ok as usize), LPARAM(0));
+        });
+        // 낙관적 숨김(07-21 QA): 셸 휴지통 API가 수 초 걸려도 행은 즉시 화면에서
+        // 제거(탐색기 동일 UX). FS 무변 — 실패하면 완료 재로드가 원복한다.
+        let mut inv = Invalidations::default();
+        st.panels[0].hide_paths(&targets, &mut inv);
+        st.panels[1].hide_paths(&targets, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+        update_title(hwnd, st, &format!(" · {}", tr("del.progress")));
+        update_status(hwnd, st);
+        return;
     }
-    let kind = tr(if permanent {
-        "del.kindPermanent"
-    } else {
-        "del.kindRecycle"
-    });
+    let (mut ok, mut fail) = (0usize, 0usize);
+    for p in &targets {
+        match nexa_ops::delete_permanent(p) {
+            Ok(()) => ok += 1,
+            Err(_) => fail += 1, // 개별 격리(원본)
+        }
+    }
+    let kind = tr("del.kindPermanent");
     let mut note = trf("del.done", &[&kind, &ok.to_string()]);
     if fail > 0 {
         note = format!("{note} · {}", trf("ops.errors", &[&fail.to_string()]));
     }
     reload_both(hwnd, st, &format!(" · {note}"));
+}
+
+/// 휴지통 삭제 워커 완료(WM_APP_DELETE — 07-21 QA): undo 기록 + 결과 노트 + 재로드.
+unsafe fn on_delete_message(hwnd: HWND, st: &mut State, ok_flag: bool) {
+    let Some(targets) = st.pending_delete.take() else {
+        return;
+    };
+    let (ok, fail) = if ok_flag {
+        (targets.len(), 0)
+    } else {
+        (0, targets.len())
+    };
+    if ok_flag {
+        // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
+        st.history.push(Box::new(DeleteBatchOp {
+            description: trf("del.recycleOp", &[&ok.to_string()]),
+            paths: targets,
+        }));
+    }
+    let mut note = trf("del.done", &[&tr("del.kindRecycle"), &ok.to_string()]);
+    if fail > 0 {
+        note = format!("{note} · {}", trf("ops.errors", &[&fail.to_string()]));
+    }
+    reload_both(hwnd, st, &format!(" · {note}"));
+    update_status(hwnd, st);
 }
 
 /// F2 — 캐럿 행 인라인 이름변경 시작(원본 B-6).
@@ -2391,11 +2452,14 @@ unsafe fn start_transfer(
     }
     st.transfer_gen += 1;
     let gen = st.transfer_gen;
+    let item_count = sources.len();
     let shared = Arc::new(TransferShared {
         cancel: AtomicBool::new(false),
         done_bytes: AtomicU64::new(0),
         total_bytes: AtomicU64::new(0),
         outcome: Mutex::new(None),
+        items: Mutex::new(Vec::new()),
+        in_flight: Mutex::new(None),
     });
     let sh = shared.clone();
     let hwnd_raw = hwnd.0 as isize; // HWND는 !Send — 원시값으로 워커에 전달
@@ -2415,6 +2479,8 @@ unsafe fn start_transfer(
         // 커스텀 대화상자(dialog.rs — MessageBox 대체). "모두 덮어쓰기"만 이후 무확인,
         // 그 외에는 파일별로 다시 묻는다. 1건뿐이면 자연히 1회 질문.
         let mut decided: Option<nexa_ops::Conflict> = None;
+        // 현재 항목 시작 시점의 전체 누적 바이트(항목별 done 산출 — 07-21)
+        let mut item_base = 0u64;
         let out = nexa_ops::transfer(
             &sources,
             &dest,
@@ -2458,13 +2524,57 @@ unsafe fn start_transfer(
                     }
                 }
             },
-            &mut |p, _| {
-                sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
-                sh.total_bytes.store(p.total_bytes, Ordering::Relaxed);
-                // 4MB 청크 단위 통지 — 저빈도라 스로틀 불요
-                unsafe {
+            // 이벤트 통지(07-21 — 계획/항목 시작·종결/바이트): 공유 상태 갱신 후 PostMessage.
+            // ItemStart는 상태만 기록(다음 Bytes/End가 게시 — 다항목 소파일 메시지 절감).
+            &mut |ev| {
+                let post = || unsafe {
                     let _ =
                         PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(0));
+                };
+                match ev {
+                    nexa_ops::Event::Plan { sizes, total_bytes } => {
+                        sh.total_bytes.store(total_bytes, Ordering::Relaxed);
+                        *sh.items.lock().unwrap() = sizes
+                            .iter()
+                            .map(|&s| crate::dialog::SegItem {
+                                size: s,
+                                done: 0,
+                                status: crate::dialog::SegStatus::Pending,
+                            })
+                            .collect();
+                        post();
+                    }
+                    nexa_ops::Event::ItemStart { index, dest } => {
+                        *sh.in_flight.lock().unwrap() = Some(dest.to_path_buf());
+                        // 항목 시작 시점의 누적 바이트 = 이 항목 done 산출 기준
+                        item_base = sh.done_bytes.load(Ordering::Relaxed);
+                        if let Some(it) = sh.items.lock().unwrap().get_mut(index) {
+                            it.status = crate::dialog::SegStatus::Active;
+                        }
+                    }
+                    nexa_ops::Event::Bytes(p) => {
+                        sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
+                        sh.total_bytes.store(p.total_bytes, Ordering::Relaxed);
+                        if let Some(it) = sh.items.lock().unwrap().get_mut(p.item_index) {
+                            it.done = p.done_bytes.saturating_sub(item_base).min(it.size);
+                        }
+                        // 4MB 청크 단위 통지 — 저빈도라 스로틀 불요
+                        post();
+                    }
+                    nexa_ops::Event::ItemEnd { index, status } => {
+                        *sh.in_flight.lock().unwrap() = None;
+                        if let Some(it) = sh.items.lock().unwrap().get_mut(index) {
+                            it.status = match status {
+                                nexa_ops::ItemStatus::Done => {
+                                    it.done = it.size;
+                                    crate::dialog::SegStatus::Done
+                                }
+                                nexa_ops::ItemStatus::Skipped => crate::dialog::SegStatus::Skipped,
+                                nexa_ops::ItemStatus::Failed => crate::dialog::SegStatus::Failed,
+                            };
+                        }
+                        post();
+                    }
                 }
             },
             &sh.cancel,
@@ -2474,18 +2584,24 @@ unsafe fn start_transfer(
             let _ = PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(1));
         }
     });
-    // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop)
-    let progress = crate::dialog::Progress::open(
-        hwnd,
-        &tr("ops.progressTitle"),
-        &tr("ops.progressLabel"),
-        &st.dlg_font,
-    );
+    // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop).
+    // 설정 transfer_close_ms=0 = 창 미표시(제목줄 %만 — 사용자 요청 07-21).
+    let progress = if st.transfer_close_ms > 0 {
+        crate::dialog::Progress::open(
+            hwnd,
+            &tr("ops.progressTitle"),
+            &tr("ops.progressLabel"),
+            &st.dlg_font,
+        )
+    } else {
+        None
+    };
     st.transfer = Some(TransferJob {
         shared,
         gen,
         op,
         progress,
+        item_count,
     });
     update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &["0"])));
 }
@@ -2505,7 +2621,25 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         // 진행 창 갱신 + [취소]/X 폴링(QA 07-14) — 취소 요청은 워커 cancel 플래그로
         let job = st.transfer.as_mut().unwrap();
         if let Some(p) = &mut job.progress {
-            p.update(d, t);
+            // 세그먼트 스냅샷 + 파일 {cur}/{count}(07-21) — cur = 진행 중 항목 번호,
+            // 없으면 종결된 수(시작 전 0/N·전량 종결 N/N).
+            let items = job.shared.items.lock().unwrap().clone();
+            let count = if items.is_empty() {
+                job.item_count
+            } else {
+                items.len()
+            };
+            let cur = items
+                .iter()
+                .position(|i| i.status == crate::dialog::SegStatus::Active)
+                .map(|i| i + 1)
+                .unwrap_or_else(|| {
+                    items
+                        .iter()
+                        .filter(|i| i.status != crate::dialog::SegStatus::Pending)
+                        .count()
+                });
+            p.update(d, t, items, cur, count);
             if p.cancelled() {
                 job.shared.cancel.store(true, Ordering::Relaxed);
             }
@@ -2518,12 +2652,29 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         return;
     }
     let mut job = st.transfer.take().unwrap();
-    // 진행 창 = 완료 표기 + [닫기 (2)] 카운트다운(창 자체가 닫힘 — 사용자 요청 07-15).
-    // 호스트 타이머는 백스톱: 구조체 지연 해제(창은 이미 닫혔어도 무해).
+    // 진행 창 = 완료 표기 + [닫기 (N)] 카운트다운(창 자체가 닫힘 — 사용자 요청 07-15,
+    // 대기 = 설정 transfer_close_ms 07-21). 호스트 타이머는 백스톱: 구조체 지연 해제.
     if let Some(mut p) = job.progress.take() {
-        p.set_done(&tr("ops.doneClosing"));
+        // 마지막 스냅샷 반영(최종 바이트·세그먼트 상태 — 취소 시 부분 진행 정직 표기)
+        let items = job.shared.items.lock().unwrap().clone();
+        let count = if items.is_empty() {
+            job.item_count
+        } else {
+            items.len()
+        };
+        let cur = items
+            .iter()
+            .filter(|i| i.status != crate::dialog::SegStatus::Pending)
+            .count();
+        let (d, t) = (
+            job.shared.done_bytes.load(Ordering::Relaxed),
+            job.shared.total_bytes.load(Ordering::Relaxed),
+        );
+        p.update(d, t, items, cur, count);
+        let ms = st.transfer_close_ms.max(1);
+        p.set_done(&tr("ops.doneClosing"), ms);
         st.transfer_close = Some(p);
-        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, 2_500, None);
+        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, ms as u32 + 500, None);
     }
     let out = job
         .shared
@@ -3152,8 +3303,7 @@ unsafe fn tip_tick(hwnd: HWND, st: &mut State) {
     let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
     let mut tl = windows::Win32::Foundation::POINT { x: rc.x, y: rc.y };
     let _ = windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut tl);
-    let inside =
-        pt.x >= tl.x && pt.x < tl.x + rc.w && pt.y >= tl.y && pt.y < tl.y + rc.h;
+    let inside = pt.x >= tl.x && pt.x < tl.x + rc.w && pt.y >= tl.y && pt.y < tl.y + rc.h;
     if !inside {
         tip_cancel(hwnd, st);
         return;
@@ -3450,6 +3600,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 typeahead_special: st.ta_special,
                 typeahead_space: st.ta_space,
                 typeahead_backspace: st.ta_backspace,
+                transfer_close_ms: st.transfer_close_ms,
             },
             st.dlg_font.clone(),
         )
@@ -3675,6 +3826,10 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     // 탭 더블클릭 동작(07-15)
     if v.tab_dblclick != st.tab_dblclick {
         st.tab_dblclick = v.tab_dblclick.clone();
+    }
+    // 전송 완료 창 닫기 시간(07-21) — 다음 전송부터 적용(0=창 미표시)
+    if v.transfer_close_ms != st.transfer_close_ms {
+        st.transfer_close_ms = v.transfer_close_ms.clamp(0, 10_000);
     }
     // 타입어헤드 옵션(07-15) — 전 탭 즉시 적용
     if v.typeahead_scope != st.ta_scope
@@ -3939,6 +4094,7 @@ fn current_settings(st: &State) -> Settings {
         term_font_size: st.term_font_size,
         term_wrap: st.term_wrap,
         term_cols: st.term_cols,
+        transfer_close_ms: st.transfer_close_ms,
         col_autofit_max: st.col_autofit_max,
         toolbar_order: st.toolbar_order.clone(),
         ctx_menu_order: st.ctx_menu_order.clone(),
@@ -3948,6 +4104,31 @@ fn current_settings(st: &State) -> Settings {
         launcher_items: Some(st.launcher_items.clone()),
         launcher_seed: crate::launcher::SEED_VERSION,
     }
+}
+
+/// 전송(복사/이동) 중 쓰는 대상(또는 그 하위)인가 — 완료 전 실행/드래그 차단(07-21).
+fn transfer_blocks(st: &State, path: &std::path::Path) -> bool {
+    let Some(job) = &st.transfer else {
+        return false;
+    };
+    let guard = job.shared.in_flight.lock().unwrap();
+    guard
+        .as_ref()
+        .is_some_and(|dest| nexa_ops::is_same_or_sub(dest, path))
+}
+
+/// 파일 실행 게이트(07-21) — 전송 중 대상은 완료까지 열기 차단(부분 파일 실행 방지).
+unsafe fn guarded_shell_open(hwnd: HWND, file: &std::path::Path) {
+    if let Some(st) = state_of(hwnd) {
+        if transfer_blocks(st, file) {
+            let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(
+                windows::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
+            );
+            update_title(hwnd, st, &format!(" · {}", tr("ops.itemBusy")));
+            return;
+        }
+    }
+    shell_open(hwnd, file);
 }
 
 /// 파일 실행(더블클릭·Enter·Alt+↓ — QA 07-14) — 기본 연결 프로그램(탐색기 동일).
@@ -4458,10 +4639,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 도구 모음 빈 영역/컬럼 헤더 우클릭 팝업(07-19 사용자)
             if let Some(st) = state_of(hwnd) {
                 let (x, y) = mouse_xy(lparam);
-                if st
-                    .toolbar
-                    .bounds()
-                    .contains(nexa_gui::Point { x, y })
+                if st.toolbar.bounds().contains(nexa_gui::Point { x, y })
                     && !st.toolbar.is_button_at(x, y)
                 {
                     show_bar_popup(hwnd, true);
@@ -4601,7 +4779,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                         st.drag_press = None;
                         st.rename_on_up = false; // 드래그 시작 = 느린 재클릭 리네임 취소(DnD 우선)
-                        let paths = keyboard_targets(st);
+                        let mut paths = keyboard_targets(st);
+                        // 전송 중 쓰는 대상은 드래그(이동/복사 발신) 제외 — 완료까지 잠금(07-21)
+                        paths.retain(|p| !transfer_blocks(st, p));
                         (!paths.is_empty()).then_some(paths)
                     })
                 } else {
@@ -4799,7 +4979,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             }
             if let Some(file) = exec {
-                shell_open(hwnd, &file); // 파일 실행(QA 07-14 — 기본 연결 프로그램)
+                guarded_shell_open(hwnd, &file); // 파일 실행(QA 07-14 — 전송 중 대상 차단 07-21)
             }
             LRESULT(0)
         }
@@ -4983,7 +5163,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == VK_RETURN.0 {
                     if let Some(c) = st.active_panel().rows().caret() {
                         if let Some(file) = st.active_panel().activate_row(c, ctx, &mut inv) {
-                            shell_open(hwnd, &file); // Enter = 파일 실행(QA 07-14)
+                            guarded_shell_open(hwnd, &file); // Enter = 파일 실행(QA 07-14)
                         }
                     }
                 } else if vk == VK_F2.0 {
@@ -5044,7 +5224,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // Alt+↓ = 캐럿 행 활성화(더블클릭 동등 — 원본 F19, QA 07-14)
                     if let Some(c) = st.active_panel().rows().caret() {
                         if let Some(file) = st.active_panel().activate_row(c, ctx, &mut inv) {
-                            shell_open(hwnd, &file);
+                            guarded_shell_open(hwnd, &file);
                         }
                     }
                     true
@@ -5128,9 +5308,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let mut inv = Invalidations::default();
                     match wparam.0 as u32 {
                         ORDER_FIELD_TOOLBAR => {
-                            st.toolbar_order = config::serialize_toolbar_order(
-                                &config::parse_toolbar_order(&v),
-                            );
+                            st.toolbar_order =
+                                config::serialize_toolbar_order(&config::parse_toolbar_order(&v));
                             st.toolbar.set_buttons(
                                 build_toolbar(
                                     &st.toolbar_order,
@@ -5217,6 +5396,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         m if m == WM_APP_TRANSFER => {
             if let Some(st) = state_of(hwnd) {
                 on_transfer_message(hwnd, st, wparam.0 as u64, lparam.0 == 1);
+            }
+            LRESULT(0)
+        }
+        // 휴지통 삭제 워커 완료(07-21 QA — UI 블로킹 해소) — undo 기록·재로드
+        m if m == WM_APP_DELETE => {
+            if let Some(st) = state_of(hwnd) {
+                on_delete_message(hwnd, st, wparam.0 == 1);
             }
             LRESULT(0)
         }
