@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "nexa-app"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "nexa-core",
  "nexa-gui",
@@ -18,26 +18,26 @@ dependencies = [
 
 [[package]]
 name = "nexa-core"
-version = "0.8.1"
+version = "0.9.0"
 
 [[package]]
 name = "nexa-gui"
-version = "0.8.1"
+version = "0.9.0"
 
 [[package]]
 name = "nexa-ops"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "regex-lite",
 ]
 
 [[package]]
 name = "nexa-term"
-version = "0.8.1"
+version = "0.9.0"
 
 [[package]]
 name = "nexa-tree"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "nexa-core",
  "nexa-vfs",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "nexa-vfs"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "nexa-core",
 ]

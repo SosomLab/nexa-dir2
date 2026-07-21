@@ -75,8 +75,11 @@ jobs:
           }
           Get-Item packaging\chocolatey\out\*.nupkg | ForEach-Object { Write-Output "nupkg: $($_.Name)" }
 
-      - name: Chocolatey 커뮤니티 저장소 push (CHOCO_API_KEY 시크릿 있을 때만)
-        if: github.ref_type == 'tag' && env.CHOCO_API_KEY != ''
+      # choco push 스위치(사용자 요청 07-21): 저장소 변수 CHOCO_PUSH='true'일 때만 게시.
+      # 미설정(기본) = GitHub Release까지만 — 모더레이션 승인 대기 중 이중 큐 회피.
+      # 승인 후 Settings > Variables에 CHOCO_PUSH=true 등록으로 재개(코드 무변).
+      - name: Chocolatey 커뮤니티 저장소 push (CHOCO_PUSH 변수 + 시크릿 있을 때만)
+        if: github.ref_type == 'tag' && env.CHOCO_API_KEY != '' && vars.CHOCO_PUSH == 'true'
         shell: pwsh
         run: |
           $ver = "${{ github.ref_name }}".TrimStart("v")
