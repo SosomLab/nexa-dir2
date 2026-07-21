@@ -50,8 +50,9 @@ cargo build --release -p nexa-app
 5. **GitHub Release 자동 생성**(자동 릴리스 노트) + **포터블·설치형 2종 첨부**
    (설계 상세 = [21-distribution.md](21-distribution.md))
 6. **Chocolatey**(3채널, **2패키지** `nexa-dir`·`nexa-dir.portable`): 각 자산의
-   SHA-256 주입 → `choco pack` → `CHOCO_API_KEY` 시크릿이 있으면 `choco push`
-   ([21 §7](21-distribution.md) — 최초 등록·수동 게시 절차 포함)
+   SHA-256 주입 → `choco pack` → **`CHOCO_API_KEY` 시크릿 + 저장소 변수
+   `CHOCO_PUSH=true`가 모두 있으면** `choco push`(스위치 07-21 — 기본 꺼짐 =
+   GitHub Release 전용. [21 §7](21-distribution.md) — 최초 등록·수동 게시·재개 절차 포함)
 
 ```sh
 # 릴리스 절차(예: 0.6.0) — main green 확인 후

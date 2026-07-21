@@ -1,12 +1,13 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-21 7차 (KST)** — **릴리스 `0.9.0`(GitHub 전용 —
-> 사용자 요청)**: 보류 방침을 **choco push만**으로 축소(새 Release는
-> 대기 중 0.8.1 심사에 무영향·winget=수동 PR) — release.yml choco push에
-> `vars.CHOCO_PUSH` 스위치(기본 꺼짐, 승인 후 변수 등록으로 재개).
-> 0.9.0 = 0.8.1 이후 전체(X-25 1차·X-26 ③·X-27·X-28·X-29·X-30 전송
-> 진행 UX+QA 시리즈·X-31 일본어 언어팩).
-> [journal/2026-07-21.md](journal/2026-07-21.md).
+> **갱신: 2026-07-21 7차 (KST)** — **릴리스 `0.9.0` 배포 완료(GitHub
+> 전용 — 사용자 요청)**: 보류 방침을 **choco push만**으로 축소(새
+> Release는 대기 중 0.8.1 심사에 무영향·winget=수동 PR) — release.yml
+> choco push에 `vars.CHOCO_PUSH` 스위치(기본 꺼짐, 승인 후 변수 등록으로
+> 재개). **실행 검증**: 게이트 B2·B3 통과·choco push **skipped**·Release
+> 자산 2종(포터블 1.48MB·설치형 2.6MB) 첨부. 0.9.0 = 0.8.1 이후
+> 전체(X-25 1차·X-26 ③·X-27·X-28·X-29·X-30 전송 진행 UX+QA 시리즈·
+> X-31 일본어 언어팩). [journal/2026-07-21.md](journal/2026-07-21.md).
 >
 > **직전(07-21 6차)** — **X-31 일본어 내장 언어팩(사용자
 > 요청)**: `ja.lang`(en 기준 전 키 번역·Windows 일본어 UI 용어 관례) +
