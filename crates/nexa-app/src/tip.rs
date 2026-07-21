@@ -8,14 +8,15 @@
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, GetDC, ReleaseDC,
-    SelectObject, SetBkMode, SetTextColor, DT_CALCRECT, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE,
-    DT_VCENTER, FillRect, FrameRect, HFONT, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GetDC,
+    ReleaseDC, SelectObject, SetBkMode, SetTextColor, DT_CALCRECT, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW, IsWindow,
-    RegisterClassW, SetWindowLongPtrW, ShowWindow, GWLP_USERDATA, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE,
-    WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    RegisterClassW, SetWindowLongPtrW, ShowWindow, GWLP_USERDATA, SW_SHOWNOACTIVATE,
+    WINDOW_EX_STYLE, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::dialog::DlgFont;

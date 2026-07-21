@@ -852,10 +852,9 @@ impl DrawCtx for DwCtx<'_> {
             // 잉크 없는 구형 키는 검정 폴백. 최종 키 = `emb:<이름>:<버킷>:<ARGB8>`
             // (테마·활성별로 캐시 분리 — 다크/라이트 아이콘 공존).
             let (core, rgb) = match key.rsplit_once('#') {
-                Some((c, hex)) if hex.len() == 6 => (
-                    c,
-                    u32::from_str_radix(hex, 16).unwrap_or(0x0000_0000),
-                ),
+                Some((c, hex)) if hex.len() == 6 => {
+                    (c, u32::from_str_radix(hex, 16).unwrap_or(0x0000_0000))
+                }
                 _ => (key, 0x0000_0000),
             };
             let (core, alpha) = match core.strip_suffix("#dis") {

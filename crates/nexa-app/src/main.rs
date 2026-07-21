@@ -36,6 +36,8 @@ mod icons;
 mod launcher;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod nav;
+#[cfg(windows)]
+mod ordereditor;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod panel;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -51,8 +53,6 @@ mod shellmenu;
 mod shellpath;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod source;
-#[cfg(windows)]
-mod ordereditor;
 mod svg;
 #[cfg(windows)]
 mod tip;

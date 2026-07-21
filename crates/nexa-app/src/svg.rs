@@ -39,9 +39,24 @@ pub enum Seg {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     /// 라운드 사각 스트로크(`rx` 0 = 직각).
-    Rect { x: f32, y: f32, w: f32, h: f32, rx: f32 },
-    Circle { cx: f32, cy: f32, r: f32 },
-    Line { x1: f32, y1: f32, x2: f32, y2: f32 },
+    Rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        rx: f32,
+    },
+    Circle {
+        cx: f32,
+        cy: f32,
+        r: f32,
+    },
+    Line {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+    },
     Polyline(Vec<(f32, f32)>),
     Path(Vec<Seg>),
     /// 텍스트(`y` = 베이스라인 — SVG 규약). `middle` = 수평 중앙 앵커.
@@ -168,14 +183,13 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     .filter(|s| !s.is_empty())
                     .filter_map(|s| s.parse().ok())
                     .collect();
-                let pairs: Vec<(f32, f32)> =
-                    pts.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                let pairs: Vec<(f32, f32)> = pts.chunks_exact(2).map(|c| (c[0], c[1])).collect();
                 if pairs.len() >= 2 {
                     doc.ops.push(Element {
                         op: Op::Polyline(pairs),
                         color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                         fill: elem_fill(attrs),
-                width: elem_width(attrs),
+                        width: elem_width(attrs),
                     });
                 }
             }
@@ -187,7 +201,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                             op: Op::Path(segs),
                             color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                             fill: elem_fill(attrs),
-                width: elem_width(attrs),
+                            width: elem_width(attrs),
                         });
                     }
                 }
@@ -210,7 +224,7 @@ pub fn parse(svg: &str) -> Option<Doc> {
                         },
                         color: resolve_color(attrs, doc.root_stroke, doc.root_fill, doc.fill),
                         fill: elem_fill(attrs),
-                width: elem_width(attrs),
+                        width: elem_width(attrs),
                     });
                 }
             }
@@ -265,7 +279,8 @@ fn hex_color(v: Option<&str>) -> Option<u32> {
 
 /// 요소 색 오버라이드 — 요소 자체 `stroke`/`fill`의 `#RRGGBB`만.
 fn elem_color(attrs: &str) -> Option<u32> {
-    hex_color(attr(attrs, "stroke").as_deref()).or_else(|| hex_color(attr(attrs, "fill").as_deref()))
+    hex_color(attr(attrs, "stroke").as_deref())
+        .or_else(|| hex_color(attr(attrs, "fill").as_deref()))
 }
 
 /// 요소 색 해석 — 자체 색 → 없으면 루트 상속(채움 요소는 루트 `fill`,
@@ -288,9 +303,7 @@ fn resolve_color(
 }
 
 fn num(attrs: &str, key: &str) -> f32 {
-    attr(attrs, key)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0)
+    attr(attrs, key).and_then(|s| s.parse().ok()).unwrap_or(0.0)
 }
 
 /// path `d` 파싱 — 상대 명령은 절대 좌표로 정규화. 미지 명령 = `None`(전체 무효).
@@ -484,7 +497,13 @@ mod tests {
         assert_eq!(
             doc.ops[0].op,
             // 07-19 최대 크기 판(사용자: "view 모두 최대 크기") — 1.25배 확장
-            Op::Rect { x: 1.0, y: 1.0, w: 7.5, h: 7.5, rx: 1.25 }
+            Op::Rect {
+                x: 1.0,
+                y: 1.0,
+                w: 7.5,
+                h: 7.5,
+                rx: 1.25
+            }
         );
         assert_eq!(doc.ops[0].color, None, "currentColor = 잉크");
         assert_eq!(
@@ -524,11 +543,18 @@ mod tests {
 
     #[test]
     fn rect_rx_boundary_not_confused_with_x() {
-        let svg = r#"<svg viewBox="0 0 8 8"><rect x="1" y="2" width="3" height="4" rx="0.5"/></svg>"#;
+        let svg =
+            r#"<svg viewBox="0 0 8 8"><rect x="1" y="2" width="3" height="4" rx="0.5"/></svg>"#;
         let doc = parse(svg).unwrap();
         assert_eq!(
             doc.ops[0].op,
-            Op::Rect { x: 1.0, y: 2.0, w: 3.0, h: 4.0, rx: 0.5 }
+            Op::Rect {
+                x: 1.0,
+                y: 2.0,
+                w: 3.0,
+                h: 4.0,
+                rx: 0.5
+            }
         );
     }
 
@@ -537,7 +563,9 @@ mod tests {
         assert!(parse(r#"<svg width="8"><rect x="1" width="2" height="2"/></svg>"#).is_none());
         assert!(parse(r#"<svg viewBox="0 0 8 8"><path d="M0 0 Q 1 1 2 2"/></svg>"#).is_none());
         // 타원 호(rx≠ry)는 미지원
-        assert!(parse(r#"<svg viewBox="0 0 8 8"><path d="M0 0 A 2 1 0 0 1 2 2"/></svg>"#).is_none());
+        assert!(
+            parse(r#"<svg viewBox="0 0 8 8"><path d="M0 0 A 2 1 0 0 1 2 2"/></svg>"#).is_none()
+        );
     }
 
     #[test]
@@ -549,10 +577,20 @@ mod tests {
             panic!("path")
         };
         assert_eq!(segs[0], Seg::MoveTo(25.2, 6.8));
-        let Seg::Arc { cx, cy, r, start, sweep } = segs[1] else {
+        let Seg::Arc {
+            cx,
+            cy,
+            r,
+            start,
+            sweep,
+        } = segs[1]
+        else {
             panic!("arc")
         };
-        assert!((cx - 16.0).abs() < 0.1 && (cy - 16.0).abs() < 0.1, "{cx},{cy}");
+        assert!(
+            (cx - 16.0).abs() < 0.1 && (cy - 16.0).abs() < 0.1,
+            "{cx},{cy}"
+        );
         assert!((r - 13.0).abs() < 0.1);
         assert!((start - -45.0).abs() < 1.0, "{start}");
         assert!((sweep - -315.0).abs() < 1.5, "{sweep}"); // fs=0 = 반시계 315°

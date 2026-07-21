@@ -1792,8 +1792,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 if d.active {
                     let col = &self.columns[d.col];
                     let w = col.width;
-                    let gx = (d.cur_x - w / 2)
-                        .clamp(b.x, (b.right() - w).max(b.x));
+                    let gx = (d.cur_x - w / 2).clamp(b.x, (b.right() - w).max(b.x));
                     let cell = Rect::new(gx, hy, w, self.row_h);
                     ctx.fill_rect(cell, theme.header_bg);
                     // 1px 테두리(시안 — 떠 있는 헤더 박스)
@@ -1803,10 +1802,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                         theme.border,
                     );
                     ctx.fill_rect(Rect::new(cell.x, cell.y, 1, cell.h), theme.border);
-                    ctx.fill_rect(
-                        Rect::new(cell.right() - 1, cell.y, 1, cell.h),
-                        theme.border,
-                    );
+                    ctx.fill_rect(Rect::new(cell.right() - 1, cell.y, 1, cell.h), theme.border);
                     ctx.text_opaque(
                         cell.x + self.pad_x,
                         hty,
@@ -2250,7 +2246,7 @@ mod tests {
     fn header_label_shows_arrow_before_and_badge_after() {
         let (mut v, mut inv) = list_with_cols(10, 220);
         click(&mut v, &mut inv, 50, 5, false); // 이름 ▲
-                                              // 순번 = 정렬 시작부터 상시 표시(사용자 확정 07-18 — 단일 = ①)
+                                               // 순번 = 정렬 시작부터 상시 표시(사용자 확정 07-18 — 단일 = ①)
         assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");
         click(&mut v, &mut inv, 250, 5, true); // + 크기
         assert_eq!(v.header_label(&v.columns()[0]), "▲ 이름 ①");

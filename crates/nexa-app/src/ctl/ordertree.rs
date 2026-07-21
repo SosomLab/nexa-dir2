@@ -28,7 +28,9 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, DrawTextW, EndPaint, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
     DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, TRANSPARENT,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, ReleaseCapture, SetCapture, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, KillTimer, SetTimer, HMENU, WINDOW_EX_STYLE,
     WINDOW_STYLE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -106,8 +108,8 @@ impl Drop for OtState {
 /// 셰브론 마커 폰트(Segoe MDL2 Assets 9px — 파일뷰/설정 트리 규약).
 fn make_marker_font() -> HFONT {
     use windows::Win32::Graphics::Gdi::{
-        CreateFontW, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_QUALITY, FF_DONTCARE,
-        FW_NORMAL, OUT_DEFAULT_PRECIS,
+        CreateFontW, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_QUALITY, FF_DONTCARE, FW_NORMAL,
+        OUT_DEFAULT_PRECIS,
     };
     unsafe {
         CreateFontW(
@@ -459,8 +461,7 @@ pub unsafe fn key_extend(hwnd: HWND, up: bool) {
             .rev()
             .find(|&j| st.rows[j].1 == lv && parent_of(&st.rows, j) == pa)
     } else {
-        (cur_end + 1..st.rows.len())
-            .find(|&j| st.rows[j].1 == lv && parent_of(&st.rows, j) == pa)
+        (cur_end + 1..st.rows.len()).find(|&j| st.rows[j].1 == lv && parent_of(&st.rows, j) == pa)
     };
     // 축소 방향(앵커 쪽으로 되돌아옴)도 자연 처리: target 없으면 유지
     let t = match target {
@@ -531,7 +532,9 @@ pub unsafe fn cancel_drag(hwnd: HWND) -> bool {
     let Some(st) = super::base::state::<OtState>(hwnd).as_mut() else {
         return false;
     };
-    let Some(d) = st.drag.take() else { return false };
+    let Some(d) = st.drag.take() else {
+        return false;
+    };
     let _ = KillTimer(Some(hwnd), TIMER_SCROLL);
     let _ = ReleaseCapture();
     if !d.active {
@@ -814,7 +817,11 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
             frame(
                 dc,
                 &brc,
-                if dis { st.style.text_dim } else { st.style.border },
+                if dis {
+                    st.style.text_dim
+                } else {
+                    st.style.border
+                },
             );
             if *on {
                 let irc = RECT {
@@ -826,7 +833,11 @@ unsafe fn paint(hwnd: HWND, st: &OtState) {
                 fill(
                     dc,
                     &irc,
-                    if dis { st.style.text_dim } else { st.style.accent },
+                    if dis {
+                        st.style.text_dim
+                    } else {
+                        st.style.accent
+                    },
                 );
             }
         }

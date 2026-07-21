@@ -7,10 +7,10 @@
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, DeleteObject, DrawTextW, EndPaint, GetDC, InvalidateRect,
-    ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, CLIP_DEFAULT_PRECIS,
-    DEFAULT_CHARSET, DEFAULT_QUALITY, DT_CALCRECT, DT_LEFT, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD,
-    HBRUSH, HFONT, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateFontW, DeleteObject, DrawTextW, EndPaint, GetDC, InvalidateRect, ReleaseDC,
+    ScreenToClient, SelectObject, SetBkMode, SetTextColor, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
+    DEFAULT_QUALITY, DT_CALCRECT, DT_LEFT, FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HFONT,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;

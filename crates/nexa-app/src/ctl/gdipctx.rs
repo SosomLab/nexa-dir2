@@ -121,7 +121,8 @@ unsafe fn render_svg_bitmap(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option
     let big = render_svg_at(doc, hi, argb)?;
     const PXF_32ARGB: i32 = 0x0026_200A;
     let mut small: *mut GpBitmap = std::ptr::null_mut();
-    if GdipCreateBitmapFromScan0(px, px, 0, PXF_32ARGB, None, &mut small).0 != 0 || small.is_null() {
+    if GdipCreateBitmapFromScan0(px, px, 0, PXF_32ARGB, None, &mut small).0 != 0 || small.is_null()
+    {
         return Some(big); // 축소 실패 시 큰 비트맵 그대로(호출자 DrawIconEx가 축소)
     }
     let mut g: *mut GpGraphics = std::ptr::null_mut();
@@ -194,8 +195,13 @@ unsafe fn render_svg_at(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<*mu
                     }
                     Op::Circle { cx, cy, r } => {
                         let d = r * scale * 2.0;
-                        let _ =
-                            GdipAddPathEllipse(path, sx(*cx) - r * scale, sy(*cy) - r * scale, d, d);
+                        let _ = GdipAddPathEllipse(
+                            path,
+                            sx(*cx) - r * scale,
+                            sy(*cy) - r * scale,
+                            d,
+                            d,
+                        );
                     }
                     Op::Line { x1, y1, x2, y2 } => {
                         let _ = GdipAddPathLine(path, sx(*x1), sy(*y1), sx(*x2), sy(*y2));
@@ -220,8 +226,7 @@ unsafe fn render_svg_at(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<*mu
                                     (cx, cy) = (x, y);
                                 }
                                 Seg::LineTo(x, y) => {
-                                    let _ =
-                                        GdipAddPathLine(path, sx(cx), sy(cy), sx(x), sy(y));
+                                    let _ = GdipAddPathLine(path, sx(cx), sy(cy), sx(x), sy(y));
                                     (cx, cy) = (x, y);
                                 }
                                 Seg::CurveTo([c1, c2, e]) => {
@@ -303,7 +308,11 @@ unsafe fn render_svg_at(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<*mu
                                 windows::core::PCWSTR(wide.as_ptr()),
                                 content.encode_utf16().count() as i32,
                                 family,
-                                if *bold { 1 /* FontStyleBold */ } else { 0 },
+                                if *bold {
+                                    1 /* FontStyleBold */
+                                } else {
+                                    0
+                                },
                                 em,
                                 &rect,
                                 fmt,
