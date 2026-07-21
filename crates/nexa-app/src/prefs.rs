@@ -14,8 +14,8 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColorBrush,
     InvalidateRect, SelectObject, SetBkMode, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, DEFAULT_CHARSET,
-    DEFAULT_QUALITY, DT_LEFT, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD, HBRUSH, HFONT,
-    OUT_DEFAULT_PRECIS, TRANSPARENT,
+    DEFAULT_QUALITY, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD,
+    HBRUSH, HFONT, OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -829,7 +829,7 @@ impl PrefState {
             self.title_font,
             w!("STATIC"),
             &title,
-            0,
+            0x0080, // SS_NOPREFIX — '&' 그대로 표시(View & Sort)
             x0,
             PAD - self.scroll_y,
             pane_w,
@@ -856,7 +856,7 @@ impl PrefState {
                     self.font,
                     w!("STATIC"),
                     &tr(lk),
-                    0x0100, // SS_NOTIFY — STN_CLICKED로 이동
+                    0x0180, // SS_NOTIFY | SS_NOPREFIX — 클릭 이동·'&' 그대로
                     x0,
                     y,
                     pane_w,
@@ -915,7 +915,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y + 3,
                             pane_w - 90,
@@ -945,7 +945,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y,
                             pane_w,
@@ -1013,7 +1013,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y,
                             pane_w,
@@ -1079,7 +1079,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0,
                             y,
                             pane_w,
@@ -1171,7 +1171,7 @@ impl PrefState {
                             self.font,
                             w!("STATIC"),
                             &label,
-                            0,
+                            0x0080,
                             x0 + EDIT_W + 8,
                             y + 3,
                             (pane_w - EDIT_W - 8).max(40),
@@ -1192,7 +1192,7 @@ impl PrefState {
                         self.font,
                         w!("STATIC"),
                         &desc,
-                        0,
+                        0x0080,
                         x0 + 2,
                         y,
                         pane_w - 2,
@@ -1469,11 +1469,12 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
         right: dis.rcItem.right - 4,
         bottom: dis.rcItem.bottom,
     };
+    // DT_NOPREFIX — 라벨의 '&'를 접두(밑줄)로 해석하지 않음(View & Sort — QA 07-21)
     DrawTextW(
         dis.hDC,
         &mut wide,
         &mut rc,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
     );
     SelectObject(dis.hDC, old);
 }
