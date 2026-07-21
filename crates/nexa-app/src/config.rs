@@ -59,6 +59,9 @@ pub struct Settings {
     pub term_wrap: bool,
     /// 터미널 고정 열 수(X-3 ② — 80~1000, 원본 MaxColumns 240. `term_wrap=false`일 때만).
     pub term_cols: i32,
+    /// 전송(복사/이동) 완료 후 진행 창 닫기 카운트다운(초, 0~10 — 사용자 요청 07-21).
+    /// **0 = 진행 창 자체를 표시하지 않음**(전송은 그대로 수행·제목줄 %만 갱신).
+    pub transfer_close_secs: i32,
     /// 대화상자(확인창·진행 창) 글꼴/크기(pt — QA 07-14 "대화창용 폰트 설정").
     pub dlg_font: String,
     pub dlg_font_size: i32,
@@ -141,6 +144,7 @@ impl Default for Settings {
             term_font_size: 12,
             term_wrap: true,
             term_cols: 240,
+            transfer_close_secs: 2, // 기존 하드코딩 2초 승격(07-21)
             dlg_font: "Segoe UI".into(),
             dlg_font_size: 9,
             base_font: "Segoe UI".into(),
@@ -305,6 +309,10 @@ impl Settings {
             self.term_cols
         ));
         out.push_str(&format!(
+            "transfer_close_secs={}\n",
+            self.transfer_close_secs
+        ));
+        out.push_str(&format!(
             "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\nview_mode={}\npanel_mode={}\ninfo_mode={}\n",
             u8::from(self.sort_folders_first),
             u8::from(self.sort_case_sensitive),
@@ -438,6 +446,11 @@ impl Settings {
                 "term_cols" => {
                     if let Ok(n) = v.parse::<i32>() {
                         s.term_cols = n.clamp(80, 1000);
+                    }
+                }
+                "transfer_close_secs" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.transfer_close_secs = n.clamp(0, 10);
                     }
                 }
                 "sort_folders_first" => s.sort_folders_first = v != "0",
@@ -747,10 +760,7 @@ pub const CTXMENU_BLOCKS: OrderDefs = &[
 /// 제네릭 순서 직렬화 — `블록:vis[자식:vis,…]|블록:vis|…`(단일 블록 =
 /// 대괄호 생략). `with_vis` = 표시 여부 포함. **블록 vis(07-19)**: 그룹
 /// 숨김 = 통째 비표시(자식 상태는 보존).
-pub fn serialize_order_with(
-    order: &[OrderBlock],
-    with_vis: bool,
-) -> String {
+pub fn serialize_order_with(order: &[OrderBlock], with_vis: bool) -> String {
     order
         .iter()
         .map(|(b, bv, items)| {
@@ -857,10 +867,18 @@ mod toolbar_order_tests {
     #[test]
     fn roundtrip_and_merge() {
         let d = default_toolbar_order();
-        assert_eq!(serialize_toolbar_order(&parse_toolbar_order(&d)), d, "기본 왕복");
+        assert_eq!(
+            serialize_toolbar_order(&parse_toolbar_order(&d)),
+            d,
+            "기본 왕복"
+        );
         // 재배열 + 표시 여부 왕복(07-19 — 블록/자식 vis 공통)
         let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,dock:1,info:1]|show:1[dot:1,hidden:1]|settings:1";
-        assert_eq!(serialize_toolbar_order(&parse_toolbar_order(s)), s, "재배열/표시 보존");
+        assert_eq!(
+            serialize_toolbar_order(&parse_toolbar_order(s)),
+            s,
+            "재배열/표시 보존"
+        );
         // 구형(vis 생략) 호환 + 미지 토큰 제거 + 누락 보충(정의 위치 삽입 —
         // 07-19: tree/flat이 정의상 tiles 앞이므로 앞에 들어간다)
         let s = "view[tiles,junk]|bogus|panel[toggle:0]";
@@ -895,6 +913,7 @@ mod tests {
             term_font_size: 14,
             term_wrap: false,
             term_cols: 132,
+            transfer_close_secs: 0,
             dlg_font: "맑은 고딕".into(),
             dlg_font_size: 10,
             base_font: "본고딕".into(),
@@ -954,6 +973,15 @@ mod tests {
         assert_eq!(parsed.term_font_size, 14);
         assert!(!parsed.term_wrap, "터미널 줄 바꿈 왕복(X-3)");
         assert_eq!(parsed.term_cols, 132, "터미널 고정 열 왕복(X-3)");
+        assert_eq!(
+            parsed.transfer_close_secs, 0,
+            "전송 창 닫기 시간 왕복(07-21)"
+        );
+        assert_eq!(
+            Settings::parse("transfer_close_secs=99").transfer_close_secs,
+            10,
+            "닫기 시간 상한 클램프"
+        );
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(
             parsed.toolbar_order,

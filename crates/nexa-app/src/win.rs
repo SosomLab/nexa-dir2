@@ -595,9 +595,11 @@ struct State {
     uia_struct: Option<(usize, String, usize)>,
     /// 진행 중 전송 잡(M3-1) — 동시 1개(α). 세대 번호로 낡은 워커 통지 무시.
     transfer: Option<TransferJob>,
-    /// 완료 후 자동 닫기 대기 중인 진행 창(2초 — TIMER_PROG_CLOSE가 drop).
+    /// 완료 후 자동 닫기 대기 중인 진행 창(TIMER_PROG_CLOSE가 drop).
     transfer_close: Option<crate::dialog::Progress>,
     transfer_gen: u64,
+    /// 전송 완료 창 닫기 카운트다운(초, 0~10 — 0=진행 창 미표시, 설정 07-21).
+    transfer_close_secs: i32,
     /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
     drag_press: Option<(i32, i32)>,
     /// 직전 행 클릭 (패널, 경로, 시각) — 기선택 항목 느린 재클릭=이름 바꾸기 판정(탐색기 관례).
@@ -715,6 +717,10 @@ struct TransferShared {
     done_bytes: AtomicU64,
     total_bytes: AtomicU64,
     outcome: Mutex<Option<nexa_ops::Outcome>>,
+    /// 항목별 세그먼트 진행(07-21 — Plan 수신 시 고정 길이로 채워짐. 진행 창 표시용).
+    items: Mutex<Vec<crate::dialog::SegItem>>,
+    /// 현재 쓰는 중인 대상 경로(07-21) — 완료 전 더블클릭 실행/드래그 이동 차단.
+    in_flight: Mutex<Option<PathBuf>>,
 }
 
 struct TransferJob {
@@ -723,7 +729,10 @@ struct TransferJob {
     /// 완료 시 히스토리 기록용(M3-3) — Move/Copy에 따라 역연산이 다르다.
     op: nexa_ops::Op,
     /// 진행 창(QA 07-14 — 커스텀 프로그레스·취소 버튼). Drop=창 닫기.
+    /// 설정 `transfer_close_secs=0`이면 None(창 미표시 — 07-21).
     progress: Option<crate::dialog::Progress>,
+    /// 전송 항목 수(Plan 도착 전 표시용 — 07-21).
+    item_count: usize,
 }
 
 impl State {
@@ -1055,6 +1064,7 @@ pub fn run() -> Result<()> {
         transfer: None,
         transfer_close: None,
         transfer_gen: 0,
+        transfer_close_secs: settings.transfer_close_secs,
         drag_press: None,
         slow_click: None,
         rename_on_up: false,
@@ -2391,11 +2401,14 @@ unsafe fn start_transfer(
     }
     st.transfer_gen += 1;
     let gen = st.transfer_gen;
+    let item_count = sources.len();
     let shared = Arc::new(TransferShared {
         cancel: AtomicBool::new(false),
         done_bytes: AtomicU64::new(0),
         total_bytes: AtomicU64::new(0),
         outcome: Mutex::new(None),
+        items: Mutex::new(Vec::new()),
+        in_flight: Mutex::new(None),
     });
     let sh = shared.clone();
     let hwnd_raw = hwnd.0 as isize; // HWND는 !Send — 원시값으로 워커에 전달
@@ -2415,6 +2428,8 @@ unsafe fn start_transfer(
         // 커스텀 대화상자(dialog.rs — MessageBox 대체). "모두 덮어쓰기"만 이후 무확인,
         // 그 외에는 파일별로 다시 묻는다. 1건뿐이면 자연히 1회 질문.
         let mut decided: Option<nexa_ops::Conflict> = None;
+        // 현재 항목 시작 시점의 전체 누적 바이트(항목별 done 산출 — 07-21)
+        let mut item_base = 0u64;
         let out = nexa_ops::transfer(
             &sources,
             &dest,
@@ -2458,13 +2473,57 @@ unsafe fn start_transfer(
                     }
                 }
             },
-            &mut |p, _| {
-                sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
-                sh.total_bytes.store(p.total_bytes, Ordering::Relaxed);
-                // 4MB 청크 단위 통지 — 저빈도라 스로틀 불요
-                unsafe {
+            // 이벤트 통지(07-21 — 계획/항목 시작·종결/바이트): 공유 상태 갱신 후 PostMessage.
+            // ItemStart는 상태만 기록(다음 Bytes/End가 게시 — 다항목 소파일 메시지 절감).
+            &mut |ev| {
+                let post = || unsafe {
                     let _ =
                         PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(0));
+                };
+                match ev {
+                    nexa_ops::Event::Plan { sizes, total_bytes } => {
+                        sh.total_bytes.store(total_bytes, Ordering::Relaxed);
+                        *sh.items.lock().unwrap() = sizes
+                            .iter()
+                            .map(|&s| crate::dialog::SegItem {
+                                size: s,
+                                done: 0,
+                                status: crate::dialog::SegStatus::Pending,
+                            })
+                            .collect();
+                        post();
+                    }
+                    nexa_ops::Event::ItemStart { index, dest } => {
+                        *sh.in_flight.lock().unwrap() = Some(dest.to_path_buf());
+                        // 항목 시작 시점의 누적 바이트 = 이 항목 done 산출 기준
+                        item_base = sh.done_bytes.load(Ordering::Relaxed);
+                        if let Some(it) = sh.items.lock().unwrap().get_mut(index) {
+                            it.status = crate::dialog::SegStatus::Active;
+                        }
+                    }
+                    nexa_ops::Event::Bytes(p) => {
+                        sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
+                        sh.total_bytes.store(p.total_bytes, Ordering::Relaxed);
+                        if let Some(it) = sh.items.lock().unwrap().get_mut(p.item_index) {
+                            it.done = p.done_bytes.saturating_sub(item_base).min(it.size);
+                        }
+                        // 4MB 청크 단위 통지 — 저빈도라 스로틀 불요
+                        post();
+                    }
+                    nexa_ops::Event::ItemEnd { index, status } => {
+                        *sh.in_flight.lock().unwrap() = None;
+                        if let Some(it) = sh.items.lock().unwrap().get_mut(index) {
+                            it.status = match status {
+                                nexa_ops::ItemStatus::Done => {
+                                    it.done = it.size;
+                                    crate::dialog::SegStatus::Done
+                                }
+                                nexa_ops::ItemStatus::Skipped => crate::dialog::SegStatus::Skipped,
+                                nexa_ops::ItemStatus::Failed => crate::dialog::SegStatus::Failed,
+                            };
+                        }
+                        post();
+                    }
                 }
             },
             &sh.cancel,
@@ -2474,18 +2533,24 @@ unsafe fn start_transfer(
             let _ = PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(1));
         }
     });
-    // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop)
-    let progress = crate::dialog::Progress::open(
-        hwnd,
-        &tr("ops.progressTitle"),
-        &tr("ops.progressLabel"),
-        &st.dlg_font,
-    );
+    // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop).
+    // 설정 transfer_close_secs=0 = 창 미표시(제목줄 %만 — 사용자 요청 07-21).
+    let progress = if st.transfer_close_secs > 0 {
+        crate::dialog::Progress::open(
+            hwnd,
+            &tr("ops.progressTitle"),
+            &tr("ops.progressLabel"),
+            &st.dlg_font,
+        )
+    } else {
+        None
+    };
     st.transfer = Some(TransferJob {
         shared,
         gen,
         op,
         progress,
+        item_count,
     });
     update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &["0"])));
 }
@@ -2505,7 +2570,25 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         // 진행 창 갱신 + [취소]/X 폴링(QA 07-14) — 취소 요청은 워커 cancel 플래그로
         let job = st.transfer.as_mut().unwrap();
         if let Some(p) = &mut job.progress {
-            p.update(d, t);
+            // 세그먼트 스냅샷 + 파일 {cur}/{count}(07-21) — cur = 진행 중 항목 번호,
+            // 없으면 종결된 수(시작 전 0/N·전량 종결 N/N).
+            let items = job.shared.items.lock().unwrap().clone();
+            let count = if items.is_empty() {
+                job.item_count
+            } else {
+                items.len()
+            };
+            let cur = items
+                .iter()
+                .position(|i| i.status == crate::dialog::SegStatus::Active)
+                .map(|i| i + 1)
+                .unwrap_or_else(|| {
+                    items
+                        .iter()
+                        .filter(|i| i.status != crate::dialog::SegStatus::Pending)
+                        .count()
+                });
+            p.update(d, t, items, cur, count);
             if p.cancelled() {
                 job.shared.cancel.store(true, Ordering::Relaxed);
             }
@@ -2518,12 +2601,34 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         return;
     }
     let mut job = st.transfer.take().unwrap();
-    // 진행 창 = 완료 표기 + [닫기 (2)] 카운트다운(창 자체가 닫힘 — 사용자 요청 07-15).
-    // 호스트 타이머는 백스톱: 구조체 지연 해제(창은 이미 닫혔어도 무해).
+    // 진행 창 = 완료 표기 + [닫기 (N)] 카운트다운(창 자체가 닫힘 — 사용자 요청 07-15,
+    // N = 설정 transfer_close_secs 07-21). 호스트 타이머는 백스톱: 구조체 지연 해제.
     if let Some(mut p) = job.progress.take() {
-        p.set_done(&tr("ops.doneClosing"));
+        // 마지막 스냅샷 반영(최종 바이트·세그먼트 상태 — 취소 시 부분 진행 정직 표기)
+        let items = job.shared.items.lock().unwrap().clone();
+        let count = if items.is_empty() {
+            job.item_count
+        } else {
+            items.len()
+        };
+        let cur = items
+            .iter()
+            .filter(|i| i.status != crate::dialog::SegStatus::Pending)
+            .count();
+        let (d, t) = (
+            job.shared.done_bytes.load(Ordering::Relaxed),
+            job.shared.total_bytes.load(Ordering::Relaxed),
+        );
+        p.update(d, t, items, cur, count);
+        let secs = st.transfer_close_secs.max(1);
+        p.set_done(&tr("ops.doneClosing"), secs);
         st.transfer_close = Some(p);
-        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, 2_500, None);
+        SetTimer(
+            Some(hwnd),
+            TIMER_PROG_CLOSE,
+            secs as u32 * 1_000 + 500,
+            None,
+        );
     }
     let out = job
         .shared
@@ -3152,8 +3257,7 @@ unsafe fn tip_tick(hwnd: HWND, st: &mut State) {
     let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
     let mut tl = windows::Win32::Foundation::POINT { x: rc.x, y: rc.y };
     let _ = windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut tl);
-    let inside =
-        pt.x >= tl.x && pt.x < tl.x + rc.w && pt.y >= tl.y && pt.y < tl.y + rc.h;
+    let inside = pt.x >= tl.x && pt.x < tl.x + rc.w && pt.y >= tl.y && pt.y < tl.y + rc.h;
     if !inside {
         tip_cancel(hwnd, st);
         return;
@@ -3450,6 +3554,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 typeahead_special: st.ta_special,
                 typeahead_space: st.ta_space,
                 typeahead_backspace: st.ta_backspace,
+                transfer_close_secs: st.transfer_close_secs,
             },
             st.dlg_font.clone(),
         )
@@ -3675,6 +3780,10 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     // 탭 더블클릭 동작(07-15)
     if v.tab_dblclick != st.tab_dblclick {
         st.tab_dblclick = v.tab_dblclick.clone();
+    }
+    // 전송 완료 창 닫기 시간(07-21) — 다음 전송부터 적용(0=창 미표시)
+    if v.transfer_close_secs != st.transfer_close_secs {
+        st.transfer_close_secs = v.transfer_close_secs.clamp(0, 10);
     }
     // 타입어헤드 옵션(07-15) — 전 탭 즉시 적용
     if v.typeahead_scope != st.ta_scope
@@ -3939,6 +4048,7 @@ fn current_settings(st: &State) -> Settings {
         term_font_size: st.term_font_size,
         term_wrap: st.term_wrap,
         term_cols: st.term_cols,
+        transfer_close_secs: st.transfer_close_secs,
         col_autofit_max: st.col_autofit_max,
         toolbar_order: st.toolbar_order.clone(),
         ctx_menu_order: st.ctx_menu_order.clone(),
@@ -3948,6 +4058,31 @@ fn current_settings(st: &State) -> Settings {
         launcher_items: Some(st.launcher_items.clone()),
         launcher_seed: crate::launcher::SEED_VERSION,
     }
+}
+
+/// 전송(복사/이동) 중 쓰는 대상(또는 그 하위)인가 — 완료 전 실행/드래그 차단(07-21).
+fn transfer_blocks(st: &State, path: &std::path::Path) -> bool {
+    let Some(job) = &st.transfer else {
+        return false;
+    };
+    let guard = job.shared.in_flight.lock().unwrap();
+    guard
+        .as_ref()
+        .is_some_and(|dest| nexa_ops::is_same_or_sub(dest, path))
+}
+
+/// 파일 실행 게이트(07-21) — 전송 중 대상은 완료까지 열기 차단(부분 파일 실행 방지).
+unsafe fn guarded_shell_open(hwnd: HWND, file: &std::path::Path) {
+    if let Some(st) = state_of(hwnd) {
+        if transfer_blocks(st, file) {
+            let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(
+                windows::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
+            );
+            update_title(hwnd, st, &format!(" · {}", tr("ops.itemBusy")));
+            return;
+        }
+    }
+    shell_open(hwnd, file);
 }
 
 /// 파일 실행(더블클릭·Enter·Alt+↓ — QA 07-14) — 기본 연결 프로그램(탐색기 동일).
@@ -4458,10 +4593,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 도구 모음 빈 영역/컬럼 헤더 우클릭 팝업(07-19 사용자)
             if let Some(st) = state_of(hwnd) {
                 let (x, y) = mouse_xy(lparam);
-                if st
-                    .toolbar
-                    .bounds()
-                    .contains(nexa_gui::Point { x, y })
+                if st.toolbar.bounds().contains(nexa_gui::Point { x, y })
                     && !st.toolbar.is_button_at(x, y)
                 {
                     show_bar_popup(hwnd, true);
@@ -4601,7 +4733,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                         st.drag_press = None;
                         st.rename_on_up = false; // 드래그 시작 = 느린 재클릭 리네임 취소(DnD 우선)
-                        let paths = keyboard_targets(st);
+                        let mut paths = keyboard_targets(st);
+                        // 전송 중 쓰는 대상은 드래그(이동/복사 발신) 제외 — 완료까지 잠금(07-21)
+                        paths.retain(|p| !transfer_blocks(st, p));
                         (!paths.is_empty()).then_some(paths)
                     })
                 } else {
@@ -4799,7 +4933,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             }
             if let Some(file) = exec {
-                shell_open(hwnd, &file); // 파일 실행(QA 07-14 — 기본 연결 프로그램)
+                guarded_shell_open(hwnd, &file); // 파일 실행(QA 07-14 — 전송 중 대상 차단 07-21)
             }
             LRESULT(0)
         }
@@ -4983,7 +5117,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 } else if vk == VK_RETURN.0 {
                     if let Some(c) = st.active_panel().rows().caret() {
                         if let Some(file) = st.active_panel().activate_row(c, ctx, &mut inv) {
-                            shell_open(hwnd, &file); // Enter = 파일 실행(QA 07-14)
+                            guarded_shell_open(hwnd, &file); // Enter = 파일 실행(QA 07-14)
                         }
                     }
                 } else if vk == VK_F2.0 {
@@ -5044,7 +5178,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // Alt+↓ = 캐럿 행 활성화(더블클릭 동등 — 원본 F19, QA 07-14)
                     if let Some(c) = st.active_panel().rows().caret() {
                         if let Some(file) = st.active_panel().activate_row(c, ctx, &mut inv) {
-                            shell_open(hwnd, &file);
+                            guarded_shell_open(hwnd, &file);
                         }
                     }
                     true
@@ -5128,9 +5262,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let mut inv = Invalidations::default();
                     match wparam.0 as u32 {
                         ORDER_FIELD_TOOLBAR => {
-                            st.toolbar_order = config::serialize_toolbar_order(
-                                &config::parse_toolbar_order(&v),
-                            );
+                            st.toolbar_order =
+                                config::serialize_toolbar_order(&config::parse_toolbar_order(&v));
                             st.toolbar.set_buttons(
                                 build_toolbar(
                                     &st.toolbar_order,

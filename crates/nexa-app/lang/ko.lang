@@ -374,3 +374,9 @@ bulk.date.modified = 수정한 날짜
 bulk.date.created = 만든 날짜
 bulk.date.fmt = 포맷(yyyy-MM-dd, MMM, HHmmss…)
 bulk.count = {0}개 항목이 변경됩니다.
+# 전송 진행 창 개선(07-21) — 파일 수·전송 중 잠금·완료 창 닫기 시간 설정
+ops.fileCount = 파일 {0}/{1}
+ops.itemBusy = 전송 중인 항목 — 완료 후 열 수 있습니다
+pref.cat.transfer = 파일 전송
+pref.transferClose = 완료 창 닫기 시간(초, 0~10)
+pref.transferClose.desc = 복사/이동 완료 후 진행 창이 닫히기까지의 시간입니다. 0이면 진행 창을 표시하지 않습니다.

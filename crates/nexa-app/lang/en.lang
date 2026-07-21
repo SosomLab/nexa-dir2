@@ -375,3 +375,9 @@ bulk.date.modified = Modification date
 bulk.date.created = Creation date
 bulk.date.fmt = Format (yyyy-MM-dd, MMM, HHmmss...)
 bulk.count = {0} items will be renamed.
+# Transfer progress window (07-21) - file count, in-flight lock, close-time setting
+ops.fileCount = File {0}/{1}
+ops.itemBusy = Item is being transferred - available when complete
+pref.cat.transfer = File Transfer
+pref.transferClose = Close delay after transfer (sec, 0-10)
+pref.transferClose.desc = How long the progress window stays open after a copy/move completes. 0 hides the progress window entirely.
