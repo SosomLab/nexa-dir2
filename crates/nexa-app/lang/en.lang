@@ -381,3 +381,4 @@ ops.itemBusy = Item is being transferred - available when complete
 pref.cat.transfer = File Transfer
 pref.transferClose = Close delay after transfer (ms, 0-10000)
 pref.transferClose.desc = How long (in milliseconds) the progress window stays open after a copy/move completes. 0 hides the progress window entirely.
+del.progress = Deleting...

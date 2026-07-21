@@ -115,6 +115,9 @@ const WM_APP_BULK: u32 = 0x8008; // WM_APP + 8
 const WM_APP_CTLDEMO: u32 = 0x8009; // WM_APP + 9
 /// About 창 지연 실행(X-26 ③ — 모달 재진입 규약 WM_APP_PREFS 동일. 0x800A/B=편집 창).
 const WM_APP_ABOUT: u32 = 0x800C;
+/// 휴지통 삭제 워커 완료 통지(07-21 QA — SHFileOperationW가 UI 스레드를 3~4초
+/// 블로킹하던 것을 워커로 이관). wparam=성공 여부(1/0) — 대상은 `pending_delete`.
+const WM_APP_DELETE: u32 = 0x800D;
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -600,6 +603,9 @@ struct State {
     transfer_gen: u64,
     /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 설정 07-21).
     transfer_close_ms: i32,
+    /// 진행 중 휴지통 삭제 대상(07-21 QA — SHFileOperationW 워커 이관·동시 1잡).
+    /// Some = 워커 실행 중(완료 통지 WM_APP_DELETE에서 undo 기록·재로드에 사용).
+    pending_delete: Option<Vec<PathBuf>>,
     /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
     drag_press: Option<(i32, i32)>,
     /// 직전 행 클릭 (패널, 경로, 시각) — 기선택 항목 느린 재클릭=이름 바꾸기 판정(탐색기 관례).
@@ -1065,6 +1071,7 @@ pub fn run() -> Result<()> {
         transfer_close: None,
         transfer_gen: 0,
         transfer_close_ms: settings.transfer_close_ms,
+        pending_delete: None,
         drag_press: None,
         slow_click: None,
         rename_on_up: false,
@@ -2245,34 +2252,61 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
             return;
         }
     }
-    let (mut ok, mut fail) = (0usize, 0usize);
-    if permanent {
-        for p in &targets {
-            match nexa_ops::delete_permanent(p) {
-                Ok(()) => ok += 1,
-                Err(_) => fail += 1, // 개별 격리(원본)
-            }
+    if !permanent {
+        // 휴지통 삭제 = 워커 스레드(07-21 QA): SHFileOperationW가 소파일 몇 개에도
+        // 3~4초 걸릴 수 있어(셸 네임스페이스·휴지통 메타데이터) UI 스레드 동기 호출이
+        // 앱 전체를 멈추던 문제. 완료는 WM_APP_DELETE로 통지(undo 기록·재로드).
+        if st.pending_delete.is_some() {
+            return; // 동시 1잡 — 진행 중이면 무시(대상 소실 경합 방지)
         }
-    } else if delete_to_recycle_bin(&targets) {
-        ok = targets.len();
-        // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
-        st.history.push(Box::new(DeleteBatchOp {
-            description: trf("del.recycleOp", &[&ok.to_string()]),
-            paths: targets,
-        }));
-    } else {
-        fail = targets.len();
+        st.pending_delete = Some(targets.clone());
+        let hwnd_raw = hwnd.0 as isize;
+        std::thread::spawn(move || unsafe {
+            let ok = delete_to_recycle_bin(&targets);
+            let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+            let _ = PostMessageW(Some(hwnd), WM_APP_DELETE, WPARAM(ok as usize), LPARAM(0));
+        });
+        update_title(hwnd, st, &format!(" · {}", tr("del.progress")));
+        return;
     }
-    let kind = tr(if permanent {
-        "del.kindPermanent"
-    } else {
-        "del.kindRecycle"
-    });
+    let (mut ok, mut fail) = (0usize, 0usize);
+    for p in &targets {
+        match nexa_ops::delete_permanent(p) {
+            Ok(()) => ok += 1,
+            Err(_) => fail += 1, // 개별 격리(원본)
+        }
+    }
+    let kind = tr("del.kindPermanent");
     let mut note = trf("del.done", &[&kind, &ok.to_string()]);
     if fail > 0 {
         note = format!("{note} · {}", trf("ops.errors", &[&fail.to_string()]));
     }
     reload_both(hwnd, st, &format!(" · {note}"));
+}
+
+/// 휴지통 삭제 워커 완료(WM_APP_DELETE — 07-21 QA): undo 기록 + 결과 노트 + 재로드.
+unsafe fn on_delete_message(hwnd: HWND, st: &mut State, ok_flag: bool) {
+    let Some(targets) = st.pending_delete.take() else {
+        return;
+    };
+    let (ok, fail) = if ok_flag {
+        (targets.len(), 0)
+    } else {
+        (0, targets.len())
+    };
+    if ok_flag {
+        // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
+        st.history.push(Box::new(DeleteBatchOp {
+            description: trf("del.recycleOp", &[&ok.to_string()]),
+            paths: targets,
+        }));
+    }
+    let mut note = trf("del.done", &[&tr("del.kindRecycle"), &ok.to_string()]);
+    if fail > 0 {
+        note = format!("{note} · {}", trf("ops.errors", &[&fail.to_string()]));
+    }
+    reload_both(hwnd, st, &format!(" · {note}"));
+    update_status(hwnd, st);
 }
 
 /// F2 — 캐럿 행 인라인 이름변경 시작(원본 B-6).
@@ -5345,6 +5379,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         m if m == WM_APP_TRANSFER => {
             if let Some(st) = state_of(hwnd) {
                 on_transfer_message(hwnd, st, wparam.0 as u64, lparam.0 == 1);
+            }
+            LRESULT(0)
+        }
+        // 휴지통 삭제 워커 완료(07-21 QA — UI 블로킹 해소) — undo 기록·재로드
+        m if m == WM_APP_DELETE => {
+            if let Some(st) = state_of(hwnd) {
+                on_delete_message(hwnd, st, wparam.0 == 1);
             }
             LRESULT(0)
         }
