@@ -2261,12 +2261,29 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
         }
         st.pending_delete = Some(targets.clone());
         let hwnd_raw = hwnd.0 as isize;
+        let worker_targets = targets.clone();
         std::thread::spawn(move || unsafe {
-            let ok = delete_to_recycle_bin(&targets);
+            // 셸 확장 대비 COM 초기화(STA — SHFileOperation 권고. 실패해도 진행)
+            let hr = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED
+                    | windows::Win32::System::Com::COINIT_DISABLE_OLE1DDE,
+            );
+            let ok = delete_to_recycle_bin(&worker_targets);
+            if hr.is_ok() {
+                windows::Win32::System::Com::CoUninitialize();
+            }
             let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
             let _ = PostMessageW(Some(hwnd), WM_APP_DELETE, WPARAM(ok as usize), LPARAM(0));
         });
+        // 낙관적 숨김(07-21 QA): 셸 휴지통 API가 수 초 걸려도 행은 즉시 화면에서
+        // 제거(탐색기 동일 UX). FS 무변 — 실패하면 완료 재로드가 원복한다.
+        let mut inv = Invalidations::default();
+        st.panels[0].hide_paths(&targets, &mut inv);
+        st.panels[1].hide_paths(&targets, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
         update_title(hwnd, st, &format!(" · {}", tr("del.progress")));
+        update_status(hwnd, st);
         return;
     }
     let (mut ok, mut fail) = (0usize, 0usize);
