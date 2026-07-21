@@ -358,8 +358,20 @@ unsafe fn set_btn_countdown(btn: HWND, n: i32) {
     let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(btn, PCWSTR(w.as_ptr()));
 }
 
-/// 세그먼트 진행 바(07-21): 항목별 크기 비례 구간 + 상태색(완료=accent·진행=accent 부분·
-/// 건너뜀=회색·실패=적색) + 구간 경계선. 계획 미도착/항목 과다(>512)는 단색 바 폴백.
+/// 파일별 진행색 5색 순환 팔레트(사용자 요청 07-21 — 항목 인덱스 % 5).
+/// 1색 = 앱 accent 근사(기존 단색 바와 동일), 이후 초록/주황/보라/분홍(BGR).
+const SEG_PALETTE: [COLORREF; 5] = [
+    COLORREF(0x00D47B26), // 파랑(앱 accent 근사)
+    COLORREF(0x0059C734), // 초록
+    COLORREF(0x000A9FFF), // 주황
+    COLORREF(0x00DE52AF), // 보라
+    COLORREF(0x005F37FF), // 분홍
+];
+
+/// 세그먼트 진행 바(07-21): 항목별 크기 비례 구간 + 파일별 순환 팔레트색(완료=전체·
+/// 진행=부분 채움) + 건너뜀=회색·실패=적색 + 구간 경계선. **모든 항목 최소 3px 보장**
+/// (QA 07-21 — 작은 파일 구간이 반올림으로 소멸해 4파일이 3구간으로 보이던 문제:
+/// 부족분은 가장 넓은 구간에서 차감). 계획 미도착/항목 과다(>512)는 단색 바 폴백.
 unsafe fn paint_segments(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     inner: &RECT,
@@ -367,9 +379,9 @@ unsafe fn paint_segments(
     done: u64,
     total: u64,
 ) {
-    const ACCENT: COLORREF = COLORREF(0x00D47B26); // 앱 accent 근사(BGR)
     const SKIP: COLORREF = COLORREF(0x00A0A0A0); // 건너뜀 회색
     const FAIL: COLORREF = COLORREF(0x003C3CDC); // 실패 적색(BGR)
+    const MIN_W: i32 = 3; // 구간 최소 가시 폭(경계선 1px + 본체)
     let w = (inner.right - inner.left) as i64;
     let fill = |rc: &RECT, c: COLORREF| {
         if rc.right > rc.left {
@@ -379,7 +391,7 @@ unsafe fn paint_segments(
         }
     };
     if total == 0 || items.is_empty() || items.len() > 512 {
-        // 폴백 — 기존 단색 바(전체 백분율)
+        // 폴백 — 단색 바(전체 백분율)
         let pct = if total > 0 {
             (done as f64 / total as f64).clamp(0.0, 1.0)
         } else {
@@ -389,24 +401,50 @@ unsafe fn paint_segments(
             right: inner.left + (w as f64 * pct) as i32,
             ..*inner
         };
-        fill(&rc, ACCENT);
+        fill(&rc, SEG_PALETTE[0]);
         return;
     }
-    let mut cum = 0u64; // 앞 항목 크기 누적 — 경계 = 전체 폭 × 누적/총합(오차 비누적)
-    for (k, it) in items.iter().enumerate() {
-        let x0 = inner.left + (w * cum as i64 / total as i64) as i32;
+    // 1) 크기 비례 폭(누적 경계 — 오차 비누적) → 2) 최소 폭 보정(공간이 허락할 때):
+    // 작은/0바이트 항목도 자기 구간이 보이도록 부족분을 가장 넓은 구간에서 가져온다.
+    let n = items.len();
+    let mut widths: Vec<i32> = Vec::with_capacity(n);
+    let mut cum = 0u64;
+    let mut prev_x = 0i32;
+    for it in items {
         cum += it.size;
-        let x1 = inner.left + (w * cum as i64 / total as i64) as i32;
+        let x = (w * cum as i64 / total as i64) as i32;
+        widths.push(x - prev_x);
+        prev_x = x;
+    }
+    if (n as i64) * ((MIN_W + 1) as i64) <= w {
+        for i in 0..n {
+            while widths[i] < MIN_W {
+                // 가장 넓은 구간에서 1px씩 차감(단순·항목 수 소규모 전제)
+                let Some(j) = (0..n)
+                    .filter(|&j| j != i && widths[j] > MIN_W)
+                    .max_by_key(|&j| widths[j])
+                else {
+                    break;
+                };
+                widths[j] -= 1;
+                widths[i] += 1;
+            }
+        }
+    }
+    let mut x0 = inner.left;
+    for (k, it) in items.iter().enumerate() {
+        let x1 = x0 + widths[k];
         if x1 <= x0 {
-            continue; // 0바이트/서브픽셀 항목 — 표시 생략
+            continue; // 최소 폭 보정 불능(항목 과다) — 표시 생략
         }
         let seg = RECT {
             left: x0,
             right: x1,
             ..*inner
         };
+        let color = SEG_PALETTE[k % SEG_PALETTE.len()];
         match it.status {
-            SegStatus::Done => fill(&seg, ACCENT),
+            SegStatus::Done => fill(&seg, color),
             SegStatus::Skipped => fill(&seg, SKIP),
             SegStatus::Failed => fill(&seg, FAIL),
             SegStatus::Active => {
@@ -419,12 +457,12 @@ unsafe fn paint_segments(
                     right: x0 + ((x1 - x0) as f64 * frac) as i32,
                     ..seg
                 };
-                fill(&rc, ACCENT);
+                fill(&rc, color);
             }
             SegStatus::Pending => {}
         }
-        // 구간 경계선(왼쪽 변) — 너무 좁으면 생략(다항목 가독)
-        if k > 0 && x1 - x0 >= 3 {
+        // 구간 경계선(왼쪽 변)
+        if k > 0 {
             let div = RECT {
                 left: x0,
                 right: x0 + 1,
@@ -432,6 +470,7 @@ unsafe fn paint_segments(
             };
             fill(&div, COLORREF(0x00808080));
         }
+        x0 = x1;
     }
 }
 
