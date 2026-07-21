@@ -467,7 +467,8 @@ unsafe extern "system" fn prog_proc(
             LRESULT(0)
         }
         WM_TIMER => {
-            // 완료 카운트다운(07-15) — [닫기 (N)] 재라벨, 0 = 자동 닫힘
+            // 완료 카운트다운(07-15) — [닫기 (N)] 재라벨, 0 = 자동 닫힘.
+            // 첫 틱은 ms 나머지 간격(set_done — 07-21 ms 정밀), 이후 1초 주기로 재무장.
             if !state.is_null() {
                 if let Some(n) = (*state).closing {
                     let left = n - 1;
@@ -477,6 +478,7 @@ unsafe extern "system" fn prog_proc(
                     } else {
                         (*state).closing = Some(left);
                         set_btn_countdown((*state).btn, left);
+                        SetTimer(Some(hwnd), 1, 1_000, None); // 같은 id = 간격 재설정
                     }
                 }
             }
@@ -701,16 +703,20 @@ impl Progress {
     /// 완료 표시(원본 PROG-WIN — **커스텀 카운트다운 닫기 버튼**, 사용자 요청 07-15):
     /// 라벨 교체 + [취소]→[닫기 (N)] 전환. 창 자체 타이머가 1초마다 (N)을
     /// 줄이고 0이 되거나 버튼 클릭 시 창을 닫는다(닫기 트리거 = 버튼). 호스트는
-    /// 백스톱 타이머로 구조체만 지연 해제. `secs` = 카운트다운 초(설정 — 07-21).
+    /// 백스톱 타이머로 구조체만 지연 해제. `ms` = 닫기 대기(설정 `transfer_close_ms`).
     ///
     /// 진행값은 실제 바이트를 유지한다(07-21 — 1/1로 강제하던 것이 "1 B / 1 B" 오표기
     /// 원인이었음). 취소·실패로 미완료면 바도 부분 진행 그대로 남는다(정직 표기).
-    pub unsafe fn set_done(&mut self, label: &str, secs: i32) {
+    pub unsafe fn set_done(&mut self, label: &str, ms: i32) {
         self.state.label = label.encode_utf16().collect();
-        let secs = secs.max(1);
-        self.state.closing = Some(secs);
-        set_btn_countdown(self.state.btn, secs);
-        SetTimer(Some(self.hwnd), 1, 1_000, None);
+        // ms 정밀(설정 단위 ms — 07-21 2차): 버튼 표시는 올림 초 [닫기 (N)],
+        // 첫 틱 = ms 나머지 간격(이후 wndproc가 1초 주기 재무장) → 총 대기 = 정확히 ms.
+        let ms = ms.max(1);
+        let n = (ms + 999) / 1_000; // 올림 초(div_ceil — 고정 툴체인 미안정이라 수동)
+        self.state.closing = Some(n);
+        set_btn_countdown(self.state.btn, n);
+        let first = (ms - (n - 1) * 1_000).max(50); // 1..=1000ms(과소 방지 하한)
+        SetTimer(Some(self.hwnd), 1, first as u32, None);
         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
     }
 }

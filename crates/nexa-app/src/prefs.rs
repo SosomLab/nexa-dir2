@@ -90,8 +90,8 @@ pub struct PrefValues {
     pub typeahead_special: bool,
     pub typeahead_space: bool,
     pub typeahead_backspace: bool,
-    /// 전송 완료 창 닫기 카운트다운(초, 0~10 — 0=진행 창 미표시, 07-21).
-    pub transfer_close_secs: i32,
+    /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 07-21).
+    pub transfer_close_ms: i32,
 }
 
 /// 설정 항목 종류(편집 컨트롤 형태) — 레지스트리 최소 단위.
@@ -694,7 +694,7 @@ fn sanitize(v: &mut PrefValues) {
     );
     v.typeahead_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
     v.typeahead_pos = v.typeahead_pos.clamp(0, 8);
-    v.transfer_close_secs = v.transfer_close_secs.clamp(0, 10);
+    v.transfer_close_ms = v.transfer_close_ms.clamp(0, 10_000);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
 }
 
@@ -1145,7 +1145,7 @@ impl PrefState {
                             F_TERM_COLS => self.values.term_cols.to_string(),
                             F_COL_AUTOFIT => self.values.col_autofit_max.to_string(),
                             F_TA_RESET => self.values.typeahead_reset_ms.to_string(),
-                            F_TRANSFER_CLOSE => self.values.transfer_close_secs.to_string(),
+                            F_TRANSFER_CLOSE => self.values.transfer_close_ms.to_string(),
                             F_DLG_FONT => self.values.dlg_font.clone(),
                             F_DLG_SIZE => self.values.dlg_font_size.to_string(),
                             _ => String::new(),
@@ -1272,7 +1272,7 @@ impl PrefState {
             F_TAB_DBL => v.tab_dblclick != d.tab_dblclick,
             F_TA_SCOPE => v.typeahead_scope != d.typeahead_scope,
             F_TA_RESET => v.typeahead_reset_ms != d.typeahead_reset_ms,
-            F_TRANSFER_CLOSE => v.transfer_close_secs != d.transfer_close_secs,
+            F_TRANSFER_CLOSE => v.transfer_close_ms != d.transfer_close_ms,
             F_TA_POS => v.typeahead_pos != d.typeahead_pos,
             F_BASE_FONT => v.base_font != d.base_font,
             F_BASE_SIZE => v.base_font_size != d.base_font_size,
@@ -1364,7 +1364,7 @@ impl PrefState {
                     self.values.typeahead_reset_ms = get_text(hw).trim().parse().unwrap_or(1000)
                 }
                 F_TRANSFER_CLOSE => {
-                    self.values.transfer_close_secs = get_text(hw).trim().parse().unwrap_or(2)
+                    self.values.transfer_close_ms = get_text(hw).trim().parse().unwrap_or(2000)
                 }
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),

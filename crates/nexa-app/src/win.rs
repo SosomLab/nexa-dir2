@@ -598,8 +598,8 @@ struct State {
     /// 완료 후 자동 닫기 대기 중인 진행 창(TIMER_PROG_CLOSE가 drop).
     transfer_close: Option<crate::dialog::Progress>,
     transfer_gen: u64,
-    /// 전송 완료 창 닫기 카운트다운(초, 0~10 — 0=진행 창 미표시, 설정 07-21).
-    transfer_close_secs: i32,
+    /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 설정 07-21).
+    transfer_close_ms: i32,
     /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
     drag_press: Option<(i32, i32)>,
     /// 직전 행 클릭 (패널, 경로, 시각) — 기선택 항목 느린 재클릭=이름 바꾸기 판정(탐색기 관례).
@@ -729,7 +729,7 @@ struct TransferJob {
     /// 완료 시 히스토리 기록용(M3-3) — Move/Copy에 따라 역연산이 다르다.
     op: nexa_ops::Op,
     /// 진행 창(QA 07-14 — 커스텀 프로그레스·취소 버튼). Drop=창 닫기.
-    /// 설정 `transfer_close_secs=0`이면 None(창 미표시 — 07-21).
+    /// 설정 `transfer_close_ms=0`이면 None(창 미표시 — 07-21).
     progress: Option<crate::dialog::Progress>,
     /// 전송 항목 수(Plan 도착 전 표시용 — 07-21).
     item_count: usize,
@@ -1064,7 +1064,7 @@ pub fn run() -> Result<()> {
         transfer: None,
         transfer_close: None,
         transfer_gen: 0,
-        transfer_close_secs: settings.transfer_close_secs,
+        transfer_close_ms: settings.transfer_close_ms,
         drag_press: None,
         slow_click: None,
         rename_on_up: false,
@@ -2534,8 +2534,8 @@ unsafe fn start_transfer(
         }
     });
     // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop).
-    // 설정 transfer_close_secs=0 = 창 미표시(제목줄 %만 — 사용자 요청 07-21).
-    let progress = if st.transfer_close_secs > 0 {
+    // 설정 transfer_close_ms=0 = 창 미표시(제목줄 %만 — 사용자 요청 07-21).
+    let progress = if st.transfer_close_ms > 0 {
         crate::dialog::Progress::open(
             hwnd,
             &tr("ops.progressTitle"),
@@ -2602,7 +2602,7 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
     }
     let mut job = st.transfer.take().unwrap();
     // 진행 창 = 완료 표기 + [닫기 (N)] 카운트다운(창 자체가 닫힘 — 사용자 요청 07-15,
-    // N = 설정 transfer_close_secs 07-21). 호스트 타이머는 백스톱: 구조체 지연 해제.
+    // 대기 = 설정 transfer_close_ms 07-21). 호스트 타이머는 백스톱: 구조체 지연 해제.
     if let Some(mut p) = job.progress.take() {
         // 마지막 스냅샷 반영(최종 바이트·세그먼트 상태 — 취소 시 부분 진행 정직 표기)
         let items = job.shared.items.lock().unwrap().clone();
@@ -2620,15 +2620,10 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
             job.shared.total_bytes.load(Ordering::Relaxed),
         );
         p.update(d, t, items, cur, count);
-        let secs = st.transfer_close_secs.max(1);
-        p.set_done(&tr("ops.doneClosing"), secs);
+        let ms = st.transfer_close_ms.max(1);
+        p.set_done(&tr("ops.doneClosing"), ms);
         st.transfer_close = Some(p);
-        SetTimer(
-            Some(hwnd),
-            TIMER_PROG_CLOSE,
-            secs as u32 * 1_000 + 500,
-            None,
-        );
+        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, ms as u32 + 500, None);
     }
     let out = job
         .shared
@@ -3554,7 +3549,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 typeahead_special: st.ta_special,
                 typeahead_space: st.ta_space,
                 typeahead_backspace: st.ta_backspace,
-                transfer_close_secs: st.transfer_close_secs,
+                transfer_close_ms: st.transfer_close_ms,
             },
             st.dlg_font.clone(),
         )
@@ -3782,8 +3777,8 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         st.tab_dblclick = v.tab_dblclick.clone();
     }
     // 전송 완료 창 닫기 시간(07-21) — 다음 전송부터 적용(0=창 미표시)
-    if v.transfer_close_secs != st.transfer_close_secs {
-        st.transfer_close_secs = v.transfer_close_secs.clamp(0, 10);
+    if v.transfer_close_ms != st.transfer_close_ms {
+        st.transfer_close_ms = v.transfer_close_ms.clamp(0, 10_000);
     }
     // 타입어헤드 옵션(07-15) — 전 탭 즉시 적용
     if v.typeahead_scope != st.ta_scope
@@ -4048,7 +4043,7 @@ fn current_settings(st: &State) -> Settings {
         term_font_size: st.term_font_size,
         term_wrap: st.term_wrap,
         term_cols: st.term_cols,
-        transfer_close_secs: st.transfer_close_secs,
+        transfer_close_ms: st.transfer_close_ms,
         col_autofit_max: st.col_autofit_max,
         toolbar_order: st.toolbar_order.clone(),
         ctx_menu_order: st.ctx_menu_order.clone(),

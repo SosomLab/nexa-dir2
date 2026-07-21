@@ -378,5 +378,5 @@ bulk.count = {0}개 항목이 변경됩니다.
 ops.fileCount = 파일 {0}/{1}
 ops.itemBusy = 전송 중인 항목 — 완료 후 열 수 있습니다
 pref.cat.transfer = 파일 전송
-pref.transferClose = 완료 창 닫기 시간(초, 0~10)
-pref.transferClose.desc = 복사/이동 완료 후 진행 창이 닫히기까지의 시간입니다. 0이면 진행 창을 표시하지 않습니다.
+pref.transferClose = 완료 창 닫기 시간(ms, 0~10000)
+pref.transferClose.desc = 복사/이동 완료 후 진행 창이 닫히기까지의 시간(밀리초)입니다. 0이면 진행 창을 표시하지 않습니다.
