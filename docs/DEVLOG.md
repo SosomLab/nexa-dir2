@@ -8,6 +8,7 @@
 
 ## 2026-07-21
 
+- **X-31 일본어 내장 언어팩(사용자 요청)**: `ja.lang` 신설(en 기준 전 키 번역 — Windows 일본어 UI 용어 관례) + i18n `BUILTIN_JA`/`discover` 등록(내장 3언어 en·ko·ja — 메뉴/설정 라디오 자동 노출·`data\lang` 오버라이드·OS `ja-JP` 시스템 추종). 파리티 테스트를 내장 전 언어 루프로 일반화, 기존 "신규 언어" 시나리오는 fr로 교체. 61 green·clippy 0·exe 1.56MB. 상세 [journal/2026-07-21.md](journal/2026-07-21.md).
 - **설정 창 "View _Sort" 표기 수정(사용자 QA)**: 라벨 `View & Sort`의 `&`를 STATIC·트리 오너드로가 단축키 접두(밑줄)로 해석 — prefs 텍스트 STATIC 8곳 `SS_NOPREFIX` + 사이드바 트리 `DT_NOPREFIX`(라벨 원문 그대로·향후 `&` 라벨 공통 안전). 상세 [journal/2026-07-21.md](journal/2026-07-21.md).
 - **휴지통 삭제 지연 = 셸 API 고정 비용 판단 + 낙관적 숨김(사용자 QA 연속)**: 완전 삭제(std::fs)는 즉시인데 휴지통(SHFileOperationW)만 수 초 = **API 자체가 병목**($I/$R 생성·휴지통 설정 확인·SHChangeNotify·셸 확장/AV — 파일 크기 무관 고정 비용, 환경 따라 3~4초). 코드로 API를 빠르게 할 수 없어 **탐색기 동일 UX 채택**: DEL 즉시 행을 화면에서 제거(nexa-tree `remove_paths` 신설 — 하위 포함 표시 제외·선택 정리·FS 무변, panel `hide_paths` 양 패널 적용) 후 워커가 뒤에서 처리, **실패 시 완료 재로드가 원복**. 워커 COM STA 초기화 추가. 상세 [journal/2026-07-21.md](journal/2026-07-21.md).
 - **X-30 QA 후속 3건(사용자 — 같은 브랜치 연속)**: ① **DEL 휴지통 삭제 3~4초 UI 멈춤 해소** — `SHFileOperationW` 동기 호출(UI 스레드)이 원인, **워커 스레드 이관**(`pending_delete` 동시 1잡 가드 → `WM_APP_DELETE` 완료 통지에서 undo 기록·재로드, 진행 중 "삭제 중..." 표시. Shift+Del 완전 삭제는 즉시라 동기 유지) ② **세그먼트 4파일→3구간 보임 수정** — 작은 파일 구간이 반올림 소멸, **전 항목 최소 3px 보장**(부족분 = 최대 구간에서 차감) ③ **파일별 진행색 5색 순환 팔레트**(파랑[accent]·초록·주황·보라·분홍 — 인덱스 % 5, 건너뜀/실패 상태색 유지). 상세 [journal/2026-07-21.md](journal/2026-07-21.md).

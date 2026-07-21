@@ -13,11 +13,14 @@ use std::path::Path;
 /// 내장 언어(빌드 산출물에 임베드 — `lang/` 폴더 없이도 붕괴하지 않는 안전망, 원본 §2).
 const BUILTIN_EN: &str = include_str!("../lang/en.lang");
 const BUILTIN_KO: &str = include_str!("../lang/ko.lang");
+/// 일본어(사용자 요청 07-21) — en/ko와 동일한 전 키 번역·파리티 테스트 대상.
+const BUILTIN_JA: &str = include_str!("../lang/ja.lang");
 
 fn builtin(code: &str) -> Option<&'static str> {
     match code {
         "en" => Some(BUILTIN_EN),
         "ko" => Some(BUILTIN_KO),
+        "ja" => Some(BUILTIN_JA),
         _ => None,
     }
 }
@@ -120,6 +123,7 @@ pub fn discover(data_dir: &Path) -> Vec<(String, String)> {
     let mut out = vec![
         ("en".to_string(), "English".to_string()),
         ("ko".to_string(), "한국어".to_string()),
+        ("ja".to_string(), "日本語".to_string()),
     ];
     let mut extra: Vec<(String, String)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(data_dir.join("lang")) {
@@ -210,17 +214,20 @@ mod tests {
     }
 
     #[test]
-    fn builtin_en_ko_parse_and_key_parity() {
-        let (en, ko) = (parse(BUILTIN_EN), parse(BUILTIN_KO));
+    fn builtin_langs_parse_and_key_parity() {
+        let en = parse(BUILTIN_EN);
         assert_eq!(en.meta["code"], "en");
-        assert_eq!(ko.meta["code"], "ko");
         assert!(!en.strings.is_empty());
-        // 번역 파리티 — 신규 키 누락 방지(en = 기준 언어)
-        for k in en.strings.keys() {
-            assert!(ko.strings.contains_key(k), "ko.lang에 키 누락: {k}");
-        }
-        for k in ko.strings.keys() {
-            assert!(en.strings.contains_key(k), "en.lang에 키 누락: {k}");
+        // 번역 파리티 — 신규 키 누락 방지(en = 기준 언어). 내장 전 언어 공통.
+        for (code, text) in [("ko", BUILTIN_KO), ("ja", BUILTIN_JA)] {
+            let l = parse(text);
+            assert_eq!(l.meta["code"], code);
+            for k in en.strings.keys() {
+                assert!(l.strings.contains_key(k), "{code}.lang에 키 누락: {k}");
+            }
+            for k in l.strings.keys() {
+                assert!(en.strings.contains_key(k), "en.lang에 키 누락({code}): {k}");
+            }
         }
     }
 
@@ -229,11 +236,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nexa_lang_{}", std::process::id()));
         let sub = dir.join("lang");
         std::fs::create_dir_all(&sub).unwrap();
-        // 사용자 오버라이드: ko의 일부 키만 교체 + 신규 언어 ja
+        // 사용자 오버라이드: ko의 일부 키만 교체 + 신규 언어 fr(ja는 내장 승격 — 07-21)
         std::fs::write(sub.join("ko.lang"), "menu.file = 화일\n").unwrap();
         std::fs::write(
-            sub.join("ja.lang"),
-            "@code = ja\n@name = 日本語\nmenu.file = ファイル\n",
+            sub.join("fr.lang"),
+            "@code = fr\n@name = Français\nmenu.file = Fichier\n",
         )
         .unwrap();
 
@@ -245,13 +252,16 @@ mod tests {
         );
         assert_eq!(ko.get("menu.view"), Some("보기"), "나머지는 내장 유지");
         let ja = load("ja", &dir);
-        assert_eq!(ja.get("menu.file"), Some("ファイル"));
-        assert_eq!(ja.get("menu.view"), Some("View"), "누락 키 = en 폴백");
-        assert_eq!(ja.get("no.such.key"), None);
+        assert_eq!(ja.get("menu.file"), Some("ファイル"), "내장 일본어(07-21)");
+        let fr = load("fr", &dir);
+        assert_eq!(fr.get("menu.file"), Some("Fichier"));
+        assert_eq!(fr.get("menu.view"), Some("View"), "누락 키 = en 폴백");
+        assert_eq!(fr.get("no.such.key"), None);
 
         let avail = discover(&dir);
         assert_eq!(avail[0].0, "en");
         assert!(avail.iter().any(|(c, n)| c == "ja" && n == "日本語"));
+        assert!(avail.iter().any(|(c, n)| c == "fr" && n == "Français"));
         assert_eq!(
             avail.iter().filter(|(c, _)| c == "ko").count(),
             1,
@@ -259,8 +269,13 @@ mod tests {
         );
 
         assert_eq!(resolve_code("system", "ko-KR", &avail), "ko");
-        assert_eq!(resolve_code("system", "fr-FR", &avail), "en", "미보유 = en");
-        assert_eq!(resolve_code("ja", "ko-KR", &avail), "ja");
+        assert_eq!(
+            resolve_code("system", "ja-JP", &avail),
+            "ja",
+            "OS 일본어 추종"
+        );
+        assert_eq!(resolve_code("system", "de-DE", &avail), "en", "미보유 = en");
+        assert_eq!(resolve_code("fr", "ko-KR", &avail), "fr");
         assert_eq!(resolve_code("zz", "ko-KR", &avail), "en");
         std::fs::remove_dir_all(&dir).unwrap();
     }

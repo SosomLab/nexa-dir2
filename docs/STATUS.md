@@ -1,6 +1,13 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-21 5차 (KST)** — **X-30 마감 — main 병합**
+> **갱신: 2026-07-21 6차 (KST)** — **X-31 일본어 내장 언어팩(사용자
+> 요청)**: `ja.lang`(en 기준 전 키 번역·Windows 일본어 UI 용어 관례) +
+> i18n 내장 등록(en·ko·ja — 메뉴/설정 라디오 자동 노출·`data\lang`
+> 오버라이드·OS `ja-JP` 시스템 추종). 파리티 테스트 전 언어 일반화.
+> 61 green·clippy 0·exe 1.56MB.
+> [journal/2026-07-21.md](journal/2026-07-21.md).
+>
+> **직전(07-21 5차)** — **X-30 마감 — main 병합**
 > (`feat/transfer-progress-ux` 7커밋): 전송 진행 UX 개편 전체(1B 오표기
 > 수정·B~TB 단위·파일 {cur}/{count}·세그먼트 바[최소 3px·5색 순환 팔레트]·
 > `transfer_close_ms` 설정[0=창 미표시]·전송 중 대상 잠금) + QA 시리즈

@@ -1,0 +1,384 @@
+# Nexa Dir language file — format: original nexa-dir docs/42 §3 (properties style)
+# Lines: '#' comment · '@key = value' metadata · 'key = value' string. Escapes: \n \t \\
+@code = ja
+@name = 日本語
+@name.en = Japanese
+@author = SosomLab
+@app = 0.8.1
+@fallback = en
+
+# ── Menu bar ──
+menu.file = ファイル
+menu.file.newTab = 新しいタブ
+menu.file.closeTab = タブを閉じる
+menu.file.newFolder = 新しいフォルダー
+menu.file.newFile = 新しいファイル
+menu.file.exit = 終了
+menu.edit = 編集
+menu.edit.undo = 元に戻す
+menu.edit.redo = やり直し
+menu.view = 表示
+menu.view.modeTree = ツリー表示
+menu.view.modeFlat = フラット表示
+menu.view.modeTiles = タイル表示
+menu.view.hidden = 隠しファイルを表示
+menu.view.dot = ドット (.) ファイルを表示
+menu.view.dock = 下部ドック
+menu.view.launcher = クイックランチャーバー
+menu.view.refresh = 最新の情報に更新
+menu.view.theme.system = テーマ: システム
+menu.view.theme.light = テーマ: ライト
+menu.view.theme.dark = テーマ: ダーク
+menu.view.lang.system = 言語: システム
+menu.help = ヘルプ
+menu.help.about = Nexa Dir について
+
+# ── About (X-26 (3)) ──
+about.title = Nexa Dir について
+about.desc = Windows 向けの超低メモリ・ポータブルファイルエクスプローラー
+about.version = バージョン
+about.link.repo = Nexa Dir リポジトリ (GitHub)
+about.link.releases = ダウンロード (GitHub Releases)
+about.license = ライセンス: PolyForm Noncommercial 1.0.0
+about.copyright = © 2026 SosomLab · Sangyong Bae
+about.ok = OK
+
+# ── Columns (original col.* keys) ──
+col.name = 名前
+col.ext = 拡張子
+col.size = サイズ
+col.modified = 更新日時
+col.kind = 種類
+
+# ── Kind cells (original kind.* keys) ──
+kind.folder = フォルダー
+kind.link = リンク
+kind.file = ファイル
+kind.drive = ドライブ
+kind.extFile = {0} ファイル
+
+# ── File ops (M3-1 transfer · M3-2 delete/rename/new) ──
+ops.progress = 転送中 {0}%
+ops.done = 転送 {0}
+ops.skipped = スキップ {0}
+ops.errors = 失敗 {0}
+ops.canceled = キャンセルされました
+ops.overwriteTitle = 上書きの確認
+ops.overwrite = '{0}' は宛先フォルダーに既に存在します。上書きしますか？\n(いいえ=この項目をスキップ · キャンセル=すべて中止)
+del.title = 削除
+del.confirm = {0} 個の項目を完全に削除しますか？
+del.kindRecycle = ごみ箱
+del.kindPermanent = 完全削除
+del.done = {0}: {1} 個削除
+del.recycleOp = ごみ箱へ {0} 個
+rename.fail = 名前の変更に失敗: {0}
+new.folderBase = 新しいフォルダー
+new.fileBase = 新しいファイル
+new.fail = 作成に失敗: {0}
+
+# ── Undo/Redo (M3-3) ──
+undo.none = 元に戻す操作はありません
+redo.none = やり直す操作はありません
+undo.done = 元に戻しました: {0}
+redo.done = やり直しました: {0}
+undo.fail = 元に戻せませんでした ({0}): {1}
+redo.fail = やり直せませんでした ({0}): {1}
+history.failedItems = {0} 個の項目が失敗
+history.missingSource = 元が見つかりません: {0}
+history.nameExists = 同じ名前が既に存在します: {0}
+op.moveCount = {0} 個の移動
+op.copyCount = {0} 個のコピー
+rename.done = 名前の変更: {0} → {1}
+new.folderOp = 新しいフォルダー
+new.fileOp = 新しいファイル
+
+# ── Shell context menu (M3-4) ──
+ctx.deletePermanent = 完全に削除
+ctx.pasteInto = フォルダーへ貼り付け
+ctx.paste = 貼り付け
+
+# ── Bottom dock (M4-1·M4-2) ──
+dock.info = 情報
+dock.preview = プレビュー
+preview.none = プレビューする項目がありません
+preview.empty = (空のファイル)
+preview.binary = バイナリファイル — テキストプレビューはありません
+preview.fail = 読み取りに失敗しました
+dock.terminal = ターミナル
+term.exited = [シェルが終了しました — 任意のキーで再起動]
+term.fail = ターミナルの起動に失敗しました (ConPTY)
+info.selected = {0} 個を選択中
+info.kind = 種類: {0}
+info.size = サイズ: {0} B
+info.modified = 更新日時: {0}
+info.path = パス: {0}
+info.currentFolder = 現在のフォルダー: {0}
+ctx.undoOf = 元に戻す: {0}
+ctx.redoOf = やり直し: {0}
+
+# ── Status bar · title ──
+status.itemCount = {0} 個の項目
+status.selectedCount = {0} 個を選択
+status.tab = タブ {0}/{1}
+status.avg = 平均 {0}µs
+status.firstRender = 初回描画 {0}ms
+status.filters = 隠し: {0} · ドット: {1}
+status.show = 表示
+status.hide = 非表示
+panel.left = L
+panel.right = R
+
+tab.lock = タブをロック
+tab.unlock = タブのロックを解除
+tab.duplicate = タブを複製
+tab.new = 新しいタブ
+tab.close = タブを閉じる
+ops.applyAll = (はい=すべて上書き / いいえ=すべてスキップ / キャンセル=中止 — 選択は残りのすべての競合に適用されます)
+
+ctx.copyPath = パスとしてコピー
+
+ops.yes = 上書き
+ops.yesAll = すべて上書き
+ops.skip = スキップ
+ops.cancel = キャンセル
+ops.progressTitle = ファイル転送
+ops.progressLabel = 転送中...
+
+pref.title = 環境設定
+pref.theme = テーマ
+pref.theme.system = システム
+pref.theme.light = ライト
+pref.theme.dark = ダーク
+pref.lang = 言語
+pref.lang.system = システム
+pref.termFont = ターミナルフォント (カンマ = フォールバックチェーン)
+pref.termFontSize = ターミナルフォントサイズ (8-32)
+pref.dlgFont = ダイアログフォント
+pref.dlgFontSize = ダイアログフォントサイズ (7-24)
+menu.file.prefs = 環境設定...
+ctx.copyName = 名前としてコピー
+pref.cat.appearance = 外観
+pref.cat.fonts = フォント
+pref.cat.terminal = ターミナル
+pref.cat.list = ファイル一覧
+pref.cat.ctxmenu = コンテキストメニュー
+pref.cat.dock = 下部ドック
+pref.cat.lang = 言語
+pref.search.placeholder = 設定を検索
+pref.showHidden = 隠しファイルを表示
+pref.showDotfiles = ドット (.) ファイルを表示
+pref.dock = 下部ドックを表示
+launcher.ran = {0} を起動しました
+launcher.failed = {0} の起動に失敗しました
+menu.edit.bulkRename = 一括名前変更...
+bulk.title = 一括名前変更
+bulk.find = 検索
+bulk.with = 置換後
+bulk.matchCase = 大文字と小文字を区別
+bulk.insert = テキストを挿入
+bulk.posPrefix = 名前の前
+bulk.posSuffix = 名前の後
+bulk.case = 大文字/小文字の変更
+bulk.case.none = そのまま
+bulk.case.upper = 大文字
+bulk.case.lower = 小文字
+bulk.case.title = タイトル
+bulk.case.sentence = 文
+bulk.number = 連番
+bulk.start = 開始
+bulk.step = 増分
+bulk.pad = 桁数
+bulk.apply = 適用
+bulk.cancel = キャンセル
+bulk.conflict.empty = 空の名前
+bulk.conflict.invalid = 無効な文字
+bulk.conflict.dup = 重複
+bulk.conflict.exists = 既に存在します
+bulk.conflict.nested = 親フォルダーと同時に選択
+bulk.done = 名前変更 {0}
+bulk.fail = 失敗 {0}
+bulk.noSelection = 選択がありません
+bulk.regex = 正規表現
+bulk.add = ブロックを追加
+bulk.pipeline = パイプライン (上から順に適用)
+bulk.date.fmtHelpTitle = 日付フォーマットトークン
+bulk.date.fmtHelpNote = トークン以外の文字はそのまま残ります。例: ${YYYY}-${MM}-${DD} -> 2026-07-17
+bulk.kind.replace = テキスト置換
+bulk.kind.replaceRx = 正規表現置換
+bulk.kind.case = 大文字/小文字の変更
+bulk.kind.insert = テキスト挿入
+bulk.kind.number = 連番の追加
+bulk.kind.move = 区間の移動
+bulk.kind.ext = 拡張子の変更
+bulk.moveStart = 開始位置 (1 起点)
+bulk.moveLen = 長さ
+bulk.destFront = 先頭へ
+bulk.destEnd = 末尾へ
+bulk.extFrom = 元の拡張子 (空=すべて)
+bulk.extTo = 変更後の拡張子
+bulk.preset.name = プリセット名
+bulk.preset.save = 保存
+bulk.preset.load = 読み込み
+pref.grp.general = 全般
+pref.grp.panel = 下部ドック
+pref.search.results = {0} 件一致
+pref.theme.desc = アプリの配色テーマ — システムは OS の設定に従います。
+pref.lang.desc = 表示言語 — システムは OS の言語に従います。
+pref.termFont.desc = ターミナルフォント。カンマ区切りの一覧はフォールバックチェーンになります。
+pref.termFontSize.desc = ターミナルフォントサイズ (DIP、8~32)。
+pref.dlgFont.desc = ダイアログ (確認・進行状況) のフォント。
+pref.dlgFontSize.desc = ダイアログフォントサイズ (ポイント、7~24)。
+pref.showHidden.desc = 隠し属性のファイルとフォルダーを表示します。
+pref.showDotfiles.desc = 名前がドットで始まるファイルとフォルダーを表示します。
+pref.colAutofitMax = 列の自動調整の最大幅 (50-2000)
+pref.colAutofitMax.desc = 列の境界をダブルクリックして内容に合わせるときの最大幅 (px)。
+pref.toolbarOrder = ツールバーの順序
+pref.toolbarOrder.desc = ツールバーボタンを並べ替えます。グループまたは項目を選択して上下ボタンで移動 — グループは全体で、項目はグループ内で移動します (Shift クリック = 連続複数選択)。
+pref.tbo.grpPanel = パネル操作
+pref.tbo.grpView = 表示モード
+pref.tbo.grpShow = 表示/非表示
+pref.tbo.panelToggle = ファイルパネル切替
+pref.tbo.infoToggle = 情報ペイン切替
+pref.editBtn = 編集...
+pref.colLayout = ファイル一覧の列
+pref.colLayout.desc = ファイル一覧の列の表示/非表示と並べ替えを別ウィンドウで行います (フォーカス中のパネルに適用・列同期に従います)。
+pref.ctxMenuOrder = コンテキストメニュー項目
+pref.ctxMenuOrder.desc = アプリ独自のコンテキストメニュー項目の表示/非表示と並べ替え (シェル動詞には影響しません)。
+pref.ctxm.grpRow = 項目メニュー
+pref.ctxm.grpBg = 背景メニュー
+pref.dock.desc = 下部ドック (情報・プレビュー・ターミナル) を表示します。
+pref.sortFoldersFirst = フォルダーを先に並べ替え
+pref.sortFoldersFirst.desc = 並び順に関係なくフォルダーをファイルより前にまとめます。
+pref.termWrap = ターミナルの折り返し
+pref.termWrap.desc = 表示幅で行を折り返します。オフ = 固定列 + 水平スクロール。
+pref.termCols = ターミナルの列数 (80~1000)
+pref.termCols.desc = 折り返しオフ時の固定列数。Shift+ホイールで水平スクロールします。
+pref.sortCaseSensitive = 大文字と小文字を区別して並べ替え
+pref.sortCaseSensitive.desc = 大文字と小文字を区別して並べ替えます — 大文字で始まる名前が先にまとまります。
+pref.navUpAlign = 上へ移動後の選択位置
+pref.navUpAlign.desc = Alt+↑ で上のフォルダーへ移動した後、離れたフォルダーをビューのどこに置くか。
+pref.align.top = 上
+pref.align.center = 中央
+pref.align.bottom = 下
+ops.doneClosing = 完了 — まもなく閉じます
+pref.cat.tabs = タブ
+pref.tabDblclick = タブのダブルクリック動作
+pref.tabDblclick.desc = タブをダブルクリックしたときの動作です。オプションは今後追加されます。
+pref.tabDbl.close = タブを閉じる
+pref.tabDbl.pin = タブをピン留め
+pref.tabDbl.lock = タブをロック
+tab.pin = タブをピン留め
+tab.unpin = ピン留めを解除
+pref.taScope = 先行入力の検索範囲
+pref.taScope.desc = プレフィックス入力が検索する範囲です。
+pref.taScope.global = 全体を先頭から
+pref.taScope.level = 現在の階層 (兄弟)
+pref.taScope.visible = 可視ストリーム (既定)
+pref.taReset = 先行入力のリセット (ms)
+pref.taReset.desc = 入力がないときにプレフィックスをリセットするまでの時間 (200~10000)。
+pref.taPos = 先行入力バッジの位置
+pref.taPos.desc = 検索バッジを一覧のどこに表示するかを決めます。
+pref.taPos.tl = 左上
+pref.taPos.tc = 中央上
+pref.taPos.tr = 右上
+pref.taPos.ml = 左中
+pref.taPos.mc = 中央
+pref.taPos.mr = 右中
+pref.taPos.bl = 左下 (既定)
+pref.taPos.bc = 中央下
+pref.taPos.br = 右下
+pref.taSpecial = 特殊文字を含める (ファイル名で安全)
+pref.taSpecial.desc = オフ = 英数字のみ入力されます。
+pref.taSpace = スペースを含める (プレフィックス入力中)
+pref.taSpace.desc = プレフィックスがないときのスペースは選択の切り替えとして動作します。
+pref.taBackspace = Backspace で最後の文字を削除
+pref.taBackspace.desc = オフ = 先行入力中の Backspace を無視します。
+pref.cat.listGeneral = 表示と並べ替え
+pref.cat.typeahead = 先行入力
+ops.close = 閉じる
+# X-17 virtual top-level
+nav.mypc = PC
+col.total = 合計サイズ
+col.free = 空き領域
+drive.freeOf = 空き {1} / {0}
+# X-12 font slots
+pref.baseFont = 基本フォント
+pref.baseFont.desc = 特定の設定がない場所 — メニュー・タブ・パス・説明・ドックペインで使用します。
+pref.consoleFont.desc = ターミナル専用。カンマで区切るとフォールバック順になります。
+pref.ctxFont = コンテキストメニューフォント
+pref.ctxFont.desc = カスタム描画メニュー用の予約 — 現在の右クリックメニューは OS フォントに従います。
+pref.statusFont = ステータスバーフォント
+pref.statusFont.desc = 下部のステータスバー。
+pref.listFont = ファイル一覧フォント
+pref.listFont.desc = 左右パネルのファイル一覧 + 列ヘッダー (ファミリ/サイズ共有)。
+pref.folderBold = フォルダー名を太字に
+pref.folderBold.desc = ファイル一覧のフォルダーをセミボールドで描画します。
+pref.hdrBold = 列ヘッダーを太字に
+pref.hdrBold.desc = 装飾のみ — ファミリ/サイズはファイル一覧と同じです。
+pref.hdrItalic = 列ヘッダーを斜体に
+pref.hdrItalic.desc = 装飾のみ — ファミリ/サイズはファイル一覧と同じです。
+# panel/info modes (07-16)
+menu.view.panelDual = デュアルファイルパネル
+menu.view.panelSingle = シングルファイルパネル
+menu.view.infoDual = デュアル情報ペイン
+menu.view.infoSingle = シングル情報ペイン
+menu.view.colWidthSync = 列幅を同期
+status.infoLocked = シングルファイルパネルでは情報ペインはシングルに固定されます
+# bulk rename v2 (X-22)
+bulk.kind.date = 日付の追加
+bulk.scope.name = 名前
+bulk.scope.nameext = 拡張子付きの名前
+bulk.scope.ext = 拡張子
+bulk.scope.extdot = ドット付き拡張子
+bulk.lbl.applyTo = 適用対象:
+bulk.preset.saveSeq = 名前変更シーケンスを保存…
+bulk.preset.editSeq = 名前変更シーケンスを編集…
+bulk.preset.savePrompt = プリセット名
+bulk.preset.savedSeq = 保存済みの名前変更シーケンス
+bulk.rename = 名前の変更
+bulk.preset.delete = 削除
+bulk.preset.close = 閉じる
+bulk.preset.ok = OK
+bulk.preset.cancel = キャンセル
+bulk.grid.name = 名前
+bulk.grid.apply = 適用
+bulk.grid.before = 変更前
+bulk.grid.after = 変更後
+bulk.lbl.mode = モード:
+bulk.lbl.matchCase = 大小区別:
+bulk.lbl.find = 置換対象:
+bulk.lbl.findRx = 置換正規表現:
+bulk.lbl.with = 置換後:
+bulk.lbl.pos = 位置:
+bulk.lbl.text = テキスト:
+bulk.lbl.caseTo = 変更後のケース:
+bulk.lbl.padding = 桁数:
+bulk.lbl.start = 開始値:
+bulk.lbl.step = 増分:
+bulk.lbl.type = 種類:
+bulk.lbl.fmt = フォーマット:
+bulk.lbl.wrap = 前後:
+bulk.lbl.prefix = 前置:
+bulk.lbl.suffix = 後置:
+bulk.lbl.range = 範囲:
+bulk.lbl.dest = 移動先:
+bulk.lbl.ext = 拡張子:
+bulk.mode.all = すべての一致
+bulk.mode.first = 最初の一致
+bulk.mode.last = 最後の一致
+bulk.mode.entire = テキスト全体
+bulk.dirStart = 先頭から
+bulk.dirEnd = 末尾から
+bulk.wrapPre = 前置 (値の前後)
+bulk.wrapSuf = 後置 (値の前後)
+bulk.date.modified = 更新日
+bulk.date.created = 作成日
+bulk.date.fmt = フォーマット (yyyy-MM-dd, MMM, HHmmss...)
+bulk.count = {0} 個の項目の名前が変更されます。
+# Transfer progress window (07-21) - file count, in-flight lock, close-time setting
+ops.fileCount = ファイル {0}/{1}
+ops.itemBusy = 転送中の項目 — 完了後に開けます
+pref.cat.transfer = ファイル転送
+pref.transferClose = 完了後にウィンドウを閉じるまでの時間 (ms, 0-10000)
+pref.transferClose.desc = コピー/移動の完了後、進行状況ウィンドウが閉じるまでの時間 (ミリ秒) です。0 の場合は進行状況ウィンドウを表示しません。
+del.progress = 削除中...
