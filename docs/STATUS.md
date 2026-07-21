@@ -1,6 +1,6 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-21 4차 (KST)** — **X-30 마감 — main 병합**
+> **갱신: 2026-07-21 5차 (KST)** — **X-30 마감 — main 병합**
 > (`feat/transfer-progress-ux` 7커밋): 전송 진행 UX 개편 전체(1B 오표기
 > 수정·B~TB 단위·파일 {cur}/{count}·세그먼트 바[최소 3px·5색 순환 팔레트]·
 > `transfer_close_ms` 설정[0=창 미표시]·전송 중 대상 잠금) + QA 시리즈
@@ -8,6 +8,15 @@
 > 화면 즉시 제거·실패 시 재로드 원복]·설정 창 "View _Sort" 표기 =
 > `SS_NOPREFIX`/`DT_NOPREFIX`). 전 테스트 green·clippy 0·릴리즈 실측 exe
 > 1.5MB. 릴리스 태그는 choco 승인 대기 방침 유지(07-21 1차).
+> [journal/2026-07-21.md](journal/2026-07-21.md).
+>
+> **직전(07-21 4차)** — **배포 채널 상태 실측 점검**: ①
+> **Chocolatey 진전** — `nexa-dir`·`nexa-dir.portable` 0.8.1 자동 검사 3종
+> **완료**(Validation/Verification **Passing**, Package Scan **Flagged Note**
+> = 참고성 플래그·차단 아님) → `awaiting moderation`. 07-19 기록의 "3종
+> Pending"은 정정됨. ② **winget 변동 없음** — #404528·#404533 모두 `OPEN`,
+> `Azure-Pipeline-Passed` 라벨 유지·07-19 14:07 이후 무변동(신규 기여자
+> 재실행 권한 없음 → 모더레이터 검토 대기). **양 채널 우리 측 조치 불요.**
 > [journal/2026-07-21.md](journal/2026-07-21.md).
 >
 > **직전(07-21 3차)** — **X-30 QA 후속 3건(사용자)**: ①
