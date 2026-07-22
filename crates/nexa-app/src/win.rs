@@ -94,6 +94,10 @@ const IDLE_TRIM_MS: u64 = 60_000;
 /// 패널별(TIMER_WATCH_BASE+패널), 300ms 코얼레싱(원본 FolderWatcher 동일).
 const WM_APP_FSCHANGE: u32 = 0x8002; // WM_APP + 2
 const TIMER_WATCH_BASE: usize = 10;
+/// DnD 추적 폴링(X-32) — 드래그 중 커서 위치로 엣지 자동 스크롤·탭/폴더 호버 대기 판정
+/// (OLE DragOver는 정지 커서에서 호출이 멎을 수 있어 타이머로 보강).
+const TIMER_DND: usize = 12;
+const DND_TICK_MS: u32 = 100;
 const WATCH_DEBOUNCE_MS: u32 = 300;
 /// 터미널 출력/종료 통지(M4-3) — wparam=패널(|EXIT_FLAG), lparam=세대.
 const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
@@ -608,6 +612,10 @@ struct State {
     pending_delete: Option<Vec<PathBuf>>,
     /// 행 위 왼쪽 버튼 누름 좌표(M3-5 S4) — 임계 이동 시 OLE 드래그 발신 시작.
     drag_press: Option<(i32, i32)>,
+    /// DnD 호버 대기(X-32) — (대상, 시작 시각 now_ms). 대상이 바뀌면 리셋.
+    dnd_hover: Option<(DndHover, u64)>,
+    /// DnD 호버 대기 시간(ms — 설정 `dnd_hover_ms`, 기본 3000).
+    dnd_hover_ms: i32,
     /// 직전 행 클릭 (패널, 경로, 시각) — 기선택 항목 느린 재클릭=이름 바꾸기 판정(탐색기 관례).
     slow_click: Option<(usize, String, u64)>,
     /// 느린 재클릭 리네임 예약 — **MouseUp에서 진입**(드래그가 시작되면 취소 = DnD 우선).
@@ -1073,6 +1081,8 @@ pub fn run() -> Result<()> {
         transfer_close_ms: settings.transfer_close_ms,
         pending_delete: None,
         drag_press: None,
+        dnd_hover: None,
+        dnd_hover_ms: settings.dnd_hover_ms,
         slow_click: None,
         rename_on_up: false,
         watchers: [None, None],
@@ -1141,12 +1151,19 @@ pub fn run() -> Result<()> {
             crate::dnd::DropHooks {
                 dest_at: drop_dest_at,
                 drop: handle_external_drop,
+                track: dnd_track,
+                leave: dnd_leave,
             },
         )
         .into();
         if let Err(e) = windows::Win32::System::Ole::RegisterDragDrop(hwnd, &drop_target) {
             eprintln!("DnD 수신 등록 실패(계속 진행): {e}");
         }
+
+        // 잘라내기 흐림 표시(X-32) — 클립보드 변경 구독(WM_CLIPBOARDUPDATE) + 시작 시 1회 동기
+        // (앱 시작 전 탐색기에서 잘라낸 목록도 흐림). 해제는 WM_NCDESTROY.
+        let _ = windows::Win32::System::DataExchange::AddClipboardFormatListener(hwnd);
+        let _ = crate::clipboard::sync_cut_marks();
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -1454,6 +1471,19 @@ fn clip_from_selection(st: &mut State, op: nexa_ops::Op) -> Option<(Vec<PathBuf>
         .map(|p| p.to_path_buf())
         .collect();
     (!paths.is_empty()).then_some((paths, op))
+}
+
+/// Ctrl+V 대상 폴더(X-32 — 탐색기 관례): 선택이 **폴더 1개**면 그 폴더 안으로,
+/// 그 외(선택 없음/파일/다중 선택)는 활성 패널 현재 폴더.
+fn paste_dest(st: &mut State) -> PathBuf {
+    let panel = st.active_panel();
+    let sel = panel.rows().source().tree().selected_paths();
+    if let [one] = sel[..] {
+        if one.is_dir() {
+            return one.to_path_buf();
+        }
+    }
+    panel.root_path()
 }
 
 /// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식) — 다중 선택=개수·단일=속성·없음=현재 폴더.
@@ -2109,6 +2139,103 @@ unsafe fn drop_dest_at(hwnd: HWND, sx: i32, sy: i32) -> Option<PathBuf> {
 unsafe fn handle_external_drop(hwnd: HWND, paths: Vec<PathBuf>, dest: PathBuf, op: nexa_ops::Op) {
     if let Some(st) = state_of(hwnd) {
         start_transfer(hwnd, st, paths, dest, op);
+    }
+}
+
+/// DnD 호버 대기 대상(X-32) — 드래그 중 같은 대상 위에 `dnd_hover_ms` 이상 머물면 발동.
+#[derive(Clone, PartialEq)]
+enum DndHover {
+    /// (패널, 탭 인덱스) — 발동 = 그 탭으로 전환(탐색기 탭 호버 규약).
+    Tab(usize, usize),
+    /// (패널, 행, 경로) — 발동 = 접힌 폴더 펼침(경로로 행 이동/재정렬 재검증).
+    Folder(usize, usize, PathBuf),
+}
+
+/// 드래그 추적 훅(X-32, dnd.rs) — DragEnter/DragOver 화면 좌표. 폴링 타이머 무장
+/// (정지 커서에서도 대기 경과·연속 엣지 스크롤 판정).
+unsafe fn dnd_track(hwnd: HWND, sx: i32, sy: i32) {
+    let mut pt = windows::Win32::Foundation::POINT { x: sx, y: sy };
+    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+    SetTimer(Some(hwnd), TIMER_DND, DND_TICK_MS, None);
+    if let Some(st) = state_of(hwnd) {
+        dnd_track_update(hwnd, st, pt.x, pt.y);
+    }
+}
+
+/// 드래그 이탈/종료 훅(X-32, dnd.rs) — 추적 타이머·호버 대기 해제.
+unsafe fn dnd_leave(hwnd: HWND) {
+    let _ = KillTimer(Some(hwnd), TIMER_DND);
+    if let Some(st) = state_of(hwnd) {
+        st.dnd_hover = None;
+    }
+}
+
+/// 드래그 위치 판정(X-32) — ① 본문 상/하단 엣지 자동 스크롤 ② 비활성 탭/접힌 폴더
+/// 호버 대기·발동. 트리거 시 탭 전환·폴더 펼침 후 대기 리셋(다음 대상은 새로 대기).
+unsafe fn dnd_track_update(hwnd: HWND, st: &mut State, x: i32, y: i32) {
+    let mut inv = Invalidations::default();
+    // ① 커서 아래 패널의 본문 엣지 = 1행 자동 스크롤(폴링 반복 = 연속 스크롤)
+    if let Some(pi) = st.panel_at_pt(x, y) {
+        st.panels[pi].rows_mut().drag_scroll_edge(y, &mut inv);
+    }
+    // ② 호버 대기 후보: 비활성 탭 > 접힌 폴더 행
+    let mut cand = None;
+    for pi in 0..2 {
+        if let Some(ti) = st.panels[pi].tabbar.tab_index_at(x, y) {
+            if ti != st.panels[pi].active_index() {
+                cand = Some(DndHover::Tab(pi, ti));
+            }
+        }
+    }
+    if cand.is_none() {
+        if let Some(pi) = st.panel_at_pt(x, y) {
+            let rows = st.panels[pi].rows();
+            if let Some(row) = rows.row_at(x, y) {
+                if rows.is_collapsed_dir(row) {
+                    let tree = rows.source().tree();
+                    if let Some(p) = tree.visible_id(row).and_then(|id| tree.node_path(id)) {
+                        cand = Some(DndHover::Folder(pi, row, p.to_path_buf()));
+                    }
+                }
+            }
+        }
+    }
+    let mut fired = false;
+    match (st.dnd_hover.clone(), cand) {
+        (_, None) => st.dnd_hover = None,
+        (Some((cur, since)), Some(c)) if cur == c => {
+            if now_ms().saturating_sub(since) >= st.dnd_hover_ms.max(0) as u64 {
+                dnd_hover_fire(st, c, &mut inv);
+                st.dnd_hover = None;
+                fired = true;
+            }
+        }
+        (_, Some(c)) => st.dnd_hover = Some((c, now_ms())),
+    }
+    flush_invalidations(hwnd, &mut inv);
+    if fired {
+        // 탭 전환 = 경로 변경 가능 — 상태바·watcher·세션 저장 길목 합류
+        update_title(hwnd, st, "");
+        update_status(hwnd, st);
+    }
+}
+
+/// 호버 대기 발동(X-32): 탭 = 그 탭으로 전환 · 폴더 = 펼침(행-경로 불일치 시 무시 —
+/// 스크롤/재정렬로 행이 밀린 경우 다음 폴링이 새 대상으로 다시 대기).
+fn dnd_hover_fire(st: &mut State, target: DndHover, inv: &mut Invalidations) {
+    match target {
+        DndHover::Tab(pi, ti) => st.panels[pi].switch_tab(ti, inv),
+        DndHover::Folder(pi, row, path) => {
+            let rows = st.panels[pi].rows();
+            let tree = rows.source().tree();
+            let same = tree
+                .visible_id(row)
+                .and_then(|id| tree.node_path(id))
+                .is_some_and(|p| p == path);
+            if same {
+                st.panels[pi].rows_mut().hover_expand(row, inv);
+            }
+        }
     }
 }
 
@@ -3601,6 +3728,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 typeahead_space: st.ta_space,
                 typeahead_backspace: st.ta_backspace,
                 transfer_close_ms: st.transfer_close_ms,
+                dnd_hover_ms: st.dnd_hover_ms,
             },
             st.dlg_font.clone(),
         )
@@ -3830,6 +3958,10 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     // 전송 완료 창 닫기 시간(07-21) — 다음 전송부터 적용(0=창 미표시)
     if v.transfer_close_ms != st.transfer_close_ms {
         st.transfer_close_ms = v.transfer_close_ms.clamp(0, 10_000);
+    }
+    // DnD 호버 대기 시간(X-32) — 다음 드래그부터 적용
+    if v.dnd_hover_ms != st.dnd_hover_ms {
+        st.dnd_hover_ms = v.dnd_hover_ms.clamp(200, 10_000);
     }
     // 타입어헤드 옵션(07-15) — 전 탭 즉시 적용
     if v.typeahead_scope != st.ta_scope
@@ -4095,6 +4227,7 @@ fn current_settings(st: &State) -> Settings {
         term_wrap: st.term_wrap,
         term_cols: st.term_cols,
         transfer_close_ms: st.transfer_close_ms,
+        dnd_hover_ms: st.dnd_hover_ms,
         col_autofit_max: st.col_autofit_max,
         toolbar_order: st.toolbar_order.clone(),
         ctx_menu_order: st.ctx_menu_order.clone(),
@@ -5150,7 +5283,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if op == nexa_ops::Op::Move {
                             crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
                         }
-                        let dest = st.active_panel().root_path();
+                        // 폴더 1개 선택 = 그 폴더 안으로(X-32), 그 외 = 현재 폴더
+                        let dest = paste_dest(st);
                         start_transfer(hwnd, st, paths, dest, op);
                         return LRESULT(0);
                     }
@@ -5643,6 +5777,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(st) = state_of(hwnd) {
                     begin_rename_caret(hwnd, st);
                 }
+            } else if wparam.0 == TIMER_DND {
+                // DnD 추적 폴링(X-32) — 정지 커서에서도 엣지 스크롤·호버 대기 경과 판정
+                if let Some(st) = state_of(hwnd) {
+                    let mut pt = windows::Win32::Foundation::POINT::default();
+                    let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+                    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+                    dnd_track_update(hwnd, st, pt.x, pt.y);
+                }
             } else if wparam.0 == TIMER_JANITOR {
                 if let Some(st) = state_of(hwnd) {
                     if should_trim(now_ms(), st.last_activity_ms, st.trimmed) {
@@ -5713,7 +5855,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             PostQuitMessage(0);
             LRESULT(0)
         }
+        // 클립보드 변경(X-32) — 잘라내기 흐림 표시 동기(잘라내기=흐림·복사/붙여넣기/비움=해제)
+        m if m == windows::Win32::UI::WindowsAndMessaging::WM_CLIPBOARDUPDATE => {
+            if crate::clipboard::sync_cut_marks() {
+                if let Some(st) = state_of(hwnd) {
+                    let mut inv = Invalidations::default();
+                    inv.push(st.panels[0].rows().bounds());
+                    inv.push(st.panels[1].rows().bounds());
+                    flush_invalidations(hwnd, &mut inv);
+                }
+            }
+            LRESULT(0)
+        }
         WM_NCDESTROY => {
+            // 클립보드 구독 해제(X-32)
+            let _ = windows::Win32::System::DataExchange::RemoveClipboardFormatListener(hwnd);
             let _ = windows::Win32::System::Ole::RevokeDragDrop(hwnd); // DnD 수신 해제(M3-5)
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut State;
             if !ptr.is_null() {

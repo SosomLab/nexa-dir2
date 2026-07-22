@@ -59,6 +59,27 @@ fn drive_space_of(_root: &str) -> Option<(u64, u64)> {
     None
 }
 
+/// 잘라내기 대기 행 판정(X-32) — 클립보드 미러(clipboard.rs)는 Windows 전용이라 격리.
+#[cfg(windows)]
+fn ghost_active() -> bool {
+    crate::clipboard::has_cut_marks()
+}
+
+#[cfg(windows)]
+fn ghost_marked(path: &std::path::Path) -> bool {
+    crate::clipboard::is_cut_marked(path)
+}
+
+#[cfg(not(windows))]
+fn ghost_active() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+fn ghost_marked(_path: &std::path::Path) -> bool {
+    false
+}
+
 impl TreeSource {
     pub fn new(tree: Tree, tz_offset_min: i32) -> Self {
         let mut src = TreeSource {
@@ -228,6 +249,16 @@ impl RowSource for TreeSource {
         self.tree
             .visible_id(index)
             .is_some_and(|id| self.tree.is_selected(id))
+    }
+
+    fn is_ghosted(&self, index: usize) -> bool {
+        // 잘라내기 대기 흐림(X-32) — 표시 집합이 비면 경로 조회 없이 종료(페인트 핫패스)
+        ghost_active()
+            && self
+                .tree
+                .visible_id(index)
+                .and_then(|id| self.tree.node_path(id))
+                .is_some_and(ghost_marked)
     }
 
     fn select(&mut self, index: usize, op: SelectOp) -> bool {

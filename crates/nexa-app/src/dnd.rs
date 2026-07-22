@@ -37,6 +37,11 @@ pub struct DropHooks {
     pub dest_at: unsafe fn(HWND, i32, i32) -> Option<PathBuf>,
     /// 드롭 확정 — 전송 엔진 시작(undo 기록 포함).
     pub drop: unsafe fn(HWND, Vec<PathBuf>, PathBuf, nexa_ops::Op),
+    /// 드래그 위치 추적(X-32) — DragEnter/DragOver 화면 좌표(엣지 자동 스크롤·탭/폴더
+    /// 호버 대기 판정. 호스트가 폴링 타이머를 무장해 정지 커서도 계속 판정).
+    pub track: unsafe fn(HWND, i32, i32),
+    /// 드래그 이탈/종료(X-32) — 추적 타이머·호버 대기 해제.
+    pub leave: unsafe fn(HWND),
 }
 
 /// 외부 드래그 수신 대상(창 1개 전역 — RegisterDragDrop이 수명 보유).
@@ -279,6 +284,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         *self.paths.borrow_mut() = paths;
         unsafe {
             *effect = self.resolve(keys, pt).2;
+            (self.hooks.track)(self.hwnd, pt.x, pt.y); // 추적 시작(X-32)
         }
         Ok(())
     }
@@ -291,12 +297,14 @@ impl IDropTarget_Impl for DropTarget_Impl {
     ) -> windows::core::Result<()> {
         unsafe {
             *effect = self.resolve(keys, pt).2;
+            (self.hooks.track)(self.hwnd, pt.x, pt.y); // 위치 갱신(X-32)
         }
         Ok(())
     }
 
     fn DragLeave(&self) -> windows::core::Result<()> {
         self.paths.borrow_mut().clear();
+        unsafe { (self.hooks.leave)(self.hwnd) }; // 추적 해제(X-32)
         Ok(())
     }
 
@@ -307,6 +315,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
+        unsafe { (self.hooks.leave)(self.hwnd) }; // 드롭 = 드래그 종료 — 추적 해제(X-32)
         let (dest, op, fx) = unsafe { self.resolve(keys, pt) };
         // **최적화 이동(optimized move) 규약**: 이동은 우리(타깃)가 전송 엔진으로 직접 수행하므로
         // 소스에 DROPEFFECT_NONE을 반환 — MOVE를 돌려주면 소스(탐색기)가 원본을 삭제해

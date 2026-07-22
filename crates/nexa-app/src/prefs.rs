@@ -92,6 +92,8 @@ pub struct PrefValues {
     pub typeahead_backspace: bool,
     /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 07-21).
     pub transfer_close_ms: i32,
+    /// DnD 호버 대기(ms, 200~10000 — 드래그 중 탭 전환/폴더 펼침까지 대기, X-32).
+    pub dnd_hover_ms: i32,
 }
 
 /// 설정 항목 종류(편집 컨트롤 형태) — 레지스트리 최소 단위.
@@ -165,6 +167,7 @@ const F_TOOLBAR_ORDER: u32 = 35;
 const F_COL_LAYOUT: u32 = 36;
 const F_CTX_MENU: u32 = 37;
 const F_TRANSFER_CLOSE: u32 = 38;
+const F_DND_HOVER: u32 = 39;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -440,6 +443,13 @@ fn registry() -> Vec<Entry> {
             field: F_TRANSFER_CLOSE,
         },
         Entry {
+            cat: "transfer",
+            label_key: "pref.dndHover",
+            desc_key: "pref.dndHover.desc",
+            kind: Kind::Number,
+            field: F_DND_HOVER,
+        },
+        Entry {
             cat: "list",
             label_key: "pref.sortFoldersFirst",
             desc_key: "pref.sortFoldersFirst.desc",
@@ -695,6 +705,7 @@ fn sanitize(v: &mut PrefValues) {
     v.typeahead_reset_ms = v.typeahead_reset_ms.clamp(200, 10_000);
     v.typeahead_pos = v.typeahead_pos.clamp(0, 8);
     v.transfer_close_ms = v.transfer_close_ms.clamp(0, 10_000);
+    v.dnd_hover_ms = v.dnd_hover_ms.clamp(200, 10_000);
     v.dlg_font_size = v.dlg_font_size.clamp(7, 24);
 }
 
@@ -1146,6 +1157,7 @@ impl PrefState {
                             F_COL_AUTOFIT => self.values.col_autofit_max.to_string(),
                             F_TA_RESET => self.values.typeahead_reset_ms.to_string(),
                             F_TRANSFER_CLOSE => self.values.transfer_close_ms.to_string(),
+                            F_DND_HOVER => self.values.dnd_hover_ms.to_string(),
                             F_DLG_FONT => self.values.dlg_font.clone(),
                             F_DLG_SIZE => self.values.dlg_font_size.to_string(),
                             _ => String::new(),
@@ -1273,6 +1285,7 @@ impl PrefState {
             F_TA_SCOPE => v.typeahead_scope != d.typeahead_scope,
             F_TA_RESET => v.typeahead_reset_ms != d.typeahead_reset_ms,
             F_TRANSFER_CLOSE => v.transfer_close_ms != d.transfer_close_ms,
+            F_DND_HOVER => v.dnd_hover_ms != d.dnd_hover_ms,
             F_TA_POS => v.typeahead_pos != d.typeahead_pos,
             F_BASE_FONT => v.base_font != d.base_font,
             F_BASE_SIZE => v.base_font_size != d.base_font_size,
@@ -1365,6 +1378,9 @@ impl PrefState {
                 }
                 F_TRANSFER_CLOSE => {
                     self.values.transfer_close_ms = get_text(hw).trim().parse().unwrap_or(2000)
+                }
+                F_DND_HOVER => {
+                    self.values.dnd_hover_ms = get_text(hw).trim().parse().unwrap_or(3000)
                 }
                 F_DLG_FONT => self.values.dlg_font = get_text(hw),
                 F_DLG_SIZE => self.values.dlg_font_size = get_text(hw).trim().parse().unwrap_or(9),

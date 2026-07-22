@@ -380,4 +380,7 @@ ops.itemBusy = 전송 중인 항목 — 완료 후 열 수 있습니다
 pref.cat.transfer = 파일 전송
 pref.transferClose = 완료 창 닫기 시간(ms, 0~10000)
 pref.transferClose.desc = 복사/이동 완료 후 진행 창이 닫히기까지의 시간(밀리초)입니다. 0이면 진행 창을 표시하지 않습니다.
+# DnD 호버 대기(X-32) — 드래그 중 탭/접힌 폴더 위 대기 시 전환·펼침
+pref.dndHover = 드래그 호버 전환 시간(ms, 200~10000)
+pref.dndHover.desc = 드래그 중 탭이나 접힌 폴더 위에 머물렀을 때 탭 전환·폴더 펼침까지 기다리는 시간(밀리초)입니다. 기본 3000ms(3초).
 del.progress = 삭제 중...

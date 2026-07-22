@@ -381,4 +381,7 @@ ops.itemBusy = 転送中の項目 — 完了後に開けます
 pref.cat.transfer = ファイル転送
 pref.transferClose = 完了後にウィンドウを閉じるまでの時間 (ms, 0-10000)
 pref.transferClose.desc = コピー/移動の完了後、進行状況ウィンドウが閉じるまでの時間 (ミリ秒) です。0 の場合は進行状況ウィンドウを表示しません。
+# DnD hover switch (X-32) - dwell on tab/collapsed folder while dragging
+pref.dndHover = ドラッグホバー切り替え時間 (ms, 200-10000)
+pref.dndHover.desc = ドラッグ中にタブや折りたたまれたフォルダーの上に留まったとき、タブ切り替え・フォルダー展開までの待ち時間 (ミリ秒) です。既定値は 3000ms (3 秒)。
 del.progress = 削除中...

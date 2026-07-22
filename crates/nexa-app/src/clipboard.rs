@@ -9,7 +9,9 @@
 //! "Preferred DropEffect"(등록 포맷) = DWORD(DROPEFFECT_COPY=1 / DROPEFFECT_MOVE=2 — 잘라내기 판정).
 //! 전부 user32/kernel32/shell32 — 신규 임포트 DLL 0(B3 무변).
 
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use windows::core::w;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, POINT};
@@ -49,6 +51,45 @@ impl Drop for Open {
 /// 클립보드에 파일 목록이 있는가(열지 않고 판정) — 붙여넣기 메뉴 활성 판단용.
 pub fn has_files() -> bool {
     unsafe { IsClipboardFormatAvailable(CF_HDROP.0 as u32).is_ok() }
+}
+
+thread_local! {
+    /// 잘라내기 대기 표시 집합(X-32) — OS 클립보드의 '잘라내기' 파일 목록 미러(UI 스레드 전용).
+    /// WM_CLIPBOARDUPDATE에서 [`sync_cut_marks`]로 갱신, 목록 페인트가 행 흐림 판정에 사용.
+    static CUT_MARKS: RefCell<HashSet<PathBuf>> = RefCell::new(HashSet::new());
+}
+
+/// 잘라내기 표시 집합 갱신(X-32) — 클립보드가 '이동(잘라내기)' 파일 목록이면 그 목록,
+/// 그 외(복사·비파일·비움)면 빈 집합. 표시가 실제로 바뀌었으면 `true`(호출자가 목록 재도장).
+/// 외부 앱(탐색기)의 잘라내기도 동일하게 흐려진다 — OS 클립보드 단일 출처 규약 계승.
+pub unsafe fn sync_cut_marks() -> bool {
+    let next: HashSet<PathBuf> = if has_files() {
+        match read_file_list() {
+            Some((paths, nexa_ops::Op::Move)) => paths.into_iter().collect(),
+            _ => HashSet::new(),
+        }
+    } else {
+        HashSet::new()
+    };
+    CUT_MARKS.with(|m| {
+        let mut m = m.borrow_mut();
+        if *m == next {
+            false
+        } else {
+            *m = next;
+            true
+        }
+    })
+}
+
+/// 잘라내기 대기 표시가 하나라도 있는가 — 페인트 선판정(비면 경로 조회 생략).
+pub fn has_cut_marks() -> bool {
+    CUT_MARKS.with(|m| !m.borrow().is_empty())
+}
+
+/// 경로가 잘라내기 대기 중인가(X-32) — TreeSource 가시 행 페인트 판정.
+pub fn is_cut_marked(path: &Path) -> bool {
+    CUT_MARKS.with(|m| m.borrow().contains(path))
 }
 
 /// DWORD 1개를 담은 HGLOBAL(Preferred DropEffect 페이로드).

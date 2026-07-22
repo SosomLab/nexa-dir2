@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-22
+
+- **X-32 클립보드·DnD UX 보완 4종(사용자 요청 — `feat/clipboard-dnd-ux`)**: ① **Ctrl+X 잘라내기 흐림 표시** — OS 클립보드 미러 `CUT_MARKS`(`AddClipboardFormatListener`+WM_CLIPBOARDUPDATE 단일 길목 — 자기/외부 탐색기 잘라내기·해제 전부 수렴) + `RowSource::is_ghosted`(이름·셀 text_dim, 리스트/타일 공통) ② **Ctrl+V 선택 폴더 붙여넣기** — `paste_dest()`: 폴더 1개 선택 = 그 안, 그 외 = 현재 폴더 ③ **DnD 엣지 자동 스크롤** — `drag_scroll_edge`(본문 상/하단 한 행 존 ±1행·폴링 반복 = 연속) ④ **DnD 호버 대기** — DropHooks `track/leave` + `TIMER_DND` 100ms 폴링(GetCursorPos — 정지 커서 보강): 비활성 탭 3초 = 탭 전환·접힌 폴더 3초 = 펼침(펼침 전용·중첩 = 재대기·행-경로 재검증), **설정 `dnd_hover_ms`**(기본 3000·200~10000 — prefs "파일 전송"·lang 3종). 209 green·clippy 0 — 실기 QA 대기. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
+
 ## 2026-07-21
 
 - **릴리스 `0.9.0` — choco push 스위치 + GitHub 전용 배포(사용자 요청)**: 보류 방침을 **choco push만**으로 축소(새 Release는 대기 중 0.8.1 심사에 무영향·winget은 수동 PR) — release.yml choco push 조건에 `vars.CHOCO_PUSH == 'true'` 게이트 추가(기본 꺼짐 = GitHub Release까지만, 승인 후 저장소 변수로 재개). 0.9.0 = 0.8.1 이후 전체(07-20 X-25~29 + 07-21 X-30 전송 UX·QA 시리즈 + X-31 일본어). 상세 [journal/2026-07-21.md](journal/2026-07-21.md).

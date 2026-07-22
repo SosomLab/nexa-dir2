@@ -381,4 +381,7 @@ ops.itemBusy = Item is being transferred - available when complete
 pref.cat.transfer = File Transfer
 pref.transferClose = Close delay after transfer (ms, 0-10000)
 pref.transferClose.desc = How long (in milliseconds) the progress window stays open after a copy/move completes. 0 hides the progress window entirely.
+# DnD hover switch (X-32) - dwell on tab/collapsed folder while dragging
+pref.dndHover = Drag hover switch delay (ms, 200-10000)
+pref.dndHover.desc = How long (in milliseconds) to hover over a tab or a collapsed folder while dragging before it switches or expands. Default 3000 ms (3 s).
 del.progress = Deleting...

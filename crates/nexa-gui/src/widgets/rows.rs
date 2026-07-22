@@ -87,6 +87,12 @@ pub trait RowSource {
         let _ = index;
         false
     }
+    /// 행을 흐리게 표시하는가(잘라내기 대기 항목 — 탐색기 반투명 관례, X-32).
+    /// 기본 = 없음.
+    fn is_ghosted(&self, index: usize) -> bool {
+        let _ = index;
+        false
+    }
     fn select(&mut self, index: usize, op: SelectOp) -> bool {
         let _ = (index, op);
         false
@@ -800,6 +806,46 @@ impl<S: RowSource> VirtualRows<S> {
         (row < self.src.len()).then_some(row)
     }
 
+    /// DnD 엣지 자동 스크롤(X-32) — 드래그 y가 본문 상/하단 **한 행 높이** 이내면 1행 이동
+    /// (탐색기 관례 — 호스트 타이머가 반복 호출해 연속 스크롤). 스크롤했으면 `true`.
+    pub fn drag_scroll_edge(&mut self, y: i32, inv: &mut Invalidations) -> bool {
+        let top = self.body_top();
+        let bottom = self.bounds.bottom();
+        if y < top || y >= bottom {
+            return false;
+        }
+        let before = self.scroll_row;
+        if y < top + self.row_h {
+            self.scroll_to(self.scroll_row as isize - 1, inv);
+        } else if y >= bottom - self.row_h {
+            self.scroll_to(self.scroll_row as isize + 1, inv);
+        }
+        self.scroll_row != before
+    }
+
+    /// 접힌 폴더 행인가(X-32 — DnD 호버 펼침 후보 판정). 트리 보기 전용
+    /// (Flat/Tiles는 펼침 개념 없음).
+    pub fn is_collapsed_dir(&self, row: usize) -> bool {
+        self.mode == ViewMode::Tree
+            && row < self.src.len()
+            && self.src.row(row).marker == Marker::Collapsed
+    }
+
+    /// DnD 호버 펼침(X-32) — 접힌 폴더 행이면 펼친다(접기 없음 — 토글 아님).
+    /// 펼쳤으면 `true`(목록 구조 변경 — 전체 무효화).
+    pub fn hover_expand(&mut self, row: usize, inv: &mut Invalidations) -> bool {
+        if !self.is_collapsed_dir(row) {
+            return false;
+        }
+        if self.src.toggle(row) {
+            self.clamp_scroll();
+            inv.push(self.bounds);
+            true
+        } else {
+            false
+        }
+    }
+
     /// 행의 클라이언트 앵커 좌표(가시 범위 내일 때만) — 키보드 컨텍스트 메뉴 위치(M3-4 Apps 키).
     pub fn row_anchor(&self, row: usize) -> Option<Point> {
         if row >= self.src.len() {
@@ -914,6 +960,8 @@ impl<S: RowSource> VirtualRows<S> {
     // ── 페인트 보조 ──────────────────────────────────────────────
 
     /// 트리 컬럼(마커+들여쓰기+아이콘+이름)을 `cell` 안에 그린다.
+    /// `fg` = 이름 색(잘라내기 대기 행은 text_dim — X-32 흐림 표시).
+    #[allow(clippy::too_many_arguments)] // 행 페인트 색 2종(bg/fg) 전달(구조체화는 후속)
     fn paint_tree_cell(
         &self,
         ctx: &mut dyn DrawCtx,
@@ -922,6 +970,7 @@ impl<S: RowSource> VirtualRows<S> {
         icon: Option<&(String, String)>,
         cell: Rect,
         bg: crate::theme::Color,
+        fg: crate::theme::Color,
     ) {
         // 텍스트 세로 위치: 행 높이의 4/5를 글자 높이로 보고 중앙 정렬(M0-7 계승)
         let ty = cell.y + (cell.h - (cell.h * 4) / 5) / 2;
@@ -948,7 +997,7 @@ impl<S: RowSource> VirtualRows<S> {
             if folder_bold {
                 ctx.select_font(crate::FontSlot::List, true, false);
             }
-            ctx.text_opaque(name_x, ty, name_rc, &item.text, theme.text, bg);
+            ctx.text_opaque(name_x, ty, name_rc, &item.text, fg, bg);
             if folder_bold {
                 ctx.select_font(crate::FontSlot::List, false, false);
             }
@@ -1154,7 +1203,13 @@ impl<S: RowSource> VirtualRows<S> {
                 if folder_bold {
                     ctx.select_font(crate::FontSlot::List, true, false);
                 }
-                ctx.text_opaque(tx, ly, name_rc, &item.text, theme.text, bg);
+                // 잘라내기 대기 타일은 이름 흐리게(X-32 — 리스트와 동일 규약)
+                let fg = if self.src.is_ghosted(idx) {
+                    theme.text_dim
+                } else {
+                    theme.text
+                };
+                ctx.text_opaque(tx, ly, name_rc, &item.text, fg, bg);
                 if folder_bold {
                     ctx.select_font(crate::FontSlot::List, false, false);
                 }
@@ -1669,6 +1724,12 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             };
             // 텍스트 세로 위치: 행 높이의 4/5를 글자 높이로 보고 중앙 정렬(M0-7 계승)
             let ty = y + (self.row_h - (self.row_h * 4) / 5) / 2;
+            // 잘라내기 대기 행은 흐리게(X-32 — 탐색기 반투명 관례)
+            let fg = if self.src.is_ghosted(row) {
+                theme.text_dim
+            } else {
+                theme.text
+            };
 
             if self.columns.is_empty() {
                 // M1-3 호환: 단일 트리 컬럼이 전체 폭
@@ -1678,7 +1739,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 }
                 let icon = self.src.icon(row);
                 let rc = Rect::new(b.x, y, b.w, self.row_h);
-                self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), rc, bg);
+                self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), rc, bg, fg);
             } else {
                 for (ci, col) in self.columns.iter().enumerate() {
                     let cx = self.col_x(ci);
@@ -1692,7 +1753,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                             item.marker = Marker::None; // 일반 폴더 보기(07-16)
                         }
                         let icon = self.src.icon(row);
-                        self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), cell, bg);
+                        self.paint_tree_cell(ctx, theme, &item, icon.as_ref(), cell, bg, fg);
                     } else {
                         let text = self.src.cell(row, col.key);
                         let tx = match col.align {
@@ -1702,7 +1763,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                                 (cell.right() - self.pad_x - w).max(cell.x + self.pad_x)
                             }
                         };
-                        ctx.text_opaque(tx, ty, cell, &text, theme.text, bg);
+                        ctx.text_opaque(tx, ty, cell, &text, fg, bg);
                     }
                 }
                 // 마지막 컬럼 오른쪽 잔여 = 빈 본문(선택 하이라이트 제외 — 원본 B-4·QA 07-13)
@@ -2713,5 +2774,124 @@ mod tests {
         // 헤더는 y=0행에 그려짐
         let hdr = p.texts.iter().find(|(_, _, t)| t == "이름").unwrap();
         assert!(hdr.1 < 20);
+    }
+
+    #[test]
+    fn ghosted_row_paints_name_dim() {
+        // 잘라내기 대기 행 흐림(X-32) — is_ghosted 행의 이름은 text_dim
+        struct Ghosty;
+        impl RowSource for Ghosty {
+            fn len(&self) -> usize {
+                2
+            }
+            fn row(&self, index: usize) -> RowItem {
+                RowItem {
+                    text: format!("g-{index}"),
+                    depth: 0,
+                    marker: Marker::None,
+                }
+            }
+            fn is_ghosted(&self, index: usize) -> bool {
+                index == 0
+            }
+        }
+        struct Probe {
+            named: Vec<(String, Color)>,
+        }
+        impl DrawCtx for Probe {
+            fn fill_rect(&mut self, _rect: Rect, _color: Color) {}
+            fn text_opaque(
+                &mut self,
+                _x: i32,
+                _y: i32,
+                _clip: Rect,
+                text: &str,
+                fg: Color,
+                _bg: Color,
+            ) {
+                self.named.push((text.to_string(), fg));
+            }
+            fn text_width(&mut self, text: &str) -> i32 {
+                text.chars().count() as i32 * 8
+            }
+        }
+        let mut v = VirtualRows::new(Ghosty, 20, 6, 16);
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 300, 100), &mut inv);
+        let mut p = Probe { named: vec![] };
+        let th = Theme::dark();
+        v.paint(&mut p, &th);
+        let fg_of = |name: &str| p.named.iter().find(|(t, _)| t == name).unwrap().1;
+        assert_eq!(fg_of("g-0"), th.text_dim, "잘라내기 대기 행 = 흐림");
+        assert_eq!(fg_of("g-1"), th.text, "일반 행 = 기본 색");
+    }
+
+    #[test]
+    fn drag_scroll_edge_moves_one_row_within_edge_zone() {
+        // DnD 엣지 자동 스크롤(X-32) — 상/하단 한 행 높이 존에서만 ±1행
+        let mut v = VirtualRows::new(Rows::new(50), 20, 6, 16);
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 300, 100), &mut inv); // 헤더 없음 — 가시 5행
+        assert!(!v.drag_scroll_edge(50, &mut inv), "중앙 = 무동작");
+        assert!(v.drag_scroll_edge(95, &mut inv), "하단 엣지 = +1");
+        assert_eq!(v.scroll_row(), 1);
+        assert!(v.drag_scroll_edge(5, &mut inv), "상단 엣지 = -1");
+        assert_eq!(v.scroll_row(), 0);
+        assert!(!v.drag_scroll_edge(5, &mut inv), "최상단에서 위 = 클램프 무변");
+        assert!(!v.drag_scroll_edge(150, &mut inv), "본문 밖 = 무동작");
+    }
+
+    #[test]
+    fn hover_expand_only_collapsed_dirs_in_tree_mode() {
+        // DnD 호버 펼침(X-32) — 접힌 폴더만, 펼침 전용(토글 아님), Flat 모드 제외
+        struct Dirs {
+            expanded: bool,
+        }
+        impl RowSource for Dirs {
+            fn len(&self) -> usize {
+                2
+            }
+            fn row(&self, index: usize) -> RowItem {
+                if index == 0 {
+                    RowItem {
+                        text: "dir".into(),
+                        depth: 0,
+                        marker: if self.expanded {
+                            Marker::Expanded
+                        } else {
+                            Marker::Collapsed
+                        },
+                    }
+                } else {
+                    RowItem {
+                        text: "file".into(),
+                        depth: 0,
+                        marker: Marker::None,
+                    }
+                }
+            }
+            fn toggle(&mut self, index: usize) -> bool {
+                if index == 0 {
+                    self.expanded = !self.expanded;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+        let mut v = VirtualRows::new(Dirs { expanded: false }, 20, 6, 16);
+        let mut inv = Invalidations::default();
+        v.set_bounds(Rect::new(0, 0, 300, 100), &mut inv);
+        assert!(v.is_collapsed_dir(0) && !v.is_collapsed_dir(1));
+        assert!(!v.hover_expand(1, &mut inv), "파일 = 무동작");
+        assert!(v.hover_expand(0, &mut inv), "접힌 폴더 = 펼침");
+        assert!(!v.is_collapsed_dir(0), "펼침 후 = 후보 아님");
+        assert!(!v.hover_expand(0, &mut inv), "이미 펼침 = 무동작(접기 없음)");
+        // Flat 모드 = 펼침 개념 없음 — 접힌 폴더라도 후보 아님
+        let mut f = VirtualRows::new(Dirs { expanded: false }, 20, 6, 16);
+        f.set_bounds(Rect::new(0, 0, 300, 100), &mut inv);
+        f.set_view_mode(ViewMode::Flat, &mut inv);
+        assert!(!f.is_collapsed_dir(0));
+        assert!(!f.hover_expand(0, &mut inv));
     }
 }

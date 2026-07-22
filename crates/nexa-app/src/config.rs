@@ -63,6 +63,8 @@ pub struct Settings {
     /// 단위 초→ms 개정 07-21 2차). **0 = 진행 창 자체를 표시하지 않음**(전송은 그대로
     /// 수행·제목줄 %만 갱신). 닫기 버튼 카운트다운 표시는 올림 초 단위.
     pub transfer_close_ms: i32,
+    /// DnD 호버 대기 시간(ms, 200~10000 — 드래그 중 탭 전환/접힌 폴더 펼침까지 대기, X-32).
+    pub dnd_hover_ms: i32,
     /// 대화상자(확인창·진행 창) 글꼴/크기(pt — QA 07-14 "대화창용 폰트 설정").
     pub dlg_font: String,
     pub dlg_font_size: i32,
@@ -146,6 +148,7 @@ impl Default for Settings {
             term_wrap: true,
             term_cols: 240,
             transfer_close_ms: 2000, // 기존 하드코딩 2초 승격(07-21 — ms 단위)
+            dnd_hover_ms: 3000,      // 탐색기 관례 근사(사용자 확정 07-22 — 3초)
             dlg_font: "Segoe UI".into(),
             dlg_font_size: 9,
             base_font: "Segoe UI".into(),
@@ -310,6 +313,7 @@ impl Settings {
             self.term_cols
         ));
         out.push_str(&format!("transfer_close_ms={}\n", self.transfer_close_ms));
+        out.push_str(&format!("dnd_hover_ms={}\n", self.dnd_hover_ms));
         out.push_str(&format!(
             "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\nview_mode={}\npanel_mode={}\ninfo_mode={}\n",
             u8::from(self.sort_folders_first),
@@ -449,6 +453,11 @@ impl Settings {
                 "transfer_close_ms" => {
                     if let Ok(n) = v.parse::<i32>() {
                         s.transfer_close_ms = n.clamp(0, 10_000);
+                    }
+                }
+                "dnd_hover_ms" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.dnd_hover_ms = n.clamp(200, 10_000);
                     }
                 }
                 // 구 키(07-21 1차 — 초 단위) 이행: ×1000
@@ -918,6 +927,7 @@ mod tests {
             term_wrap: false,
             term_cols: 132,
             transfer_close_ms: 0,
+            dnd_hover_ms: 1500,
             dlg_font: "맑은 고딕".into(),
             dlg_font_size: 10,
             base_font: "본고딕".into(),
@@ -987,6 +997,17 @@ mod tests {
             Settings::parse("transfer_close_secs=3").transfer_close_ms,
             3_000,
             "구 키(초) 이행 = ×1000"
+        );
+        assert_eq!(parsed.dnd_hover_ms, 1500, "DnD 호버 대기 왕복(X-32)");
+        assert_eq!(
+            Settings::parse("dnd_hover_ms=50").dnd_hover_ms,
+            200,
+            "DnD 호버 하한 클램프"
+        );
+        assert_eq!(
+            Settings::parse("").dnd_hover_ms,
+            3000,
+            "DnD 호버 기본 3초(X-32)"
         );
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(
