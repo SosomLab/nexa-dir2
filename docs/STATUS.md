@@ -1,6 +1,18 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-21 7차 (KST)** — **릴리스 `0.9.0` 배포 완료(GitHub
+> **갱신: 2026-07-22 1차 (KST)** — **X-32 클립보드·DnD UX 4종 병합 +
+> 릴리스 `0.10.0`(GitHub 전용 — 사용자 요청)**:
+> `feat/clipboard-dnd-ux` main 병합(ff `ec8d727`) — ① Ctrl+X 잘라내기
+> **흐림 표시**(OS 클립보드 미러·WM_CLIPBOARDUPDATE 단일 길목 — 외부
+> 탐색기 잘라내기 포함) ② Ctrl+V **선택 폴더 안 붙여넣기**(폴더 1개
+> 선택 시) ③ DnD **엣지 자동 스크롤** ④ DnD **호버 3초 = 탭
+> 전환/접힌 폴더 펼침**(설정 `dnd_hover_ms` 기본 3000·200~10000 —
+> prefs "파일 전송"·lang 3종). 209 green·clippy 0·release exe 1.50MB.
+> **위키 반영**(파일 조작·설정·단축키 + 내장 3언어 표기)·choco push는
+> 스위치 꺼짐 유지(GitHub Release만). 태그 `0.10.0` push → Actions.
+> [journal/2026-07-22.md](journal/2026-07-22.md).
+>
+> **직전(07-21 7차)** — **릴리스 `0.9.0` 배포 완료(GitHub
 > 전용 — 사용자 요청)**: 보류 방침을 **choco push만**으로 축소(새
 > Release는 대기 중 0.8.1 심사에 무영향·winget=수동 PR) — release.yml
 > choco push에 `vars.CHOCO_PUSH` 스위치(기본 꺼짐, 승인 후 변수 등록으로

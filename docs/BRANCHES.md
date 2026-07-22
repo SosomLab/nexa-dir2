@@ -7,6 +7,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `feat/clipboard-dnd-ux` | 2026-07-22 | 2026-07-22 (ff `ec8d727`) | 2026-07-22 | 1 | **X-32 클립보드·DnD UX 보완 4종**(사용자 요청) — ① Ctrl+X 잘라내기 흐림 표시(OS 클립보드 미러 CUT_MARKS·WM_CLIPBOARDUPDATE 단일 길목·RowSource::is_ghosted — 외부 탐색기 잘라내기 포함) ② Ctrl+V 선택 폴더 안 붙여넣기(paste_dest — 폴더 1개 선택 시) ③ DnD 엣지 자동 스크롤(drag_scroll_edge — 상/하단 한 행 존 ±1행) ④ DnD 호버 대기(DropHooks track/leave + TIMER_DND 100ms 폴링 — 비활성 탭=전환·접힌 폴더=펼침 전용, 설정 `dnd_hover_ms` 기본 3000·prefs 파일 전송·lang 3종). 209 green·clippy 0 | [2026-07-22](journal/2026-07-22.md) |
 | `feat/transfer-progress-ux` | 2026-07-21 | 2026-07-21 (`639e04a`) | 2026-07-21 | 8 | **X-30 전송 진행 UX 개편 + QA 시리즈**(사용자 요청·QA 연속) — "1 B" 오표기 수정(set_done 실제 바이트 유지)·설정 `transfer_close_ms`(ms 단위·0=창 미표시)·B~TB 단위+파일 수 표기·항목별 크기 비례 세그먼트 바(nexa-ops Event 프로토콜·최소 3px·5색 순환 팔레트)·전송 중 대상 실행/드래그 잠금·DEL 휴지통 삭제 워커 이관+낙관적 숨김(nexa-tree remove_paths)·설정 창 NOPREFIX 표기 수정 | [2026-07-21](journal/2026-07-21.md) |
 | `feat/svg-icons` | 2026-07-18 | 2026-07-18 (`aad2b93`) | 2026-07-18 | 1 | **SVG 아이콘 파이프라인**(사용자 요청·SVG 제공) — svg.rs 서브셋 파서(중립·테스트 6·crate 0)+gdipctx svg_to_hicon(ARGB 오프스크린·요청 크기 즉석 래스터)+icons EMBEDDED_SVG(PNG 우선순위 역전·폴백). 1호 view-flat.svg. 193 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/order-editors` | 2026-07-19 | 2026-07-19 (병합) | 2026-07-19 | 1 | **설정 편집기 3종 공통 창 + 컬럼 기능**(사용자 요청) — ordereditor 공통 모달(어댑터)·NxOrderTree 체크·config 제네릭 문법·prefs OrderDialog 3항목·컬럼 드래그 재배열/표시·colsync 연동·세션·ctx 메뉴 반영. 실기 QA 전 항목 | [2026-07-19](journal/2026-07-19.md) |
