@@ -1,6 +1,17 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-22 2차 (KST)** — **릴리스 `0.11.0`(GitHub 전용) —
+> **갱신: 2026-07-22 3차 (KST)** — **winget Portable `0.11.0` 배포(사용자
+> 요청)**: 채널 재점검에서 winget **Portable(`SosomLab.NexaDir.Portable`)은
+> 0.8.1이 이미 병합·배포 완료**(PR #404533 MERGED 07-21 — 기존 문서 OPEN
+> 표기 정정)임을 확인 → 최신 릴리스 **0.11.0**으로 버전 업데이트 매니페스트
+> 3종(`packaging/winget/portable/0.11.0/` — SHA-256 `523D864F…02772`·locale
+> 언어 en/ko/**ja** 정확화) 제출: microsoft/winget-pkgs **PR #405973** OPEN
+> (검증 대기). 이미 승인된 패키지의 버전 업데이트라 choco 보류 방침 무관.
+> **채널 현황**: winget Portable = **0.8.1 배포 완료 · 0.11.0 심사 중** ·
+> winget Setup(#404528) OPEN · choco `nexa-dir`·`nexa-dir.portable` = 둘 다
+> **미승인(awaiting moderation)**. [journal/2026-07-22.md](journal/2026-07-22.md).
+>
+> **직전(07-22 2차)** — **릴리스 `0.11.0`(GitHub 전용) —
 > 컬럼 리사이즈 단독 조절 + Ctrl+V 대상 보완(사용자 QA)**:
 > ① 컬럼 경계 드래그 = **해당 컬럼만** 변경(이웃 불변·총폭 가변 —
 > 한 쌍 동시 조절[QA 07-15] 폐지, 초과분 = 가로 스크롤) ② Ctrl+V —
