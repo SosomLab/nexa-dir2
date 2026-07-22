@@ -9,7 +9,9 @@
 > (검증 대기). 이미 승인된 패키지의 버전 업데이트라 choco 보류 방침 무관.
 > **채널 현황**: winget Portable = **0.8.1 배포 완료 · 0.11.0 심사 중** ·
 > winget Setup(#404528) OPEN · choco `nexa-dir`·`nexa-dir.portable` = 둘 다
-> **미승인(awaiting moderation)**. [journal/2026-07-22.md](journal/2026-07-22.md).
+> **미승인(awaiting moderation)**. **Wiki 설치 페이지 신설**([설치와-다운로드]
+> — 포터블 winget 안내·GitHub Release 다운로드, `ce22af5` 발행)·배포 문서 §8
+> 이력 갱신. [journal/2026-07-22.md](journal/2026-07-22.md).
 >
 > **직전(07-22 2차)** — **릴리스 `0.11.0`(GitHub 전용) —
 > 컬럼 리사이즈 단독 조절 + Ctrl+V 대상 보완(사용자 QA)**:

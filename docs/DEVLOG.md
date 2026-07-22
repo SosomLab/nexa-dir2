@@ -8,6 +8,7 @@
 
 ## 2026-07-22
 
+- **Wiki 설치 페이지 신설 + 배포 문서 이력 갱신(사용자 요청)**: 채널 분석에서 ① 문서 다수가 winget Portable 병합(07-21) 미반영 ② **Wiki에 설치/다운로드 페이지 부재**를 확인 → 둘 다 해소. Wiki [설치와-다운로드] 신설(**포터블 winget 설치 안내** install/upgrade/uninstall·제거 시 데이터 소멸 경고 + GitHub Release 포터블/설치형·시스템 요구사항·준비 중 채널) + Home/_Sidebar/프로젝트-소개 배선·실측 0.11.0 갱신 → wiki.git 발행(`ce22af5`). `21-distribution.md` §8에 winget Portable MERGED(#404533)·0.11.0(#405973)·Setup OPEN·gh CLI 절차 기록. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
 - **winget Portable `0.11.0` 배포 — 버전 업데이트 PR(사용자 요청)**: 채널 재점검에서 winget **Portable은 0.8.1이 이미 병합·배포 완료**(PR #404533 MERGED 07-21 — 문서엔 OPEN으로 남아 있던 것 정정)임을 확인 → 최신 릴리스 **0.11.0**으로 버전 업데이트 매니페스트 3종 작성(`packaging/winget/portable/0.11.0/` — SHA-256 `523D864F…02772` Release 자산 대조·locale 언어 설명 en/ko/**ja** 정확화) 후 microsoft/winget-pkgs **PR #405973** 제출(OPEN·검증 대기). 이미 승인된 패키지의 버전 업데이트라 choco 보류 방침과 무관. 나머지 3채널(winget Setup #404528·choco 2종)은 여전히 모더레이션 대기. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
 - **릴리스 `0.11.0` — GitHub Release 전용(사용자 요청)**: 0.10.0 이후분(컬럼 리사이즈 단독 조절·Ctrl+V 파일 선택=그 파일의 폴더) 승격 — choco push 스위치 꺼짐 유지. 위키 수정분 발행. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
 - **Ctrl+V 대상 보완(사용자 QA — main 직커밋)**: 파일 1개 선택 시 가시 루트가 아니라 **그 파일이 있는 폴더**로 붙여넣기(`paste_dest` — 폴더=그 안/파일=parent/없음·다중=현재 폴더). 위키 동기. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
