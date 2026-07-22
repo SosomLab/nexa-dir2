@@ -8,6 +8,7 @@
 
 ## 2026-07-22
 
+- **컬럼 리사이즈 = 단독 조절(사용자 확정 — main 직커밋)**: 경계 드래그의 한 쌍 동시 조절(총폭 보존 — QA 07-15) 폐지 → **해당 컬럼만** 변경·이웃 불변·총폭 가변(초과분 = 가로 스크롤, 탐색기 규약). `ResizeDrag.start_w2` 제거·테스트에 이웃 불변/총폭 검증 보강·위키 리사이즈 서술 동기. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
 - **릴리스 `0.10.0` — GitHub Release 전용(사용자 요청)**: X-32 브랜치 main 병합(ff `ec8d727`) 후 0.10.0 승격(Cargo workspace·lang 3종 `@app`) — choco push는 `vars.CHOCO_PUSH` 스위치 꺼짐 유지(추가 조치 불요·0.9.0에서 skipped 검증). **위키 반영(필수 요청)**: 기능-파일-조작(붙여넣기 대상·잘라내기 흐림·엣지 스크롤·호버 전환)·기능-설정(파일 전송 카테고리 행 신설·내장 3언어 표기)·키보드-단축키(Ctrl+X/V) 갱신 후 wiki.git 발행. 로컬 release exe 1.50MB. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
 - **X-32 클립보드·DnD UX 보완 4종(사용자 요청 — `feat/clipboard-dnd-ux`)**: ① **Ctrl+X 잘라내기 흐림 표시** — OS 클립보드 미러 `CUT_MARKS`(`AddClipboardFormatListener`+WM_CLIPBOARDUPDATE 단일 길목 — 자기/외부 탐색기 잘라내기·해제 전부 수렴) + `RowSource::is_ghosted`(이름·셀 text_dim, 리스트/타일 공통) ② **Ctrl+V 선택 폴더 붙여넣기** — `paste_dest()`: 폴더 1개 선택 = 그 안, 그 외 = 현재 폴더 ③ **DnD 엣지 자동 스크롤** — `drag_scroll_edge`(본문 상/하단 한 행 존 ±1행·폴링 반복 = 연속) ④ **DnD 호버 대기** — DropHooks `track/leave` + `TIMER_DND` 100ms 폴링(GetCursorPos — 정지 커서 보강): 비활성 탭 3초 = 탭 전환·접힌 폴더 3초 = 펼침(펼침 전용·중첩 = 재대기·행-경로 재검증), **설정 `dnd_hover_ms`**(기본 3000·200~10000 — prefs "파일 전송"·lang 3종). 209 green·clippy 0 — 실기 QA 대기. 상세 [journal/2026-07-22.md](journal/2026-07-22.md).
 

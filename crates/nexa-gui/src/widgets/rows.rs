@@ -159,15 +159,14 @@ struct ColDrag {
     orig: Vec<u32>,
 }
 
-/// 리사이즈 드래그 상태.
+/// 리사이즈 드래그 상태 — **단독 조절**(사용자 확정 07-22): 해당 컬럼 너비만 변하고
+/// 이웃은 그대로, 컬럼 총폭이 늘거나 준다(초과분은 가로 스크롤 — 탐색기 규약).
+/// (구 QA 07-15의 한 쌍 동시 조절[총폭 보존]은 폐지.)
 #[derive(Clone, Copy, Debug)]
 struct ResizeDrag {
     col: usize,
     start_x: i32,
     start_w: i32,
-    /// 오른쪽 이웃 컬럼 시작 폭 — Some이면 **한 쌍 동시 조절**(총폭 보존, QA 07-15:
-    /// 경계 드래그 시 좌우 컬럼이 함께 변한다). None = 마지막/고정 이웃(단독 조절).
-    start_w2: Option<i32>,
 }
 
 /// 보기 모드(사용자 요청 07-16 — 원본 FR-A4 뷰 모드의 dir2 1차):
@@ -1482,15 +1481,11 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             InputEvent::MouseDown { x, y, shift, ctrl } => {
                 if let Some((i, handle)) = self.header_hit(x, y) {
                     if handle {
-                        // 오른쪽 이웃이 조절 가능하면 한 쌍 동시 조절(총폭 보존 — QA 07-15)
-                        let start_w2 = (i + 1 < self.columns.len()
-                            && self.columns[i + 1].resizable)
-                            .then(|| self.columns[i + 1].width);
+                        // 단독 조절(사용자 확정 07-22) — 이웃 불변·총폭 가변
                         self.resize = Some(ResizeDrag {
                             col: i,
                             start_x: x,
                             start_w: self.columns[i].width,
-                            start_w2,
                         });
                     } else {
                         // 헤더 라벨 프레스 = 드래그 재배열 후보(07-19 — 탭과
@@ -1556,29 +1551,15 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             }
             InputEvent::MouseMove { x, y } => {
                 if let Some(drag) = self.resize {
-                    // 이동량을 양쪽 min_width로 제한 — 한 쌍 조절이면 이웃도 함께(QA 07-15)
-                    let mut dx =
+                    // 단독 조절(07-22) — min_width 하한만, 이웃 불변·총폭 가변
+                    let dx =
                         (x - drag.start_x).max(self.columns[drag.col].min_width - drag.start_w);
-                    if let Some(w2) = drag.start_w2 {
-                        dx = dx.min(w2 - self.columns[drag.col + 1].min_width);
-                        let (nw1, nw2) = (drag.start_w + dx, w2 - dx);
-                        if nw1 != self.columns[drag.col].width
-                            || nw2 != self.columns[drag.col + 1].width
-                        {
-                            self.columns[drag.col].width = nw1;
-                            self.columns[drag.col + 1].width = nw2;
-                            self.col_resized = true; // 호스트 동기 폴링(07-18)
-                            self.clamp_scroll_x();
-                            inv.push(self.bounds);
-                        }
-                    } else {
-                        let w = drag.start_w + dx;
-                        if w != self.columns[drag.col].width {
-                            self.columns[drag.col].width = w;
-                            self.col_resized = true; // 호스트 동기 폴링(07-18)
-                            self.clamp_scroll_x();
-                            inv.push(self.bounds);
-                        }
+                    let w = drag.start_w + dx;
+                    if w != self.columns[drag.col].width {
+                        self.columns[drag.col].width = w;
+                        self.col_resized = true; // 호스트 동기 폴링(07-18)
+                        self.clamp_scroll_x();
+                        inv.push(self.bounds);
                     }
                 } else if let Some(mut d) = self.col_drag.take() {
                     d.cur_x = x;
@@ -2320,13 +2301,20 @@ mod tests {
     #[test]
     fn drag_handle_resizes_column_with_min_width() {
         let (mut v, mut inv) = list_with_cols(10, 220);
+        let neighbor_w = v.columns()[1].width;
+        let total0: i32 = v.columns().iter().map(|c| c.width).sum();
         // 이름 컬럼 오른쪽 경계 x=200 → 핸들 [194, 202)
         down(&mut v, &mut inv, 197, 5, false);
         assert!(v.sort().is_empty(), "핸들 클릭은 정렬이 아님");
         v.on_event(&InputEvent::MouseMove { x: 257, y: 5 }, &mut inv);
         assert_eq!(v.columns()[0].width, 260); // +60
+        // 단독 조절(07-22): 이웃 불변·총폭 가변(초과분 = 가로 스크롤)
+        assert_eq!(v.columns()[1].width, neighbor_w, "이웃 컬럼 너비 불변");
+        let total: i32 = v.columns().iter().map(|c| c.width).sum();
+        assert_eq!(total, total0 + 60, "총폭이 늘어난다");
         v.on_event(&InputEvent::MouseMove { x: -500, y: 5 }, &mut inv);
         assert_eq!(v.columns()[0].width, 40); // min_width 고정
+        assert_eq!(v.columns()[1].width, neighbor_w, "축소 시에도 이웃 불변");
         v.on_event(&InputEvent::MouseUp { x: -500, y: 5 }, &mut inv);
         v.on_event(&InputEvent::MouseMove { x: 300, y: 5 }, &mut inv);
         assert_eq!(v.columns()[0].width, 40, "업 이후엔 리사이즈 없음");
