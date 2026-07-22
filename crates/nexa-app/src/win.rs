@@ -1473,14 +1473,21 @@ fn clip_from_selection(st: &mut State, op: nexa_ops::Op) -> Option<(Vec<PathBuf>
     (!paths.is_empty()).then_some((paths, op))
 }
 
-/// Ctrl+V 대상 폴더(X-32 — 탐색기 관례): 선택이 **폴더 1개**면 그 폴더 안으로,
-/// 그 외(선택 없음/파일/다중 선택)는 활성 패널 현재 폴더.
+/// Ctrl+V 대상 폴더(X-32 — 탐색기 관례, 07-22 보완): 선택 1개가 **폴더**면 그 안,
+/// **파일**이면 **그 파일이 있는 폴더**(트리 펼침으로 하위 폴더 안 파일을 선택한
+/// 경우 가시 루트가 아니라 그 폴더 — 사용자 확정). 그 외(없음/다중)는 현재 폴더.
 fn paste_dest(st: &mut State) -> PathBuf {
     let panel = st.active_panel();
     let sel = panel.rows().source().tree().selected_paths();
     if let [one] = sel[..] {
         if one.is_dir() {
             return one.to_path_buf();
+        }
+        // 파일 = 부모 폴더(패널 루트 밖일 일은 없지만 is_dir로 방어)
+        if let Some(parent) = one.parent() {
+            if parent.is_dir() {
+                return parent.to_path_buf();
+            }
         }
     }
     panel.root_path()
