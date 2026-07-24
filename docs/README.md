@@ -53,6 +53,7 @@
 | [11 개발 환경](11-dev-environment.md) | 맥(일상)/Windows(실행·QA)/CI |
 | [18 빌드 & 테스트](18-build-and-test.md) | ★ 빌드·테스트·예산 측정 절차(SSOT) |
 | [15 개발 방법론](15-dev-methodology.md) | 수직 슬라이스·커밋 규약·단위 백로그 |
+| [16 문서·커밋/푸시 규약](16-doc-git-conventions.md) | ★ 문서 4층 체계·커밋/브랜치/푸시 규칙 — **타 프로젝트 이식용 지시문 포함** |
 
 ---
 
