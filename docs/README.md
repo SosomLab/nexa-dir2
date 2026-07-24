@@ -35,8 +35,20 @@
 | [MILESTONES](MILESTONES.md) | ★ 기능·마일스톤 현황(✅/🚧/📐/☐) |
 | [01 아키텍처](01-architecture.md) | 크레이트 구조·렌더링·스레딩·원본 대응표 |
 | [12 패키징](12-packaging-single-exe.md) | 단일 exe·영속 규율·서명 |
+| [21 배포](21-distribution.md) | ★ 배포 2채널(포터블·설치형) + Chocolatey·winget 채널 상태 |
 | [23 macOS·Linux 확장 타당성](23-cross-platform-feasibility.md) | ★ 크로스 플랫폼 검토서 — 실측 결합도(중립 40%)·DR 충돌·선택지 4종·스파이크 권고 |
 | [ctl 컨트롤 라이브러리](ctl/README.md) | ★ Nexa Controls — 컨트롤 14종 문서 색인·공통 규약(판매용) |
+
+### ADR · 기능 설계 (개별 결정 상세)
+
+| 문서 | 내용 |
+|---|---|
+| [07 ADR-0002 렌더링](07-adr-0002-rendering.md) | 텍스트 렌더링 = DirectWrite GDI interop 채택 근거(벤치 비교) |
+| [08 ADR-0003 셸 컨텍스트 메뉴](08-adr-0003-shell-context-menu.md) | 탐색기 확장 메뉴 노출 방식 결정 |
+| [09 ADR-0004 미리보기 플러그인](09-adr-0004-preview-plugins.md) | Starlark 플러그인 도입(DR-7 개정 근거) |
+| [19 원본 패리티 갭](19-parity-gap.md) | 원본 대비 미구현·초과 항목(G-1~14) |
+| [20 세션 코얼레싱](20-session-coalescing.md) | 탭/경로 변경 디바운스 자동 저장 설계 |
+| [22 일괄 이름변경 v2](22-batch-rename-v2.md) | PF 6동작 패리티 — 코어 재작성·Date 토큰 엔진 |
 
 ## ③ 진행 경과 · 할 일
 

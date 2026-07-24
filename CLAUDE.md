@@ -7,7 +7,8 @@
 
 **Nexa Dir** = 원본 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어+WinUI 3/C#)의 기능을
 **포터블 단일 exe · 초저메모리(RSS ≤30MB) · unmanaged 올 러스트**로 재구축하는 Windows 파일 탐색기.
-원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`. 현 단계: **M5(마감) 진행** — M0(`0.1.0`)~M4(`0.5.0`) 완료.
+원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`.
+현 단계: **포스트 M5 — UX 고도화 + 배포 채널 정착**. M0(`0.1.0`)~M5(`0.6.0`) 완료, 최신 릴리스 **`0.11.0`**(GitHub Release + winget Portable 배포 완료 · winget 설치형·Chocolatey 2종은 심사 대기 — [21 §7·§8](docs/21-distribution.md)).
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com (원본과 동일)
 
@@ -49,7 +50,12 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md)(M0-1부터 순차).
 
-## 7. 다음 단계 (2026-07-11)
+## 7. 다음 단계 (2026-07-24 갱신)
 
-1. **M0**: `feat/m0-scaffold` — 워크스페이스·코어 3크레이트 이식·Win32 창 스켈레톤·CI·**게이트 실측**(Windows 실기) → `0.1.0`.
-2. M1: ADR-0002(렌더링 확정) → 가상 리스트·플래그십 재현. → [docs/02](docs/02-roadmap.md)
+> M0~M5는 전부 완료(`0.1.0`~`0.6.0`), 이후 포스트 M5 UX 고도화로 `0.11.0`까지 릴리스됨.
+> 아래는 **지금 열려 있는 것**만. 최신 현황은 항상 [docs/STATUS.md](docs/STATUS.md).
+
+1. **실기 QA 잔여분 소화** — 사용자 QA가 병목. 새 기능보다 우선.
+2. **배포 채널 심사 대기 3건**(우리 측 조치 불요·상태만 추적): winget 설치형(#404528 — `Policy-Test-1.2` waiver 대기) · Chocolatey `nexa-dir`·`nexa-dir.portable`(모더레이션 큐). 승인 시 `CHOCO_PUSH` 스위치를 켜 후속 버전 재개. → [21 §7·§8](docs/21-distribution.md)
+3. **백로그 진행** — [docs/TODO.md](docs/TODO.md) §7: X-11 원본 패리티 갭 건별([19](docs/19-parity-gap.md)) · X-2 Starlark 플러그인 · X-16 최적화 잔여 · X-13 2/2.
+4. **X-33 macOS·Linux 확장** — 검토 완료([23](docs/23-cross-platform-feasibility.md)), **착수 여부는 사용자 결정 대기**. 진행 시 다음 액션 = 맥 렌더 스파이크(결정 아님) + DR-1/2/8 개정 ADR-0005.
