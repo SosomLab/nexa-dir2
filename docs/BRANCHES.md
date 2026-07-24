@@ -1,14 +1,17 @@
 # BRANCHES — 브랜치 기록 (Branch History, 시간 역순)
 
 > **목적**: 병합 후 삭제되는 작업 브랜치의 이력을 남긴다(원본 규약 차용). **정렬: 시간 역순(최신이 위)** — 새 브랜치는 표·상세 모두 맨 위에 추가. 시각=커밋 committer date(KST).
-> **규약**: 브랜치는 main 병합·green 확인 후 삭제, 이력은 이 문서 + journal에 보존. push는 사용자 명시 요청 시에만.
+> **규약**: 브랜치는 main 병합·green 확인 후 삭제, 이력은 이 문서 + journal에 보존. push는 사용자 명시 요청 시에만([16 §4](16-doc-git-conventions.md#4-브랜치--푸시--반드시-준수)).
+> **삭제 열** = 로컬 ref를 실제로 지운 날. 병합 후 ref가 남아 있었다면 정리한 날짜로 적고 `(정정)`을 붙인다.
 
 ## 요약 (시간 역순)
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `docs/repo-sync-cleanup` | 2026-07-24 | 2026-07-24 (ff) | 2026-07-24 | 1 | **저장소 최신화 — 로컬 브랜치 정리 + 이력 보정**(사용자 요청) — 동기화 실측(main↔origin 0/0·태그 12종 일치·트리 clean) 후 머지 완료 로컬 전용 브랜치 3개 삭제(`feat/chocolatey-packaging`·`feat/m0-render-spike`·`feat/m0-scaffold`) · 이 표의 어긋남 2건 보정(chocolatey 행 소급 기록 · M0 2건 삭제 열 정정) · **삭제 열 정의 명문화**. 코드 무변경 | [2026-07-24](journal/2026-07-24.md) |
 | `feat/clipboard-dnd-ux` | 2026-07-22 | 2026-07-22 (ff `ec8d727`) | 2026-07-22 | 1 | **X-32 클립보드·DnD UX 보완 4종**(사용자 요청) — ① Ctrl+X 잘라내기 흐림 표시(OS 클립보드 미러 CUT_MARKS·WM_CLIPBOARDUPDATE 단일 길목·RowSource::is_ghosted — 외부 탐색기 잘라내기 포함) ② Ctrl+V 선택 폴더 안 붙여넣기(paste_dest — 폴더 1개 선택 시) ③ DnD 엣지 자동 스크롤(drag_scroll_edge — 상/하단 한 행 존 ±1행) ④ DnD 호버 대기(DropHooks track/leave + TIMER_DND 100ms 폴링 — 비활성 탭=전환·접힌 폴더=펼침 전용, 설정 `dnd_hover_ms` 기본 3000·prefs 파일 전송·lang 3종). 209 green·clippy 0 | [2026-07-22](journal/2026-07-22.md) |
 | `feat/transfer-progress-ux` | 2026-07-21 | 2026-07-21 (`639e04a`) | 2026-07-21 | 8 | **X-30 전송 진행 UX 개편 + QA 시리즈**(사용자 요청·QA 연속) — "1 B" 오표기 수정(set_done 실제 바이트 유지)·설정 `transfer_close_ms`(ms 단위·0=창 미표시)·B~TB 단위+파일 수 표기·항목별 크기 비례 세그먼트 바(nexa-ops Event 프로토콜·최소 3px·5색 순환 팔레트)·전송 중 대상 실행/드래그 잠금·DEL 휴지통 삭제 워커 이관+낙관적 숨김(nexa-tree remove_paths)·설정 창 NOPREFIX 표기 수정 | [2026-07-21](journal/2026-07-21.md) |
+| `feat/chocolatey-packaging` | 2026-07-19 | 2026-07-19 (merge `0743472`) | 2026-07-24 | 2 | **Chocolatey 배포 채널 등록 + `0.8.1` 승격**(사용자 요청) — `packaging/chocolatey/` 신설(nuspec + install/uninstall/VERIFICATION — **바이너리 미동봉**, 설치 시 Release 설치형 exe를 SHA-256 검증 후 다운로드[PolyForm NC = 비-FOSS 대응])·release.yml 체크섬 주입→`choco pack`→시크릿 있을 때만 `choco push`·함정 2건 해소(`/ALLUSERS` 명시 + iss `commandline` 허용 / step `if`의 `secrets` 미인식 → job env 승격). **표 누락분 소급 기록**(07-24 로컬 브랜치 정리 중 확인) | [2026-07-19](journal/2026-07-19.md) |
 | `feat/svg-icons` | 2026-07-18 | 2026-07-18 (`aad2b93`) | 2026-07-18 | 1 | **SVG 아이콘 파이프라인**(사용자 요청·SVG 제공) — svg.rs 서브셋 파서(중립·테스트 6·crate 0)+gdipctx svg_to_hicon(ARGB 오프스크린·요청 크기 즉석 래스터)+icons EMBEDDED_SVG(PNG 우선순위 역전·폴백). 1호 view-flat.svg. 193 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/order-editors` | 2026-07-19 | 2026-07-19 (병합) | 2026-07-19 | 1 | **설정 편집기 3종 공통 창 + 컬럼 기능**(사용자 요청) — ordereditor 공통 모달(어댑터)·NxOrderTree 체크·config 제네릭 문법·prefs OrderDialog 3항목·컬럼 드래그 재배열/표시·colsync 연동·세션·ctx 메뉴 반영. 실기 QA 전 항목 | [2026-07-19](journal/2026-07-19.md) |
 | `feat/toolbar-tips` | 2026-07-18 | 2026-07-18 (`033ac02`) | 2026-07-18 | 1 | **도구 모음 툴팁 i18n**(사용자 요청) — tip.rs 팝업(NOACTIVATE·테마 색·dlg_font)+chrome hover_tip/set_buttons+win TIMER_TIP(500ms 표시·커서 실측 이탈 해제·클릭 파괴). 기존 메뉴 키 재사용(신규 키 0)·언어 전환 즉시 반영. 실기 en/ko·187 green | [2026-07-18](journal/2026-07-18.md) |
@@ -124,8 +127,8 @@
 | `feat/m1-virtual-list` | 2026-07-12 | 2026-07-12 (`baa3b3f`) | 2026-07-12 | 3 | M1-3 — 가상화 파일 리스트 초안: nexa-tree 평면 스트림 배선(TreeSource·들여쓰기·마커·클릭 토글)·GDI 경로 제거·DW 레이아웃 캐시(벤치 1,673µs). 테스트 48 green·실기 실측 | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m1-adr0002-render` | 2026-07-12 | 2026-07-12 (`e0daf56`) | 2026-07-12 | 2 | M1-2 — ADR-0002 확정: DirectWrite GDI interop 채택(벤치 −28%·RSS +4.1MB 예산 내), dw.rs 백엔드·F2/F3 비교 하네스·기본 백엔드 전환 | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m1-gui` | 2026-07-11 | 2026-07-11 (`c20ddde`) | 2026-07-11 | 3 | M1-1 — `nexa-gui` 크레이트 분리: 플랫폼 중립 위젯 trait·무효화(rect 병합)·입력 이벤트·테마 토큰(원본 docs/39 차용)·`VirtualRows` + nexa-app 재배선(`gdi.rs` DrawCtx 백엔드). 테스트 43 green·실기 확인 | [2026-07-11](journal/2026-07-11.md) |
-| `feat/m0-render-spike` | 2026-07-11 | 2026-07-11 (`cc7e7ed`) | 2026-07-11 | 3 | M0-7 — GDI 렌더 스파이크: 더블 버퍼·합성 100k행 가시 영역만·휠/키 스크롤·DPI (windows 타깃 check·clippy green) + git -C 권한 병합 | [2026-07-11](journal/2026-07-11.md) |
-| `feat/m0-scaffold` | 2026-07-11 | 2026-07-11 (`e1a2e7f`) | 2026-07-11 | 11 | M0-1~6 — 워크스페이스·코어 3크레이트 이식(테스트 green)·Win32 창 스켈레톤(windows 타깃 check green)·CI(예산 게이트) + 권한 복구 | [2026-07-11](journal/2026-07-11.md) |
+| `feat/m0-render-spike` | 2026-07-11 | 2026-07-11 (`cc7e7ed`) | 2026-07-24(정정) | 3 | M0-7 — GDI 렌더 스파이크: 더블 버퍼·합성 100k행 가시 영역만·휠/키 스크롤·DPI (windows 타깃 check·clippy green) + git -C 권한 병합 | [2026-07-11](journal/2026-07-11.md) |
+| `feat/m0-scaffold` | 2026-07-11 | 2026-07-11 (`e1a2e7f`) | 2026-07-24(정정) | 11 | M0-1~6 — 워크스페이스·코어 3크레이트 이식(테스트 green)·Win32 창 스켈레톤(windows 타깃 check green)·CI(예산 게이트) + 권한 복구 | [2026-07-11](journal/2026-07-11.md) |
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 
 ---
