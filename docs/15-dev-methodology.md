@@ -14,6 +14,7 @@
 - **원본 참조 우선**: 기능 설계 전 원본 문서·코드를 먼저 확인(재발명 금지). 이식 커밋 본문에 원본 경로 명기.
 - **브랜치**: 설계/개발 큰 단위마다 브랜치(`docs/…`, `feat/m0-…`, `refactor/…`) → 세부 기능 단위 커밋 → green 확인 후 main 병합. **push는 사용자 명시 요청 시에만.**
 - 커밋 규약: Conventional Commits `type(scope)` — scope 예: `core/tree` `gui/list` `app/win` `ops` `shell` `term` `pkg`.
+- **문서 체계·커밋/푸시 규칙의 정식 규약 = [16 문서·커밋/푸시 규약](16-doc-git-conventions.md)**(이 문서는 개발 규율, 16은 기록·git 규약 — 타 프로젝트 이식용 지시문 포함).
 
 ## 3. 진행 추적 (원본 규약 차용)
 

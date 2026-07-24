@@ -39,7 +39,8 @@
 
 - 원본 규약 전면 계승([docs/15](docs/15-dev-methodology.md)): **수직 슬라이스·단위=커밋 1개·초안→확장·main 항상 green·Conventional Commits**.
 - **큰 단위=브랜치, 세부 기능=커밋. push는 사용자 명시 요청 시에만.** 사용자 개입 최소화 — 특별한 상황 외 자동 진행(파괴적 작업 제외).
-- 기록: 일자 상세 `docs/journal/YYYY-MM-DD.md`(시간 역순) + [DEVLOG](docs/DEVLOG.md) 요약 + [MILESTONES](docs/MILESTONES.md) + [BRANCHES](docs/BRANCHES.md).
+- 기록: 일자 상세 `docs/journal/YYYY-MM-DD.md`(시간 역순) + [DEVLOG](docs/DEVLOG.md) 요약 + [MILESTONES](docs/MILESTONES.md) + [BRANCHES](docs/BRANCHES.md). **한 작업 = 한 트랜잭션 갱신**(커밋→journal→DEVLOG→MILESTONES/TODO→BRANCHES).
+- **문서·커밋/푸시 규약 SSOT = [docs/16](docs/16-doc-git-conventions.md)** — 4층 문서 체계·작성 규칙 8·커밋/브랜치/푸시 필수 규칙(타 프로젝트 이식용 지시문 §0 포함).
 - **기능 설계 전 원본 문서·코드 먼저 확인**(재발명 금지). 이식 커밋에 원본 경로 명기.
 - `.claude/settings.json`(권한)은 **덮어쓰기 금지, 병합만** — 세션 승인 항목 유실 사고 방지.
 - 빌드/테스트 SSOT = [docs/18](docs/18-build-and-test.md) — 절차 변경 시 같은 커밋에서 갱신.
