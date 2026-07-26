@@ -1,6 +1,19 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-26 (KST)** — **X-2 Starlark 플러그인 시스템 +
+> **갱신: 2026-07-26 2차 (KST)** — **플러그인 목록·사용 여부 설정
+> 페이지(사용자 요청 — `feat/starlark-plugin` 8커밋째)**: 설정 창 사이드바
+> **플러그인** 카테고리 — 로드된 `.star` 목록을 `NAME (id) — 확장자`
+> 체크박스로 나열(동적 목록 — `ID_PLUGIN_BASE` 2100으로 기존 "클릭 즉시
+> harvest+apply" 경로 재사용). **체크 해제 = `plugins_disabled=id|…`**
+> (settings 왕복·영속) → resolve에서 **preview_map 오버라이드·EXTS 선언
+> 매치 모두 제외**(내장 `builtin.*` = 폴백 안전망 면역) → 도크 미리보기
+> 즉시 갱신. 빈 목록 = `data\plugins` 안내 1줄. harvest는 플러그인
+> 페이지에서만 값 재구성(타 페이지의 값 소거 예방).
+> `preview::plugin_infos()` 신설(설정 UI 메타). 가이드 [23 §7-4]
+> (23-plugin-dev-guide.md) 추가. **215 green(+1)·clippy 0·5.74MB 불변**.
+> [journal/2026-07-26.md](journal/2026-07-26.md).
+>
+> **직전(07-26 1차)** — **X-2 Starlark 플러그인 시스템 +
 > MarkdownViewerPlugin 샘플(사용자 지시 — `feat/starlark-plugin` 6커밋,
 > 실기 QA 후 병합 대기)**: 1차 내장 러스트 md 뷰어(`feat/md-preview`)는
 > 사용자 지시로 **폐기(미병합 보존)** → Starlark 기반 재설계.

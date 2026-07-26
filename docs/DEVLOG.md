@@ -8,6 +8,7 @@
 
 ## 2026-07-26
 
+- **플러그인 목록·사용 여부 설정 페이지(사용자 요청 — 같은 브랜치 2차)**: 설정 창 사이드바 **플러그인** 카테고리 — 로드된 .star 목록을 `NAME (id) — 확장자` 체크박스로 나열(동적 — ID_PLUGIN_BASE 2100 = 기존 즉시 적용 경로 재사용), 체크 해제 = `plugins_disabled`(왕복·영속) → resolve에서 오버라이드/선언 매치 제외(내장 = 폴백 면역) → 도크 즉시 갱신. 빈 목록 = data\plugins 안내. 215 green·clippy 0·5.74MB 불변. 가이드 23 §7-4. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **X-2 Starlark 플러그인 시스템 + MarkdownViewerPlugin 샘플(사용자 지시 — `feat/starlark-plugin` 6커밋, QA 후 병합 대기)**: 1차 내장 러스트 md 뷰어(`feat/md-preview` — 미병합 보존)를 사용자 지시로 폐기하고 **Starlark 기반 재설계**. ① S1 시임 + **preview_map 설정 오버라이드**(스크립트 EXTS 내부 선언 = 기본값 > 설정 재정의 > 폴백) ② **S2 starlark 0.14.2 런타임**(DR-8 원장 확정 — B2 실측 +4.24MB, 1.50→5.74MB ≤10 통과): `data\plugins\*.star` 파일명 순 로드·동결 캐시·오류 격리·호스트 API(file.path/ext/size·read_text[대상 파일만 256KB]·disp_width[CJK 2칸]) ③ **독립 미리보기 창 F3**(콘솔 그리드·스크롤 — 플러그인 기준 캔버스, 벤치는 Shift+F3) ④ **samples/markdown-viewer 독립 프로젝트**(markdown.star 참조 구현: md 서브셋 + **Mermaid flowchart/sequence 텍스트 다이어그램** 순수 Starlark·픽스처·README) + 실제 런타임 E2E 테스트 ⑤ **개발자 가이드 [23](23-plugin-dev-guide.md)**(프로젝트 생성→개발→테스트→배포 8단계 순차). 214 green·clippy 0·B3 통과. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 
 ## 2026-07-24
