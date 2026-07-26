@@ -1548,7 +1548,7 @@ fn preview_content(
     disabled: &str,
     dark: bool,
 ) -> (Vec<String>, Option<String>) {
-    crate::preview::star::set_dark(dark); // 다이어그램 색 선택(호스트 주입 — 07-26)
+    crate::preview::set_dark(dark); // 다이어그램 색 선택(호스트 주입 — 07-26)
     let tree = p.rows().source().tree();
     if tree.selection_count() != 1 {
         return (vec![tr("preview.none")], None);
@@ -1605,7 +1605,7 @@ fn open_preview_window(hwnd: HWND, st: &mut State, panel: usize) {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    crate::preview::star::set_dark(st.theme.is_dark);
+    crate::preview::set_dark(st.theme.is_dark);
     let lines = match crate::preview::preview_for(&path, &st.preview_map, &st.plugins_disabled) {
         crate::preview::PreviewDoc::Lines(l) => l,
         crate::preview::PreviewDoc::Image(_) => vec![tr("preview.window.image")],

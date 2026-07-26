@@ -9,14 +9,12 @@ homepage.workspace = true
 description = "Nexa Dir 앱 (Win32 창·메시지 루프·조립)"
 
 [dependencies]
-anyhow = "1.0.104"
 nexa-core = { workspace = true }
 nexa-gui = { workspace = true }
 nexa-ops = { workspace = true }
 nexa-term = { workspace = true }
 nexa-tree = { workspace = true }
 nexa-vfs = { workspace = true } # X-17 가상 최상위(MY_PC 센티널)
-starlark = "0.14"
 
 [target."cfg(windows)".dependencies]
 windows-core = "0.62.2" # #[implement] 매크로 전개가 ::windows_core 경로를 참조
