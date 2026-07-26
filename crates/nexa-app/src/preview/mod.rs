@@ -8,6 +8,8 @@
 //! 시임·독립 창·설정(preview_map/plugins_disabled)·격리 설계·라인 태그 계약
 //! (`\u{2}종류|`·`\u{1}img|`)은 런타임 중립 자산으로 유지.
 
+pub mod wasm;
+
 use crate::i18n::tr;
 use std::path::Path;
 
@@ -257,7 +259,23 @@ fn with_providers<R>(f: impl FnOnce(&[Box<dyn PreviewProvider>], &[PluginInfo]) 
         static PROVIDERS: std::cell::OnceCell<Cache> = const { std::cell::OnceCell::new() };
     }
     PROVIDERS.with(|c| {
-        let (providers, infos) = c.get_or_init(|| (builtins(), Vec::new()));
+        let (providers, infos) = c.get_or_init(|| {
+            let (plugins, _errors) = wasm::load_dir(&crate::config::data_dir().join("plugins"));
+            let infos: Vec<PluginInfo> = plugins
+                .iter()
+                .map(|p| PluginInfo {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    exts: p.exts.clone(),
+                })
+                .collect();
+            let mut v: Vec<Box<dyn PreviewProvider>> = plugins
+                .into_iter()
+                .map(|p| Box::new(wasm::WasmProvider { plugin: p }) as Box<dyn PreviewProvider>)
+                .collect();
+            v.extend(builtins());
+            (v, infos)
+        });
         f(providers, infos)
     })
 }

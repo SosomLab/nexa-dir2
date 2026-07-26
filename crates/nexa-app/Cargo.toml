@@ -15,6 +15,7 @@ nexa-ops = { workspace = true }
 nexa-term = { workspace = true }
 nexa-tree = { workspace = true }
 nexa-vfs = { workspace = true } # X-17 가상 최상위(MY_PC 센티널)
+wasmi = "1.1.0"
 
 [target."cfg(windows)".dependencies]
 windows-core = "0.62.2" # #[implement] 매크로 전개가 ::windows_core 경로를 참조
@@ -22,3 +23,6 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+wat = "1.254.0"
