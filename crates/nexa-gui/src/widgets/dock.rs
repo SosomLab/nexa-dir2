@@ -37,6 +37,10 @@ pub struct InfoDock {
     pending_popout: bool,
     /// ↗ 버튼 히트 존 캐시(paint가 채움).
     popout_range: std::cell::Cell<Rect>,
+    /// ↗ hover(색 입힘 — X-27 sel_bg 토큰)·pressed(누름 효과 — accent 블렌드 +
+    /// 아이콘 1px 오프셋, MouseUp이 버튼 안이면 발화 — 07-26 이미지 버튼 개편).
+    popout_hover: bool,
+    popout_pressed: bool,
     /// 내용 텍스트 선택(드래그 — QA 07-15 라인 → **문자 단위**로 보완 07-20:
     /// Info/Preview 영역 선택 복사). (앵커, 현재) = (라인, 문자 경계).
     sel: Option<((usize, usize), (usize, usize))>,
@@ -80,6 +84,8 @@ impl InfoDock {
             popout_on: false,
             pending_popout: false,
             popout_range: std::cell::Cell::new(Rect::default()),
+            popout_hover: false,
+            popout_pressed: false,
             sel: None,
             sel_drag: false,
             offsets: std::cell::RefCell::new(Vec::new()),
@@ -177,25 +183,56 @@ impl InfoDock {
         std::mem::take(&mut self.pending_popout)
     }
 
-    /// 우상단 "크게"(↗) 오버레이 그리기(내용/이미지 **위에** — paint 마지막 호출).
-    /// 히트 존 캐시 갱신 포함.
+    /// 우상단 "크게"(↗) **이미지 버튼** 그리기(내용/이미지 위 — paint 마지막 호출,
+    /// 07-26 개편). 3상태 배경: pressed = accent 38% 블렌드(툴바 켜짐 규약) >
+    /// hover = sel_bg(X-27 토큰) > 기본 header_bg. 누름 효과 = 아이콘 1px 우하 오프셋.
+    /// 아이콘 = `emb:popout`(SVG — 잉크 = 테마 본문색·다크 신호), 미로드 폴백 = ↗ 글리프.
     fn draw_popout(&self, ctx: &mut dyn DrawCtx, theme: &Theme, content_top: i32) {
         if !self.popout_on {
             self.popout_range.set(Rect::default());
             return;
         }
         let b = self.bounds;
-        let label = "↗";
-        let w = ctx.text_width(label) + self.pad_x * 2;
-        let h = self.row_h.min((b.bottom() - content_top - 2).max(0));
-        let cell = Rect::new(b.right() - w - self.pad_x, content_top + 2, w, h);
+        let side = (self.row_h + 4).min((b.bottom() - content_top - 4).max(0));
+        let cell = Rect::new(b.right() - side - self.pad_x, content_top + 2, side, side);
         if cell.w <= 0 || cell.h <= 0 {
             self.popout_range.set(Rect::default());
             return;
         }
-        let ty = cell.y + (cell.h - (cell.h * 4) / 5) / 2;
-        let fg = if self.focused { theme.text } else { theme.text_dim };
-        ctx.text_opaque(cell.x + self.pad_x, ty, cell, label, fg, theme.header_bg);
+        let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * 0.38) as u8;
+        let bg = if self.popout_pressed {
+            crate::theme::Color {
+                r: mix(theme.panel_bg.r, theme.accent.r),
+                g: mix(theme.panel_bg.g, theme.accent.g),
+                b: mix(theme.panel_bg.b, theme.accent.b),
+            }
+        } else if self.popout_hover {
+            theme.sel_bg
+        } else {
+            theme.header_bg
+        };
+        ctx.fill_rect(cell, bg);
+        let off = i32::from(self.popout_pressed); // 누름 효과 1px 우하
+        let isz = (side - 8).max(8);
+        let ink =
+            ((theme.text.r as u32) << 16) | ((theme.text.g as u32) << 8) | theme.text.b as u32;
+        let dk = if theme.is_dark { "#dark" } else { "" };
+        let key = format!("emb:popout{dk}#{ink:06X}");
+        let drew = ctx.draw_icon(
+            cell.x + (side - isz) / 2 + off,
+            cell.y + (side - isz) / 2 + off,
+            isz,
+            &key,
+            "",
+        );
+        if !drew {
+            // 미로드/추출 실패 폴백 = ↗ 글리프(bg는 이미 채움)
+            let label = "↗";
+            let tw = ctx.text_width(label);
+            let ty = cell.y + (cell.h - (cell.h * 4) / 5) / 2 + off;
+            let fg = if self.focused { theme.text } else { theme.text_dim };
+            ctx.text(cell.x + (cell.w - tw).max(0) / 2 + off, ty, cell, label, fg);
+        }
         self.popout_range.set(cell);
     }
 
@@ -320,8 +357,9 @@ impl Widget for InfoDock {
                         }
                     }
                 } else if self.popout_on && self.popout_range.get().contains(Point { x, y }) {
-                    // 우상단 ↗ "크게" 오버레이(07-26) — 호스트가 독립 창(모달)을 연다
-                    self.pending_popout = true;
+                    // 우상단 ↗ "크게" 이미지 버튼(07-26) — 프레스 시각만, 발화는 MouseUp
+                    self.popout_pressed = true;
+                    inv.push(self.popout_range.get());
                 } else if let Some(pos) = self.char_at(x, y) {
                     // 내용 드래그 선택 시작(QA 07-15 → 07-20 **문자 단위** 앵커)
                     self.sel = Some((pos, pos));
@@ -332,6 +370,14 @@ impl Widget for InfoDock {
                 }
             }
             InputEvent::MouseMove { x, y } => {
+                // ↗ hover 색 입힘(07-26 — X-27 sel_bg 토큰. 변경 시에만 무효화)
+                let hp = self.popout_on
+                    && !self.sel_drag
+                    && self.popout_range.get().contains(Point { x, y });
+                if hp != self.popout_hover {
+                    self.popout_hover = hp;
+                    inv.push(self.popout_range.get());
+                }
                 if self.sel_drag {
                     let top = self.bounds.y + 1 + self.row_h.min((self.bounds.h - 1).max(0));
                     // 드래그 자동 스크롤(07-26): 내용 영역 위/아래 = 1행씩 이동
@@ -386,7 +432,15 @@ impl Widget for InfoDock {
                     let _ = self.scroll_to(to, inv);
                 }
             }
-            InputEvent::MouseUp { .. } => {
+            InputEvent::MouseUp { x, y } => {
+                // ↗ 버튼 의미론(07-26): 누른 채 버튼 **안에서 뗄 때만** 발화
+                if self.popout_pressed {
+                    self.popout_pressed = false;
+                    if self.popout_range.get().contains(Point { x, y }) {
+                        self.pending_popout = true;
+                    }
+                    inv.push(self.popout_range.get());
+                }
                 self.sel_drag = false; // 선택은 유지(Ctrl+C 복사 — 터미널 규약 동일)
                 if let Some((a, c)) = self.sel {
                     if a == c {
@@ -615,14 +669,22 @@ mod tests {
     }
 
     #[test]
-    fn popout_overlay_hit_reports_once_and_skips_selection() {
+    fn popout_button_hover_press_release_semantics() {
+        // 07-26 이미지 버튼 개편: hover 색·press 시각·**안에서 릴리스할 때만** 발화.
         let mut inv = Invalidations::default();
         let mut d = InfoDock::new("정보", 20, 6);
         d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
         d.set_lines(vec!["abc".into()], &mut inv);
         d.set_popout(true, &mut inv);
         d.paint(&mut Probe, &Theme::dark());
-        // Probe: "↗" 폭 8 + pad 12 = 20 → cell x=400-20-6=374, y=123, h=20
+        // 버튼 정사각 side = row_h+4 = 24 → cell x=400-24-6=370, y=123
+        let _ = inv.drain().count();
+        d.on_event(&InputEvent::MouseMove { x: 380, y: 130 }, &mut inv);
+        assert!(d.popout_hover, "hover 색 입힘");
+        assert_eq!(inv.drain().count(), 1, "hover 진입 = 무효화 1회");
+        d.on_event(&InputEvent::MouseMove { x: 380, y: 130 }, &mut inv);
+        assert_eq!(inv.drain().count(), 0, "동일 hover = 무비용");
+        // 프레스 = 시각만(발화 없음)
         d.on_event(
             &InputEvent::MouseDown {
                 x: 380,
@@ -632,9 +694,24 @@ mod tests {
             },
             &mut inv,
         );
-        assert!(d.take_popout(), "↗ 클릭 = 1회성 통지");
+        assert!(d.popout_pressed && !d.take_popout(), "press = 발화 전");
+        // 밖에서 릴리스 = 취소
+        d.on_event(&InputEvent::MouseUp { x: 10, y: 130 }, &mut inv);
+        assert!(!d.popout_pressed && !d.take_popout(), "밖 릴리스 = 취소");
+        // 안에서 릴리스 = 1회성 발화
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: 380,
+                y: 130,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        d.on_event(&InputEvent::MouseUp { x: 380, y: 130 }, &mut inv);
+        assert!(d.take_popout(), "안 릴리스 = 발화");
         assert!(!d.take_popout(), "수거 후 소진");
-        assert_eq!(d.selected_text(), None, "버튼 클릭은 선택 시작 아님");
+        assert_eq!(d.selected_text(), None, "버튼 조작은 선택 시작 아님");
         // 꺼진 상태에서는 히트 없음
         d.set_popout(false, &mut inv);
         d.paint(&mut Probe, &Theme::dark());
@@ -647,6 +724,7 @@ mod tests {
             },
             &mut inv,
         );
+        d.on_event(&InputEvent::MouseUp { x: 380, y: 130 }, &mut inv);
         assert!(!d.take_popout());
     }
 

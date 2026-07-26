@@ -181,6 +181,8 @@ pub mod shell {
             include_str!("../assets/toolbar/info-toggle-dark.svg"),
         ),
         ("dock", include_str!("../assets/toolbar/dock.svg")),
+        // 미리보기 ↗ "크게" 오버레이(07-26 — 도크): 다크 변형 없음 = 잉크 재색
+        ("popout", include_str!("../assets/toolbar/popout.svg")),
         // 다크 전용 변형(사용자 제공 — 흰 채움 타일+검은 바 홈). 다크 테마에서
         // chrome이 `#dark` 신호 → make_embedded가 `<이름>-dark` 에셋을 원색 그대로 렌더.
         ("dock-dark", include_str!("../assets/toolbar/dock-dark.svg")),

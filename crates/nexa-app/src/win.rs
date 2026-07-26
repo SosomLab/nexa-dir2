@@ -4759,13 +4759,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         update_dock_info(st, &mut inv);
                         invalidate_dock(hwnd, st, idx);
                     }
-                    // 미리보기 ↗ "크게" 오버레이(07-26) = 독립 미리보기 창(모달)
-                    if st.panels[idx].dock.take_popout() {
-                        flush_invalidations(hwnd, &mut inv);
-                        let src = if single_info(st) { st.active } else { idx };
-                        open_preview_window(hwnd, st, src);
-                        return LRESULT(0);
-                    }
                     // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3)
                     if st.panels[idx].dock_visible()
                         && y >= st.panels[idx].dock.bounds().y
@@ -5090,6 +5083,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 st.panels[1].on_event(&ev, &mut inv);
                 sync_col_widths(st, &mut inv); // 컬럼 폭 동기(07-18)
                 flush_invalidations(hwnd, &mut inv);
+                // 미리보기 ↗ "크게" 버튼 발화(07-26 — 버튼 안 릴리스) = 독립 창(모달)
+                for i in 0..2 {
+                    if st.panels[i].dock.take_popout() {
+                        let src = if single_info(st) { st.active } else { i };
+                        open_preview_window(hwnd, st, src);
+                        break;
+                    }
+                }
                 // 느린 재클릭 리네임 — 클릭 확정(무드래그) 시 **더블클릭 시간만큼 지연** 후
                 // 진입(그 안에 두 번째 클릭 = 더블클릭 열기 → WM_LBUTTONDBLCLK가 취소, QA 07-14)
                 if st.rename_on_up {
