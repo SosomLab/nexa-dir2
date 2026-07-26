@@ -1556,6 +1556,40 @@ fn preview_content(p: &Panel, preview_map: &str) -> (Vec<String>, Option<String>
     }
 }
 
+/// F3 — 독립 미리보기 창(07-26, 사용자 요청): 활성 패널의 단일 선택 파일을
+/// 콘솔 폰트 그리드 창으로 표시(플러그인 기준 캔버스 — 도크와 같은 공급자 경로).
+/// 이미지 공급자 결과는 도크(WIC) 담당 — 창은 안내 1줄.
+fn open_preview_window(hwnd: HWND, st: &mut State) {
+    let p = &st.panels[st.active];
+    let tree = p.rows().source().tree();
+    if tree.selection_count() != 1 {
+        return;
+    }
+    let Some(path) = tree.selected_path(0).map(std::path::Path::to_path_buf) else {
+        return;
+    };
+    if path.is_dir() {
+        return;
+    }
+    let title = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let lines = match crate::preview::preview_for(&path, &st.preview_map) {
+        crate::preview::PreviewDoc::Lines(l) => l,
+        crate::preview::PreviewDoc::Image(_) => vec![tr("preview.window.image")],
+    };
+    unsafe {
+        crate::previewwnd::show(
+            hwnd,
+            &title,
+            lines,
+            (&st.term_font, st.term_font_size),
+            st.theme.is_dark,
+        );
+    }
+}
+
 /// 양 패널 도크 내용 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
 /// 활성 종류: 0=정보(원본 DockInfo) · 1=미리보기(M4-2).
 fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
@@ -5230,7 +5264,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     run_command(hwnd, st, next);
                     return LRESULT(0);
                 } else if vk == VK_F3.0 {
-                    bench(hwnd, st);
+                    if shift {
+                        bench(hwnd, st); // 개발 벤치(구 F3 — Shift+F3로 이동, 07-26)
+                    } else {
+                        // F3 = 독립 미리보기 창(07-26 — 파일 관리자 F3 뷰어 관례)
+                        open_preview_window(hwnd, st);
+                    }
+                    return LRESULT(0);
                 } else if vk == VK_TAB.0 {
                     if ctrl {
                         st.active_panel().next_tab(&mut inv); // Ctrl+Tab = 다음 탭

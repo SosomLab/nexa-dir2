@@ -47,6 +47,9 @@ mod prefs;
 /// 미리보기 공급자 시임(ADR-0004 S1~S3 — X-2)
 #[cfg_attr(not(windows), allow(dead_code))]
 mod preview;
+/// 독립 미리보기 창(07-26 — 플러그인 기준 캔버스)
+#[cfg(windows)]
+mod previewwnd;
 #[cfg(windows)]
 mod recycle;
 #[cfg(windows)]
