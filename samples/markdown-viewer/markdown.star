@@ -475,6 +475,109 @@ def _mm_node_span(t):
             break
     return idl
 
+def _esc(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _mm_colors():
+    # 호스트 is_dark() — 테마 연동 팔레트(GitHub 근사)
+    if is_dark():
+        return {"bg": "#191C21", "node": "#262B33", "border": "#3D8BFF", "fg": "#D6DAE0", "line": "#8A919C"}
+    return {"bg": "#FFFFFF", "node": "#F6F8FA", "border": "#0969DA", "fg": "#1F2328", "line": "#57606A"}
+
+def _mm_flow_svg(reg, edges, rowidx, rows, horizontal):
+    # flowchart를 **이미지 수준**으로 — SVG 생성 → 호스트 render_svg(GDI+ AA 래스터,
+    # 07-26). 실패(비지원 플랫폼·상한 초과) = None → 텍스트 아트 폴백.
+    n = len(reg["ids"])
+    C = _mm_colors()
+    BH = 34
+    bw = [disp_width(l) * 7 + 26 for l in reg["labels"]]
+    pos = [[0, 0] for _ in range(n)]
+    if horizontal:
+        gap = 46
+        col_w = [max([bw[i] for i in row]) for row in rows]
+        col_h = [len(row) * (BH + 14) - 14 for row in rows]
+        H = max(col_h) + 20
+        x = 10
+        for ci in range(len(rows)):
+            yy = 10 + (H - 20 - col_h[ci]) // 2
+            for node in rows[ci]:
+                pos[node] = [x, yy]
+                yy += BH + 14
+            x += col_w[ci] + gap
+        W = x - gap + 10
+    else:
+        gaph = 28
+        gapv = 50
+        row_w = []
+        for row in rows:
+            w2 = 0
+            for i in row:
+                w2 += bw[i]
+            row_w.append(w2 + gaph * (len(row) - 1))
+        W = max(row_w) + 20
+        for li in range(len(rows)):
+            yy = 10 + li * (BH + gapv)
+            xx = 10 + (W - 20 - row_w[li]) // 2
+            for node in rows[li]:
+                pos[node] = [xx, yy]
+                xx += bw[node] + gaph
+        H = 10 + len(rows) * (BH + gapv) - gapv + 10
+    if W > 1600 or H > 1200:
+        return None
+    p = ['<svg viewBox="0 0 {} {}" stroke-width="1.5">'.format(W, H)]
+    p.append('<rect x="0" y="0" width="{}" height="{}" fill="{}"/>'.format(W, H, C["bg"]))
+    for e in edges:
+        if rowidx[e[1]] != rowidx[e[0]] + 1:
+            continue
+        if horizontal:
+            x1 = pos[e[0]][0] + bw[e[0]]
+            y1 = pos[e[0]][1] + BH // 2
+            x2 = pos[e[1]][0]
+            y2 = pos[e[1]][1] + BH // 2
+            mx = (x1 + x2) // 2
+            p.append('<polyline points="{},{} {},{} {},{} {},{}" fill="none" stroke="{}"/>'.format(
+                x1, y1, mx, y1, mx, y2, x2 - 2, y2, C["line"]))
+            p.append('<path d="M {} {} L {} {} L {} {} Z" fill="{}"/>'.format(
+                x2, y2, x2 - 8, y2 - 4, x2 - 8, y2 + 4, C["line"]))
+            lx = mx
+            ly = min(y1, y2) - 6
+        else:
+            x1 = pos[e[0]][0] + bw[e[0]] // 2
+            y1 = pos[e[0]][1] + BH
+            x2 = pos[e[1]][0] + bw[e[1]] // 2
+            y2 = pos[e[1]][1]
+            my = (y1 + y2) // 2
+            p.append('<polyline points="{},{} {},{} {},{} {},{}" fill="none" stroke="{}"/>'.format(
+                x1, y1, x1, my, x2, my, x2, y2 - 2, C["line"]))
+            p.append('<path d="M {} {} L {} {} L {} {} Z" fill="{}"/>'.format(
+                x2, y2, x2 - 4, y2 - 8, x2 + 4, y2 - 8, C["line"]))
+            lx = (x1 + x2) // 2 + 6
+            ly = my - 4
+        if e[2] != "":
+            p.append('<text x="{}" y="{}" font-size="12" fill="{}">{}</text>'.format(
+                lx, ly, C["fg"], _esc(e[2])))
+    for i in range(n):
+        rx = 16 if reg["round"][i] else 6
+        p.append('<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{}"/>'.format(
+            pos[i][0], pos[i][1], bw[i], BH, rx, C["node"]))
+        p.append('<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="none" stroke="{}"/>'.format(
+            pos[i][0], pos[i][1], bw[i], BH, rx, C["border"]))
+        p.append('<text x="{}" y="{}" font-size="13" text-anchor="middle" fill="{}">{}</text>'.format(
+            pos[i][0] + bw[i] // 2, pos[i][1] + BH // 2 + 5, C["fg"], _esc(reg["labels"][i])))
+    p.append("</svg>")
+    img = render_svg("".join(p))
+    if img == "":
+        return None
+    out = ["\x01img|" + img]
+    nrows = min(max(H // 22, 3), 18)
+    for _ in range(nrows - 1):
+        out.append("\x01pad")
+    for e in edges:
+        if rowidx[e[1]] != rowidx[e[0]] + 1:
+            lbl = "" if e[2] == "" else " ({})".format(e[2])
+            out.append("· {} ─▶ {}{}".format(reg["labels"][e[0]], reg["labels"][e[1]], lbl))
+    return out
+
 _MM_SKIP = ["subgraph", "end", "style", "classDef", "class", "click", "linkStyle", "direction"]
 
 def _mm_flow(body, horizontal):
@@ -534,6 +637,10 @@ def _mm_flow(body, horizontal):
     rows = [[] for _ in used]
     for i in range(n):
         rows[rowidx[i]].append(i)
+    # 1순위 = 이미지 수준 SVG 렌더(호스트 GDI+ — 실패 시 텍스트 아트 폴백)
+    svg_art = _mm_flow_svg(reg, edges, rowidx, rows, horizontal)
+    if svg_art != None:
+        return svg_art
     bw = [disp_width(l) + 4 for l in reg["labels"]]
     pos = [[0, 0] for _ in range(n)]
     if horizontal:

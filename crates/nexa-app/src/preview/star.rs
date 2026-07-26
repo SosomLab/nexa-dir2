@@ -46,6 +46,60 @@ struct PreviewCtx {
     path: PathBuf,
 }
 
+thread_local! {
+    /// 현재 테마 다크 여부(호스트 is_dark() — win.rs가 미리보기 전에 세팅, 07-26).
+    static DARK: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// 테마 신호 주입(win.rs — 다이어그램 배경/색 선택용).
+pub fn set_dark(dark: bool) {
+    DARK.with(|d| d.set(dark));
+}
+
+/// SVG(svg.rs 서브셋) → 임시 32bpp BMP 캐시 파일(내용 해시 이름 — 재사용).
+/// 실패 = None(호출측 빈 문자열 → 플러그인 텍스트 폴백).
+#[cfg(windows)]
+fn render_svg_impl(svg: &str) -> Option<String> {
+    if svg.len() > 256 * 1024 {
+        return None;
+    }
+    let doc = crate::svg::parse(svg)?;
+    let (w, h, mut px) = unsafe { crate::ctl::gdipctx::svg_to_pixels(&doc)? };
+    // WIC의 32bpp BMP는 알파 무시(BGRX) — 배경 rect 전제 + 알파 255 강제
+    for p in px.chunks_exact_mut(4) {
+        p[3] = 0xFF;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hsh = std::collections::hash_map::DefaultHasher::new();
+    svg.hash(&mut hsh);
+    let dir = std::env::temp_dir().join("nexa-preview");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("d{:016x}.bmp", hsh.finish()));
+    if !path.exists() {
+        let mut f = Vec::with_capacity(54 + px.len());
+        f.extend_from_slice(b"BM");
+        f.extend_from_slice(&(54 + px.len() as u32).to_le_bytes());
+        f.extend_from_slice(&[0u8; 4]);
+        f.extend_from_slice(&54u32.to_le_bytes());
+        f.extend_from_slice(&40u32.to_le_bytes());
+        f.extend_from_slice(&w.to_le_bytes());
+        f.extend_from_slice(&(-h).to_le_bytes()); // top-down
+        f.extend_from_slice(&1u16.to_le_bytes());
+        f.extend_from_slice(&32u16.to_le_bytes());
+        f.extend_from_slice(&0u32.to_le_bytes()); // BI_RGB
+        f.extend_from_slice(&(px.len() as u32).to_le_bytes());
+        f.extend_from_slice(&[0u8; 16]);
+        f.extend_from_slice(&px);
+        std::fs::write(&path, f).ok()?;
+    }
+    Some(path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(windows))]
+fn render_svg_impl(_svg: &str) -> Option<String> {
+    None // GDI+ 없음 — 플러그인은 텍스트 아트 폴백
+}
+
 #[starlark_module]
 fn host_globals(builder: &mut GlobalsBuilder) {
     /// 미리보기 **대상 파일**의 앞 `n`바이트를 텍스트로 읽는다(UTF-8 lossy·
@@ -65,6 +119,19 @@ fn host_globals(builder: &mut GlobalsBuilder) {
     /// 순수 헬퍼(Starlark엔 ord()가 없어 호스트가 제공).
     fn disp_width(s: &str) -> anyhow::Result<i32> {
         Ok(disp_width_impl(s) as i32)
+    }
+
+    /// SVG(svg.rs 서브셋 — rect/line/polyline/path/text)를 **이미지 수준으로
+    /// 래스터**해 임시 BMP 경로를 반환(07-26 — 다이어그램). 플러그인은 반환
+    /// 경로를 `\u{1}img|<path>` 마커 라인 + `\u{1}pad` 행들로 lines에 삽입한다.
+    /// 실패/비지원 플랫폼 = **빈 문자열**(플러그인이 텍스트 아트 폴백).
+    fn render_svg(svg: String) -> anyhow::Result<String> {
+        Ok(render_svg_impl(&svg).unwrap_or_default())
+    }
+
+    /// 현재 테마가 다크인가 — 다이어그램 배경·색 선택용(호스트 주입).
+    fn is_dark() -> anyhow::Result<bool> {
+        Ok(DARK.with(|d| d.get()))
     }
 }
 
@@ -102,6 +169,13 @@ fn load_one(path: &Path) -> Result<StarPlugin, String> {
     let frozen = Module::with_temp_heap(|module| -> Result<FrozenModule, String> {
         {
             let mut eval = Evaluator::new(&module);
+            // 로드 격리 상한(사용자 요구 07-26 — 톱레벨 무한 루프 방어): 500ms·연료·힙
+            let start = std::time::Instant::now();
+            eval.set_check_cancelled(Box::new(move || {
+                start.elapsed() > std::time::Duration::from_millis(500)
+            }));
+            let _ = eval.set_max_tick_count(50_000_000);
+            let _ = eval.set_max_heap_size(64 * 1024 * 1024);
             eval.eval_module(ast, globals()).map_err(|e| e.to_string())?;
         }
         module.freeze().map_err(|e| format!("freeze: {e:?}"))
@@ -188,6 +262,15 @@ pub fn run_preview(plugin: &StarPlugin, path: &Path) -> Result<PreviewDoc, Strin
         ]));
         let mut eval = Evaluator::new(&module);
         eval.extra = Some(&ctx);
+        // 실행 격리 상한(ADR-0004 §격리·예산 — 사용자 요구 07-26: 지연 미리보기가
+        // 전체 프로세스를 멈추지 않도록): 시간 300ms(주기 콜백)·연료 5천만 틱·
+        // 힙 64MB. 초과 = 오류 → 해당 플러그인만 오류 1줄(격리 경로 재사용).
+        let start = std::time::Instant::now();
+        eval.set_check_cancelled(Box::new(move || {
+            start.elapsed() > std::time::Duration::from_millis(300)
+        }));
+        let _ = eval.set_max_tick_count(50_000_000);
+        let _ = eval.set_max_heap_size(64 * 1024 * 1024);
         let res = eval
             .eval_function(preview_fn, &[file], &[])
             .map_err(|e| e.to_string())?;

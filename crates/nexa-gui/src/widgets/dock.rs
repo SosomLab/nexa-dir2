@@ -52,6 +52,13 @@ pub struct InfoDock {
     offsets: std::cell::RefCell<Vec<Vec<i32>>>,
 }
 
+/// 인라인 이미지 마커(07-26 다이어그램 — 이미지 수준 렌더): 라인
+/// `"\u{1}img|<경로>"` 가 이미지 시작이고, 후속 `"\u{1}pad"` 라인들이 표시
+/// 영역(행 수)을 예약한다. 렌더 = draw_image(비율 유지)·선택/복사 = 제외.
+pub const IMG_MARKER: &str = "\u{1}img|";
+/// 이미지 영역 예약 행(마커 다음 연속 — 내용 없음).
+pub const IMG_PAD: &str = "\u{1}pad";
+
 /// 클릭 x(원점 상대) → 최근접 문자 경계 인덱스(edit.rs index_at 규약).
 fn nearest_boundary(offs: &[i32], rel: i32) -> usize {
     let mut best = 0usize;
@@ -136,7 +143,15 @@ impl InfoDock {
         if lo == hi || lo.0 >= self.lines.len() {
             return None;
         }
-        let chars_of = |l: usize| self.lines[l].chars().collect::<Vec<char>>();
+        // 이미지 마커/패드 라인은 복사 대상에서 제외(07-26 — 제어 문자 유출 방지)
+        let chars_of = |l: usize| {
+            let s = &self.lines[l];
+            if s.starts_with('\u{1}') {
+                Vec::new()
+            } else {
+                s.chars().collect::<Vec<char>>()
+            }
+        };
         let (ll, lc) = lo;
         let (hl, hc) = (hi.0.min(self.lines.len() - 1), hi.1);
         if ll == hl {
@@ -148,7 +163,12 @@ impl InfoDock {
         let f = chars_of(ll);
         parts.push(f[lc.min(f.len())..].iter().collect::<String>());
         for l in ll + 1..hl {
-            parts.push(self.lines[l].clone());
+            let s = &self.lines[l];
+            parts.push(if s.starts_with('\u{1}') {
+                String::new()
+            } else {
+                s.clone()
+            });
         }
         let t = chars_of(hl);
         parts.push(t[..hc.min(t.len())].iter().collect::<String>());
@@ -530,6 +550,33 @@ impl Widget for InfoDock {
         for (i, line) in self.lines.iter().enumerate().skip(self.scroll) {
             if y >= b.bottom() {
                 break;
+            }
+            // 인라인 이미지(07-26 다이어그램): 마커 = 예약 행 전체에 draw_image,
+            // 패드 = 배경만. 오프셋은 경계 0 하나(선택 대상 아님).
+            if let Some(path) = line.strip_prefix(IMG_MARKER) {
+                if rebuild {
+                    self.offsets.borrow_mut().push(vec![0]);
+                }
+                let k = 1 + self.lines[i + 1..]
+                    .iter()
+                    .take_while(|l| l.as_str() == IMG_PAD)
+                    .count() as i32;
+                let area = Rect::new(
+                    x0,
+                    y,
+                    (b.w - self.pad_x * 2).max(0),
+                    (self.row_h * k).min(b.bottom() - y),
+                );
+                ctx.draw_image(area, path);
+                y += self.row_h;
+                continue;
+            }
+            if line == IMG_PAD {
+                if rebuild {
+                    self.offsets.borrow_mut().push(vec![0]);
+                }
+                y += self.row_h;
+                continue;
             }
             if rebuild {
                 let mut offs = vec![0];

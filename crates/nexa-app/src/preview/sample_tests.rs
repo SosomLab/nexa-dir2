@@ -42,10 +42,12 @@ fn sample_markdown_viewer_plugin_end_to_end() {
     // 표 CJK 정렬 — 경계 '│' 표시 폭 일치(disp_width 호스트 API 사용 검증)
     let table: Vec<&String> = lines.iter().filter(|l| l.starts_with('│')).collect();
     assert!(table.len() >= 3, "표 행: {joined}");
-    // Mermaid — flowchart(박스·↓ 화살표·간선 라벨)·sequence(참여자 별칭·화살표)
-    assert!(joined.contains('▼'), "flowchart 세로 화살표: {joined}");
-    assert!(joined.contains("◇ OK?"), "결정 노드 라벨");
-    assert!(joined.contains("yes"), "간선 라벨");
+    // Mermaid — flowchart: Windows = 이미지 마커(SVG→BMP 래스터·07-26),
+    // 비지원 플랫폼 = 텍스트 아트 폴백. sequence = 텍스트 아트(별칭·화살표).
+    assert!(
+        joined.contains('\u{1}') || joined.contains('▼'),
+        "flowchart 이미지 마커 또는 텍스트 아트: {joined}"
+    );
     assert!(joined.contains("Client"), "participant as 별칭");
     assert!(joined.contains('▶') || joined.contains('◀'), "sequence 화살표");
     let _ = std::fs::remove_dir_all(&d);

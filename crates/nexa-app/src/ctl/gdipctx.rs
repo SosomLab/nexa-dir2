@@ -105,6 +105,50 @@ pub(crate) unsafe fn svg_to_image(doc: &crate::svg::Doc, px: i32, argb: u32) -> 
         .unwrap_or(std::ptr::null_mut())
 }
 
+/// SVG 문서 → **BGRA(top-down) 픽셀**(크기 = viewBox·스케일 1 — 미리보기
+/// 다이어그램 07-26). 정사각 래스터( [`render_svg_at`] )에서 viewBox 영역만
+/// 크롭 추출. 반환 (w, h, BGRA). 실패/상한 초과 = `None`.
+///
+/// # Safety
+/// GDI+ 초기화 전제(내부 보장).
+pub(crate) unsafe fn svg_to_pixels(doc: &crate::svg::Doc) -> Option<(i32, i32, Vec<u8>)> {
+    use windows::Win32::Graphics::GdiPlus::{
+        GdipBitmapLockBits, GdipBitmapUnlockBits, BitmapData, ImageLockModeRead, Rect as GpRect,
+    };
+    let (_, _, vw, vh) = doc.viewbox;
+    let (w, h) = (vw.ceil() as i32, vh.ceil() as i32);
+    if w <= 0 || h <= 0 || w > 2000 || h > 2000 {
+        return None;
+    }
+    let px = w.max(h);
+    let bmp = render_svg_at(doc, px, 0xFF00_0000)?; // 잉크 = 불투명 검정(요소 색이 우선)
+    const PXF_32ARGB: i32 = 0x0026_200A;
+    let rect = GpRect {
+        X: 0,
+        Y: 0,
+        Width: w,
+        Height: h,
+    };
+    let mut data = BitmapData::default();
+    let mut out = None;
+    if GdipBitmapLockBits(bmp, &rect, ImageLockModeRead.0 as u32, PXF_32ARGB, &mut data).0 == 0 {
+        let stride = data.Stride;
+        let scan0 = data.Scan0 as *const u8;
+        if !scan0.is_null() && stride != 0 {
+            let mut buf = vec![0u8; (w * h * 4) as usize];
+            for row in 0..h {
+                let src = scan0.offset((row * stride) as isize);
+                let dst = &mut buf[(row * w * 4) as usize..][..(w * 4) as usize];
+                std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), (w * 4) as usize);
+            }
+            out = Some((w, h, buf));
+        }
+        let _ = GdipBitmapUnlockBits(bmp, &mut data);
+    }
+    let _ = GdipDisposeImage(bmp as *mut GpImage);
+    out
+}
+
 /// SVG 래스터 — 얇은 선 선명화를 위해 **4배 슈퍼샘플 후 고품질 축소**(직접
 /// px 렌더는 1px 스트로크가 AA로 반투명 회색처럼 퍼져 다크 배경에 묻힘, 07-19).
 unsafe fn render_svg_bitmap(doc: &crate::svg::Doc, px: i32, argb: u32) -> Option<*mut GpBitmap> {

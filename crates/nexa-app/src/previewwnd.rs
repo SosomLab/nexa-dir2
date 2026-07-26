@@ -52,6 +52,40 @@ struct PvState {
     /// 문자 선택 (앵커, 현재) = (라인, 문자 경계) — 도크 규약 동일(절대 인덱스).
     sel: Option<((usize, usize), (usize, usize))>,
     drag: bool,
+    /// 인라인 이미지 캐시(07-26 다이어그램) — 경로 → (w, h, BGRA top-down).
+    images: std::collections::HashMap<String, Option<(i32, i32, Vec<u8>)>>,
+}
+
+/// 자체 기록 32bpp BMP 로드(star.rs render_svg 산출물 — BGRA top-down 반환).
+fn load_bmp(path: &str) -> Option<(i32, i32, Vec<u8>)> {
+    let b = std::fs::read(path).ok()?;
+    if b.len() < 54 || &b[0..2] != b"BM" {
+        return None;
+    }
+    let off = u32::from_le_bytes(b[10..14].try_into().ok()?) as usize;
+    let w = i32::from_le_bytes(b[18..22].try_into().ok()?);
+    let h_raw = i32::from_le_bytes(b[22..26].try_into().ok()?);
+    let bpp = u16::from_le_bytes(b[28..30].try_into().ok()?);
+    if bpp != 32 || w <= 0 || w > 4096 || h_raw == 0 || h_raw.abs() > 4096 {
+        return None;
+    }
+    let h = h_raw.abs();
+    let need = off + (w * h * 4) as usize;
+    if b.len() < need {
+        return None;
+    }
+    let mut px = b[off..need].to_vec();
+    if h_raw > 0 {
+        // bottom-up → top-down 뒤집기(자체 산출물은 top-down이라 보통 불필요)
+        let stride = (w * 4) as usize;
+        let mut flipped = vec![0u8; px.len()];
+        for r in 0..h as usize {
+            flipped[r * stride..(r + 1) * stride]
+                .copy_from_slice(&px[(h as usize - 1 - r) * stride..][..stride]);
+        }
+        px = flipped;
+    }
+    Some((w, h, px))
 }
 
 /// 테마색(BGR COLORREF) — nexa-gui Theme 다크/라이트 토큰과 동일 값.
@@ -127,7 +161,11 @@ unsafe fn text_w(hdc: HDC, text: &str) -> i32 {
 }
 
 /// 라인의 문자 경계 x 오프셋(px — 도크 offsets 규약: [0, w1, w1+w2, …]).
+/// 이미지 마커/패드 라인 = 경계 0 하나(선택 대상 아님 — 07-26).
 unsafe fn char_offsets(hwnd: HWND, st: &PvState, line: usize) -> Vec<i32> {
+    if st.text[line].starts_with('\u{1}') {
+        return vec![0];
+    }
     let hdc = GetDC(Some(hwnd));
     let old = SelectObject(hdc, st.font.into());
     let mut offs = vec![0i32];
@@ -217,7 +255,15 @@ fn selected_text(st: &PvState) -> Option<String> {
     if lo == hi || lo.0 >= st.text.len() {
         return None;
     }
-    let chars_of = |l: usize| st.text[l].chars().collect::<Vec<char>>();
+    // 이미지 마커/패드 라인은 복사 제외(07-26 — 제어 문자 유출 방지)
+    let chars_of = |l: usize| {
+        let s = &st.text[l];
+        if s.starts_with('\u{1}') {
+            Vec::new()
+        } else {
+            s.chars().collect::<Vec<char>>()
+        }
+    };
     let (ll, lc) = lo;
     let (hl, hc) = (hi.0.min(st.text.len() - 1), hi.1);
     if ll == hl {
@@ -229,7 +275,12 @@ fn selected_text(st: &PvState) -> Option<String> {
     let f = chars_of(ll);
     parts.push(f[lc.min(f.len())..].iter().collect::<String>());
     for l in ll + 1..hl {
-        parts.push(st.text[l].clone());
+        let s = &st.text[l];
+        parts.push(if s.starts_with('\u{1}') {
+            String::new()
+        } else {
+            s.clone()
+        });
     }
     let t = chars_of(hl);
     parts.push(t[..hc.min(t.len())].iter().collect::<String>());
@@ -269,7 +320,7 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !state.is_null() {
-                let st = &*state;
+                let st = &mut *state;
                 let (bg, fg, selbg) = colors(st.dark);
                 let old = SelectObject(hdc, st.font.into());
                 let rc = client(hwnd);
@@ -278,8 +329,36 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let x0 = PAD_X - st.left;
                 let pad_top = PAD_X / 2;
                 let mut y = pad_top;
+                // 인라인 이미지(07-26 다이어그램) — 행 bg 도장 후 마지막에 그림
+                // (pad 행의 불투명 도장이 이미지를 지우지 않도록 지연)
+                let mut deferred: Vec<(i32, i32, String)> = Vec::new();
                 for i in st.top..(st.top + vis + 1).min(st.lines.len() as i32) {
                     let li = i as usize;
+                    let is_marker = st.text[li].starts_with('\u{1}');
+                    if is_marker {
+                        let row = RECT {
+                            left: rc.left,
+                            top: y,
+                            right: rc.right,
+                            bottom: y + st.line_h,
+                        };
+                        SetBkColor(hdc, bg);
+                        let _ = ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, Some(&row), w!(""), 0, None);
+                        if let Some(path) = st.text[li]
+                            .strip_prefix(nexa_gui::widgets::dock::IMG_MARKER)
+                            .map(str::to_string)
+                        {
+                            let k = 1 + st.text[li + 1..]
+                                .iter()
+                                .take_while(|l| {
+                                    l.as_str() == nexa_gui::widgets::dock::IMG_PAD
+                                })
+                                .count() as i32;
+                            deferred.push(((st.line_h * k).min(rc.bottom - y), y, path));
+                        }
+                        y += st.line_h;
+                        continue;
+                    }
                     let row = RECT {
                         left: rc.left,
                         top: y,
@@ -351,6 +430,51 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     }
                     y += st.line_h;
+                }
+                // 지연 이미지 드로우(07-26 — pad 행 불투명 도장 이후 최종)
+                for (area_h, iy, path) in deferred {
+                    let entry = st.images.entry(path.clone()).or_insert_with(|| load_bmp(&path));
+                    if let Some((iw, ih, bits)) = entry {
+                        use windows::Win32::Graphics::Gdi::{
+                            StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+                            SRCCOPY,
+                        };
+                        let avail_w = (rc.right - PAD_X * 2).max(1);
+                        let scale = (avail_w as f32 / *iw as f32)
+                            .min(area_h as f32 / *ih as f32)
+                            .min(1.0);
+                        let (dw, dh) =
+                            (((*iw as f32) * scale) as i32, ((*ih as f32) * scale) as i32);
+                        if dw > 0 && dh > 0 {
+                            let bmi = BITMAPINFO {
+                                bmiHeader: BITMAPINFOHEADER {
+                                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                                    biWidth: *iw,
+                                    biHeight: -*ih, // top-down
+                                    biPlanes: 1,
+                                    biBitCount: 32,
+                                    biCompression: BI_RGB.0,
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            };
+                            StretchDIBits(
+                                hdc,
+                                PAD_X + (avail_w - dw) / 2,
+                                iy + (area_h - dh) / 2,
+                                dw,
+                                dh,
+                                0,
+                                0,
+                                *iw,
+                                *ih,
+                                Some(bits.as_ptr() as *const core::ffi::c_void),
+                                &bmi,
+                                DIB_RGB_COLORS,
+                                SRCCOPY,
+                            );
+                        }
+                    }
                 }
                 // 잔여 배경(상단 패드 + 마지막 라인 아래)
                 for r in [
@@ -610,6 +734,7 @@ pub unsafe fn show(owner: HWND, title: &str, lines: Vec<String>, mono: (&str, i3
         dark,
         sel: None,
         drag: false,
+        images: std::collections::HashMap::new(),
     });
     sync_scroll(hwnd, &mut state);
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);

@@ -1542,7 +1542,13 @@ fn dock_info(p: &Panel) -> Vec<String> {
 /// 단일 선택 파일의 미리보기(M4-2 → ADR-0004 S1: 공급자 시임 경유).
 /// 공급자 결정 = 설정 `preview_map` 오버라이드 > 선언(EXTS) 매치 > 텍스트 폴백.
 /// 반환 (텍스트 라인들, 이미지 경로).
-fn preview_content(p: &Panel, preview_map: &str, disabled: &str) -> (Vec<String>, Option<String>) {
+fn preview_content(
+    p: &Panel,
+    preview_map: &str,
+    disabled: &str,
+    dark: bool,
+) -> (Vec<String>, Option<String>) {
+    crate::preview::star::set_dark(dark); // 다이어그램 색 선택(호스트 주입 — 07-26)
     let tree = p.rows().source().tree();
     if tree.selection_count() != 1 {
         return (vec![tr("preview.none")], None);
@@ -1578,6 +1584,7 @@ fn open_preview_window(hwnd: HWND, st: &mut State, panel: usize) {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
+    crate::preview::star::set_dark(st.theme.is_dark);
     let lines = match crate::preview::preview_for(&path, &st.preview_map, &st.plugins_disabled) {
         crate::preview::PreviewDoc::Lines(l) => l,
         crate::preview::PreviewDoc::Image(_) => vec![tr("preview.window.image")],
@@ -1610,7 +1617,12 @@ fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
                 inv,
             );
             let (lines, image) = match st.panels[i].dock.active_kind() {
-                1 => preview_content(&st.panels[src], &st.preview_map, &st.plugins_disabled),
+                1 => preview_content(
+                    &st.panels[src],
+                    &st.preview_map,
+                    &st.plugins_disabled,
+                    st.theme.is_dark,
+                ),
                 2 => (Vec::new(), None), // 터미널은 paint에서 직접 그림(M4-3)
                 _ => (dock_info(&st.panels[src]), None),
             };
