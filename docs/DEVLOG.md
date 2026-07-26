@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-26
+
+- **X-2 Starlark 플러그인 시스템 + MarkdownViewerPlugin 샘플(사용자 지시 — `feat/starlark-plugin` 6커밋, QA 후 병합 대기)**: 1차 내장 러스트 md 뷰어(`feat/md-preview` — 미병합 보존)를 사용자 지시로 폐기하고 **Starlark 기반 재설계**. ① S1 시임 + **preview_map 설정 오버라이드**(스크립트 EXTS 내부 선언 = 기본값 > 설정 재정의 > 폴백) ② **S2 starlark 0.14.2 런타임**(DR-8 원장 확정 — B2 실측 +4.24MB, 1.50→5.74MB ≤10 통과): `data\plugins\*.star` 파일명 순 로드·동결 캐시·오류 격리·호스트 API(file.path/ext/size·read_text[대상 파일만 256KB]·disp_width[CJK 2칸]) ③ **독립 미리보기 창 F3**(콘솔 그리드·스크롤 — 플러그인 기준 캔버스, 벤치는 Shift+F3) ④ **samples/markdown-viewer 독립 프로젝트**(markdown.star 참조 구현: md 서브셋 + **Mermaid flowchart/sequence 텍스트 다이어그램** 순수 Starlark·픽스처·README) + 실제 런타임 E2E 테스트 ⑤ **개발자 가이드 [23](23-plugin-dev-guide.md)**(프로젝트 생성→개발→테스트→배포 8단계 순차). 214 green·clippy 0·B3 통과. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
+
 ## 2026-07-24
 
 - **문서·커밋/푸시 규약 문서화(사용자 요청 — 타 프로젝트 이식용)**: 현행 기준을 구두 요약에 그치지 않고 [16 문서·커밋/푸시 규약](16-doc-git-conventions.md)으로 고정 — **§0 붙여넣기용 지시문 블록**(새 프로젝트 세션에 그대로 투입) + 문서 **4층 체계**(진입/현황/경과/지식, 시간축·목적축·상태축 분리 — 상세는 journal 한 곳·나머지는 요약+링크) + 작성 필수 규칙 8(한 작업 = 한 트랜잭션 갱신·SSOT 동시 갱신·"왜+실측값"·문서 번호 불변) + 커밋 규약(Conventional + 맥락 태그) + **🔴 push는 명시 요청 시에만·태그 push 별도 승인·파괴적 작업 사전 확인** + 릴리스 4단계 + 새 프로젝트 적용 체크리스트. docs/README ④ 색인 배선. 상세 [journal/2026-07-24.md](journal/2026-07-24.md).
