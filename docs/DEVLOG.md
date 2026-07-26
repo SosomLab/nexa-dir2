@@ -8,6 +8,7 @@
 
 ## 2026-07-26
 
+- **Mermaid `<br/>` 라벨 QA 픽스(사용자 QA — 7차·main 직커밋)**: `<br/>` 미해석 → 폭 폭증 → 상한 초과 → 원문 폴백이던 진범 — 멀티라인 박스(폭=최장 줄·높이=줄 수)·따옴표 간선 라벨·캔버스 2000px·노드 24/간선 60·폴백 라벨 평탄화. E2E 6·218 green. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **Mermaid 이미지 수준 렌더 + 실행 격리 상한(사용자 승인·요구 — 6차)**: 호스트 `render_svg`(svg.rs→GDI+ AA 래스터→BMP 캐시)·`is_dark()` + 인라인 이미지 마커(`\u{1}img|`+pad — 도크/독립 창 렌더·복사 제외) — markdown.star flowchart가 테마 연동 SVG로 이미지 수준 표시(실패 = 텍스트 폴백). 격리: 실행 300ms/로드 500ms·연료 5천만 틱·힙 64MB(초과 = 플러그인만 오류 1줄). 218 green·clippy 0. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **리네임 재클릭 결함 픽스 + Mermaid 이미지 수준 검토(사용자 QA·질의 — 5차)**: 슬로우클릭 리네임의 `is_renaming()` 전체 가드가 취소 클릭의 slow_click 이력을 소실시키던 진범 — 가드를 편집 필드 안으로 축소(`rename_field_hit`)+취소 클릭은 시드만. 검토: 현 구조에서 Mermaid 이미지 수준 = **가능**(계약에 `{"draw": 명령}` 추가 → 호스트 GDI+ AA 렌더 — 크레이트 0·라이선스 무관), 완전판(mermaid.js)은 웹뷰 필요로 구조 밖. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **↗ 이미지 버튼 + 렌더 대안 검토(사용자 요청 — 같은 브랜치 4차)**: 오버레이를 `emb:popout` SVG 이미지 버튼으로(3상태 배경 pressed=accent 38%>hover=sel_bg>기본·1px 누름 오프셋·안 릴리스 발화). 검토: Python md+Mermaid 라이브러리 = 전부 HTML 패스스루(mermaid.js 의존)·Starlark에서 import 불가 → 채택 불가(라이선스 아닌 기술 제약) · sosomlab-nexa-viewer(자사 MIT·Tauri+react-markdown+mermaid.js) = 웹뷰 렌더라 DR-1/B3 상충 — 연동(외부 열기)·GFM 서브셋 이식이 현실 경로. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
