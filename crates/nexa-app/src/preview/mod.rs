@@ -5,11 +5,14 @@
 //! Starlark 플러그인(S2)은 [`star`] 모듈이 이 레지스트리 앞단에 이어진다.
 //! 원본 대응: `../nexa-dir/docs/35-preview-system.md`(공급자 모델).
 
-use crate::i18n::tr;
+pub mod star;
+
+use crate::i18n::{tr, trf};
 use std::path::Path;
 
 /// 공급자 산출물 — 도크/독립 창이 해석(ADR-0004 반환 규약 `lines`/`image` 대응.
 /// `kv`는 후속 — 표 렌더로 수렴 예정).
+#[derive(Debug)]
 pub enum PreviewDoc {
     /// 텍스트 라인들 — 도크·독립 창(모노 그리드) 공통.
     Lines(Vec<String>),
@@ -107,6 +110,27 @@ fn builtins() -> Vec<Box<dyn PreviewProvider>> {
     ]
 }
 
+/// Starlark 플러그인 → 공급자 어댑터(S2) — 실행 오류는 해당 플러그인만
+/// 오류 1줄로 격리(ADR-0004 §격리).
+struct StarProvider {
+    plugin: star::StarPlugin,
+}
+
+impl PreviewProvider for StarProvider {
+    fn id(&self) -> &str {
+        &self.plugin.id
+    }
+    fn exts(&self) -> &[String] {
+        &self.plugin.exts
+    }
+    fn preview(&self, path: &Path) -> PreviewDoc {
+        match star::run_preview(&self.plugin, path) {
+            Ok(doc) => doc,
+            Err(e) => PreviewDoc::Lines(vec![trf("preview.plugin.error", &[&self.plugin.id, &e])]),
+        }
+    }
+}
+
 /// 공급자 결정 — `preview_map`(설정 오버라이드 `ext:id|…`) > 선언 매치(로드 순) >
 /// 텍스트 폴백. `providers` = 전체 후보(플러그인이 내장보다 앞 — S2에서 합류).
 fn resolve<'a>(
@@ -150,15 +174,26 @@ pub fn preview_for(path: &Path, preview_map: &str) -> PreviewDoc {
     with_providers(|providers| resolve(providers, &ext, preview_map).preview(path))
 }
 
-/// 현재 공급자 전체(플러그인 + 내장)로 콜백 실행 — S2에서 지연 로드 플러그인이
-/// 내장 앞에 합류한다(S1 = 내장만).
+/// 현재 공급자 전체로 콜백 실행 — **플러그인(`data\plugins\*.star`, 파일명 순)이
+/// 내장보다 앞**(같은 확장자 선언 시 플러그인 우선). 미리보기 최초 사용 시 지연
+/// 로드(B1 상주 영향 0)·이후 캐시(재로드 = 앱 재시작).
 fn with_providers<R>(f: impl FnOnce(&[Box<dyn PreviewProvider>]) -> R) -> R {
     thread_local! {
-        /// UI 스레드 전용 캐시(미리보기 최초 사용 시 구성 — B1 상주 영향 0).
+        /// UI 스레드 전용 캐시(공급자 Value는 Send 아님 — 도크/독립 창 모두 UI 스레드).
         static PROVIDERS: std::cell::OnceCell<Vec<Box<dyn PreviewProvider>>> =
             const { std::cell::OnceCell::new() };
     }
-    PROVIDERS.with(|c| f(c.get_or_init(builtins)))
+    PROVIDERS.with(|c| {
+        f(c.get_or_init(|| {
+            let (plugins, _errors) = star::load_dir(&crate::config::data_dir().join("plugins"));
+            let mut v: Vec<Box<dyn PreviewProvider>> = plugins
+                .into_iter()
+                .map(|p| Box::new(StarProvider { plugin: p }) as Box<dyn PreviewProvider>)
+                .collect();
+            v.extend(builtins());
+            v
+        }))
+    })
 }
 
 #[cfg(test)]

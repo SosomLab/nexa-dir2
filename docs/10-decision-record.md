@@ -32,7 +32,8 @@
 | `windows` | Win32/COM 바인딩 | MIT/Apache-2.0 | exe +수백 KB(사용 API만 링크) | 2026-07-11 |
 | `windows-core` | `#[implement]` COM 콜백(IDWriteTextRenderer) — `windows` 매크로 전개가 요구하는 직접 의존 | MIT/Apache-2.0 | 0(이미 `windows`의 전이 의존) | 2026-07-12 |
 | `regex-lite` | 일괄 이름변경 정규식(docs/25 §2 동작 2 — 사용자 요청 07-15). `regex` 본가 대비 이진 크기·컴파일 시간 최적화 판(의존 0) | MIT/Apache-2.0 | **B2 실측 +0.11MB**(0.90→1.01MB — 게이트 여유) | 2026-07-15 |
-| `starlark` (예정) | 미리보기 플러그인 런타임(ADR-0004 S2) — 도입 시 의존 트리·B2 증가분 실측 후 본 원장에서 확정 | Apache-2.0 | exe +수 MB 예상(실측 후 판단) | 승인 대기 |
+| `starlark` 0.14.2 | 미리보기 플러그인 런타임(ADR-0004 S2 — `data\plugins\*.star` 로드·실행. **사용자 지시 07-26**: md 뷰어를 Starlark 기반으로 재설계) | Apache-2.0 | **B2 실측 +4.24MB**(1.50→5.74MB — 게이트 ≤10 통과·여유 4.26. ADR "초과 시 경량 대안" 미발동) | 2026-07-26 |
+| `anyhow` | starlark 네이티브 함수 오류 반환 타입(공개 API 요구 — read_text/disp_width) | MIT/Apache-2.0 | 0(starlark 전이 의존에 기승) | 2026-07-26 |
 
 ## 2. 원본과의 관계 (SSOT 분담)
 
