@@ -1,0 +1,20 @@
+# MarkdownViewerPlugin(wasm) — Nexa Dir 미리보기 플러그인 참조 구현(ADR-0005).
+# 빌드: cargo build --release --target wasm32-unknown-unknown
+# 산출: target/wasm32-unknown-unknown/release/markdown_viewer.wasm → data\plugins\ 복사.
+[package]
+name = "markdown-viewer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+# 앱 워크스페이스와 분리(타깃이 다름 — 독립 프로젝트)
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = "symbols"
+codegen-units = 1

@@ -8,6 +8,8 @@
 //! 시임·독립 창·설정(preview_map/plugins_disabled)·격리 설계·라인 태그 계약
 //! (`\u{2}종류|`·`\u{1}img|`)은 런타임 중립 자산으로 유지.
 
+#[cfg(test)]
+mod sample_tests;
 pub mod wasm;
 
 use crate::i18n::tr;
