@@ -8,6 +8,7 @@
 
 ## 2026-07-26
 
+- **리네임 재클릭 결함 픽스 + Mermaid 이미지 수준 검토(사용자 QA·질의 — 5차)**: 슬로우클릭 리네임의 `is_renaming()` 전체 가드가 취소 클릭의 slow_click 이력을 소실시키던 진범 — 가드를 편집 필드 안으로 축소(`rename_field_hit`)+취소 클릭은 시드만. 검토: 현 구조에서 Mermaid 이미지 수준 = **가능**(계약에 `{"draw": 명령}` 추가 → 호스트 GDI+ AA 렌더 — 크레이트 0·라이선스 무관), 완전판(mermaid.js)은 웹뷰 필요로 구조 밖. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **↗ 이미지 버튼 + 렌더 대안 검토(사용자 요청 — 같은 브랜치 4차)**: 오버레이를 `emb:popout` SVG 이미지 버튼으로(3상태 배경 pressed=accent 38%>hover=sel_bg>기본·1px 누름 오프셋·안 릴리스 발화). 검토: Python md+Mermaid 라이브러리 = 전부 HTML 패스스루(mermaid.js 의존)·Starlark에서 import 불가 → 채택 불가(라이선스 아닌 기술 제약) · sosomlab-nexa-viewer(자사 MIT·Tauri+react-markdown+mermaid.js) = 웹뷰 렌더라 DR-1/B3 상충 — 연동(외부 열기)·GFM 서브셋 이식이 현실 경로. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **미리보기 UX 6종(사용자 요청 — 같은 브랜치 3차)**: ① 도크 미리보기 우상단 **↗ '크게' 오버레이**(클릭 = 독립 창) ② 독립 창 **모달 전환** ③ 스크롤 — 도크 휠 세로(3줄/노치·절대 라인 재정렬)+독립 창 세로/가로(최장 라인 실측 상한) ④ 독립 창 **드래그 문자 선택**(도크 규약·3분할 렌더) ⑤ **rich 복사**(CF_UNICODETEXT+모노 RTF 동시 게시 — 표/박스 정렬 유지·도크 Ctrl+C 승격) ⑥ 드래그 자동 스크롤(도크 상/하·창 상하좌우+50ms 타이머 연속). 218 green(+3)·clippy 0·5.76MB. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **플러그인 목록·사용 여부 설정 페이지(사용자 요청 — 같은 브랜치 2차)**: 설정 창 사이드바 **플러그인** 카테고리 — 로드된 .star 목록을 `NAME (id) — 확장자` 체크박스로 나열(동적 — ID_PLUGIN_BASE 2100 = 기존 즉시 적용 경로 재사용), 체크 해제 = `plugins_disabled`(왕복·영속) → resolve에서 오버라이드/선언 매치 제외(내장 = 폴백 면역) → 도크 즉시 갱신. 빈 목록 = data\plugins 안내. 215 green·clippy 0·5.74MB 불변. 가이드 23 §7-4. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
