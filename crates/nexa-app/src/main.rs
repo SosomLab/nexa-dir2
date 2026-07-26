@@ -44,6 +44,9 @@ mod panel;
 mod pathinput;
 #[cfg(windows)]
 mod prefs;
+/// 미리보기 공급자 시임(ADR-0004 S1~S3 — X-2)
+#[cfg_attr(not(windows), allow(dead_code))]
+mod preview;
 #[cfg(windows)]
 mod recycle;
 #[cfg(windows)]

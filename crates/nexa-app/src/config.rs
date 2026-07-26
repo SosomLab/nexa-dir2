@@ -91,6 +91,10 @@ pub struct Settings {
     pub nav_up_align: String,
     /// 탭 더블클릭 동작(사용자 요청 07-15): "close"(기본)|"pin"|"lock" — 옵션 추가 예정.
     pub tab_dblclick: String,
+    /// 미리보기 공급자 오버라이드(ADR-0004 S3·사용자 확정 07-26) —
+    /// `ext:플러그인ID|…` 형식(예: `md:markdown|jpg:builtin.image`).
+    /// 스크립트 내부 `EXTS` 선언(기본값)을 **외부 설정으로 재정의**한다. 빈 값 = 선언만.
+    pub preview_map: String,
     /// 타입어헤드(원본 docs/32 §7 — 설정 07-15): 범위 "global"|"level"|"visible"(기본).
     pub typeahead_scope: String,
     /// 입력 리셋(ms, 200~10000 — 기본 1000).
@@ -166,6 +170,7 @@ impl Default for Settings {
             sort_case_sensitive: false,
             nav_up_align: "center".into(),
             tab_dblclick: "close".into(),
+            preview_map: String::new(), // 기본 = 플러그인/내장 선언(EXTS)만
             typeahead_scope: "visible".into(),
             typeahead_reset_ms: 1000,
             typeahead_pos: 6,
@@ -314,6 +319,9 @@ impl Settings {
         ));
         out.push_str(&format!("transfer_close_ms={}\n", self.transfer_close_ms));
         out.push_str(&format!("dnd_hover_ms={}\n", self.dnd_hover_ms));
+        if !self.preview_map.is_empty() {
+            out.push_str(&format!("preview_map={}\n", self.preview_map));
+        }
         out.push_str(&format!(
             "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\nview_mode={}\npanel_mode={}\ninfo_mode={}\n",
             u8::from(self.sort_folders_first),
@@ -493,6 +501,8 @@ impl Settings {
                 "tab_dblclick" if matches!(v, "close" | "pin" | "lock") => {
                     s.tab_dblclick = v.into()
                 }
+                // 미리보기 오버라이드(S3) — 형식 검증은 사용 시점(resolve)에서 관대하게
+                "preview_map" if v.len() <= 512 => s.preview_map = v.trim().into(),
                 "typeahead_scope" if matches!(v, "global" | "level" | "visible") => {
                     s.typeahead_scope = v.into()
                 }
@@ -945,6 +955,7 @@ mod tests {
             sort_case_sensitive: true,
             nav_up_align: "top".into(),
             tab_dblclick: "lock".into(),
+            preview_map: "md:markdown|png:builtin.text".into(),
             typeahead_scope: "level".into(),
             typeahead_reset_ms: 700,
             typeahead_pos: 2,
@@ -1028,6 +1039,10 @@ mod tests {
         assert!(parsed.sort_case_sensitive, "대소문자 정렬 왕복");
         assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
         assert_eq!(parsed.tab_dblclick, "lock", "탭 더블클릭 동작 왕복(07-15)");
+        assert_eq!(
+            parsed.preview_map, "md:markdown|png:builtin.text",
+            "미리보기 오버라이드 왕복(07-26)"
+        );
         assert_eq!(parsed.view_mode, "tiles", "보기 모드 왕복(07-16)");
         assert!(!parsed.col_width_sync, "컬럼 동기화 왕복(07-18)");
         assert_eq!(parsed.panel_mode, "single", "패널 모드 왕복(07-16)");

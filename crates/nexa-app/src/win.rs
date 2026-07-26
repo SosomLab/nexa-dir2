@@ -564,6 +564,8 @@ struct State {
     nav_up_align: String,
     /// 탭 더블클릭 동작("close"|"pin"|"lock" — 사용자 요청 07-15).
     tab_dblclick: String,
+    /// 미리보기 공급자 오버라이드 `ext:id|…`(ADR-0004 S3 — 사용자 확정 07-26).
+    preview_map: String,
     /// 타입어헤드 설정(원본 docs/32 §7 — 07-15): 범위·리셋 ms·HUD 위치·체크 3종.
     ta_scope: String,
     ta_reset_ms: i32,
@@ -1046,6 +1048,7 @@ pub fn run() -> Result<()> {
         sort_case_sensitive: settings.sort_case_sensitive,
         nav_up_align: settings.nav_up_align.clone(),
         tab_dblclick: settings.tab_dblclick.clone(),
+        preview_map: settings.preview_map.clone(),
         ta_scope: settings.typeahead_scope.clone(),
         ta_reset_ms: settings.typeahead_reset_ms,
         ta_pos: settings.typeahead_pos,
@@ -1533,17 +1536,10 @@ fn dock_info(p: &Panel) -> Vec<String> {
     )]
 }
 
-/// WIC가 인박스로 디코드하는 이미지 확장자(원본 docs/35 이미지 공급자 대응).
-// webp(G-12) = OS WIC 확장 코덱 의존 — 미설치면 디코드 실패로 텍스트/이진 판정 폴백(무해)
-const IMAGE_EXTS: [&str; 9] = [
-    "png", "jpg", "jpeg", "bmp", "gif", "ico", "tif", "tiff", "webp",
-];
-
-/// 단일 선택 파일의 미리보기(M4-2 — 원본 docs/35 텍스트·이미지 공급자 대응).
-/// 반환 (텍스트 라인들, 이미지 경로) — 이미지 확장자면 WIC 렌더(draw_image), 그 외 텍스트
-/// 첫 16KB(대용량 안전·첫 1KB NUL=이진 판정).
-fn preview_content(p: &Panel) -> (Vec<String>, Option<String>) {
-    use std::io::Read;
+/// 단일 선택 파일의 미리보기(M4-2 → ADR-0004 S1: 공급자 시임 경유).
+/// 공급자 결정 = 설정 `preview_map` 오버라이드 > 선언(EXTS) 매치 > 텍스트 폴백.
+/// 반환 (텍스트 라인들, 이미지 경로).
+fn preview_content(p: &Panel, preview_map: &str) -> (Vec<String>, Option<String>) {
     let tree = p.rows().source().tree();
     if tree.selection_count() != 1 {
         return (vec![tr("preview.none")], None);
@@ -1554,31 +1550,10 @@ fn preview_content(p: &Panel) -> (Vec<String>, Option<String>) {
     if path.is_dir() {
         return (vec![tr("preview.none")], None);
     }
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    if IMAGE_EXTS.contains(&ext.as_str()) {
-        return (Vec::new(), Some(path.to_string_lossy().into_owned()));
+    match crate::preview::preview_for(&path, preview_map) {
+        crate::preview::PreviewDoc::Lines(lines) => (lines, None),
+        crate::preview::PreviewDoc::Image(img) => (Vec::new(), Some(img)),
     }
-    let Ok(mut f) = std::fs::File::open(&path) else {
-        return (vec![tr("preview.fail")], None);
-    };
-    let mut buf = vec![0u8; 16 * 1024];
-    let n = f.read(&mut buf).unwrap_or(0);
-    buf.truncate(n);
-    if n == 0 {
-        return (vec![tr("preview.empty")], None);
-    }
-    if buf[..n.min(1024)].contains(&0) {
-        return (vec![tr("preview.binary")], None);
-    }
-    let lines = String::from_utf8_lossy(&buf)
-        .lines()
-        .take(200) // 도크 높이 초과분은 그리지 않음 — 여유 상한
-        .map(|l| l.replace('\t', "    "))
-        .collect();
-    (lines, None)
 }
 
 /// 양 패널 도크 내용 갱신(표시 중일 때만 — set_lines는 변경 시에만 무효화).
@@ -1598,7 +1573,7 @@ fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
                 inv,
             );
             let (lines, image) = match st.panels[i].dock.active_kind() {
-                1 => preview_content(&st.panels[src]),
+                1 => preview_content(&st.panels[src], &st.preview_map),
                 2 => (Vec::new(), None), // 터미널은 paint에서 직접 그림(M4-3)
                 _ => (dock_info(&st.panels[src]), None),
             };
@@ -4221,6 +4196,7 @@ fn current_settings(st: &State) -> Settings {
         sort_case_sensitive: st.sort_case_sensitive,
         nav_up_align: st.nav_up_align.clone(),
         tab_dblclick: st.tab_dblclick.clone(),
+        preview_map: st.preview_map.clone(),
         typeahead_scope: st.ta_scope.clone(),
         typeahead_reset_ms: st.ta_reset_ms,
         typeahead_pos: st.ta_pos,
