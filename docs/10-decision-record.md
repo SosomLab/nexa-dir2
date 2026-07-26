@@ -32,8 +32,9 @@
 | `windows` | Win32/COM 바인딩 | MIT/Apache-2.0 | exe +수백 KB(사용 API만 링크) | 2026-07-11 |
 | `windows-core` | `#[implement]` COM 콜백(IDWriteTextRenderer) — `windows` 매크로 전개가 요구하는 직접 의존 | MIT/Apache-2.0 | 0(이미 `windows`의 전이 의존) | 2026-07-12 |
 | `regex-lite` | 일괄 이름변경 정규식(docs/25 §2 동작 2 — 사용자 요청 07-15). `regex` 본가 대비 이진 크기·컴파일 시간 최적화 판(의존 0) | MIT/Apache-2.0 | **B2 실측 +0.11MB**(0.90→1.01MB — 게이트 여유) | 2026-07-15 |
-| `starlark` 0.14.2 | 미리보기 플러그인 런타임(ADR-0004 S2 — `data\plugins\*.star` 로드·실행. **사용자 지시 07-26**: md 뷰어를 Starlark 기반으로 재설계) | Apache-2.0 | **B2 실측 +4.24MB**(1.50→5.74MB — 게이트 ≤10 통과·여유 4.26. ADR "초과 시 경량 대안" 미발동) | 2026-07-26 |
-| `anyhow` | starlark 네이티브 함수 오류 반환 타입(공개 API 요구 — read_text/disp_width) | MIT/Apache-2.0 | 0(starlark 전이 의존에 기승) | 2026-07-26 |
+| ~~`starlark` 0.14.2~~ | **제거(07-26 정정 — [ADR-0005](25-adr-0005-wasm-plugins.md))**: 실구축 결과 표현력 병목 = 호스트 계약·크로스플랫폼 확장에 WASM이 적합 판단(사용자 결정) | Apache-2.0 | 도입 시 +4.24MB 실측 → 제거로 회수 | 도입·제거 2026-07-26 |
+| ~~`anyhow`~~ | **제거(07-26)** — starlark 동반 의존이었음 | MIT/Apache-2.0 | 0 | 도입·제거 2026-07-26 |
+| `wasmi` (예정) | 플러그인 런타임(ADR-0005 — `data\plugins\*.wasm` 로드·실행, fuel/메모리 격리) | MIT/Apache-2.0 | **+1~2MB 추정 — 도입 커밋에서 실측 후 확정** | 승인 2026-07-26(실측 대기) |
 
 ## 2. 원본과의 관계 (SSOT 분담)
 
