@@ -239,6 +239,81 @@ pub unsafe fn write_text(hwnd: HWND, text: &str) -> bool {
     true
 }
 
+/// 미리보기 복사 전용 **rich 동시 게시**(07-26 — 사용자 요청): CF_UNICODETEXT +
+/// "Rich Text Format". RTF는 **모노스페이스(Consolas) 지정**이라 박스 드로잉·표를
+/// Word/Outlook 등에 붙여도 정렬이 유지된다. 평문 대상 앱은 CF_UNICODETEXT를 취한다.
+pub unsafe fn write_text_rich(hwnd: HWND, text: &str) -> bool {
+    let Some(_open) = Open::new(Some(hwnd)) else {
+        return false;
+    };
+    if EmptyClipboard().is_err() {
+        return false;
+    }
+    // ① 평문(CF_UNICODETEXT)
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = wide.len() * 2;
+    let Ok(hmem) = GlobalAlloc(GMEM_MOVEABLE, bytes) else {
+        return false;
+    };
+    let p = GlobalLock(hmem) as *mut u8;
+    if p.is_null() {
+        let _ = GlobalFree(Some(hmem));
+        return false;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, p, bytes);
+    let _ = GlobalUnlock(hmem);
+    if SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))).is_err() {
+        let _ = GlobalFree(Some(hmem));
+        return false;
+    }
+    // ② RTF(등록 포맷 — 실패해도 평문은 이미 게시됨)
+    let rtf = to_rtf_mono(text);
+    let fmt = RegisterClipboardFormatW(w!("Rich Text Format"));
+    if fmt != 0 {
+        let bytes = rtf.as_bytes();
+        if let Ok(hr) = GlobalAlloc(GMEM_MOVEABLE, bytes.len() + 1) {
+            let p = GlobalLock(hr) as *mut u8;
+            if !p.is_null() {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+                *p.add(bytes.len()) = 0; // RTF는 NUL 종료 관례
+                let _ = GlobalUnlock(hr);
+                if SetClipboardData(fmt, Some(HANDLE(hr.0))).is_err() {
+                    let _ = GlobalFree(Some(hr));
+                }
+            } else {
+                let _ = GlobalFree(Some(hr));
+            }
+        }
+    }
+    true
+}
+
+/// 평문 → 모노스페이스 RTF(7비트 ASCII 본문 + 비ASCII = `\uN?` 유니코드 이스케이프).
+fn to_rtf_mono(text: &str) -> String {
+    let mut body = String::with_capacity(text.len() * 2);
+    for line in text.split("\r\n") {
+        for c in line.chars() {
+            match c {
+                '\\' => body.push_str("\\\\"),
+                '{' => body.push_str("\\{"),
+                '}' => body.push_str("\\}"),
+                c if (c as u32) < 0x80 => body.push(c),
+                c => {
+                    // RTF \uN = **부호 있는 16비트**. BMP 밖은 서로게이트 쌍으로.
+                    let mut buf = [0u16; 2];
+                    for u in c.encode_utf16(&mut buf) {
+                        body.push_str(&format!("\\u{}?", *u as i16));
+                    }
+                }
+            }
+        }
+        body.push_str("\\par ");
+    }
+    format!(
+        "{{\\rtf1\\ansi\\deff0{{\\fonttbl{{\\f0\\fmodern Consolas;}}}}\\f0\\fs18 {body}}}"
+    )
+}
+
 /// OS 클립보드 텍스트 읽기(CF_UNICODETEXT — 시스템이 CF_TEXT를 자동 변환 제공) —
 /// 편집 필드·터미널 Ctrl+V(QA 07-14).
 pub unsafe fn read_text() -> Option<String> {

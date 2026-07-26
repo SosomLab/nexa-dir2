@@ -1559,11 +1559,11 @@ fn preview_content(p: &Panel, preview_map: &str, disabled: &str) -> (Vec<String>
     }
 }
 
-/// F3 — 독립 미리보기 창(07-26, 사용자 요청): 활성 패널의 단일 선택 파일을
-/// 콘솔 폰트 그리드 창으로 표시(플러그인 기준 캔버스 — 도크와 같은 공급자 경로).
-/// 이미지 공급자 결과는 도크(WIC) 담당 — 창은 안내 1줄.
-fn open_preview_window(hwnd: HWND, st: &mut State) {
-    let p = &st.panels[st.active];
+/// F3·도크 ↗ — 독립 미리보기 창(07-26, 사용자 요청): 지정 패널의 단일 선택
+/// 파일을 콘솔 폰트 그리드 **모달** 창으로 표시(플러그인 기준 캔버스 — 도크와
+/// 같은 공급자 경로). 이미지 공급자 결과는 도크(WIC) 담당 — 창은 안내 1줄.
+fn open_preview_window(hwnd: HWND, st: &mut State, panel: usize) {
+    let p = &st.panels[panel];
     let tree = p.rows().source().tree();
     if tree.selection_count() != 1 {
         return;
@@ -1616,6 +1616,9 @@ fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
             };
             st.panels[i].dock.set_lines(lines, inv);
             st.panels[i].dock.set_image(image, inv);
+            // 미리보기 종류일 때만 ↗ "크게" 오버레이(07-26 — 독립 창 열기)
+            let popout = st.panels[i].dock.active_kind() == 1;
+            st.panels[i].dock.set_popout(popout, inv);
         }
     }
 }
@@ -4585,6 +4588,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                     return LRESULT(0);
                 }
+                // 도크 미리보기 내용 위 휠 = 내용 스크롤(07-26 — 파일 목록 대신)
+                if st.panels[target].dock_visible()
+                    && st.panels[target].dock.active_kind() == 1
+                    && st.panels[target]
+                        .dock
+                        .content_rect()
+                        .contains(nexa_gui::Point { x: px, y: py })
+                {
+                    let mut inv = Invalidations::default();
+                    st.panels[target]
+                        .dock
+                        .on_event(&InputEvent::Wheel { delta }, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                    return LRESULT(0);
+                }
                 let ev = if wparam.0 & MK_SHIFT != 0 {
                     InputEvent::HWheel { delta: -delta }
                 } else {
@@ -4740,6 +4758,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.term_focus = Some(idx);
                         update_dock_info(st, &mut inv);
                         invalidate_dock(hwnd, st, idx);
+                    }
+                    // 미리보기 ↗ "크게" 오버레이(07-26) = 독립 미리보기 창(모달)
+                    if st.panels[idx].dock.take_popout() {
+                        flush_invalidations(hwnd, &mut inv);
+                        let src = if single_info(st) { st.active } else { idx };
+                        open_preview_window(hwnd, st, src);
+                        return LRESULT(0);
                     }
                     // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3)
                     if st.panels[idx].dock_visible()
@@ -5280,7 +5305,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         bench(hwnd, st); // 개발 벤치(구 F3 — Shift+F3로 이동, 07-26)
                     } else {
                         // F3 = 독립 미리보기 창(07-26 — 파일 관리자 F3 뷰어 관례)
-                        open_preview_window(hwnd, st);
+                        let panel = st.active;
+                        open_preview_window(hwnd, st, panel);
                     }
                     return LRESULT(0);
                 } else if vk == VK_TAB.0 {
@@ -5305,7 +5331,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         .iter()
                         .find_map(|p| p.dock_visible().then(|| p.dock.selected_text()).flatten())
                     {
-                        crate::clipboard::write_text(hwnd, &t);
+                        // rich 동시 게시(07-26) — 모노 RTF로 표/박스 정렬 유지
+                        crate::clipboard::write_text_rich(hwnd, &t);
                     } else if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Copy) {
                         crate::clipboard::write_file_list(hwnd, &paths, op);
                     }
