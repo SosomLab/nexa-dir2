@@ -95,6 +95,9 @@ pub struct Settings {
     /// `ext:플러그인ID|…` 형식(예: `md:markdown|jpg:builtin.image`).
     /// 스크립트 내부 `EXTS` 선언(기본값)을 **외부 설정으로 재정의**한다. 빈 값 = 선언만.
     pub preview_map: String,
+    /// 사용 안 함 플러그인 ID 목록(`|` 구분 — 설정 창 "플러그인" 페이지 체크 해제,
+    /// 사용자 요청 07-26). 내장(builtin.*)은 대상 아님(폴백 안전망).
+    pub plugins_disabled: String,
     /// 타입어헤드(원본 docs/32 §7 — 설정 07-15): 범위 "global"|"level"|"visible"(기본).
     pub typeahead_scope: String,
     /// 입력 리셋(ms, 200~10000 — 기본 1000).
@@ -171,6 +174,7 @@ impl Default for Settings {
             nav_up_align: "center".into(),
             tab_dblclick: "close".into(),
             preview_map: String::new(), // 기본 = 플러그인/내장 선언(EXTS)만
+            plugins_disabled: String::new(), // 기본 = 전부 사용
             typeahead_scope: "visible".into(),
             typeahead_reset_ms: 1000,
             typeahead_pos: 6,
@@ -321,6 +325,9 @@ impl Settings {
         out.push_str(&format!("dnd_hover_ms={}\n", self.dnd_hover_ms));
         if !self.preview_map.is_empty() {
             out.push_str(&format!("preview_map={}\n", self.preview_map));
+        }
+        if !self.plugins_disabled.is_empty() {
+            out.push_str(&format!("plugins_disabled={}\n", self.plugins_disabled));
         }
         out.push_str(&format!(
             "sort_folders_first={}\nsort_case_sensitive={}\nnav_up_align={}\ntab_dblclick={}\nview_mode={}\npanel_mode={}\ninfo_mode={}\n",
@@ -503,6 +510,8 @@ impl Settings {
                 }
                 // 미리보기 오버라이드(S3) — 형식 검증은 사용 시점(resolve)에서 관대하게
                 "preview_map" if v.len() <= 512 => s.preview_map = v.trim().into(),
+                // 플러그인 사용 안 함 목록(07-26 — 설정 창 체크 해제)
+                "plugins_disabled" if v.len() <= 512 => s.plugins_disabled = v.trim().into(),
                 "typeahead_scope" if matches!(v, "global" | "level" | "visible") => {
                     s.typeahead_scope = v.into()
                 }
@@ -956,6 +965,7 @@ mod tests {
             nav_up_align: "top".into(),
             tab_dblclick: "lock".into(),
             preview_map: "md:markdown|png:builtin.text".into(),
+            plugins_disabled: "markdown|exif".into(),
             typeahead_scope: "level".into(),
             typeahead_reset_ms: 700,
             typeahead_pos: 2,
@@ -1042,6 +1052,10 @@ mod tests {
         assert_eq!(
             parsed.preview_map, "md:markdown|png:builtin.text",
             "미리보기 오버라이드 왕복(07-26)"
+        );
+        assert_eq!(
+            parsed.plugins_disabled, "markdown|exif",
+            "플러그인 사용 안 함 왕복(07-26)"
         );
         assert_eq!(parsed.view_mode, "tiles", "보기 모드 왕복(07-16)");
         assert!(!parsed.col_width_sync, "컬럼 동기화 왕복(07-18)");

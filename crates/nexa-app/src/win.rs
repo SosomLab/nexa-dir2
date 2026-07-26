@@ -566,6 +566,8 @@ struct State {
     tab_dblclick: String,
     /// 미리보기 공급자 오버라이드 `ext:id|…`(ADR-0004 S3 — 사용자 확정 07-26).
     preview_map: String,
+    /// 사용 안 함 플러그인 id 목록 `id|…`(설정 창 "플러그인" 체크 해제 — 07-26).
+    plugins_disabled: String,
     /// 타입어헤드 설정(원본 docs/32 §7 — 07-15): 범위·리셋 ms·HUD 위치·체크 3종.
     ta_scope: String,
     ta_reset_ms: i32,
@@ -1049,6 +1051,7 @@ pub fn run() -> Result<()> {
         nav_up_align: settings.nav_up_align.clone(),
         tab_dblclick: settings.tab_dblclick.clone(),
         preview_map: settings.preview_map.clone(),
+        plugins_disabled: settings.plugins_disabled.clone(),
         ta_scope: settings.typeahead_scope.clone(),
         ta_reset_ms: settings.typeahead_reset_ms,
         ta_pos: settings.typeahead_pos,
@@ -1539,7 +1542,7 @@ fn dock_info(p: &Panel) -> Vec<String> {
 /// 단일 선택 파일의 미리보기(M4-2 → ADR-0004 S1: 공급자 시임 경유).
 /// 공급자 결정 = 설정 `preview_map` 오버라이드 > 선언(EXTS) 매치 > 텍스트 폴백.
 /// 반환 (텍스트 라인들, 이미지 경로).
-fn preview_content(p: &Panel, preview_map: &str) -> (Vec<String>, Option<String>) {
+fn preview_content(p: &Panel, preview_map: &str, disabled: &str) -> (Vec<String>, Option<String>) {
     let tree = p.rows().source().tree();
     if tree.selection_count() != 1 {
         return (vec![tr("preview.none")], None);
@@ -1550,7 +1553,7 @@ fn preview_content(p: &Panel, preview_map: &str) -> (Vec<String>, Option<String>
     if path.is_dir() {
         return (vec![tr("preview.none")], None);
     }
-    match crate::preview::preview_for(&path, preview_map) {
+    match crate::preview::preview_for(&path, preview_map, disabled) {
         crate::preview::PreviewDoc::Lines(lines) => (lines, None),
         crate::preview::PreviewDoc::Image(img) => (Vec::new(), Some(img)),
     }
@@ -1575,7 +1578,7 @@ fn open_preview_window(hwnd: HWND, st: &mut State) {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let lines = match crate::preview::preview_for(&path, &st.preview_map) {
+    let lines = match crate::preview::preview_for(&path, &st.preview_map, &st.plugins_disabled) {
         crate::preview::PreviewDoc::Lines(l) => l,
         crate::preview::PreviewDoc::Image(_) => vec![tr("preview.window.image")],
     };
@@ -1607,7 +1610,7 @@ fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
                 inv,
             );
             let (lines, image) = match st.panels[i].dock.active_kind() {
-                1 => preview_content(&st.panels[src], &st.preview_map),
+                1 => preview_content(&st.panels[src], &st.preview_map, &st.plugins_disabled),
                 2 => (Vec::new(), None), // 터미널은 paint에서 직접 그림(M4-3)
                 _ => (dock_info(&st.panels[src]), None),
             };
@@ -3737,6 +3740,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 sort_case_sensitive: st.sort_case_sensitive,
                 nav_up_align: st.nav_up_align.clone(),
                 tab_dblclick: st.tab_dblclick.clone(),
+                plugins_disabled: st.plugins_disabled.clone(),
                 typeahead_scope: st.ta_scope.clone(),
                 typeahead_reset_ms: st.ta_reset_ms,
                 typeahead_pos: st.ta_pos,
@@ -3970,6 +3974,13 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     // 탭 더블클릭 동작(07-15)
     if v.tab_dblclick != st.tab_dblclick {
         st.tab_dblclick = v.tab_dblclick.clone();
+    }
+    // 플러그인 사용 여부(07-26 — 설정 창 체크) — 도크 미리보기 즉시 반영
+    if v.plugins_disabled != st.plugins_disabled {
+        st.plugins_disabled = v.plugins_disabled.clone();
+        let mut inv = Invalidations::default();
+        update_dock_info(st, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
     }
     // 전송 완료 창 닫기 시간(07-21) — 다음 전송부터 적용(0=창 미표시)
     if v.transfer_close_ms != st.transfer_close_ms {
@@ -4231,6 +4242,7 @@ fn current_settings(st: &State) -> Settings {
         nav_up_align: st.nav_up_align.clone(),
         tab_dblclick: st.tab_dblclick.clone(),
         preview_map: st.preview_map.clone(),
+        plugins_disabled: st.plugins_disabled.clone(),
         typeahead_scope: st.ta_scope.clone(),
         typeahead_reset_ms: st.ta_reset_ms,
         typeahead_pos: st.ta_pos,

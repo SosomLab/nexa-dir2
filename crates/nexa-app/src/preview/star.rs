@@ -29,8 +29,7 @@ const LINE_LEN_CAP: usize = 4096;
 /// 로드된 플러그인 — 평가 1회 후 동결(FrozenModule = Send+Sync, 호출마다 재파싱 없음).
 pub struct StarPlugin {
     pub id: String,
-    /// 표시명 — S3 공급자 콤보 예약(현재 미사용).
-    #[allow(dead_code)]
+    /// 표시명(설정 창 플러그인 목록·S3 공급자 콤보).
     pub name: String,
     /// 스크립트 내부 선언(EXTS) = 적용 대상 **기본값**. 외부 재정의는 settings
     /// `preview_map`(mod.rs resolve 1순위).

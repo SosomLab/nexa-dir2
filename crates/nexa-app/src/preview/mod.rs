@@ -133,18 +133,26 @@ impl PreviewProvider for StarProvider {
     }
 }
 
+/// 플러그인 사용 안 함 판정(설정 `plugins_disabled` — `id|…`). 내장(builtin.*)은
+/// 폴백 안전망이라 비활성 대상이 아니다.
+fn is_disabled(id: &str, disabled: &str) -> bool {
+    !id.starts_with("builtin.") && disabled.split('|').any(|d| d.trim() == id)
+}
+
 /// 공급자 결정 — `preview_map`(설정 오버라이드 `ext:id|…`) > 선언 매치(로드 순) >
 /// 텍스트 폴백. `providers` = 전체 후보(플러그인이 내장보다 앞 — S2에서 합류).
+/// `disabled` = 사용 안 함 플러그인 id 목록(체크 해제 — 오버라이드/선언 모두 제외).
 fn resolve<'a>(
     providers: &'a [Box<dyn PreviewProvider>],
     ext: &str,
     preview_map: &str,
+    disabled: &str,
 ) -> &'a dyn PreviewProvider {
     // 1) 설정 오버라이드: "md:markdown|jpg:builtin.image" — id 매치 실패는 무시(안전)
     if !ext.is_empty() {
         for pair in preview_map.split('|') {
             if let Some((e, id)) = pair.split_once(':') {
-                if e.trim().eq_ignore_ascii_case(ext) {
+                if e.trim().eq_ignore_ascii_case(ext) && !is_disabled(id.trim(), disabled) {
                     if let Some(p) = providers.iter().find(|p| p.id() == id.trim()) {
                         return p.as_ref();
                     }
@@ -155,6 +163,7 @@ fn resolve<'a>(
     // 2) 선언 매치(로드 순 — 스크립트/공급자 내부 EXTS 기본값)
     if let Some(p) = providers
         .iter()
+        .filter(|p| !is_disabled(p.id(), disabled))
         .find(|p| p.exts().iter().any(|e| e == ext))
     {
         return p.as_ref();
@@ -167,34 +176,58 @@ fn resolve<'a>(
         .as_ref()
 }
 
-/// 미리보기 생성(시임 진입점 — win.rs 호출). `preview_map` = 설정 원문(파싱은 여기서).
-pub fn preview_for(path: &Path, preview_map: &str) -> PreviewDoc {
+/// 미리보기 생성(시임 진입점 — win.rs 호출). `preview_map`/`disabled` = 설정 원문
+/// (파싱은 여기서 — 관대).
+pub fn preview_for(path: &Path, preview_map: &str, disabled: &str) -> PreviewDoc {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    with_providers(|providers| resolve(providers, &ext, preview_map).preview(path))
+    with_providers(|providers, _| resolve(providers, &ext, preview_map, disabled).preview(path))
+}
+
+/// 설정 UI용 플러그인 메타(로드된 `.star` — 설정 창 "플러그인" 페이지 목록).
+#[derive(Clone)]
+pub struct PluginInfo {
+    pub id: String,
+    pub name: String,
+    pub exts: Vec<String>,
+}
+
+/// 로드된 플러그인 목록(설정 창 — 미로드면 이 호출이 지연 로드를 유발).
+pub fn plugin_infos() -> Vec<PluginInfo> {
+    with_providers(|_, infos| infos.to_vec())
 }
 
 /// 현재 공급자 전체로 콜백 실행 — **플러그인(`data\plugins\*.star`, 파일명 순)이
 /// 내장보다 앞**(같은 확장자 선언 시 플러그인 우선). 미리보기 최초 사용 시 지연
-/// 로드(B1 상주 영향 0)·이후 캐시(재로드 = 앱 재시작).
-fn with_providers<R>(f: impl FnOnce(&[Box<dyn PreviewProvider>]) -> R) -> R {
+/// 로드(B1 상주 영향 0)·이후 캐시(재로드 = 앱 재시작). 두 번째 인자 = 플러그인
+/// 메타 목록(설정 UI — 내장 제외).
+fn with_providers<R>(f: impl FnOnce(&[Box<dyn PreviewProvider>], &[PluginInfo]) -> R) -> R {
+    type Cache = (Vec<Box<dyn PreviewProvider>>, Vec<PluginInfo>);
     thread_local! {
         /// UI 스레드 전용 캐시(공급자 Value는 Send 아님 — 도크/독립 창 모두 UI 스레드).
-        static PROVIDERS: std::cell::OnceCell<Vec<Box<dyn PreviewProvider>>> =
-            const { std::cell::OnceCell::new() };
+        static PROVIDERS: std::cell::OnceCell<Cache> = const { std::cell::OnceCell::new() };
     }
     PROVIDERS.with(|c| {
-        f(c.get_or_init(|| {
+        let (providers, infos) = c.get_or_init(|| {
             let (plugins, _errors) = star::load_dir(&crate::config::data_dir().join("plugins"));
+            let infos: Vec<PluginInfo> = plugins
+                .iter()
+                .map(|p| PluginInfo {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    exts: p.exts.clone(),
+                })
+                .collect();
             let mut v: Vec<Box<dyn PreviewProvider>> = plugins
                 .into_iter()
                 .map(|p| Box::new(StarProvider { plugin: p }) as Box<dyn PreviewProvider>)
                 .collect();
             v.extend(builtins());
-            v
-        }))
+            (v, infos)
+        });
+        f(providers, infos)
     })
 }
 
@@ -211,12 +244,12 @@ mod tests {
     #[test]
     fn declared_ext_routes_and_text_falls_back() {
         let img = tmp("a.png", b"\x89PNG");
-        match preview_for(&img, "") {
+        match preview_for(&img, "", "") {
             PreviewDoc::Image(p) => assert!(p.ends_with("a.png")),
             _ => panic!("이미지 확장자는 이미지 공급자"),
         }
         let txt = tmp("a.rs", "fn main() {}\tok".as_bytes());
-        match preview_for(&txt, "") {
+        match preview_for(&txt, "", "") {
             PreviewDoc::Lines(lines) => {
                 assert_eq!(lines[0], "fn main() {}    ok", "탭 4칸 치환 유지")
             }
@@ -232,15 +265,58 @@ mod tests {
         // 설정 오버라이드 = 스크립트 내부 EXTS 선언보다 우선(사용자 확정 07-26).
         // png를 builtin.text로 강제 → 이미지 공급자 대신 텍스트(이진 판정) 경로.
         let img = tmp("b.png", &[0x89u8, 0x50, 0x00, 0x47]);
-        match preview_for(&img, "png:builtin.text") {
+        match preview_for(&img, "png:builtin.text", "") {
             PreviewDoc::Lines(lines) => assert_eq!(lines.len(), 1, "이진 안내 1줄"),
             _ => panic!("오버라이드가 선언 매치보다 우선해야 함"),
         }
         // 존재하지 않는 id 오버라이드 = 무시하고 선언 매치로(안전)
-        match preview_for(&img, "png:no.such.plugin") {
+        match preview_for(&img, "png:no.such.plugin", "") {
             PreviewDoc::Image(_) => {}
             _ => panic!("무효 id는 무시 — 선언 매치 유지"),
         }
         let _ = std::fs::remove_file(img);
+    }
+
+    /// 테스트용 더미 플러그인 공급자(설정 창 체크 해제 시나리오 — resolve 직접 검증).
+    struct Fake {
+        id: &'static str,
+        exts: Vec<String>,
+    }
+    impl PreviewProvider for Fake {
+        fn id(&self) -> &str {
+            self.id
+        }
+        fn exts(&self) -> &[String] {
+            &self.exts
+        }
+        fn preview(&self, _path: &Path) -> PreviewDoc {
+            PreviewDoc::Lines(vec![self.id.to_string()])
+        }
+    }
+
+    #[test]
+    fn disabled_plugin_is_skipped_but_builtin_immune() {
+        let providers: Vec<Box<dyn PreviewProvider>> = {
+            let mut v: Vec<Box<dyn PreviewProvider>> = vec![Box::new(Fake {
+                id: "markdown",
+                exts: vec!["md".into()],
+            })];
+            v.extend(builtins());
+            v
+        };
+        // 기본 = 선언 매치로 플러그인
+        assert_eq!(resolve(&providers, "md", "", "").id(), "markdown");
+        // 체크 해제(plugins_disabled) = 선언 매치 제외 → 텍스트 폴백
+        assert_eq!(resolve(&providers, "md", "", "markdown").id(), "builtin.text");
+        // 오버라이드로 지목돼도 비활성이면 제외
+        assert_eq!(
+            resolve(&providers, "md", "md:markdown", "markdown").id(),
+            "builtin.text"
+        );
+        // 내장은 비활성 목록에 있어도 면역(폴백 안전망)
+        assert_eq!(
+            resolve(&providers, "png", "", "builtin.image|markdown").id(),
+            "builtin.image"
+        );
     }
 }

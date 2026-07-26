@@ -94,6 +94,8 @@ pub struct PrefValues {
     pub transfer_close_ms: i32,
     /// DnD 호버 대기(ms, 200~10000 — 드래그 중 탭 전환/폴더 펼침까지 대기, X-32).
     pub dnd_hover_ms: i32,
+    /// 사용 안 함 플러그인 id 목록 `id|…`(플러그인 페이지 체크 해제 — 07-26).
+    pub plugins_disabled: String,
 }
 
 /// 설정 항목 종류(편집 컨트롤 형태) — 레지스트리 최소 단위.
@@ -187,6 +189,7 @@ const TREE: &[(&str, &str, i32)] = &[
     ("panel", "pref.grp.panel", 0),
     ("dock", "pref.cat.dock", 1),
     ("terminal", "pref.cat.terminal", 1),
+    ("plugins", "pref.cat.plugins", 0),
 ];
 
 fn tree_has_children(i: usize) -> bool {
@@ -590,6 +593,9 @@ struct PrefState {
     editors: Vec<(u32, HWND)>,
     /// 라디오 옵션 (컨트롤 id, field, 값) — 클릭 즉시 반영(X-9).
     radios: Vec<(u32, u32, String)>,
+    /// 플러그인 사용 여부 체크박스 (플러그인 id, hwnd) — 플러그인 페이지에서만
+    /// 채워짐(다른 페이지에서 harvest가 값을 지우지 않도록, 07-26).
+    plugin_boxes: Vec<(String, HWND)>,
 }
 
 const ID_SEARCH: u32 = 1002; // 검색박스(ctl::searchbox — 내장 ✕는 컨트롤 소관, 07-16)
@@ -604,6 +610,9 @@ const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
 const ID_NAV_BASE: u32 = 1600;
 /// 타입어헤드 위치 3×3 피커 셀(오너드로 — QA 07-15) — +0..9.
 const ID_POS_BASE: u32 = 1900;
+/// 플러그인 사용 여부 체크(07-26 — 동적 목록) — +순번. ID_FIELD_BASE 이상이라
+/// 기존 "클릭 즉시 harvest+apply" 명령 경로를 그대로 탄다.
+const ID_PLUGIN_BASE: u32 = 2100;
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("NexaPrefs");
@@ -809,6 +818,7 @@ impl PrefState {
         // 수확해 values를 덮던 결함(스크롤 시 폰트 이름 공백). 비워두면 재진입 무해.
         self.editors.clear();
         self.radios.clear();
+        self.plugin_boxes.clear();
         for h in self.rows.drain(..) {
             let _ = DestroyWindow(h);
         }
@@ -1232,6 +1242,66 @@ impl PrefState {
                 }
             }
         }
+        // 플러그인 페이지(07-26 — 사용자 요청): 로드된 .star 목록 + 사용 여부 체크.
+        // 레지스트리(정적 Entry) 밖의 **동적 목록** — 설명 1줄 + 플러그인당 체크박스
+        // "NAME (id) — ext, …". 체크 해제 = plugins_disabled(내장 폴백으로 대체됨).
+        if self.category == "plugins" && tokens.is_empty() {
+            let desc = mk(
+                self.hwnd,
+                self.font,
+                w!("STATIC"),
+                &tr("pref.plugins.desc"),
+                0x0080,
+                x0,
+                y,
+                pane_w,
+                36,
+                ID_DESC,
+            );
+            self.rows.push(desc);
+            y += 40;
+            let infos = crate::preview::plugin_infos();
+            if infos.is_empty() {
+                let empty = mk(
+                    self.hwnd,
+                    self.font,
+                    w!("STATIC"),
+                    &tr("pref.plugins.empty"),
+                    0x0080,
+                    x0,
+                    y,
+                    pane_w,
+                    36,
+                    ID_DESC,
+                );
+                self.rows.push(empty);
+                y += 40;
+            }
+            for (pi, info) in infos.iter().enumerate() {
+                let label = format!("{} ({}) — {}", info.name, info.id, info.exts.join(", "));
+                let b = mk(
+                    self.hwnd,
+                    self.font,
+                    w!("BUTTON"),
+                    &label,
+                    WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32,
+                    x0,
+                    y,
+                    pane_w,
+                    24,
+                    ID_PLUGIN_BASE + pi as u32,
+                );
+                let on = !self
+                    .values
+                    .plugins_disabled
+                    .split('|')
+                    .any(|d| d.trim() == info.id);
+                SendMessageW(b, 0x00F1, Some(WPARAM(on as usize)), Some(LPARAM(0))); // BM_SETCHECK
+                self.rows.push(b);
+                self.plugin_boxes.push((info.id.clone(), b));
+                y += ROW_H;
+            }
+        }
         self.content_h = y + self.scroll_y + PAD; // 스크롤 상한 계산용(QA 07-15)
         let _ = InvalidateRect(Some(self.hwnd), None, true);
     }
@@ -1420,6 +1490,17 @@ impl PrefState {
                 }
                 _ => {}
             }
+        }
+        // 플러그인 사용 여부(07-26) — 페이지에 체크박스가 있을 때만 재구성
+        // (다른 페이지의 harvest가 기존 값을 지우지 않도록)
+        if !self.plugin_boxes.is_empty() {
+            let off: Vec<String> = self
+                .plugin_boxes
+                .iter()
+                .filter(|(_, hw)| SendMessageW(*hw, 0x00F0, None, None).0 != 1) // BM_GETCHECK
+                .map(|(id, _)| id.clone())
+                .collect();
+            self.values.plugins_disabled = off.join("|");
         }
     }
 }
@@ -1913,6 +1994,7 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         rows: Vec::new(),
         editors: Vec::new(),
         radios: Vec::new(),
+        plugin_boxes: Vec::new(),
     });
     // 검색박스 = **자기완결 커스텀 컨트롤**(사용자 요청 07-16 — ctl::searchbox):
     // 내장 ✕(입력 시만·클릭 전체 지우기)·세로 중앙 정렬(한글 상단 붙음 해소)·
