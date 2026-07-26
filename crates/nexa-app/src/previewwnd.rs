@@ -460,7 +460,7 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             };
                             StretchDIBits(
                                 hdc,
-                                PAD_X + (avail_w - dw) / 2,
+                                PAD_X, // 좌측 정렬(GitHub 관례 — QA 07-26)
                                 iy + (area_h - dh) / 2,
                                 dw,
                                 dh,

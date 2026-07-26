@@ -19,7 +19,7 @@ EXTS = ["md", "markdown", "mdown", "mkd"]
 
 _READ_CAP = 65536   # 읽기 상한(바이트)
 _LINE_CAP = 400     # 출력 라인 상한
-_CELL_CAP = 24      # 표 셀 표시 폭 상한
+_CELL_CAP = 60      # 표 셀 표시 폭 상한(QA 07-26 — 24는 값 잘림 과다)
 
 # ── 인라인 마커 정리(평문화) ────────────────────────────────────────────
 # **b**/*i*/__b__/_i_ = 마커 제거 · `c` = ⟨c⟩ · [t](u) = t · ![a](u) = 🖼 a
@@ -64,7 +64,8 @@ def _inline(s):
                 out.append(c)
                 i += 1
             else:
-                out.append("⟨" + "".join(cs[i + r:close]) + "⟩")
+                # 인라인 코드 = 백틱 유지(QA 07-26 — ⟨⟩ 낯섦·GitHub 원문 관례)
+                out.append("`" + "".join(cs[i + r:close]) + "`")
                 i = close + r
         elif c == "!" and i + 1 < n and cs[i + 1] == "[":
             lb = i + 1
@@ -255,6 +256,14 @@ def _render(lines):
             break
         line = lines[i].replace("\t", "    ")
         t = line.strip()
+        # 본문/리스트의 <br/> = 실제 줄바꿈(QA 07-26 — 펜스 밖만·후속 줄 2칸 들여쓰기)
+        if fence == "" and "<br" in line:
+            parts = _mm_lines(line)
+            if len(parts) > 1:
+                repl = [parts[0]] + ["  " + x for x in parts[1:]]
+                lines = lines[:i] + repl + lines[i + 1:]
+                line = lines[i].replace("\t", "    ")
+                t = line.strip()
         if fence != "":
             if t.startswith(fence) and t.strip(fence[:1]).strip() == "":
                 if mermaid != None:
