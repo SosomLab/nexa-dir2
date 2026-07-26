@@ -432,6 +432,7 @@ def _mm_parse_node(tok, reg):
     for spec in [
         ["((", "))", True, False],
         ["([", "])", True, False],
+        ["[(", ")]", True, False],
         ["[[", "]]", False, False],
         ["{{", "}}", False, True],
         ["[", "]", False, False],
@@ -467,7 +468,7 @@ def _mm_node_span(t):
         else:
             break
     rest = t[idl:]
-    for spec in [["((", "))"], ["([", "])"], ["[[", "]]"], ["{{", "}}"], ["[", "]"], ["(", ")"], ["{", "}"]]:
+    for spec in [["((", "))"], ["([", "])"], ["[(", ")]"], ["[[", "]]"], ["{{", "}}"], ["[", "]"], ["(", ")"], ["{", "}"]]:
         if rest.startswith(spec[0]):
             e = rest.find(spec[1], len(spec[0]))
             if e > 0:
