@@ -344,14 +344,424 @@ def _render(lines):
         out.append("… (표시 상한 — 이후 생략)")
     return out
 
-# ── Mermaid(커밋 5에서 flowchart·sequence 텍스트 렌더로 확장) ────────────
+# ── Mermaid 텍스트 다이어그램(flowchart TD/LR·sequenceDiagram 서브셋) ────
+# 박스 드로잉 문자 격자로 직접 렌더 — 미지원 형식/상한 초과는 원문 상자 폴백.
+# 격자 셀 = 표시 열(와이드 문자는 2칸 점유 — 뒤 칸 "" 센티널, join 시 소거).
 
-def _mermaid(src_lines):
+_MM_NODES = 16   # 노드 상한
+_MM_EDGES = 40   # 간선 상한
+_MM_W = 200      # 격자 폭 상한
+_MM_H = 80       # 격자 높이 상한
+
+def _mm_grid(w, h):
+    if w < 1 or h < 1 or w > _MM_W or h > _MM_H:
+        return None
+    return [[" " for _ in range(w)] for _ in range(h)]
+
+def _mm_put(g, x, y, ch):
+    if y >= 0 and y < len(g) and x >= 0 and x < len(g[0]):
+        g[y][x] = ch
+
+def _mm_put_str(g, x, y, s):
+    cx = x
+    for ch in s.elems():
+        cw = disp_width(ch)
+        if cx + cw > len(g[0]):
+            break
+        _mm_put(g, cx, y, ch)
+        if cw == 2:
+            _mm_put(g, cx + 1, y, "")
+        cx += cw
+
+def _mm_box(g, x, y, w, label, rnd):
+    tl = "╭" if rnd else "┌"
+    tr = "╮" if rnd else "┐"
+    bl = "╰" if rnd else "└"
+    br = "╯" if rnd else "┘"
+    for i in range(1, w - 1):
+        _mm_put(g, x + i, y, "─")
+        _mm_put(g, x + i, y + 2, "─")
+    _mm_put(g, x, y, tl)
+    _mm_put(g, x + w - 1, y, tr)
+    _mm_put(g, x, y + 2, bl)
+    _mm_put(g, x + w - 1, y + 2, br)
+    _mm_put(g, x, y + 1, "│")
+    _mm_put(g, x + w - 1, y + 1, "│")
+    _mm_put_str(g, x + 2, y + 1, label)
+
+def _mm_emit(g):
+    out = []
+    for row in g:
+        s = "".join(row)
+        # rstrip — 뒤 공백 제거
+        e = len(s)
+        for _ in range(len(s)):
+            if e > 0 and s[e - 1] == " ":
+                e -= 1
+            else:
+                break
+        out.append(s[:e])
+    for _ in range(len(out)):
+        if len(out) > 0 and out[len(out) - 1] == "":
+            out.pop()
+        else:
+            break
+    return out
+
+def _mm_source(lines0):
     out = ["┌── mermaid"]
-    for l in src_lines:
+    for l in lines0:
         out.append("│ " + l)
     out.append("└──")
     return out
+
+def _mm_parse_node(tok, reg):
+    t = tok.strip()
+    idlen = 0
+    for ch in t.elems():
+        if ch.isalnum() or ch == "_":
+            idlen += 1
+        else:
+            break
+    if idlen == 0:
+        return -1
+    nid = t[:idlen]
+    rest = t[idlen:]
+    label = None
+    rnd = False
+    for spec in [
+        ["((", "))", True, False],
+        ["([", "])", True, False],
+        ["[[", "]]", False, False],
+        ["{{", "}}", False, True],
+        ["[", "]", False, False],
+        ["(", ")", True, False],
+        ["{", "}", False, True],
+    ]:
+        if rest.startswith(spec[0]):
+            e = rest.find(spec[1], len(spec[0]))
+            if e > 0:
+                raw = rest[len(spec[0]):e].strip().strip("\"")
+                label = ("◇ " + raw) if spec[3] else raw
+                rnd = spec[2]
+                break
+    if nid in reg["idx"]:
+        i = reg["idx"][nid]
+        if label != None:
+            reg["labels"][i] = label
+            reg["round"][i] = rnd
+        return i
+    i = len(reg["ids"])
+    reg["ids"].append(nid)
+    reg["labels"].append(label if label != None else nid)
+    reg["round"].append(rnd)
+    reg["idx"][nid] = i
+    return i
+
+def _mm_node_span(t):
+    # t(앞 공백 제거) 기준 노드 토큰 길이 = id + **직결** 브래킷 라벨(있을 때만).
+    idl = 0
+    for ch in t.elems():
+        if ch.isalnum() or ch == "_":
+            idl += 1
+        else:
+            break
+    rest = t[idl:]
+    for spec in [["((", "))"], ["([", "])"], ["[[", "]]"], ["{{", "}}"], ["[", "]"], ["(", ")"], ["{", "}"]]:
+        if rest.startswith(spec[0]):
+            e = rest.find(spec[1], len(spec[0]))
+            if e > 0:
+                return idl + e + len(spec[1])
+            break
+    return idl
+
+_MM_SKIP = ["subgraph", "end", "style", "classDef", "class", "click", "linkStyle", "direction"]
+
+def _mm_flow(body, horizontal):
+    reg = {"ids": [], "labels": [], "round": [], "idx": {}}
+    edges = []  # [from, to, label]
+    for line in body:
+        first = [t for t in line.split(" ") if t != ""]
+        if len(first) > 0 and first[0] in _MM_SKIP:
+            continue
+        rest = line
+        prev = -1
+        for _ in range(12):  # 체인 상한
+            if prev < 0:
+                prev = _mm_parse_node(rest, reg)
+                if prev < 0:
+                    break
+                t = rest.strip()
+                rest = t[_mm_node_span(t):]
+            # 화살표
+            r = rest.strip()
+            arrow = ""
+            for a in ["-.->", "==>", "-->", "---", "-.-", "==="]:
+                if r.startswith(a):
+                    arrow = a
+                    break
+            if arrow == "":
+                break
+            after = r[len(arrow):].strip()
+            label = ""
+            if after.startswith("|"):
+                e = after.find("|", 1)
+                if e > 0:
+                    label = after[1:e].strip()
+                    after = after[e + 1:]
+            nxt = _mm_parse_node(after, reg)
+            if nxt < 0:
+                break
+            edges.append([prev, nxt, label])
+            t = after.strip()
+            rest = t[_mm_node_span(t):]
+            prev = nxt
+    n = len(reg["ids"])
+    if n == 0 or n > _MM_NODES or len(edges) > _MM_EDGES:
+        return None
+    # 레벨 = 최장 경로(반복 이완 — 사이클은 n 상한 수렴)
+    level = [0 for _ in range(n)]
+    for _ in range(n):
+        changed = False
+        for e in edges:
+            if e[0] != e[1] and level[e[0]] + 1 > level[e[1]] and level[e[0]] < n:
+                level[e[1]] = level[e[0]] + 1
+                changed = True
+        if not changed:
+            break
+    used = sorted({l: True for l in level}.keys())
+    rowidx = [used.index(l) for l in level]
+    rows = [[] for _ in used]
+    for i in range(n):
+        rows[rowidx[i]].append(i)
+    bw = [disp_width(l) + 4 for l in reg["labels"]]
+    pos = [[0, 0] for _ in range(n)]
+    if horizontal:
+        gap = 5
+        col_w = [max([bw[i] for i in row]) for row in rows]
+        col_h = [len(row) * 4 - 1 for row in rows]
+        gh = max(col_h)
+        gw = 0
+        for k in range(len(rows)):
+            gw += col_w[k]
+        gw += gap * (len(rows) - 1)
+        g = _mm_grid(gw, gh)
+        if g == None:
+            return None
+        x = 0
+        for ci in range(len(rows)):
+            y = (gh - col_h[ci]) // 2
+            for node in rows[ci]:
+                pos[node] = [x, y]
+                y += 4
+            x += col_w[ci] + gap
+        for i in range(n):
+            _mm_box(g, pos[i][0], pos[i][1], bw[i], reg["labels"][i], reg["round"][i])
+        for e in edges:
+            if rowidx[e[1]] != rowidx[e[0]] + 1:
+                continue
+            sy = pos[e[0]][1] + 1
+            ty = pos[e[1]][1] + 1
+            sx = pos[e[0]][0] + bw[e[0]]
+            tx = pos[e[1]][0]
+            if sy == ty:
+                for cx in range(sx, tx - 1):
+                    _mm_put(g, cx, sy, "─")
+                _mm_put(g, tx - 1, sy, "▶")
+                if e[2] != "" and tx > sx + disp_width(e[2]) + 3:
+                    _mm_put_str(g, sx + 1, sy, " " + e[2] + " ")
+            else:
+                cc = sx + 1
+                _mm_put(g, sx, sy, "─")
+                _mm_put(g, cc, sy, "╮" if ty > sy else "╯")
+                lo = min(sy, ty)
+                hi = max(sy, ty)
+                for cy in range(lo + 1, hi):
+                    _mm_put(g, cc, cy, "│")
+                _mm_put(g, cc, ty, "╰" if ty > sy else "╭")
+                for cx in range(cc + 1, tx - 1):
+                    _mm_put(g, cx, ty, "─")
+                _mm_put(g, tx - 1, ty, "▶")
+    else:
+        gaph = 4
+        gapv = 3
+        row_w = []
+        for row in rows:
+            w = 0
+            for i in row:
+                w += bw[i]
+            w += gaph * (len(row) - 1)
+            row_w.append(w)
+        gw = max(row_w)
+        gh = len(rows) * 3 + gapv * (len(rows) - 1)
+        g = _mm_grid(gw, gh)
+        if g == None:
+            return None
+        for li in range(len(rows)):
+            y = li * (3 + gapv)
+            x = (gw - row_w[li]) // 2
+            for node in rows[li]:
+                pos[node] = [x, y]
+                x += bw[node] + gaph
+        for i in range(n):
+            _mm_box(g, pos[i][0], pos[i][1], bw[i], reg["labels"][i], reg["round"][i])
+        for e in edges:
+            if rowidx[e[1]] != rowidx[e[0]] + 1:
+                continue
+            px = pos[e[0]][0] + bw[e[0]] // 2
+            cx = pos[e[1]][0] + bw[e[1]] // 2
+            gy = pos[e[0]][1] + 3
+            _mm_put(g, px, gy, "│")
+            if px == cx:
+                _mm_put(g, px, gy + 1, "│")
+                if e[2] != "":
+                    _mm_put_str(g, px + 2, gy + 1, e[2])
+            else:
+                lo = min(px, cx)
+                hi = max(px, cx)
+                for x2 in range(lo + 1, hi):
+                    _mm_put(g, x2, gy + 1, "─")
+                _mm_put(g, px, gy + 1, "└" if cx > px else "┘")
+                _mm_put(g, cx, gy + 1, "┐" if cx > px else "┌")
+                if e[2] != "" and hi > lo + 2:
+                    _mm_put_str(g, lo + 2, gy + 1, e[2])
+            _mm_put(g, cx, gy + 2, "▼")
+    out = _mm_emit(g)
+    extras = []
+    for e in edges:
+        if rowidx[e[1]] != rowidx[e[0]] + 1:
+            lbl = "" if e[2] == "" else " ({})".format(e[2])
+            extras.append("· {} ─▶ {}{}".format(reg["labels"][e[0]], reg["labels"][e[1]], lbl))
+    if len(extras) > 0:
+        out.append("")
+        out.extend(extras)
+    return out
+
+_MM_ARROWS = ["-->>", "->>", "--x", "--)", "-->", "-x", "-)", "->"]
+
+def _mm_seq(body):
+    names = []
+    idx = {}
+    rows = []  # ["m", from, to, text, dashed] | ["k", marker]
+    for line in body:
+        first = [t for t in line.split(" ") if t != ""]
+        f0 = first[0] if len(first) > 0 else ""
+        if f0 in ["activate", "deactivate", "autonumber"]:
+            continue
+        if f0 in ["participant", "actor"]:
+            rest = line[len(f0):].strip()
+            parts = rest.split(" as ")
+            pid = parts[0].strip()
+            disp = parts[1].strip() if len(parts) > 1 else pid
+            if pid not in idx:
+                idx[pid] = len(names)
+                names.append(disp)
+            else:
+                names[idx[pid]] = disp
+            continue
+        low = f0.lower()
+        if low == "note":
+            p = line.find(":")
+            rows.append(["k", "· " + (line[p + 1:].strip() if p > 0 else "")])
+            continue
+        if low in ["loop", "alt", "opt", "par", "critical", "break", "rect"]:
+            rows.append(["k", "┌─ " + line])
+            continue
+        if low == "else":
+            rows.append(["k", "├─ " + line])
+            continue
+        if low == "end":
+            rows.append(["k", "└─"])
+            continue
+        # 메시지 — 가장 앞 매치(동순위 = 긴 것)
+        bp = -1
+        ba = ""
+        for a in _MM_ARROWS:
+            p = line.find(a)
+            if p >= 0 and (bp < 0 or p < bp or (p == bp and len(a) > len(ba))):
+                bp = p
+                ba = a
+        if bp < 0:
+            continue
+        lid = line[:bp].strip()
+        rest = line[bp + len(ba):]
+        cp = rest.find(":")
+        rid = (rest[:cp] if cp >= 0 else rest).strip()
+        text = rest[cp + 1:].strip() if cp >= 0 else ""
+        for pid in [lid, rid]:
+            if pid not in idx:
+                idx[pid] = len(names)
+                names.append(pid)
+        rows.append(["m", idx[lid], idx[rid], text, ba.startswith("--")])
+    if len(names) == 0 or len(rows) == 0 or len(names) > 6 or len(rows) > 40:
+        return None
+    bw = [disp_width(nm) + 4 for nm in names]
+    cx = [bw[0] // 2]
+    for i in range(1, len(names)):
+        d = max((bw[i - 1] + bw[i]) // 2 + 4, 14)
+        cx.append(cx[i - 1] + d)
+    gw = cx[len(cx) - 1] + (bw[len(bw) - 1] + 1) // 2 + 1
+    gh = 3
+    for r in rows:
+        gh += 2 if r[0] == "m" else 1
+    g = _mm_grid(gw, gh)
+    if g == None:
+        return None
+    for i in range(len(names)):
+        _mm_box(g, cx[i] - bw[i] // 2, 0, bw[i], names[i], False)
+    y = 3
+    for r in rows:
+        h = 2 if r[0] == "m" else 1
+        for dy in range(h):
+            for c in cx:
+                _mm_put(g, c, y + dy, "│")
+        if r[0] == "k":
+            _mm_put_str(g, 0, y, r[1])
+            y += 1
+        else:
+            frm = r[1]
+            to = r[2]
+            text = r[3]
+            dashed = r[4]
+            if frm == to:
+                _mm_put(g, cx[frm] + 1, y + 1, "⟲")
+                if text != "":
+                    _mm_put_str(g, cx[frm] + 2, y, text)
+            else:
+                lo = min(cx[frm], cx[to])
+                hi = max(cx[frm], cx[to])
+                if text != "":
+                    start = max((lo + hi) // 2 - disp_width(text) // 2, lo + 1)
+                    _mm_put_str(g, start, y, text)
+                for x2 in range(lo + 1, hi):
+                    _mm_put(g, x2, y + 1, "╌" if dashed else "─")
+                if cx[to] > cx[frm]:
+                    _mm_put(g, hi - 1, y + 1, "▶")
+                else:
+                    _mm_put(g, lo + 1, y + 1, "◀")
+            y += 2
+    return _mm_emit(g)
+
+def _mermaid(src_lines):
+    lines = []
+    for l in src_lines:
+        for part in l.split(";"):
+            t = part.strip()
+            if t != "" and not t.startswith("%%"):
+                lines.append(t)
+    if len(lines) == 0:
+        return _mm_source(src_lines)
+    fields = [t for t in lines[0].split(" ") if t != ""]
+    kind = fields[0] if len(fields) > 0 else ""
+    art = None
+    if kind == "graph" or kind == "flowchart":
+        dirn = fields[1].upper() if len(fields) > 1 else "TD"
+        art = _mm_flow(lines[1:], dirn == "LR" or dirn == "RL")
+    elif kind == "sequenceDiagram":
+        art = _mm_seq(lines[1:])
+    if art == None:
+        return _mm_source(src_lines)  # 미지원 형식/상한 초과 = 원문 상자 폴백
+    return art
 
 # ── 진입점 ──────────────────────────────────────────────────────────────
 
