@@ -34,8 +34,8 @@ fn main() {
 
 ```mermaid
 graph TD
-A[Start] --> B{OK?}
-B -->|yes| C[Done]
+A[Start<br/>run engine] --> B{OK?}
+B -->|"yes"| C[Done]
 B -->|no| D[Retry]
 ```
 

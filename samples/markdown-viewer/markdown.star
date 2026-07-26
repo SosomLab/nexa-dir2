@@ -348,8 +348,8 @@ def _render(lines):
 # 박스 드로잉 문자 격자로 직접 렌더 — 미지원 형식/상한 초과는 원문 상자 폴백.
 # 격자 셀 = 표시 열(와이드 문자는 2칸 점유 — 뒤 칸 "" 센티널, join 시 소거).
 
-_MM_NODES = 16   # 노드 상한
-_MM_EDGES = 40   # 간선 상한
+_MM_NODES = 24   # 노드 상한(QA 07-26 — 실무 순서도 수용)
+_MM_EDGES = 60   # 간선 상한
 _MM_W = 200      # 격자 폭 상한
 _MM_H = 80       # 격자 높이 상한
 
@@ -478,6 +478,12 @@ def _mm_node_span(t):
 def _esc(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+def _mm_lines(label):
+    # mermaid 라벨 <br/> = 줄바꿈(QA 07-26 — 그대로 노출·폭 폭증 방지)
+    t = label.replace("<br/>", "\n").replace("<br />", "\n").replace("<br>", "\n")
+    out = [x.strip() for x in t.split("\n") if x.strip() != ""]
+    return out or [label]
+
 def _mm_colors():
     # 호스트 is_dark() — 테마 연동 팔레트(GitHub 근사)
     if is_dark():
@@ -489,40 +495,52 @@ def _mm_flow_svg(reg, edges, rowidx, rows, horizontal):
     # 07-26). 실패(비지원 플랫폼·상한 초과) = None → 텍스트 아트 폴백.
     n = len(reg["ids"])
     C = _mm_colors()
-    BH = 34
-    bw = [disp_width(l) * 7 + 26 for l in reg["labels"]]
+    # 멀티라인 라벨(<br/> — QA 07-26): 박스 폭 = 최장 줄·높이 = 줄 수 비례(60칸 말줄임)
+    lls = [[_trunc(x, 60) for x in _mm_lines(l)] for l in reg["labels"]]
+    bw = [max([disp_width(x) for x in ls]) * 7 + 26 for ls in lls]
+    bh = [14 + 20 * len(ls) for ls in lls]
     pos = [[0, 0] for _ in range(n)]
     if horizontal:
         gap = 46
         col_w = [max([bw[i] for i in row]) for row in rows]
-        col_h = [len(row) * (BH + 14) - 14 for row in rows]
+        col_h = []
+        for row in rows:
+            hh = 0
+            for i in row:
+                hh += bh[i] + 14
+            col_h.append(hh - 14)
         H = max(col_h) + 20
         x = 10
         for ci in range(len(rows)):
             yy = 10 + (H - 20 - col_h[ci]) // 2
             for node in rows[ci]:
                 pos[node] = [x, yy]
-                yy += BH + 14
+                yy += bh[node] + 14
             x += col_w[ci] + gap
         W = x - gap + 10
     else:
         gaph = 28
         gapv = 50
         row_w = []
+        row_h = []
         for row in rows:
             w2 = 0
+            h2 = 0
             for i in row:
                 w2 += bw[i]
+                h2 = max(h2, bh[i])
             row_w.append(w2 + gaph * (len(row) - 1))
+            row_h.append(h2)
         W = max(row_w) + 20
+        yy = 10
         for li in range(len(rows)):
-            yy = 10 + li * (BH + gapv)
             xx = 10 + (W - 20 - row_w[li]) // 2
             for node in rows[li]:
                 pos[node] = [xx, yy]
                 xx += bw[node] + gaph
-        H = 10 + len(rows) * (BH + gapv) - gapv + 10
-    if W > 1600 or H > 1200:
+            yy += row_h[li] + gapv
+        H = yy - gapv + 10
+    if W > 2000 or H > 2000:
         return None
     p = ['<svg viewBox="0 0 {} {}" stroke-width="1.5">'.format(W, H)]
     p.append('<rect x="0" y="0" width="{}" height="{}" fill="{}"/>'.format(W, H, C["bg"]))
@@ -531,9 +549,9 @@ def _mm_flow_svg(reg, edges, rowidx, rows, horizontal):
             continue
         if horizontal:
             x1 = pos[e[0]][0] + bw[e[0]]
-            y1 = pos[e[0]][1] + BH // 2
+            y1 = pos[e[0]][1] + bh[e[0]] // 2
             x2 = pos[e[1]][0]
-            y2 = pos[e[1]][1] + BH // 2
+            y2 = pos[e[1]][1] + bh[e[1]] // 2
             mx = (x1 + x2) // 2
             p.append('<polyline points="{},{} {},{} {},{} {},{}" fill="none" stroke="{}"/>'.format(
                 x1, y1, mx, y1, mx, y2, x2 - 2, y2, C["line"]))
@@ -543,7 +561,7 @@ def _mm_flow_svg(reg, edges, rowidx, rows, horizontal):
             ly = min(y1, y2) - 6
         else:
             x1 = pos[e[0]][0] + bw[e[0]] // 2
-            y1 = pos[e[0]][1] + BH
+            y1 = pos[e[0]][1] + bh[e[0]]
             x2 = pos[e[1]][0] + bw[e[1]] // 2
             y2 = pos[e[1]][1]
             my = (y1 + y2) // 2
@@ -553,17 +571,19 @@ def _mm_flow_svg(reg, edges, rowidx, rows, horizontal):
                 x2, y2, x2 - 4, y2 - 8, x2 + 4, y2 - 8, C["line"]))
             lx = (x1 + x2) // 2 + 6
             ly = my - 4
-        if e[2] != "":
+        lbl = _trunc(" ".join(_mm_lines(e[2])).strip("\""), 40) if e[2] != "" else ""
+        if lbl != "":
             p.append('<text x="{}" y="{}" font-size="12" fill="{}">{}</text>'.format(
-                lx, ly, C["fg"], _esc(e[2])))
+                lx, ly, C["fg"], _esc(lbl)))
     for i in range(n):
         rx = 16 if reg["round"][i] else 6
         p.append('<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{}"/>'.format(
-            pos[i][0], pos[i][1], bw[i], BH, rx, C["node"]))
+            pos[i][0], pos[i][1], bw[i], bh[i], rx, C["node"]))
         p.append('<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="none" stroke="{}"/>'.format(
-            pos[i][0], pos[i][1], bw[i], BH, rx, C["border"]))
-        p.append('<text x="{}" y="{}" font-size="13" text-anchor="middle" fill="{}">{}</text>'.format(
-            pos[i][0] + bw[i] // 2, pos[i][1] + BH // 2 + 5, C["fg"], _esc(reg["labels"][i])))
+            pos[i][0], pos[i][1], bw[i], bh[i], rx, C["border"]))
+        for li in range(len(lls[i])):
+            p.append('<text x="{}" y="{}" font-size="13" text-anchor="middle" fill="{}">{}</text>'.format(
+                pos[i][0] + bw[i] // 2, pos[i][1] + 22 + 20 * li, C["fg"], _esc(lls[i][li])))
     p.append("</svg>")
     img = render_svg("".join(p))
     if img == "":
@@ -610,7 +630,7 @@ def _mm_flow(body, horizontal):
             if after.startswith("|"):
                 e = after.find("|", 1)
                 if e > 0:
-                    label = after[1:e].strip()
+                    label = after[1:e].strip().strip("\"")  # 따옴표 라벨(QA 07-26)
                     after = after[e + 1:]
             nxt = _mm_parse_node(after, reg)
             if nxt < 0:
@@ -641,6 +661,8 @@ def _mm_flow(body, horizontal):
     svg_art = _mm_flow_svg(reg, edges, rowidx, rows, horizontal)
     if svg_art != None:
         return svg_art
+    # 텍스트 아트 폴백 — <br/> 라벨은 한 줄로 평탄화(QA 07-26)
+    reg["labels"] = [" / ".join(_mm_lines(l)) for l in reg["labels"]]
     bw = [disp_width(l) + 4 for l in reg["labels"]]
     pos = [[0, 0] for _ in range(n)]
     if horizontal:
