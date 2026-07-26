@@ -8,6 +8,7 @@
 
 ## 2026-07-26
 
+- **플러그인 런타임 Starlark→wasmi 전환(사용자 결정 — 9차, `feat/wasmi-plugin` 3커밋)**: 부분 교체(1안 — 시임·독립 창·설정·격리·태그 계약 유지, revert로 원복 가능). ADR-0005 신설·Starlark 코어 제거·wasmi 1.1 런타임(.wasm 로더·nx_meta/nx_preview ABI·read_text/render_svg/is_dark/disp_width import·fuel 2억[무한 루프 트랩 실증]·메모리 64MB). **B2 실측 +1.68MB(1.50→3.18MB — starlark 대비 -2.58)**. 65 green·clippy 0. 잔여 = 러스트 wasm 샘플(md 뷰어 이식)·가이드 24 개정. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **Mermaid `<br/>` 라벨 QA 픽스(사용자 QA — 7차·main 직커밋)**: `<br/>` 미해석 → 폭 폭증 → 상한 초과 → 원문 폴백이던 진범 — 멀티라인 박스(폭=최장 줄·높이=줄 수)·따옴표 간선 라벨·캔버스 2000px·노드 24/간선 60·폴백 라벨 평탄화. E2E 6·218 green. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **Mermaid 이미지 수준 렌더 + 실행 격리 상한(사용자 승인·요구 — 6차)**: 호스트 `render_svg`(svg.rs→GDI+ AA 래스터→BMP 캐시)·`is_dark()` + 인라인 이미지 마커(`\u{1}img|`+pad — 도크/독립 창 렌더·복사 제외) — markdown.star flowchart가 테마 연동 SVG로 이미지 수준 표시(실패 = 텍스트 폴백). 격리: 실행 300ms/로드 500ms·연료 5천만 틱·힙 64MB(초과 = 플러그인만 오류 1줄). 218 green·clippy 0. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **리네임 재클릭 결함 픽스 + Mermaid 이미지 수준 검토(사용자 QA·질의 — 5차)**: 슬로우클릭 리네임의 `is_renaming()` 전체 가드가 취소 클릭의 slow_click 이력을 소실시키던 진범 — 가드를 편집 필드 안으로 축소(`rename_field_hit`)+취소 클릭은 시드만. 검토: 현 구조에서 Mermaid 이미지 수준 = **가능**(계약에 `{"draw": 명령}` 추가 → 호스트 GDI+ AA 렌더 — 크레이트 0·라이선스 무관), 완전판(mermaid.js)은 웹뷰 필요로 구조 밖. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
