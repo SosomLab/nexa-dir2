@@ -1,6 +1,20 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-26 4차 (KST)** — **X-2 마감 배치: Mermaid 이미지 수준
+> **갱신: 2026-07-27 (KST)** — **플러그인 런타임 Starlark→wasmi 전환
+> 완료(사용자 결정 — `feat/wasmi-plugin` 6커밋, 실기 QA 후 병합 대기)**:
+> ① 부분 교체(1안) — Starlark 코어만 제거(**git revert로 원복 가능**),
+> 시임·독립 창·설정·격리·라인 태그 계약 유지 ② **[ADR-0005]
+> (25-adr-0005-wasm-plugins.md)** — wasmi 채택(wasmtime JIT = B2 초과
+> 기각·`.wasm` 단일 아티팩트 = 크로스플랫폼 정합) ③ **wasmi 1.1 런타임**
+> (nx_meta/nx_preview ABI·read_text/render_svg/is_dark import·fuel 2억
+> [무한 루프 트랩 실증]·메모리 64MB) — **B2 실측 +1.68MB(1.50→3.18MB,
+> starlark 대비 -2.58)** ④ **markdown-viewer-wasm 참조 플러그인**(러스트
+> 크레이트 → 80KB .wasm — GitHub 태그 렌더·<br/>·표·Mermaid flowchart
+> SVG 이미지/sequence 아트) + dist 동봉 실런타임 E2E ⑤ 가이드 24 wasmi 판
+> 개정. **217 green·clippy 0·exe 3.18MB(B2)**.
+> [journal/2026-07-26.md](journal/2026-07-26.md).
+>
+> **직전(07-26 4차)** — **X-2 마감 배치: Mermaid 이미지 수준
 > 렌더·실행 격리·QA 픽스 → main 병합·push(사용자 지시)**:
 > ① **Mermaid 이미지 렌더(A안)** — 호스트 `render_svg`(svg.rs 서브셋 →
 > GDI+ AA 래스터 → BMP 내용 해시 캐시)·`is_dark()` + 인라인 이미지 마커
