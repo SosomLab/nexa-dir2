@@ -22,7 +22,7 @@
 | DR-4 | 원본 nexa-core/vfs/tree **rlib 이식**(cdylib/FFI/ABI 폐지) |
 | DR-5 | 원본 M1 기능 패리티 + 디자인 규약(고밀도·다크·키보드 우선) 계승 |
 | DR-6 | PolyForm NC + 의존성 **퍼미시브 온리**(GPL 금지 — Slint 배제 근거) |
-| DR-7 | **개정(07-14)**: .NET SDK 비이관 유지 + **Starlark 미리보기 플러그인 도입**(ADR-0004 — 내장은 폴백) · WASM 보류 |
+| DR-7 | **재개정(07-26 — ADR-0005)**: 미리보기 플러그인 런타임 = **WASM(wasmi)** — `.wasm` 단일 아티팩트·fuel 격리(Starlark는 실구축 후 교체·revert 가능). 내장은 폴백 |
 | DR-8 | 외부 crate 기본 0 지향 — 추가는 docs/10 §1-2 원장에 건별 기록 |
 
 ## 3. 아키텍처 요약 ([docs/01](docs/01-architecture.md))
@@ -57,5 +57,5 @@
 
 1. **실기 QA 잔여분 소화** — 사용자 QA가 병목. 새 기능보다 우선.
 2. **배포 채널 심사 대기 3건**(우리 측 조치 불요·상태만 추적): winget 설치형(#404528 — `Policy-Test-1.2` waiver 대기) · Chocolatey `nexa-dir`·`nexa-dir.portable`(모더레이션 큐). 승인 시 `CHOCO_PUSH` 스위치를 켜 후속 버전 재개. → [21 §7·§8](docs/21-distribution.md)
-3. **백로그 진행** — [docs/TODO.md](docs/TODO.md) §7: X-11 원본 패리티 갭 건별([19](docs/19-parity-gap.md)) · X-2 Starlark 플러그인 · X-16 최적화 잔여 · X-13 2/2.
+3. **백로그 진행** — [docs/TODO.md](docs/TODO.md) §7: X-11 원본 패리티 갭 건별([19](docs/19-parity-gap.md)) · X-2 플러그인(wasmi 전환 완료 — 잔여 콤보·핫 리로드) · X-16 최적화 잔여 · X-13 2/2.
 4. **X-33 macOS·Linux 확장** — 검토 완료([23](docs/23-cross-platform-feasibility.md)), **착수 여부는 사용자 결정 대기**. 진행 시 다음 액션 = 맥 렌더 스파이크(결정 아님) + DR-1/2/8 개정 ADR-0005.

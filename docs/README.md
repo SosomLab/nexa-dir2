@@ -45,7 +45,8 @@
 |---|---|
 | [07 ADR-0002 렌더링](07-adr-0002-rendering.md) | 텍스트 렌더링 = DirectWrite GDI interop 채택 근거(벤치 비교) |
 | [08 ADR-0003 셸 컨텍스트 메뉴](08-adr-0003-shell-context-menu.md) | 탐색기 확장 메뉴 노출 방식 결정 |
-| [09 ADR-0004 미리보기 플러그인](09-adr-0004-preview-plugins.md) | Starlark 플러그인 도입(DR-7 개정 근거) |
+| [09 ADR-0004 미리보기 플러그인](09-adr-0004-preview-plugins.md) | 플러그인 시임·매핑 설계(런타임은 ADR-0005로 정정) |
+| [25 ADR-0005 WASM 플러그인](25-adr-0005-wasm-plugins.md) | 런타임 Starlark→wasmi 전환(크로스플랫폼 단일 아티팩트·격리) |
 | [19 원본 패리티 갭](19-parity-gap.md) | 원본 대비 미구현·초과 항목(G-1~14) |
 | [20 세션 코얼레싱](20-session-coalescing.md) | 탭/경로 변경 디바운스 자동 저장 설계 |
 | [22 일괄 이름변경 v2](22-batch-rename-v2.md) | PF 6동작 패리티 — 코어 재작성·Date 토큰 엔진 |
@@ -67,7 +68,7 @@
 | [18 빌드 & 테스트](18-build-and-test.md) | ★ 빌드·테스트·예산 측정 절차(SSOT) |
 | [15 개발 방법론](15-dev-methodology.md) | 수직 슬라이스·커밋 규약·단위 백로그 |
 | [16 문서·커밋/푸시 규약](16-doc-git-conventions.md) | ★ 문서 4층 체계·커밋/브랜치/푸시 규칙 — **타 프로젝트 이식용 지시문 포함** |
-| [23 플러그인 개발 가이드](24-plugin-dev-guide.md) | ★ 미리보기 플러그인(.star) — 프로젝트 생성→개발→테스트→배포 전 과정(MarkdownViewerPlugin 샘플) |
+| [24 플러그인 개발 가이드](24-plugin-dev-guide.md) | ★ WASM(.wasm) 플러그인 — ABI·호스트 API·빌드→배포 전 과정(markdown-viewer-wasm 샘플) |
 
 ---
 
