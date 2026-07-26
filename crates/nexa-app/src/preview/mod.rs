@@ -5,6 +5,8 @@
 //! Starlark 플러그인(S2)은 [`star`] 모듈이 이 레지스트리 앞단에 이어진다.
 //! 원본 대응: `../nexa-dir/docs/35-preview-system.md`(공급자 모델).
 
+#[cfg(test)]
+mod sample_tests;
 pub mod star;
 
 use crate::i18n::{tr, trf};
