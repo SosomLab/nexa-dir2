@@ -1,16 +1,19 @@
 # BRANCHES — 브랜치 기록 (Branch History, 시간 역순)
-
 > **목적**: 병합 후 삭제되는 작업 브랜치의 이력을 남긴다(원본 규약 차용). **정렬: 시간 역순(최신이 위)** — 새 브랜치는 표·상세 모두 맨 위에 추가. 시각=커밋 committer date(KST).
-> **규약**: 브랜치는 main 병합·green 확인 후 삭제, 이력은 이 문서 + journal에 보존. push는 사용자 명시 요청 시에만.
-
+> **규약**: 브랜치는 main 병합·green 확인 후 삭제, 이력은 이 문서 + journal에 보존. push는 사용자 명시 요청 시에만([16 §4](16-doc-git-conventions.md#4-브랜치--푸시--반드시-준수)).
+> **삭제 열** = 로컬 ref를 실제로 지운 날. 병합 후 ref가 남아 있었다면 정리한 날짜로 적고 `(정정)`을 붙인다.
 ## 요약 (시간 역순)
-
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `feat/starlark-plugin` | 2026-07-26 | 2026-07-26 (ff) | 2026-07-26 | 17 | **X-2 Starlark 플러그인 시스템 + MarkdownViewerPlugin 샘플**(사용자 지시) — ① S1 시임 + **preview_map 오버라이드**(스크립트 EXTS 기본값 > 설정 재정의 > 폴백) ② S2 `starlark 0.14.2`(DR-8 원장 — B2 +4.24MB, 5.74MB ≤10)·`data\plugins\*.star` 지연 로드·동결 캐시·오류 격리·호스트 API(read_text 대상 파일만·disp_width) ③ **독립 미리보기 창 F3**(콘솔 그리드 — 기준 캔버스·벤치 Shift+F3) ④ samples/markdown-viewer(md+**Mermaid** 순수 Starlark)+E2E ⑤ 가이드 [23](23-plugin-dev-guide.md) ⑥ docs ⑦ **설정 창 플러그인 페이지**(목록+사용 여부 체크 — `plugins_disabled` 영속·내장 면역·즉시 적용) ⑧ **미리보기 UX 6종**(↗ 오버레이·모달 창·도크/창 스크롤·드래그 선택·rich 복사[모노 RTF]·드래그 4방향 자동 스크롤) ⑨ ↗ **이미지 버튼화**(emb:popout SVG·hover sel_bg·pressed accent 38%+1px 오프셋·안 릴리스 발화) ⑩ 리네임 재클릭 1회 지연 픽스(QA) ⑪ **Mermaid 이미지 수준 렌더**(render_svg/is_dark 호스트 API·GDI+ 래스터·인라인 이미지 마커·flowchart SVG) ⑫ **실행 격리 상한**(300ms/500ms·연료·힙 — 프로세스 영향 차단). 218 green·clippy 0·B3 통과 | [2026-07-26](journal/2026-07-26.md) |
+| `feat/starlark-plugin` | 2026-07-26 | 2026-07-26 (ff) | 2026-07-26 | 17 | **X-2 Starlark 플러그인 시스템 + MarkdownViewerPlugin 샘플**(사용자 지시) — ① S1 시임 + **preview_map 오버라이드**(스크립트 EXTS 기본값 > 설정 재정의 > 폴백) ② S2 `starlark 0.14.2`(DR-8 원장 — B2 +4.24MB, 5.74MB ≤10)·`data\plugins\*.star` 지연 로드·동결 캐시·오류 격리·호스트 API(read_text 대상 파일만·disp_width) ③ **독립 미리보기 창 F3**(콘솔 그리드 — 기준 캔버스·벤치 Shift+F3) ④ samples/markdown-viewer(md+**Mermaid** 순수 Starlark)+E2E ⑤ 가이드 [24](24-plugin-dev-guide.md) ⑥ docs ⑦ **설정 창 플러그인 페이지**(목록+사용 여부 체크 — `plugins_disabled` 영속·내장 면역·즉시 적용) ⑧ **미리보기 UX 6종**(↗ 오버레이·모달 창·도크/창 스크롤·드래그 선택·rich 복사[모노 RTF]·드래그 4방향 자동 스크롤) ⑨ ↗ **이미지 버튼화**(emb:popout SVG·hover sel_bg·pressed accent 38%+1px 오프셋·안 릴리스 발화) ⑩ 리네임 재클릭 1회 지연 픽스(QA) ⑪ **Mermaid 이미지 수준 렌더**(render_svg/is_dark 호스트 API·GDI+ 래스터·인라인 이미지 마커·flowchart SVG) ⑫ **실행 격리 상한**(300ms/500ms·연료·힙 — 프로세스 영향 차단). 218 green·clippy 0·B3 통과 | [2026-07-26](journal/2026-07-26.md) |
 | `feat/md-preview` | 2026-07-26 | **폐기**(사용자 지시 — 미병합 보존) | — | 7 | 1차 시도: 내장 러스트 md(Mermaid) 뷰어 — DocLine 스타일드 도크·FontSlot::Mono·CommonMark/mermaid 러스트 렌더(225 green·1.57MB). **Starlark 재설계 지시로 폐기** — 파서·레이아웃 설계는 markdown.star로 이식 | [2026-07-26](journal/2026-07-26.md) |
+| `docs/content-tidy-0724` | 2026-07-24 | 2026-07-24 (ff) | 2026-07-24 | 1 | **문서 내용 정리**(사용자 요청) — ① STATUS "한 장" 규약 복원(차수 22건·340줄 → 07-22 이후 원문 유지 + 07-21~07-15 하루 한 줄 색인 압축, **382→175줄**·원문은 journal 보존) ② docs/README **색인 결손 7건 보충**(07·08·09 ADR·19·20·21·22 — "ADR · 기능 설계" 표 신설) ③ **CLAUDE.md 13일 노후화 정정**(§1 M5 진행→포스트 M5 `0.11.0` · §7 다음 단계 07-11→07-24 기준). 코드 무변경 | [2026-07-24](journal/2026-07-24.md) |
+| `docs/cross-platform-study` | 2026-07-24 | 2026-07-24 (ff) | 2026-07-24 | 1 | **macOS·Linux 확장 타당성 검토**(사용자 요청) — [23 검토서](23-cross-platform-feasibility.md) 신설. 실측: 40,041 LOC 중 **중립 40.2%**·맥 네이티브 147 green·`nexa-app` 스텁 빌드 성공. 결론 = "이식이 아니라 UI 셸 재작성"(`ctl` 18종 7,139 LOC + OS 통합 3K가 재작성 대상, 화면 로직 `nexa-gui`는 재사용 가능) · **DR-1/2/8이 Linux에선 문안 그대로 성립 불가**(ADR-0005 필요) · 권고 = 맥 렌더 스파이크 선행. TODO X-33 등록 + X-32 소급 등록 | [2026-07-24](journal/2026-07-24.md) |
+| `docs/channel-status-0724` | 2026-07-24 | 2026-07-24 (ff) | 2026-07-24 | 1 | **배포 채널 상태 점검·최신화**(사용자 요청) — winget/choco 4항목 원천 조회(PR 라벨 타임라인·master 매니페스트 raw·choco 모더레이션 로그) 후 **정정 2건**: winget Portable `0.11.0`(#405973) **OPEN→MERGED**(07-22 18:44 — 최신 버전까지 배포된 유일 채널) · 설치형(#404528) 병목 = **`Policy-Test-1.2` waiver 미부여**(포터블은 07-20 waiver 후 승인). choco 2종 = 자동 3단계 완료 후 큐 대기(무변동). [21](21-distribution.md) §7 모더레이션 표·§8 채널 요약 표 신설 | [2026-07-24](journal/2026-07-24.md) |
+| `docs/repo-sync-cleanup` | 2026-07-24 | 2026-07-24 (ff) | 2026-07-24 | 1 | **저장소 최신화 — 로컬 브랜치 정리 + 이력 보정**(사용자 요청) — 동기화 실측(main↔origin 0/0·태그 12종 일치·트리 clean) 후 머지 완료 로컬 전용 브랜치 3개 삭제(`feat/chocolatey-packaging`·`feat/m0-render-spike`·`feat/m0-scaffold`) · 이 표의 어긋남 2건 보정(chocolatey 행 소급 기록 · M0 2건 삭제 열 정정) · **삭제 열 정의 명문화**. 코드 무변경 | [2026-07-24](journal/2026-07-24.md) |
 | `feat/clipboard-dnd-ux` | 2026-07-22 | 2026-07-22 (ff `ec8d727`) | 2026-07-22 | 1 | **X-32 클립보드·DnD UX 보완 4종**(사용자 요청) — ① Ctrl+X 잘라내기 흐림 표시(OS 클립보드 미러 CUT_MARKS·WM_CLIPBOARDUPDATE 단일 길목·RowSource::is_ghosted — 외부 탐색기 잘라내기 포함) ② Ctrl+V 선택 폴더 안 붙여넣기(paste_dest — 폴더 1개 선택 시) ③ DnD 엣지 자동 스크롤(drag_scroll_edge — 상/하단 한 행 존 ±1행) ④ DnD 호버 대기(DropHooks track/leave + TIMER_DND 100ms 폴링 — 비활성 탭=전환·접힌 폴더=펼침 전용, 설정 `dnd_hover_ms` 기본 3000·prefs 파일 전송·lang 3종). 209 green·clippy 0 | [2026-07-22](journal/2026-07-22.md) |
 | `feat/transfer-progress-ux` | 2026-07-21 | 2026-07-21 (`639e04a`) | 2026-07-21 | 8 | **X-30 전송 진행 UX 개편 + QA 시리즈**(사용자 요청·QA 연속) — "1 B" 오표기 수정(set_done 실제 바이트 유지)·설정 `transfer_close_ms`(ms 단위·0=창 미표시)·B~TB 단위+파일 수 표기·항목별 크기 비례 세그먼트 바(nexa-ops Event 프로토콜·최소 3px·5색 순환 팔레트)·전송 중 대상 실행/드래그 잠금·DEL 휴지통 삭제 워커 이관+낙관적 숨김(nexa-tree remove_paths)·설정 창 NOPREFIX 표기 수정 | [2026-07-21](journal/2026-07-21.md) |
+| `feat/chocolatey-packaging` | 2026-07-19 | 2026-07-19 (merge `0743472`) | 2026-07-24 | 2 | **Chocolatey 배포 채널 등록 + `0.8.1` 승격**(사용자 요청) — `packaging/chocolatey/` 신설(nuspec + install/uninstall/VERIFICATION — **바이너리 미동봉**, 설치 시 Release 설치형 exe를 SHA-256 검증 후 다운로드[PolyForm NC = 비-FOSS 대응])·release.yml 체크섬 주입→`choco pack`→시크릿 있을 때만 `choco push`·함정 2건 해소(`/ALLUSERS` 명시 + iss `commandline` 허용 / step `if`의 `secrets` 미인식 → job env 승격). **표 누락분 소급 기록**(07-24 로컬 브랜치 정리 중 확인) | [2026-07-19](journal/2026-07-19.md) |
 | `feat/svg-icons` | 2026-07-18 | 2026-07-18 (`aad2b93`) | 2026-07-18 | 1 | **SVG 아이콘 파이프라인**(사용자 요청·SVG 제공) — svg.rs 서브셋 파서(중립·테스트 6·crate 0)+gdipctx svg_to_hicon(ARGB 오프스크린·요청 크기 즉석 래스터)+icons EMBEDDED_SVG(PNG 우선순위 역전·폴백). 1호 view-flat.svg. 193 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/order-editors` | 2026-07-19 | 2026-07-19 (병합) | 2026-07-19 | 1 | **설정 편집기 3종 공통 창 + 컬럼 기능**(사용자 요청) — ordereditor 공통 모달(어댑터)·NxOrderTree 체크·config 제네릭 문법·prefs OrderDialog 3항목·컬럼 드래그 재배열/표시·colsync 연동·세션·ctx 메뉴 반영. 실기 QA 전 항목 | [2026-07-19](journal/2026-07-19.md) |
 | `feat/toolbar-tips` | 2026-07-18 | 2026-07-18 (`033ac02`) | 2026-07-18 | 1 | **도구 모음 툴팁 i18n**(사용자 요청) — tip.rs 팝업(NOACTIVATE·테마 색·dlg_font)+chrome hover_tip/set_buttons+win TIMER_TIP(500ms 표시·커서 실측 이탈 해제·클릭 파괴). 기존 메뉴 키 재사용(신규 키 0)·언어 전환 즉시 반영. 실기 en/ko·187 green | [2026-07-18](journal/2026-07-18.md) |
@@ -24,7 +27,7 @@
 | `refactor/ctl-base` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 2 | **ctl 재사용 리팩터 + 전수 검토**(사용자 요청) — **base.rs** 신설로 14개 Nx 컨트롤 생명주기 보일러플레이트 통합(state/attach/drop_state/notify/register_class — 순 −107줄)·GDI **RAII화**(icon_font·bg_brush=Drop). 전수 검토: GDI 누수 0·더블버퍼 정상·**잠재 크래시 1건 수정**(segmented 빈 텍스트→DrawTextW)·나눗셈/캐스트/인덱스/라우팅 안전. clippy 0·187 green·회귀 스모크 통과 | [2026-07-18](journal/2026-07-18.md) |
 | `feat/mdl2-disclosure` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 1 | **디스클로저 MDL2 + 내비 활성 상태**(사용자 요청 2건) — ① 폴더 마커 ▸/▾ → **MDL2 E76C/E70D**(glyph_opaque 전환·mdl2_small_format 9 DIP — 원본 FontSize 9 규약) ② **ToolButton.enabled**(비활성 = text_dim 흐림·hover/클릭 무시) — 이전/다음 = History can_back/forward·상위 = **This PC 비활성**(sync_chrome 동기). 실기 3상태+셰브론 캡처·187 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/mdl2-glyphs` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 1 | **Segoe MDL2 글리프 통일**(사용자 확인·요청) — 원본 화살표 정체 = MDL2 Assets 글리프(내비 E72B/E72A/E74A·디스클로저 E76C/E70D) 확인 후 적용: DwBackend `mdl2_format`+glyph_opaque U+E700 대역 자동 라우팅(내비 ←→↑)·NxSegmented 화살표 = 벡터 폐기→MDL2 E72A/E72B(icon_font 소유). 실기 캡처·187 green | [2026-07-18](journal/2026-07-18.md) |
-| `feat/nxgrid-sort` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 5 | **다중열 정렬·6종 확정·ExtDot 픽스·화살표**(사용자 요청 5건) — ① NxGrid 다중열 정렬 = **원본 docs/23 §4 규약 이식**(3상태·Shift 다중·▲▼ 앞/①② 뒤·비교 = 호스트[NXGR_SORT]·bulkrename order 맵) — 메인 파일 목록은 기이식 확인 ② **ExtDot 이중 점 진범 픽스**(결과 그대로 채택+재분해 — 연번/날짜/치환 전수 점검) ③ 동작 **6종 확정**(이동/확장자 카드 제거·구 프리셋 스킵·en 명칭 정확화) ④ NxSegmented **AA 벡터 화살표**(긴 샤프트+큰 머리). 187 green | [2026-07-18](journal/2026-07-18.md) |
+| `feat/nxgrid-sort` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 5 | **다중열 정렬·6종 확정·ExtDot 픽스·화살표**(사용자 요청 5건) — ① NxGrid 다중열 정렬 = **원본 docs/24 §4 규약 이식**(3상태·Shift 다중·▲▼ 앞/①② 뒤·비교 = 호스트[NXGR_SORT]·bulkrename order 맵) — 메인 파일 목록은 기이식 확인 ② **ExtDot 이중 점 진범 픽스**(결과 그대로 채택+재분해 — 연번/날짜/치환 전수 점검) ③ 동작 **6종 확정**(이동/확장자 카드 제거·구 프리셋 스킵·en 명칭 정확화) ④ NxSegmented **AA 벡터 화살표**(긴 샤프트+큰 머리). 187 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/bulk-tab-tristate` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 2 | **Tab 내비 + 3단 체크·헤더 전체 토글**(사용자 요청 3건) — ① IsDialogMessageW(모달 3곳)+**CONTROLPARENT**(카드·텍스트박스·스핀 래퍼)+WANTARROWS(콤보/세그/메뉴) = Tab 배치 순서 이동·방향키 보존 ② **NxCheckBox CheckMode 2단/3단**(0/1/2·부분 = 흐릿한 ✓ 블렌드) ③ **그리드 헤더 체크** = 전 행 집계 표시·클릭 전체 토글(NXGR_ROW_ALL 통지→excluded 재동기) ④ 체크 열 폭 = 필요 폭만. 실기 24↔0·3단 순환 검증·186 green | [2026-07-18](journal/2026-07-18.md) |
 | `fix/grid-flicker` | 2026-07-18 | 2026-07-18 (병합) | 2026-07-18 | 1 | **NxGrid 깜빡임 제거**(사용자 QA — 입력·방향키 blink) — WM_PAINT **더블버퍼**(메모리 DC 전면 도장→1회 BitBlt)+WM_ERASEBKGND=1+InvalidateRect erase=false 전환. 렌더 회귀 없음·186 green | [2026-07-18](journal/2026-07-18.md) |
 | `feat/bulk-bottom-bar` | 2026-07-18 | 2026-07-18 (`1c5e8eb`) | 2026-07-18 | 1 | **하단 행 재편**(사용자 요청 5건) — Apply → **"이름 변경(Rename)" NxButton Default**(NXBTN_SETENABLE 활성 제어) · 우하단 [취소][이름 변경] 실측 정렬 · 프리셋 [… ⌄]+건수 = 구 Apply 자리(하단 좌측) · 미리보기 그리드 전고 확장 · **GridOpts.row_h**(파일 목록 20px 동일 산식). 실기 24건 실변경 왕복·186 green | [2026-07-18](journal/2026-07-18.md) |
@@ -126,220 +129,142 @@
 | `feat/m1-virtual-list` | 2026-07-12 | 2026-07-12 (`baa3b3f`) | 2026-07-12 | 3 | M1-3 — 가상화 파일 리스트 초안: nexa-tree 평면 스트림 배선(TreeSource·들여쓰기·마커·클릭 토글)·GDI 경로 제거·DW 레이아웃 캐시(벤치 1,673µs). 테스트 48 green·실기 실측 | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m1-adr0002-render` | 2026-07-12 | 2026-07-12 (`e0daf56`) | 2026-07-12 | 2 | M1-2 — ADR-0002 확정: DirectWrite GDI interop 채택(벤치 −28%·RSS +4.1MB 예산 내), dw.rs 백엔드·F2/F3 비교 하네스·기본 백엔드 전환 | [2026-07-12](journal/2026-07-12.md) |
 | `feat/m1-gui` | 2026-07-11 | 2026-07-11 (`c20ddde`) | 2026-07-11 | 3 | M1-1 — `nexa-gui` 크레이트 분리: 플랫폼 중립 위젯 trait·무효화(rect 병합)·입력 이벤트·테마 토큰(원본 docs/39 차용)·`VirtualRows` + nexa-app 재배선(`gdi.rs` DrawCtx 백엔드). 테스트 43 green·실기 확인 | [2026-07-11](journal/2026-07-11.md) |
-| `feat/m0-render-spike` | 2026-07-11 | 2026-07-11 (`cc7e7ed`) | 2026-07-11 | 3 | M0-7 — GDI 렌더 스파이크: 더블 버퍼·합성 100k행 가시 영역만·휠/키 스크롤·DPI (windows 타깃 check·clippy green) + git -C 권한 병합 | [2026-07-11](journal/2026-07-11.md) |
-| `feat/m0-scaffold` | 2026-07-11 | 2026-07-11 (`e1a2e7f`) | 2026-07-11 | 11 | M0-1~6 — 워크스페이스·코어 3크레이트 이식(테스트 green)·Win32 창 스켈레톤(windows 타깃 check green)·CI(예산 게이트) + 권한 복구 | [2026-07-11](journal/2026-07-11.md) |
+| `feat/m0-render-spike` | 2026-07-11 | 2026-07-11 (`cc7e7ed`) | 2026-07-24(정정) | 3 | M0-7 — GDI 렌더 스파이크: 더블 버퍼·합성 100k행 가시 영역만·휠/키 스크롤·DPI (windows 타깃 check·clippy green) + git -C 권한 병합 | [2026-07-11](journal/2026-07-11.md) |
+| `feat/m0-scaffold` | 2026-07-11 | 2026-07-11 (`e1a2e7f`) | 2026-07-24(정정) | 11 | M0-1~6 — 워크스페이스·코어 3크레이트 이식(테스트 green)·Win32 창 스켈레톤(windows 타깃 check green)·CI(예산 게이트) + 권한 복구 | [2026-07-11](journal/2026-07-11.md) |
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
-
 ---
-
 ## feat/prefs-full
-
 - **생성**: 2026-07-14 (분기: main `750ef22`). **커밋**: `91eccc1`(설정 레지스트리·검색·카테고리·동적 렌더·목록/도크 라이브 반영) → `b8650d2`(docs). 병합(`809b7ca`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: 164 green · clippy 0 · fmt · B2 0.85MB · B3 무변(EDIT/BUTTON/STATIC=user32) · 릴리스 빌드. **실기 QA 대기**: Ctrl+, → 좌측 카테고리 전환·상단 검색어로 항목 필터·글꼴/크기 EDIT·숨김/닷파일/도크 체크박스·저장 시 즉시 반영 및 settings.cfg 갱신.
 - **α 한계**: 재시작 필요 설정 확인창(원본 PREF-9)·항목 확대(터미널 wrap/cols[X-3]·글꼴 다중 슬롯)는 해당 기능 도입 시 레지스트리에 추가.
-
 ## fix/ux-qa4
-
 - **생성**: 2026-07-14 (분기: main `2ccc70f`). **커밋**: `aa78c54`(QA 5건 일괄) → `231aa2f`(journal). 병합(`089e1a0`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: 164 green · clippy 0 · fmt · B2 0.86MB · B3 무변 · 릴리스 빌드. **실기 QA 대기**: 세 스플리터 동일 두께·50%/반대편 스냅(Alt 해제)·우클릭 "이름 복사"·도구모음 3그룹(토글 accent 줄·메뉴 동기)·도크 터미널 라벨 옆 [→](활성=accent) 클릭 시 현재 폴더 cd.
 - **후속(사용자 요청 접수)**: **설정 창 전면 확장** — 원본 docs/40 §8(VS Code식 좌측 검색+카테고리 트리+영속 설정 전부 수록) 구조를 신규 앱 옵션 전체에 이식(X-7 승격).
-
 ## fix/ux-qa3
-
 - **생성**: 2026-07-14 (분기: main `aa066e7`). **커밋**: `a11a3e7`(QA 6건 일괄) → `e059ee4`(journal). 병합(`9df021a`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: 164 green · clippy 0 · fmt · B2 0.84MB · B3 무변(아이콘=user32 CreateIconFromResourceEx) · 릴리스 빌드. **실기 QA 대기**: 언어 en 전환 후 우클릭 "Copy as path" 표기·확인창과 진행 창 동시 가시·타이틀바/Alt+Tab 원본 아이콘·다크에서 도크 가로선 식별·파일 메뉴/⚙ 버튼으로 설정 열기·스플리터 위 커서 변화.
 - **α 한계**: exe 파일 아이콘(탐색기 표시 — 리소스 섹션·빌드 도구=DR-8 원장 검토 후속)·라이트 아이콘 판(nexa-dir-light.ico) 테마 연동 후속.
-
 ## feat/ux-batch3
-
 - **생성**: 2026-07-14 (분기: main `bfe08fd` — S1 직커밋 직후). **커밋**: `a270be1`(S2 대화상자 폰트) → `2e1aeb1`(S3 도크 레이아웃) → `6bde8a1`(S4 터미널 마우스) → `8fa7c0c`(S5 폰트 체인+크기) → `81c2f4f`(S6 설정 창) → `777623e`(docs). 병합(`ef68feb`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: 164 green(nexa-term DECSET·config 왕복 확장 포함) · clippy 0 · fmt · B2 0.82MB · **B3 무변**(설정/대화상자=user32/gdi32·폴백 체인=dwrite) · 릴리스 빌드. **실기 QA 대기**: ① 우클릭 "경로 복사"가 윈도우 기본 위치·이름으로 1개만 ② 충돌 확인창 폰트·전체 표시(설정에서 dlg_font 변경 반영) ③ 도크 좌/우 스플리터 독립 드래그(파일과 별개)·재시작 복원 ④ Zellij에서 탭 클릭 이동(Shift=로컬 선택) ⑤ `term_font=D2Coding, JetBrainsMono Nerd Font` 후 Nerd 아이콘 표시 ⑥ Ctrl+, 설정 창 저장→적용·settings.cfg 즉시 갱신.
 - **α 한계**: 설정 창 검색/카테고리(X-7)·터미널 wrap/cols(X-3 잔여)·대화상자 Esc/Tab 네비·라이트 고정 확인/진행 창·레거시(비SGR) 마우스 인코딩.
-
 ## fix/ux-qa2
-
 - **생성**: 2026-07-14 (분기: main `f1fa849`). **커밋**: `095bf67`(탭 스냅·경로복사 순서/대체·dialog.rs·4버튼 확인창·진행 창) → `4f757ff`(journal). 병합(`59fe10d`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: 159 green · clippy 0 · fmt · B2 0.79MB · **B3 무변**(dialog.rs=user32/gdi32만 — comctl32 비의존 유지) · 릴리스 빌드. **실기 QA 대기**: 탭 드래그 스냅감·경로 복사 순서=화면 순서·셸 메뉴에 "경로 복사" 1개만 표시·충돌 2건+ 시 4버튼 확인창(모두 덮어쓰기=이후 무확인/덮어쓰기·건너뛰기=파일별)·대용량 전송 시 진행 창(바·취소).
 - **α 한계**: 대화상자 키보드 네비(Esc/Tab — IsDialogMessage의 IDCANCEL=2 충돌로 미채용, 버튼 클릭 사용)·진행 창 라이트 고정(다크 테마 후속)·탭 패널 간 이동 드래그 후속.
-
 ## fix/ux-qa1
-
 - **생성**: 2026-07-14 (분기: main `5c78aa9`). **커밋**: `4f0c943`(QA 7건 일괄) → `da12e63`(journal). 병합(`2fdd31d`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: `cargo test` 159 green · clippy 0 · fmt · B3 무변(ShellExecuteW=shell32 기등재) · 릴리스 빌드. **실기 QA 대기**: AppData 진입→복귀 시 비확장·탭 빈 공간 더블클릭·[+] 후 드래그 잔존 없음·파일 더블클릭/Enter/Alt+↓ 실행·교차 레벨 2파일 우클릭 복사/경로 복사→붙여넣기 모두 포함·충돌 시 1회 확인.
 - **α 한계**: 충돌 파일별 개별 선택(예/모두 예 4버튼 — user32 커스텀 대화상자)·Alt=POSIX 경로 복사·VerbReplacement(셸 항목 제자리 대체) = 후속.
-
 ## feat/ux-convenience
-
 - **생성**: 2026-07-14 (분기: main `aa0339b`). **커밋**: `4740275`(① 경로바 자동완성+환경변수 — pathinput.rs·PathBar 팝업) → clippy 정리 → `b7abae5`(② 탭 UX — TabBar Move/Context·Panel move/dup/lock·세션 locked) → `d1901dc`(③ 전송 충돌 일괄 적용) → `5ef0a31`(docs). 병합(`71243d6`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: `cargo test` **159 green**(신규 — pathinput expand/suggest·pathbar 제안 순환/복원/클릭·탭 move/lock/dup·세션 locked 왕복) · clippy 0 · fmt · B2 0.78MB · **B3 무변**(팝업 메뉴=user32·TaskDialog/comctl32 비의존 유지) · 릴리스 빌드. **실기 QA 대기**: 경로바 우클릭→타이핑 시 제안 팝업·↑/↓·클릭 이동·`%USERPROFILE%` 입력 이동 · 탭 드래그 재정렬·우클릭 메뉴(잠금 후 × 사라짐·Ctrl+W 거부·재시작 복원)·복제 · 파일 충돌 2건+ 전송 시 "남은 충돌 동일 적용" 확인창.
 - **α 한계(후속 배치)**: ④ 설정 창(원본 PreferencesWindow — VS Code식) · 드라이브 제안("C:" 단계) · 탭 패널 간 이동/Ctrl 복제 드래그·고정(pin)·멀티라인 · 전송 진행 창(현재 타이틀 %).
-
 ## feat/f18-expanded
-
 - **생성**: 2026-07-14 (분기: main `7bd2ed2` — 0.5.0 직후). **커밋**: `3c92ad4`(Tab.expanded 집합·경계 동기·리네임 치환·세션 영속·테스트 4종) → `784169f`(docs 현행화). 병합(`1612e8c`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: `cargo test` **153 green**(신규 — 형제 펼침 유지[진입·복귀]+접힘 유지·세션 시드 restore·config panelN.expM 왕복[빈 목록 생략 인덱스 정렬]) · clippy 0 · fmt · B2 0.73MB · B3 무변 · 릴리스 빌드. **실기 QA 통과(사용자 07-14)**: "폴더 상태가 유지되는 것은 확인했어".
 - **α 한계**: 삭제된 폴더의 잔존 엔트리는 미정리(expand_path 무시로 무해 — 세션 저장 시 동기로 자연 수렴) · 탭 복제(new_tab)는 빈 집합에서 시작(원본 동일).
-
 ## fix/nav-freeze-watcher
-
 - **생성**: 2026-07-14 (분기: main `59ed7aa`). **커밋**: `fcbc562`(watcher OVERLAPPED 재구현+캐럿 깜빡임) → `e00143a`(journal 기록). 병합(`5f6b441`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: **자동 재현 하네스**(PostMessage 키 주입+SendMessageTimeout 블로킹 실측) — 수정 전 홈→Documents **12,009ms** 무응답 → 수정 후 **6ms** · Documents→홈(조용한 OneDrive watcher 해제=최악) **4ms** · watcher 자동 반영 정상(생성/삭제 70→69) · 151 green · clippy 0 · B2 0.73MB · B3 무변(CancelIoEx/DuplicateHandle=kernel32).
 - **교훈**: 비 OVERLAPPED 핸들의 CloseHandle은 파일 객체 잠금 직렬화로 **대기 중인 동기 I/O 완료까지 블로킹** — "핸들 닫기=중지 신호" 패턴은 디렉터리 감시에 부적합. 원본 .NET FileSystemWatcher는 내부가 overlapped라 이 문제가 없었음(이식 시 단순화가 결함 유입).
-
 ## feat/m4-term-select
-
 - **생성**: 2026-07-14 (분기: main `b9f032c`). **커밋**: `3782477`(셀 정렬·선택·스크롤백·클립보드·글꼴 설정) → `2dcb73a`(docs — journal·X-3 현행화). 병합(`8c8665c`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: `cargo test` 151 green(config term_font 왕복 포함) · clippy 0 · fmt · B2 0.73MB · B3 무변(GetCursorPos/CoInitializeEx=기존 화이트리스트) · 릴리스 빌드. **실기 QA 대기**: ls 한글 파일명 열 정렬·드래그 선택+반전 표시·그리드 밖 자동 스크롤·휠 스크롤백(터미널 위)·Ctrl+C 복사/Ctrl+V 붙여넣기·data\settings.txt `term_font=D2Coding` 후 재시작.
 - **α 한계**: 스크롤백 800 상한 도달 시 선택/보기 절대 인덱스 드리프트 · 더블클릭 단어 선택 없음 · 명시 폴백 체인(1→2순위 글꼴)·글꼴 크기 설정 = X-3 잔여.
-
 ## fix/m4-qa-batch2
-
 - **생성**: 2026-07-14 (분기: main `6b8bd58`). **커밋**: `f390606`(QA 5건 일괄 — 아이콘 비동기·편집 클립보드·리네임 지연·휠 라우팅·lnk 숨김) → `6fa6982`(journal 기록). 병합(`55bdcc2`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: `cargo test` **151 green**(신규 3 — in-flight 중복 방지·insert 같은 키 대체 반환·display_name lnk/UTF-8 경계) · clippy 0 · fmt · 릴리스 빌드. **프리즈 재현 조건**: Downloads의 57.8MB 다운로드 exe(MotW) 아이콘 추출 → Defender 검사 수십 초 — 사용자 실기 재확인 대기(Downloads/Documents 진입·탭 추가 시 무응답 없어야 함).
 - **α 한계**: 아이콘 실패 키는 재페인트마다 재시도(원 동작 유지) · 붙여넣기는 한 줄로 정제 · lnk 숨김은 이름 컬럼만(종류/확장자 컬럼은 유지).
-
 ## fix/m4-term-qa
-
 - **생성**: 2026-07-14 (분기: main `1dea2c3`). **커밋**: `a0b4acf`(세로바 캐럿·Backspace=DEL 교차 매핑) → `cc54371`(docs — journal QA 기록·TODO X-3 터미널 설정 백로그). 병합(`149394b`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: `cargo test` 148 green · clippy 0 · fmt · 릴리스 빌드. **결함 원인**: WM_CHAR 0x08 직송 → ConPTY(PSReadLine)가 Ctrl+Backspace(단어 삭제)로 해석 — 원본 TerminalView.OnKeyDown(:636) 규약(Backspace→0x7F·Ctrl+Backspace→0x08)으로 정정. 실기 QA 대기(1글자 삭제·세로바 캐럿).
 - **후속**: X-3 — 원본 터미널 설정 패리티(NoWrap 기본 true·MaxColumns 240 가로 스크롤·ConsoleFamily/Size) 미구현 확인·백로그 등재.
-
 ## feat/m4-terminal
-
 - **생성**: 2026-07-14 (분기: main `17421cd` — ADR-0004 직후). **커밋**: `db266f0`(S1 — nexa-term 크레이트·VtScreen 이식·테스트 9) → `817eeb4`(S2 — conpty.rs ConPTY 세션·읽기/종료 스레드·폴백) → `4e96a0b`(S3 — 도크 통합·term_paint 셀 그리드·키 라우팅·재시작) → `d8c73fc`(docs 현행화). 병합(`acbbdae`): 2026-07-14. 삭제: CI green 확인 후.
 - **검증**: Windows 실기 — `cargo test` 워크스페이스 **148 green**(nexa-term 9: CUP/SGR/줄바꿈 스크롤/ED/EL/ECH/ICH·DCH/DECSTBM/전각/리사이즈) · clippy 0 · fmt · B2 **0.69MB** · **B3 통과(임포트 무변** — Console/Pipes 피처는 kernel32 계열) · 릴리스 재기동 스모크(procs=1). **실기 QA 대기**: 도크 [터미널] 전환→셸 프롬프트·dir/ls 출력·한글 입출력·화살표(히스토리)·도크 리사이즈·exit 후 아무 키 재시작.
 - **α 한계**: 스크롤백 휠 스크롤 표시·마우스 선택 복사·bold 별도 폰트 렌더 미구현(속성만 보존) · faint=배경 블렌드 근사 · 셸 종료 코드 미표시(안내 문구만).
-
 - **생성**: 2026-07-13 (분기: main `d051cec`). **커밋**: `32175a4`(S1/S2 — clipboard.rs·CF_HDROP+DropEffect 읽기/쓰기·내부 클립보드 제거·왕복 테스트) → `8c06960`(S3 — dnd.rs IDropTarget 수신·B-14dnd 연산 결정·최적화 이동·훅 격리) → `549b2f9`(S4 — IDropSource+SHCreateDataObject 발신·drag_press 임계 감지) → `6627715`·`b963fde`(docs 현행화). 병합(`2e93db2`): 2026-07-13. 삭제: CI green 확인 후.
 - **검증**: Windows 실기 — `cargo test` green · clippy 0 · fmt · **실 클립보드 왕복 통합 테스트**(비ASCII·cut effect, `#[ignore]` 수동) 통과 · B2 무변 · **B3 통과(임포트 무변** — DataExchange/Memory/StructuredStorage 피처는 컴파일 게이트) · 릴리스 기동 스모크. **DnD 실기 QA 대기**: 탐색기→앱 드롭(Ctrl/Shift 커서)·앱→탐색기 드래그·내부 패널 간·탐색기↔앱 Ctrl+C/V 왕복(모달 드래그 루프 — 자동화 불가).
 - **α 한계**: spring-load 폴더 hover 진입(원본 B-15h)·드롭 대상 하이라이트·Performed DropEffect SetData 미구현 · 발신 이동은 원본 미삭제(비최적화 대상=복사로 남음 — 안전 방향).
-
 ## feat/m3-shellmenu
-
 - **생성**: 2026-07-13 (분기: main `77c3265`). **커밋**: `895a660`(S1 — shellmenu.rs·IContextMenu 호스팅·wndproc 포워딩·delete/rename 가로채기·rows 우클릭 선택 규약+테스트·ADR-0003) → `11f7732`(S2 — 고유 병합 0x8000+[완전 삭제·붙여넣기]·Apps/Shift+F10·row_anchor) → `3bc4ebe`(S3 — 빈 영역 배경 메뉴 CreateViewObject·run_menu 통합·Undo/Redo 병합·paste 가로채기·in_body) → `a4241e4`(docs 현행화). 병합(`e28fed3`): 2026-07-13. 삭제: CI green 확인 후.
 - **검증**: Windows 실기 — `cargo test` 워크스페이스 **127 green**(gui 52 — 우클릭 선택 신규) · clippy 0 · fmt · B2 0.60MB · **B3 통과(임포트 무변 — comctl32 서브클래스 회피 확인)** · 릴리스 기동 스모크(RSS 26MB·정상 종료) · **실기 QA(사용자) 5/6 통과**(파일/폴더 우클릭·보내기 서브메뉴·휴지통 복원·빈영역 Undo/Redo·새 폴더 — 잔여: Apps/Shift+F10 = TODO §7 X-1).
 - **α 한계**: 커스텀 레지스트리/설정 사용자화(원본 §7)·Checksum·VerbReplacement·교차 부모 선택 = M5 후속 · 마커 존 우클릭 시 캐럿 불이동 · nexa-shell 크레이트 분리 대신 앱 모듈 채택(규모 도달 시 재검토).
-
 ## feat/m3-undo
-
 - **생성**: 2026-07-13 (분기: main `1670bfb`). **커밋**: `faf4086`(nexa-ops history 모듈·테스트 9) → `71fcd29`(앱 배선 — State.history·push 3곳·Ctrl+Z/Y·편집 메뉴·i18n) → `4fcab3c`(휴지통 복원 recycle.rs·DeleteBatchOp) → `a45da5b`(휴지통 왕복 통합 테스트·B3 ole32). 병합(`8bf3da3`): 2026-07-13. 삭제: CI green 확인 후.
 - **검증**: Windows 실기 — `cargo test` 워크스페이스 green(history 9: 스택 규약 5 + 연산 왕복 4 · ops 20) · clippy 0 · **실 휴지통 왕복 통합 테스트**(삭제→셸 undelete 복원→원위치·내용 무손상, `#[ignore]` 수동 `-- --ignored`) 통과 · 릴리스 기동 스모크(RSS 25.51MB·정상 종료) · B2 0.58MB·B3 통과(**ole32.dll 신규** — CoInitializeEx/CoTaskMemFree, OS 인박스라 DR-2 준수·화이트리스트 근거 등재).
 - **α 한계**: 편집 메뉴 Undo/Redo 활성/비활성 표시 없음(위젯 enabled 미지원 — 타이틀 노트로 알림) · 다중 버전 휴지통 항목은 경로당 최초 일치 1건(삭제 시각 비교=후속) · 완전 삭제는 undo 불가(설계상 제외 — 확인창 방어).
-
 ## feat/m3-fileops
-
 - **생성**: 2026-07-13 (분기: main `e8daec8`). **커밋**: `a291d1f`(ops 프리미티브) → `ccb8916`(gui 인라인 편집기+app 배선) → `7786eeb`(docs 현행화). 병합(`f86c021`): 2026-07-13. 삭제: CI green 확인 후.
 - **검증**: Windows 실기 — `cargo test` 116 green(ops 10·rows 리네임 플로우) · clippy 0 · fmt · 릴리스 실기 4종(Ctrl+Shift+N→"MyDir" 리네임 · Del 휴지통 · Shift+Del Esc 취소 잔존 · Shift+Del Y 완전 삭제 — 타이틀 "완전 삭제: 1개 삭제") · B2 0.56MB·B3 통과(신규 임포트 없음).
 - **α 한계**: 리네임 필드 IME 조합 창 위치 미배치 · 휴지통 undo 기록(M3-3) · 새 바로가기(M5).
-
 ## feat/m3-ops-transfer
-
 - **생성**: 2026-07-13 (분기: main `6938df5`). **커밋**: `ce5e918`(nexa-ops 엔진·테스트 8) → `d06cdba`(앱 배선 — 클립보드·워커·통지·취소) → `ea1299e`(docs 현행화). 병합(`844b1e3`): 2026-07-13. 삭제: 2026-07-13(CI green 확인).
 - **검증**: Windows 실기 — `cargo test` 113 green(ops 8: 순번 명명·같은 폴더 규칙·재귀·fast path·충돌 순차·순환 격리·진행 총량·취소 정리) · clippy 0 · fmt · 릴리스 실기(픽스처 3파일: Ctrl+A→C→V 같은 폴더 → **6항목·" (2)" 복제·"전송 3"** / Ctrl+A→X→V → **무동작·"건너뜀 6"**) · B2 0.54MB·B3 통과(신규 임포트 없음).
 - **α 한계**: 충돌=건너뜀(확인 모달 후속)·진행 창 없음(타이틀 %)·내부 클립보드만(OS 상호운용 M3-5).
-
 ## feat/m2-ime-uia
-
 - **생성**: 2026-07-12 (분기: main `5dc548f`). **커밋**: `2fab4bc`(IME 조합 창 캐럿 배치) → `1764257`(UIA 프로바이더·포커스 이벤트) → `2a155f7`(docs 현행화·M2 완료). 병합(`474515f`)·태그 `0.3.0`: 2026-07-13. 삭제: 2026-07-13(CI green 확인 — run 29197548967).
 - **검증**: Windows 실기 — `cargo test` 105 green · clippy 0 · fmt · **UIA**: .NET System.Windows.Automation 클라이언트로 List Name(활성 경로)·가시 항목 14·항목 이름·SelectionItem IsSelected 조회 정상 · **IME**: 편집 모드에서 WM_IME_STARTCOMPOSITION/COMPOSITION 주입+한글 SendKeys 생존·Esc 복귀·정상 종료(실제 IME 조합 창 위치는 수동 확인 항목) · B2 0.50MB·B3 통과(imm32·uiautomationcore 등재 — 근거 커밋 메시지).
-
 ## feat/m2-resident
-
 - **생성**: 2026-07-12 (분기: main `de2adbb`). **커밋**: `f2b5d15`(트림·자니터·활동 추적) → `437c214`(docs 현행화) → `61c83a1`(권한 병합). 병합(`b848904`): 2026-07-12. 삭제: 2026-07-12(CI green 확인 — run 29194988812).
 - **검증**: Windows 실기 — `cargo test` 105 green(`should_trim` 1: 임계/1회성/시계 역전) · clippy 0 · fmt · 릴리스 실측(**최소화 사이클**: 활성 26.86MB → 트림 2.9MB → 복원 12.09MB·타이틀/동작 정상 / **유휴 78s**: 26.98MB → 0.21MB) — **상주 RSS ≤30MB 게이트 통과** · B2 0.49MB·B3 통과(Win32_System_Threading=kernel32 계열, 신규 DLL 없음).
-
 ## feat/m2-i18n
-
 - **생성**: 2026-07-12 (분기: main `874559a`). **커밋**: `0bbc595`(i18n.rs·lang/·배선·언어 라디오) → `4be3f58`(docs 현행화) → `b2a5e38`(권한 병합). 병합(`7a50692`): 2026-07-12. 삭제: 2026-07-12(CI green 확인 — run 29193272097).
 - **검증**: Windows 실기 — `cargo test` 104 green(i18n 4: 파싱 규칙·en/ko 키 파리티·병합/오버라이드/resolve·자리표) · clippy 0 · fmt · 릴리스 스모크(**타이틀 검증**: `lang=system`→ko "[좌] 62개 항목·탭 1/1" / `lang=en`→"[L] 62 items·Tab 1/1"·정상 종료 시 `lang` 영속) · B2 0.49MB·B3 통과(Win32_Globalization=kernel32 계열, 신규 DLL 없음).
 - **비고**: 작업 도중 VSCode 비정상 종료 인시던트(작업 트리 무손실 — journal 참조). 메뉴 라디오 클릭 자동화는 mouse_event 플레이크로 생략, 단위 테스트로 커버.
-
 ## feat/m2-persistence
-
 - **생성**: 2026-07-12 (분기: main `cc9e5ba`). **커밋**: `a156a21`(config.rs·Panel restore/session·기동 로드/종료 저장) → `7a99e02`(docs 현행화). 병합(`e04e9d4`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 102 green(config 3: 라운드트립/관용 파싱/원자성) · clippy 0 · 릴리스 스모크(F6 라이트+Ctrl+T+Alt+↑ → 종료 → `data\` settings/session 생성 확인 → 재실행 **라이트 픽셀·[좌] C:\Users·탭 2/2 복원**·정상 종료) · B3 통과(신규 임포트 없음).
-
 ## feat/m2-panel-navbar
-
 - **생성**: 2026-07-12 (분기: main `bc8e788`). **커밋**: `1f97534`(패널 네비 버튼) → `c395476`(docs). 병합(`450f509`): 2026-07-12.
 - **검증**: `cargo test --workspace` 97 green(레이아웃 분할·[←]=해당 패널 뒤로) · clippy 0 · 릴리스 빌드.
-
 ## feat/m2-theme
-
 - **생성**: 2026-07-12 (분기: main `9246bb2`). **커밋**: `3bc8283`(테마 모드·F6·DWM·B3) → `d89b21b`(docs 현행화). 병합(`9891174`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 96 green · clippy 0 · 릴리스 실행 **픽셀 검증**(F6: #1F242B → #F5F7FA → 시스템 추종 → 복원·정상 종료) · B3 통과(dwmapi·advapi32 사전 등재).
-
 ## feat/m2-chrome
-
 - **생성**: 2026-07-12 (분기: main `35bd424`). **커밋**: `f146a7c`(gui: MenuBar·Toolbar·StatusBar) → `cf7fb49`(app: 적층 레이아웃·CMD 라우팅) → `03d8804`(docs 현행화). 병합(`3a1fcf5`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 96 green(menubar 4·chrome 2) · clippy 0 · 릴리스 실행(메뉴 숨김 토글 62→44행·도구 ↑ C:\Users 이동·정상 종료) · B3 통과. QA: mouse_event 클릭 간 대기 필요(플레이크) 확인.
-
 ## feat/m2-panels
-
 - **생성**: 2026-07-12 (분기: main `2c8925a`). **커밋**: `fff90ed`(gui: TabBar) → `6d8e2c0`(app: panel.rs 추출·듀얼 배치·단축키) → `9c3e3b6`(docs 현행화). 병합(`bddd5ef`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 90 green(tabbar 3·panel 4) · clippy 0 · 릴리스 실행(Tab 패널 전환·Ctrl+T 탭 2/2·탭별 독립 경로·Ctrl+Tab 순환·Ctrl+W 닫기·듀얼 RSS 25.1MB·정상 종료) · B3 통과.
-
 ## feat/m2-pathbar
-
 - **생성**: 2026-07-12 (분기: main `9bc5bef`). **커밋**: `c2eddd6`(gui: PathBar·split_path·RightDown) → `356f9b9`(app: 레이아웃·라우팅·네비 연동) → `65833a4`(docs 현행화). 병합(`3aa46fc`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 83 green(pathbar 5) · clippy 0 · 릴리스 실행(ClientToScreen 좌표 자동화: "C:" 세그먼트 클릭 → C:\ 이동·우클릭 편집+Enter → 복귀·정상 종료) · B3 통과. 1차 스모크의 좌표 오프셋 오류(창 rect 기준 추정치)를 ClientToScreen으로 교정해 재검증.
-
 ## feat/m1-gate
-
 - **생성**: 2026-07-12 (분기: main `e570ef9`). **커밋**: `a7ff9df`(첫 렌더 계측·실측) → `6f5c754`(M1 완료 docs 현행화). 병합(`0c716f5`)·태그 `0.2.0`: 2026-07-12.
 - **검증**: Windows 실기 — 100k 실제 파일 픽스처(%TEMP%): 첫 렌더 106/115/115ms·벤치 2,098µs·10k 유휴 RSS 27.87MB(60s 유휴·3회 중앙값) · 테스트 80 green · clippy 0 · B3 통과.
-
 ## feat/m1-navigation
-
 - **생성**: 2026-07-12 (분기: main `f448a25`). **커밋**: `3bd09df`(gui: replace_source·marker_hit) → `8148510`(app: nav.rs·진입·Alt+화살표·토글) → `e29d3a1`(docs 현행화). 병합(`415208f`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 80 green(nav 3) · clippy 0 · 릴리스 실행(Enter 진입→Alt+↑→Alt+← 타이틀 경로 왕복·Ctrl+H 재열기·RSS 24.5MB·정상 종료) · B3 통과.
-
 ## feat/m1-icons
-
 - **생성**: 2026-07-12 (분기: main `984f3f4`). **커밋**: `033182d`(gui: draw_icon·icon 어휘) → `0bffc72`(app: icons.rs·DwCtx·타이머·B3 shell32) → `bdcffbb`(docs 현행화). 병합(`b8833a1`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 74 green(icons 7) · clippy 0 · 릴리스 실행(아이콘 표시·벤치 2,547µs·RSS 27.95MB·정상 종료) · **B3 로컬 게이트가 shell32 신규 임포트를 push 전 검출**.
-
 ## feat/m1-keyboard
-
 - **생성**: 2026-07-12 (분기: main `843da77`). **커밋**: `48ed980`(gui: 캐럿 네비·typeahead.rs·HUD) → `e5a2386`(app: WM_CHAR·수식키·타이머 배선) → `8a26d2d`(docs 현행화). 병합(`14bfe86`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 69 green · clippy 0 · 릴리스 실행(캐럿 이동·타입어헤드 점프·keybd_event Shift+End "선택 61"·RSS 17.8MB) · B3 통과. QA 교훈: SendKeys 확장 키의 Shift 해제 특성.
-
 ## feat/m1-select
-
 - **생성**: 2026-07-12 (분기: main `5de5385`). **커밋**: `df012bb`(gui: 선택 UX·러버밴드·키) → `67e784b`(app: TreeSource 선택·수식키·타이틀) → `378a233`(docs 현행화). 병합(`a37e01e`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 60 green(교차폴더 AC2 포함) · clippy 0 · 릴리스 실행(SendKeys Ctrl+A → "선택 62" 타이틀 반영·벤치 1,540µs·RSS 18.20MB·정상 종료) · B3 통과.
-
 ## feat/m1-columns
-
 - **생성**: 2026-07-12 (분기: main `6955308`). **커밋**: `57374d5`(gui: 컬럼 모델·헤더·정렬·리사이즈·가로 스크롤) → `47a9d28`(app: 5컬럼 셀 값·트리밍·이벤트 라우팅) → `8d9a6fc`(docs 현행화). 병합(`6e4ba96`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 55 green(gui 23·source 6) · clippy 0 · 릴리스 실행(5컬럼 표시·벤치 1,813µs·RSS 18.14MB·정상 종료) · **B3 스크립트 사전 통과**(push 전 로컬).
-
 ## feat/m1-virtual-list
-
 - **생성**: 2026-07-12 (분기: main `5a613b3` — CI 핫픽스 직후 rebase). **커밋**: `199d67a`(gui: RowItem·마커·클릭 토글) → `856ced5`(app: TreeSource 배선·GDI 삭제·레이아웃 캐시) → `5606dd7`(docs 현행화). 병합(`baa3b3f`): 2026-07-12.
 - **검증**: Windows 실기 — `cargo test --workspace` 48 green(gui 20·source 2 포함) · clippy 0 · 릴리스 실행(실 트리 62행 표시·클릭 펼침/접힘·F3 벤치 1,673µs·RSS 18.17MB·정상 종료).
-
 ## feat/m1-adr0002-render
-
 - **생성**: 2026-07-12 (분기: main `9e90d78`). **커밋**: `930eca9`(dw.rs 백엔드·비교 하네스·실측) → `6f3ba92`(ADR-0002 작성·docs 현행화). 병합(`e0daf56`): 2026-07-12.
 - **검증**: Windows 실기 — 두 백엔드 벤치 자동화(SendKeys) 실측 · `cargo test --workspace` green · clippy 경고 0 · 릴리스 스모크(DW 기본, RSS 17.07MB).
-
 ## feat/m1-gui
-
 - **생성**: 2026-07-11 (분기: main `37ca70f` — M0-8 직후). **커밋**: `63ff331`(nexa-gui 크레이트 신설) → `80cbbef`(nexa-app 재배선·gdi.rs) → `0055f7b`(docs 현행화). 병합(`c20ddde`): 2026-07-11.
 - **검증**: Windows 실기 — `cargo test --workspace` 43 green(신규 nexa-gui 17) · clippy 경고 0 · fmt · 릴리스 빌드·기동·WM_CLOSE 정상(exe 0.21MB·RSS 12.4MB).
-
 ## feat/m0-render-spike
-
 - **생성**: 2026-07-11 (분기: main `b894305`). **커밋**: `90a9243`(M0-7 렌더 스파이크) → `8c5f7f8`(git -C 권한 병합) → `8e6a986`(docs 현행화). 병합(`cc7e7ed`): 2026-07-11.
 - **검증**: `cargo check/clippy --target x86_64-pc-windows-msvc` green(맥, 경고 0) · `cargo test` 26 green · fmt. 실행·화면 확인은 M0-8(Windows 실기)과 병행.
-
 ## feat/m0-scaffold
-
 - **생성**: 2026-07-11 (분기: main `522a530`). **커밋**: `391e4bb`(M0-1 워크스페이스) → `38f92ff`(M0-2 core) → `585b2dc`(M0-3 vfs) → `370b56f`(M0-4 tree) → `34b5649`(M0-5 Win32 스켈레톤) → `3b2ddf8`(M0-6 CI) + 권한 복구 3건(`5c0d6bd`·`7282ad4`·`cb8e1db`) + docs 현행화. 병합: 2026-07-11.
 - **검증**: `cargo test --workspace` green(tree 21+vfs 5) · `cargo check --target x86_64-pc-windows-msvc --workspace` green(맥). CI 러너 검증·게이트 실측(M0-8)은 push 후 Windows에서.
-
 ## docs/foundation
-
 - **생성**: 2026-07-11 (분기: main `dffc8f9` 초기 커밋). **커밋 6개**(`43a0989` 권한 → `8f528de` 00·05 → `079fa34` 01·06 → `47597e4` 10·11·12·15·18 → `506fa4e` 02·MILESTONES·TODO → `db223e3` 운영). 병합(`d2727b5`)·삭제: 2026-07-11.
 - **작업**: 원본 nexa-dir 문서 규약·형태를 차용한 설계 문서 세트 — 00/01/02/05/06/10/11/12/15/18 + README(홈)/STATUS/MILESTONES/DEVLOG/TODO/BRANCHES/journal/CLAUDE.md. 스택 결정(ADR-0001 올 러스트)·예산 게이트(DR-2)·로드맵 M0~M5.

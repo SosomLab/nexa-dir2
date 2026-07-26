@@ -1,6 +1,6 @@
 //! `samples/markdown-viewer` 독립 프로젝트 샘플의 회귀 테스트 —
 //! 실제 Starlark 런타임으로 로드·실행해 플러그인 계약(메타·호스트 API·렌더)을
-//! 검증한다(개발자 가이드 docs/23 §샘플의 "자동 테스트" 단계).
+//! 검증한다(개발자 가이드 docs/24 §샘플의 "자동 테스트" 단계).
 
 use super::star::{load_dir, run_preview};
 use super::PreviewDoc;
