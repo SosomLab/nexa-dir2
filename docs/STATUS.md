@@ -1,6 +1,22 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-26 3차 (KST)** — **미리보기 UX 6종(사용자 요청 —
+> **갱신: 2026-07-26 4차 (KST)** — **X-2 마감 배치: Mermaid 이미지 수준
+> 렌더·실행 격리·QA 픽스 → main 병합·push(사용자 지시)**:
+> ① **Mermaid 이미지 렌더(A안)** — 호스트 `render_svg`(svg.rs 서브셋 →
+> GDI+ AA 래스터 → BMP 내용 해시 캐시)·`is_dark()` + 인라인 이미지 마커
+> (`\u{1}img|`+pad — 도크/독립 창 렌더·복사 제외). markdown.star flowchart
+> = 테마 연동 SVG(라운드 노드·화살촉·간선 라벨), 실패 = 텍스트 폴백.
+> ② **실행 격리 상한**(사용자 요구 — 지연 미리보기의 프로세스 영향 차단):
+> 실행 300ms·로드 500ms·연료 5천만 틱·힙 64MB — 초과 = 플러그인만 오류
+> 1줄. ③ ↗ 오버레이 = **이미지 버튼**(emb:popout SVG·hover sel_bg·pressed
+> accent 38%+1px·안 릴리스 발화) ④ **리네임 재클릭 1회 지연 결함 픽스**
+> (사용자 QA — 편집 필드 안 클릭만 가드·취소 클릭은 시드만) ⑤ 검토 기록
+> (Python md 라이브러리 = Starlark에서 import 불가·sosomlab-nexa-viewer =
+> 웹뷰 스택이라 연동/GFM 이식 경로 권장). `feat/starlark-plugin` **17커밋
+> main 병합(ff)·push**. **218 green·clippy 0·exe 5.76MB(B2)·B3 통과**.
+> [journal/2026-07-26.md](journal/2026-07-26.md).
+>
+> **직전(07-26 3차)** — **미리보기 UX 6종(사용자 요청 —
 > `feat/starlark-plugin` 계속)**: ① 도크 미리보기 **우상단 ↗ "크게"
 > 오버레이**(클릭 = 독립 창 — 1회성 통지·히트 존 paint 캐시) ② 독립
 > 미리보기 창 **모달 전환**(소유자 차단·자체 펌프) ③ **스크롤** — 도크

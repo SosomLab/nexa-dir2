@@ -106,7 +106,13 @@ def preview(file):
 | --- | --- | --- |
 | `read_text(n)` | str | **미리보기 대상 파일**의 앞 n바이트(UTF-8 lossy). 호스트 상한 256KB 클램프. 임의 경로 읽기 불가 |
 | `disp_width(s)` | int | 표시 폭(CJK/이모지 = 2칸) — 표·상자 정렬용(콘솔 그리드 기준) |
+| `render_svg(svg)` | str | SVG(svg.rs 서브셋 — rect/line/polyline/path/text)를 **GDI+ AA 이미지로 래스터** → 임시 BMP 경로. 실패/비지원 = 빈 문자열(텍스트 폴백). 반환 경로를 `"\u{1}img\|<path>"` 마커 라인 + `"\u{1}pad"` 예약 행들로 lines에 넣으면 도크·독립 창이 그 자리에 이미지를 그린다(복사 제외) |
+| `is_dark()` | bool | 현재 테마 다크 여부 — 다이어그램 배경·색 선택용 |
 | `file.path/ext/size` | — | `preview(file)` 인자의 속성 |
+
+**실행 격리 상한**(초과 = 해당 플러그인만 오류 1줄 — 앱 무영향): 실행 **300ms** ·
+로드 500ms · 연료 5천만 틱 · 힙 64MB. 무거운 파싱은 `read_text` 상한과 요약
+출력으로 설계하라.
 
 ### 3-3. Starlark 언어 주의(Python과 다른 점)
 
