@@ -1560,7 +1560,28 @@ fn preview_content(
         return (vec![tr("preview.none")], None);
     }
     match crate::preview::preview_for(&path, preview_map, disabled) {
-        crate::preview::PreviewDoc::Lines(lines) => (lines, None),
+        // 도크 = 평문 축약 뷰: 종류 태그(\u{2} — 스타일드 렌더는 독립 창 담당)는
+        // 벗겨 표시(인용은 │ 접두 유지·hr은 ─ 줄). 07-26 GitHub 근사 계약.
+        crate::preview::PreviewDoc::Lines(lines) => (
+            lines
+                .into_iter()
+                .map(|s| {
+                    if !s.starts_with('\u{2}') {
+                        return s;
+                    }
+                    match s.split_once('|') {
+                        Some((tag, r)) if tag.ends_with("hr") => {
+                            let _ = r;
+                            "─".repeat(40)
+                        }
+                        Some((tag, r)) if tag.ends_with('q') => format!("│ {r}"),
+                        Some((_, r)) => r.to_string(),
+                        None => s,
+                    }
+                })
+                .collect(),
+            None,
+        ),
         crate::preview::PreviewDoc::Image(img) => (Vec::new(), Some(img)),
     }
 }
@@ -4600,20 +4621,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                     return LRESULT(0);
                 }
-                // 도크 미리보기 내용 위 휠 = 내용 스크롤(07-26 — 파일 목록 대신)
-                if st.panels[target].dock_visible()
-                    && st.panels[target].dock.active_kind() == 1
-                    && st.panels[target]
-                        .dock
-                        .content_rect()
-                        .contains(nexa_gui::Point { x: px, y: py })
-                {
-                    let mut inv = Invalidations::default();
-                    st.panels[target]
-                        .dock
-                        .on_event(&InputEvent::Wheel { delta }, &mut inv);
-                    flush_invalidations(hwnd, &mut inv);
-                    return LRESULT(0);
+                // 도크 미리보기 내용 위 휠 = 내용 스크롤(07-26 — 파일 목록 대신).
+                // QA 07-26: 패널 오판(싱글 정보 공유 도크 = 좌 위젯)·h=0 도크를
+                // 걸러내도록 **양 패널의 실제 도크 rect로 판정**(target 불신).
+                for di in 0..2 {
+                    if st.panels[di].dock_visible()
+                        && st.panels[di].dock.active_kind() == 1
+                        && st.panels[di].dock.bounds().h > 0
+                        && st.panels[di]
+                            .dock
+                            .content_rect()
+                            .contains(nexa_gui::Point { x: px, y: py })
+                    {
+                        let mut inv = Invalidations::default();
+                        st.panels[di]
+                            .dock
+                            .on_event(&InputEvent::Wheel { delta }, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                        return LRESULT(0);
+                    }
                 }
                 let ev = if wparam.0 & MK_SHIFT != 0 {
                     InputEvent::HWheel { delta: -delta }

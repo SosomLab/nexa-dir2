@@ -36,8 +36,34 @@ const PAD_X: i32 = 8;
 /// 드래그 자동 스크롤 연속 타이머(커서 정지 상태에서도 계속 — 07-26).
 const TIMER_DRAG: usize = 1;
 
+/// 라인 종류(스타일드 렌더 — `\u{2}tag|` 계약, 07-26 GitHub 근사):
+/// 0=본문(프로포셔널) 1..=3=h1~h3(굵게·h1/h2 밑줄 괘선) 4=코드(밴드+모노)
+/// 5=인용(바+흐림) 6=모노(표·다이어그램 아트) 7=수평선.
+fn parse_kind(l: &str) -> (u8, &str) {
+    for (tag, k) in [
+        ("\u{2}h1|", 1u8),
+        ("\u{2}h2|", 2),
+        ("\u{2}h3|", 3),
+        ("\u{2}code|", 4),
+        ("\u{2}q|", 5),
+        ("\u{2}mono|", 6),
+        ("\u{2}hr|", 7),
+    ] {
+        if let Some(r) = l.strip_prefix(tag) {
+            return (k, r);
+        }
+    }
+    (0, l)
+}
+
 struct PvState {
+    /// 콘솔(모노) 폰트 — 코드·표·다이어그램 아트.
     font: HFONT,
+    /// 본문 프로포셔널(Segoe UI)·굵게(제목) — GitHub 근사(07-26).
+    body: HFONT,
+    body_bold: HFONT,
+    /// 라인 종류(parse_kind — text와 병렬).
+    kinds: Vec<u8>,
     /// 라인 원문(선택/복사) — 탭 4칸 치환 후.
     text: Vec<String>,
     /// UTF-16(NUL 종료 — 그리기).
@@ -150,6 +176,28 @@ unsafe fn make_mono(hwnd: HWND, family: &str, size_pt: i32) -> HFONT {
 }
 
 /// 텍스트 픽셀 폭(현재 폰트).
+/// 본문 프로포셔널 폰트(Segoe UI — GitHub 근사·07-26). `bold` = 제목.
+unsafe fn make_ui(hwnd: HWND, size_pt: i32, bold: bool) -> HFONT {
+    let dpi = GetDpiForWindow(hwnd).max(96);
+    let h = -((size_pt.clamp(8, 32) * dpi as i32) / 72);
+    CreateFontW(
+        h,
+        0,
+        0,
+        0,
+        if bold { 700 } else { FW_NORMAL.0 as i32 },
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        DEFAULT_QUALITY,
+        FF_DONTCARE.0 as u32,
+        w!("Segoe UI"),
+    )
+}
+
 unsafe fn text_w(hdc: HDC, text: &str) -> i32 {
     if text.is_empty() {
         return 0;
@@ -160,6 +208,15 @@ unsafe fn text_w(hdc: HDC, text: &str) -> i32 {
     sz.cx
 }
 
+/// 라인 종류 → 폰트(측정·그리기 공용 — 지표 일치).
+fn line_font(st: &PvState, line: usize) -> HFONT {
+    match st.kinds.get(line).copied().unwrap_or(0) {
+        1..=3 => st.body_bold,
+        4 | 6 => st.font,
+        _ => st.body,
+    }
+}
+
 /// 라인의 문자 경계 x 오프셋(px — 도크 offsets 규약: [0, w1, w1+w2, …]).
 /// 이미지 마커/패드 라인 = 경계 0 하나(선택 대상 아님 — 07-26).
 unsafe fn char_offsets(hwnd: HWND, st: &PvState, line: usize) -> Vec<i32> {
@@ -167,7 +224,7 @@ unsafe fn char_offsets(hwnd: HWND, st: &PvState, line: usize) -> Vec<i32> {
         return vec![0];
     }
     let hdc = GetDC(Some(hwnd));
-    let old = SelectObject(hdc, st.font.into());
+    let old = SelectObject(hdc, line_font(st, line).into());
     let mut offs = vec![0i32];
     let mut prefix = String::new();
     for c in st.text[line].chars() {
@@ -365,6 +422,37 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         right: rc.right,
                         bottom: y + st.line_h,
                     };
+                    // 종류 스타일(07-26 GitHub 근사) — 폰트·색·밴드·괘선
+                    let kind = st.kinds.get(li).copied().unwrap_or(0);
+                    let (dim, band, border) = if st.dark {
+                        (COLORREF(0x009C918A), COLORREF(0x00332B26), COLORREF(0x00463C36))
+                    } else {
+                        (COLORREF(0x006A6057), COLORREF(0x00FAF8F6), COLORREF(0x00E4DED8))
+                    };
+                    if kind == 7 {
+                        // 수평선 — 행 배경 + 중앙 1px 괘선
+                        let row = RECT {
+                            left: rc.left,
+                            top: y,
+                            right: rc.right,
+                            bottom: y + st.line_h,
+                        };
+                        SetBkColor(hdc, bg);
+                        let _ = ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, Some(&row), w!(""), 0, None);
+                        SetBkColor(hdc, border);
+                        let lr = RECT {
+                            left: rc.left + PAD_X,
+                            top: y + st.line_h / 2,
+                            right: rc.right - PAD_X,
+                            bottom: y + st.line_h / 2 + 1,
+                        };
+                        let _ = ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, Some(&lr), w!(""), 0, None);
+                        y += st.line_h;
+                        continue;
+                    }
+                    SelectObject(hdc, line_font(st, li).into());
+                    let bg = if kind == 4 { band } else { bg }; // 코드 = 배경 밴드
+                    let fg = if kind == 5 { dim } else { fg }; // 인용 = 흐림
                     // 선택 구간 = 3분할(앞/선택/뒤 — 모노 그리드라 경계 px는 오프셋 합)
                     let seg = sel
                         .filter(|&((ll, _), (hl, _))| ll <= li && li <= hl)
@@ -428,6 +516,28 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 windows::Win32::Graphics::Gdi::OPAQUE,
                             );
                         }
+                    }
+                    if kind == 5 {
+                        // 인용 좌측 바(GitHub 관례)
+                        SetBkColor(hdc, dim);
+                        let bar = RECT {
+                            left: 2,
+                            top: y + 2,
+                            right: 5,
+                            bottom: y + st.line_h - 2,
+                        };
+                        let _ = ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, Some(&bar), w!(""), 0, None);
+                    }
+                    if kind == 1 || kind == 2 {
+                        // h1/h2 밑줄 괘선(GitHub 관례)
+                        SetBkColor(hdc, border);
+                        let ul = RECT {
+                            left: rc.left,
+                            top: y + st.line_h - 1,
+                            right: rc.right,
+                            bottom: y + st.line_h,
+                        };
+                        let _ = ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, Some(&ul), w!(""), 0, None);
                     }
                     y += st.line_h;
                 }
@@ -663,6 +773,8 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if !state.is_null() {
                 let st = Box::from_raw(state);
                 let _ = DeleteObject(st.font.into());
+                let _ = DeleteObject(st.body.into());
+                let _ = DeleteObject(st.body_bold.into());
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
             LRESULT(0)
@@ -703,21 +815,47 @@ pub unsafe fn show(owner: HWND, title: &str, lines: Vec<String>, mono: (&str, i3
         return;
     };
     let font = make_mono(hwnd, mono.0, mono.1);
-    // 지표·최장 폭 실측(폰트 기준 — 가로 스크롤 상한)
-    let text: Vec<String> = lines.into_iter().map(|l| l.replace('\t', "    ")).collect();
+    let body = make_ui(hwnd, mono.1, false);
+    let body_bold = make_ui(hwnd, mono.1, true);
+    // 종류 태그 분리(\u{2}tag| — 표시/복사 텍스트는 태그 없이 저장)
+    let parsed: Vec<(u8, String)> = lines
+        .into_iter()
+        .map(|l| {
+            let r = l.replace('\t', "    ");
+            let (k, t) = parse_kind(&r);
+            (k, t.to_string())
+        })
+        .collect();
+    let kinds: Vec<u8> = parsed.iter().map(|p| p.0).collect();
+    let text: Vec<String> = parsed.into_iter().map(|p| p.1).collect();
+    // 지표·최장 폭 실측(라인별 폰트 — 가로 스크롤 상한·행 높이 = 최대 폰트)
     let (line_h, max_w) = {
         let hdc = GetDC(Some(hwnd));
-        let old = SelectObject(hdc, font.into());
-        let mut sz = SIZE::default();
-        let probe: Vec<u16> = "Ag".encode_utf16().collect();
-        let _ = GetTextExtentPoint32W(hdc, &probe, &mut sz);
-        let mut mw = 0;
-        for l in &text {
-            mw = mw.max(text_w(hdc, l));
+        let mut lh = 12;
+        for f in [font, body, body_bold] {
+            let old = SelectObject(hdc, f.into());
+            let mut sz = SIZE::default();
+            let probe: Vec<u16> = "Ag한".encode_utf16().collect();
+            let _ = GetTextExtentPoint32W(hdc, &probe, &mut sz);
+            lh = lh.max(sz.cy);
+            SelectObject(hdc, old);
         }
-        SelectObject(hdc, old);
+        let mut mw = 0;
+        for (i, l) in text.iter().enumerate() {
+            if l.starts_with('\u{1}') {
+                continue;
+            }
+            let f = match kinds[i] {
+                1..=3 => body_bold,
+                4 | 6 => font,
+                _ => body,
+            };
+            let old = SelectObject(hdc, f.into());
+            mw = mw.max(text_w(hdc, l));
+            SelectObject(hdc, old);
+        }
         ReleaseDC(Some(hwnd), hdc);
-        ((sz.cy).max(12) + 2, mw)
+        (lh + 3, mw)
     };
     let wide: Vec<Vec<u16>> = text
         .iter()
@@ -725,6 +863,9 @@ pub unsafe fn show(owner: HWND, title: &str, lines: Vec<String>, mono: (&str, i3
         .collect();
     let mut state = Box::new(PvState {
         font,
+        body,
+        body_bold,
+        kinds,
         text,
         lines: wide,
         line_h,

@@ -31,7 +31,7 @@ fn sample_markdown_viewer_plugin_end_to_end() {
         _ => panic!("lines 반환"),
     };
     let joined = lines.join("\n");
-    assert!(joined.contains("═══"), "h1 밑줄: {joined}");
+    assert!(joined.contains("\u{2}h1|"), "h1 종류 태그: {joined}");
     assert!(joined.contains("• 항목 하나"), "불릿");
     assert!(joined.contains("☑"), "체크 목록");
     assert!(joined.contains("┌─"), "표/코드 상자");
@@ -40,7 +40,7 @@ fn sample_markdown_viewer_plugin_end_to_end() {
         "인라인 마커 정리"
     );
     // 표 CJK 정렬 — 경계 '│' 표시 폭 일치(disp_width 호스트 API 사용 검증)
-    let table: Vec<&String> = lines.iter().filter(|l| l.starts_with('│')).collect();
+    let table: Vec<&String> = lines.iter().filter(|l| l.contains('│')).collect();
     assert!(table.len() >= 3, "표 행: {joined}");
     // Mermaid — flowchart: Windows = 이미지 마커(SVG→BMP 래스터·07-26),
     // 비지원 플랫폼 = 텍스트 아트 폴백. sequence = 텍스트 아트(별칭·화살표).

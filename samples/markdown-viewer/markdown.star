@@ -267,15 +267,13 @@ def _render(lines):
         if fence != "":
             if t.startswith(fence) and t.strip(fence[:1]).strip() == "":
                 if mermaid != None:
-                    out.extend(_mermaid(mermaid))
+                    out.extend([x if x.startswith("\x01") else "\x02mono|" + x for x in _mermaid(mermaid)])
                     mermaid = None
-                else:
-                    out.append("└──")
                 fence = ""
             elif mermaid != None:
                 mermaid.append(line)
             else:
-                out.append("│ " + line)
+                out.append("\x02code|" + line)
             i += 1
             continue
         if t.startswith("```") or t.startswith("~~~"):
@@ -285,8 +283,6 @@ def _render(lines):
             lang = t[r:].strip()
             if lang.lower() == "mermaid":
                 mermaid = []
-            else:
-                out.append("┌── " + (lang if lang != "" else "code"))
             i += 1
             continue
         if t == "":
@@ -305,26 +301,24 @@ def _render(lines):
                     break
                 body.append(lines[j])
                 j += 1
-            out.extend(_render_table(lines[i], lines[i + 1], body))
+            out.extend(["\x02mono|" + x for x in _render_table(lines[i], lines[i + 1], body)])
             i = j
             continue
-        # 제목 — h1 ═ 밑줄·h2 ─ 밑줄·h3+ › 접두
+        # 제목 — 종류 태그(스타일드 렌더: 굵게 + h1/h2 밑줄 괘선은 뷰어가 그림)
         if t.startswith("#"):
             h = _run_len(list(t.elems()), 0, "#")
             if h <= 6 and len(t) > h and t[h] == " ":
                 title = _inline(t[h + 1:].strip())
                 if h == 1:
-                    out.append(title)
-                    out.append("═" * max(disp_width(title), 4))
+                    out.append("\x02h1|" + title)
                 elif h == 2:
-                    out.append(title)
-                    out.append("─" * max(disp_width(title), 4))
+                    out.append("\x02h2|" + title)
                 else:
-                    out.append("› " + title)
+                    out.append("\x02h3|" + title)
                 i += 1
                 continue
         if _is_hr(t):
-            out.append("─" * 56)
+            out.append("\x02hr|")
             i += 1
             continue
         if t.startswith(">"):
@@ -338,7 +332,7 @@ def _render(lines):
                 else:
                     rest = r2
                     break
-            out.append("│ " * depth + _inline(rest))
+            out.append("\x02q|" + "» " * (depth - 1) + _inline(rest))
             i += 1
             continue
         lm = _list_marker(t)
