@@ -382,6 +382,12 @@ impl<S: RowSource> VirtualRows<S> {
         self.rename.as_ref().map(|(r, e)| (*r, e.text()))
     }
 
+    /// 리네임 **편집 필드 안** 좌표인가(QA 07-26 — 호스트 슬로우클릭 판정용:
+    /// 필드 안 클릭 = 캐럿 배치라 행 클릭이 아님·밖 클릭 = 취소 후 정상 행 클릭).
+    pub fn rename_field_hit(&self, x: i32, y: i32) -> bool {
+        self.rename.as_ref().is_some_and(|(_, es)| es.hit(x, y))
+    }
+
     /// 인라인 이름변경 시작 — 캐럿을 그 행으로, 가시 범위로 스크롤.
     /// 초기 선택 = 파일이면 **이름부**(마지막 `.` 앞), 폴더면 전체(탐색기 관례 — QA 07-13).
     pub fn begin_rename(&mut self, row: usize, initial: &str, inv: &mut Invalidations) {

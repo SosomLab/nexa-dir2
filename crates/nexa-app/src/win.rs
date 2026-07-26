@@ -4721,10 +4721,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.term_focus = None; // 기본 해제 — 아래에서 터미널 클릭이면 재설정(M4-3)
                     set_active(hwnd, st, idx);
                     // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
-                    // 미선택 행 드래그=러버밴드(원본 B-4)·리네임 중=텍스트 드래그(QA 07-13 3차)
-                    let hit = {
+                    // 미선택 행 드래그=러버밴드(원본 B-4)·리네임 **필드 안**=텍스트 드래그
+                    // (QA 07-13 3차). 가드는 필드 안 클릭만(QA 07-26 진범: 리네임 중 다른
+                    // 행 클릭은 취소 후 정상 행 클릭인데 히트 None → slow_click 소실 →
+                    // 재클릭 리네임에 클릭 1회가 더 필요하던 결함).
+                    let (was_renaming, hit) = {
                         let rows = st.panels[idx].rows();
-                        (!rows.is_renaming())
+                        let was_renaming = rows.is_renaming();
+                        let hit = (!rows.rename_field_hit(x, y))
                             .then(|| rows.row_at(x, y))
                             .flatten()
                             .filter(|_| !rows.marker_hit(x, y))
@@ -4733,7 +4737,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 let id = tree.visible_id(r)?;
                                 let path = tree.node_path(id)?.to_string_lossy().into_owned();
                                 Some((tree.is_selected(id), path))
-                            })
+                            });
+                        (was_renaming, hit)
                     };
                     let was_selected = hit.as_ref().is_some_and(|(sel, _)| *sel);
                     // 반대 패널 도크 텍스트 선택 해제(QA 07-15 — 복사 대상은 한 곳만)
@@ -4792,7 +4797,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.rename_on_up = false;
                     let _ = KillTimer(Some(hwnd), TIMER_RENAME); // 새 클릭 = 예약 리네임 무효
                     if let Some((_, path)) = &hit {
-                        if was_selected && !shift && !ctrl {
+                        // 리네임을 끝낸 그 클릭은 예약하지 않음(기존 동작 유지 —
+                        // 취소 클릭이 곧바로 새 리네임을 잡지 않도록). 시드는 유지.
+                        if was_selected && !shift && !ctrl && !was_renaming {
                             if let Some((p_idx, p_path, t)) = &st.slow_click {
                                 st.rename_on_up = *p_idx == idx
                                     && p_path == path
