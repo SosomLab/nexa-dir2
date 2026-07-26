@@ -8,6 +8,7 @@
 
 ## 2026-07-26
 
+- **Mermaid 이미지 수준 렌더 + 실행 격리 상한(사용자 승인·요구 — 6차)**: 호스트 `render_svg`(svg.rs→GDI+ AA 래스터→BMP 캐시)·`is_dark()` + 인라인 이미지 마커(`\u{1}img|`+pad — 도크/독립 창 렌더·복사 제외) — markdown.star flowchart가 테마 연동 SVG로 이미지 수준 표시(실패 = 텍스트 폴백). 격리: 실행 300ms/로드 500ms·연료 5천만 틱·힙 64MB(초과 = 플러그인만 오류 1줄). 218 green·clippy 0. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **리네임 재클릭 결함 픽스 + Mermaid 이미지 수준 검토(사용자 QA·질의 — 5차)**: 슬로우클릭 리네임의 `is_renaming()` 전체 가드가 취소 클릭의 slow_click 이력을 소실시키던 진범 — 가드를 편집 필드 안으로 축소(`rename_field_hit`)+취소 클릭은 시드만. 검토: 현 구조에서 Mermaid 이미지 수준 = **가능**(계약에 `{"draw": 명령}` 추가 → 호스트 GDI+ AA 렌더 — 크레이트 0·라이선스 무관), 완전판(mermaid.js)은 웹뷰 필요로 구조 밖. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **↗ 이미지 버튼 + 렌더 대안 검토(사용자 요청 — 같은 브랜치 4차)**: 오버레이를 `emb:popout` SVG 이미지 버튼으로(3상태 배경 pressed=accent 38%>hover=sel_bg>기본·1px 누름 오프셋·안 릴리스 발화). 검토: Python md+Mermaid 라이브러리 = 전부 HTML 패스스루(mermaid.js 의존)·Starlark에서 import 불가 → 채택 불가(라이선스 아닌 기술 제약) · sosomlab-nexa-viewer(자사 MIT·Tauri+react-markdown+mermaid.js) = 웹뷰 렌더라 DR-1/B3 상충 — 연동(외부 열기)·GFM 서브셋 이식이 현실 경로. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
 - **미리보기 UX 6종(사용자 요청 — 같은 브랜치 3차)**: ① 도크 미리보기 우상단 **↗ '크게' 오버레이**(클릭 = 독립 창) ② 독립 창 **모달 전환** ③ 스크롤 — 도크 휠 세로(3줄/노치·절대 라인 재정렬)+독립 창 세로/가로(최장 라인 실측 상한) ④ 독립 창 **드래그 문자 선택**(도크 규약·3분할 렌더) ⑤ **rich 복사**(CF_UNICODETEXT+모노 RTF 동시 게시 — 표/박스 정렬 유지·도크 Ctrl+C 승격) ⑥ 드래그 자동 스크롤(도크 상/하·창 상하좌우+50ms 타이머 연속). 218 green(+3)·clippy 0·5.76MB. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
