@@ -1,6 +1,15 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-27 (KST)** — **플러그인 런타임 Starlark→wasmi 전환
+> **갱신: 2026-07-27 2차 (KST)** — **`.star` → `.wasm` 표기 정정(사용자
+> QA — main 직커밋)**: 런타임 전환 후에도 **설정 창 문구**가 `.star`로
+> 남아 있던 것을 포함해 현행 표면 전체 정정 — lang 3종
+> (`pref.plugins.desc/empty` = `data\plugins\*.wasm`) · **wiki
+> 개발-플러그인 wasmi 판 재작성**(개념·왜 WASM·계약 요약·설정·빌드/배포·
+> 로드맵) · 기능-설정 · 설계-결정 · ADR-0004 상단 "구판" 명시.
+> 과거 기록(journal/DEVLOG/BRANCHES)은 규약대로 보존. **217 green·
+> clippy 0·exe 3.18MB**. [journal/2026-07-27.md](journal/2026-07-27.md).
+>
+> **직전(07-27 1차)** — **플러그인 런타임 Starlark→wasmi 전환
 > 완료(사용자 결정 — `feat/wasmi-plugin` 6커밋, 실기 QA 후 병합 대기)**:
 > ① 부분 교체(1안) — Starlark 코어만 제거(**git revert로 원복 가능**),
 > 시임·독립 창·설정·격리·라인 태그 계약 유지 ② **[ADR-0005]

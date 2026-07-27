@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-07-27
+
+- **`.star` → `.wasm` 표기 정정(사용자 QA — main 직커밋)**: wasmi 전환 후 잔존하던 표시 문구를 현행 표면 전체에서 정정 — lang 3종 설정 문구(`data\plugins\*.wasm`)·wiki 개발-플러그인 **wasmi 판 재작성**·기능-설정·설계-결정·ADR-0004 상단 구판 표기. 과거 기록(journal/DEVLOG/BRANCHES)은 규약대로 보존. 217 green·clippy 0. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
+
 ## 2026-07-26
 
 - **wasm 참조 플러그인 + 가이드 24 개정(10차 — wasmi 전환 마감)**: markdown-viewer-wasm 러스트 크레이트 → **80KB .wasm**(GitHub 태그 렌더·<br/>·표·Mermaid flowchart SVG 이미지/sequence 아트) + dist 동봉 실런타임 E2E. 가이드 24 = wasmi 판 전면 개정(ABI·import·태그 계약·빌드/배포). 217 green·clippy 0. 상세 [journal/2026-07-26.md](journal/2026-07-26.md).
