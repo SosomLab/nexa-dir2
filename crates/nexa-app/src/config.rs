@@ -785,7 +785,8 @@ pub const COLUMN_BLOCKS: OrderDefs = &[("cols", &["name", "ext", "size", "modifi
 
 /// 앱 고유 컨텍스트 메뉴 항목 정의(07-19 — 셸 제공 동사는 대상 아님).
 pub const CTXMENU_BLOCKS: OrderDefs = &[
-    ("row", &["deletePermanent", "copyName", "pasteInto"]),
+    // new(07-27) = 셸 New 호스팅 서브메뉴 — 표시 여부만 제어(위치는 하단 고정 섹션)
+    ("row", &["new", "deletePermanent", "copyName", "pasteInto"]),
     ("bg", &["paste", "undo", "redo"]),
 ];
 
@@ -1038,8 +1039,8 @@ mod tests {
         );
         assert_eq!(
             parsed.ctx_menu_order,
-            "row:1[copyName:1,deletePermanent:0,pasteInto:1]|bg:0[paste:1,undo:1,redo:1]",
-            "컨텍스트 메뉴 순서/표시 왕복(07-19)"
+            "row:1[new:1,copyName:1,deletePermanent:0,pasteInto:1]|bg:0[paste:1,undo:1,redo:1]",
+            "컨텍스트 메뉴 순서/표시 왕복(07-19 — 신규 new 키는 보충 삽입 07-27)"
         );
         assert_eq!(
             Settings::parse("term_cols=20").term_cols,

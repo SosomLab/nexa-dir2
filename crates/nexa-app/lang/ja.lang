@@ -93,6 +93,7 @@ new.folderOp = 新しいフォルダー
 new.fileOp = 新しいファイル
 
 # ── Shell context menu (M3-4) ──
+ctx.new = 新規作成
 ctx.deletePermanent = 完全に削除
 ctx.pasteInto = フォルダーへ貼り付け
 ctx.paste = 貼り付け

@@ -759,6 +759,7 @@ fn ctxm_label(block: &str, item: Option<&str>) -> String {
     match (block, item) {
         ("row", None) => tr("pref.ctxm.grpRow"),
         ("bg", None) => tr("pref.ctxm.grpBg"),
+        (_, Some("new")) => tr("ctx.new"),
         (_, Some("deletePermanent")) => tr("ctx.deletePermanent"),
         (_, Some("copyName")) => tr("ctx.copyName"),
         (_, Some("pasteInto")) => tr("ctx.pasteInto"),

@@ -3,7 +3,7 @@
 //! WM_* → [`nexa_gui::InputEvent`] 번역·[`nexa_gui::Invalidations`] → `InvalidateRect` 번역.
 //! F3 = 활성 패널 200프레임 스크롤 벤치. 타이틀바 = 활성 패널 경로·행/선택 수·페인트 시간.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -1964,7 +1964,9 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
     let outcome = shellmenu::show_background(hwnd, &dir, shift, &["paste"], &[], &custom, None);
     let Some(st) = state_of(hwnd) else { return };
     match outcome {
-        shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 새로 만들기 등 FS 변경 가능
+        shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // FS 변경 가능(재로드만)
+        // 새로 만들기 생성 감지(07-27 diff) — 캐럿 이동 + 인라인 리네임 진입(탐색기 관례)
+        shellmenu::Outcome::Created(path) => focus_created_and_rename(hwnd, st, &path),
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("paste") => {
             // OS 클립보드 붙여넣기 합류(M3-5 — 전송 엔진 경유 = undo 기록 포함)
             if let Some((paths, op)) = crate::clipboard::read_file_list() {
@@ -2001,6 +2003,8 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         shift: bool,
         custom: Vec<CustomItem>,
         paste_dir: Option<PathBuf>,
+        /// "새로 만들기" 서브메뉴 대상(07-27) — 단일 선택: 파일=부모·폴더=자신.
+        new_spec: Option<shellmenu::NewSpec>,
         at: Option<windows::Win32::Foundation::POINT>,
     }
     let req = state_of(hwnd).and_then(|st| {
@@ -2043,11 +2047,28 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
             .map(|(_, _, i)| i.clone())
             .unwrap_or_default();
         let mut custom = Vec::new();
+        let mut new_spec = None;
         for (k, vis) in &row_items {
             if !vis {
                 continue;
             }
             match k.as_str() {
+                // 새로 만들기(07-27 사용자) — 셸 New 확장 호스팅 서브메뉴. 단일 선택만
+                // (다중 = 대상 폴더 모호): 파일=부모·폴더=자신(빈 영역 우클릭과 동일 동작)
+                "new" if targets.len() == 1 => {
+                    let t = &targets[0];
+                    let dir = if t.is_dir() {
+                        Some(t.clone())
+                    } else {
+                        t.parent().map(|p| p.to_path_buf())
+                    };
+                    if let Some(dir) = dir {
+                        new_spec = Some(shellmenu::NewSpec {
+                            dir,
+                            label: tr("ctx.new"),
+                        });
+                    }
+                }
                 "deletePermanent" => custom.push(CustomItem {
                     id: CTX_DELETE_PERMANENT,
                     label: tr("ctx.deletePermanent"),
@@ -2079,6 +2100,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
             shift: GetKeyState(VK_SHIFT.0 as i32) < 0,
             custom,
             paste_dir,
+            new_spec,
             at,
         })
     });
@@ -2090,11 +2112,14 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         &["delete", "rename", "copy", "cut"],
         &[("copyaspath", CTX_COPY_PATH, tr("ctx.copyPath"))],
         &req.custom,
+        req.new_spec.as_ref(),
         req.at,
     );
     let Some(st) = state_of(hwnd) else { return };
     match outcome {
         shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 셸이 FS 변경했을 수 있음
+        // 새로 만들기 생성 감지(07-27) — 캐럿 이동 + 인라인 리네임 진입(탐색기 관례)
+        shellmenu::Outcome::Created(path) => focus_created_and_rename(hwnd, st, &path),
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("delete") => {
             // 앱 경로 합류 — undo 기록(M3-3). Shift 열림 = 완전 삭제(확인창 방어)
             do_delete(hwnd, st, req.shift);
@@ -2601,22 +2626,40 @@ unsafe fn create_new(hwnd: HWND, st: &mut State, folder: bool) {
                 Box::new(recycle_delete_one),
                 recreate,
             )));
-            reload_both(hwnd, st, "");
-            let row = st
-                .active_panel()
-                .rows()
-                .source()
-                .tree()
-                .index_of_path(&path.to_string_lossy());
-            if let Some(row) = row {
-                let name = nexa_ops::leaf_name(&path);
-                let mut inv = Invalidations::default();
-                st.active_panel()
-                    .rows_mut()
-                    .begin_rename(row, &name, &mut inv);
-                flush_invalidations(hwnd, &mut inv);
-            }
+            focus_created_and_rename(hwnd, st, &path);
         }
+    }
+}
+
+/// 생성 직후 재로드 → 캐럿 이동 → 인라인 리네임 진입(07-27 — 앱 새 폴더/파일과 셸
+/// 새로 만들기 [`shellmenu::Outcome::Created`] 공용, 탐색기 관례). 접힌 폴더 안 생성
+/// (항목 메뉴 폴더 New)이면 부모를 펼쳐 가시화 후 진입 — 행 미발견 시 조용히 생략.
+unsafe fn focus_created_and_rename(hwnd: HWND, st: &mut State, path: &Path) {
+    reload_both(hwnd, st, "");
+    fn find(st: &mut State, path: &Path) -> Option<usize> {
+        st.active_panel()
+            .rows()
+            .source()
+            .tree()
+            .index_of_path(&path.to_string_lossy())
+    }
+    let mut row = find(st, path);
+    if row.is_none() {
+        // 부모가 접힌 가시 폴더면 펼친 후 재탐색(hover_expand — 접힘일 때만 동작)
+        if let Some(parent_row) = path.parent().and_then(|p| find(st, p)) {
+            let mut inv = Invalidations::default();
+            st.active_panel().rows_mut().hover_expand(parent_row, &mut inv);
+            flush_invalidations(hwnd, &mut inv);
+            row = find(st, path);
+        }
+    }
+    if let Some(row) = row {
+        let name = nexa_ops::leaf_name(path);
+        let mut inv = Invalidations::default();
+        st.active_panel()
+            .rows_mut()
+            .begin_rename(row, &name, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
     }
 }
 
