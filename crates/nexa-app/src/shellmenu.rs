@@ -81,11 +81,40 @@ pub enum Outcome {
     Custom(u32),
 }
 
-// 메뉴 표시 구간의 활성 IContextMenu2/3 목록 — wndproc 포워딩용(UI 스레드 전용).
-// 07-27: 단일 쌍 → Vec(항목 메뉴 + 호스팅한 New 확장이 공존 — 각자 자기 서브메뉴만 처리).
+/// 활성 셸 메뉴 핸들러(주 메뉴 ICM/호스팅 New 확장) + 메시지 라우팅 정보.
+/// QA 07-27: 전 핸들러 브로드캐스트는 CNewMenu가 **주 메뉴** WM_INITMENUPOPUP에
+/// 반응해 템플릿을 주 메뉴에 평탄 삽입하는 오동작 유발 → 소유 서브메뉴 핸들·명령
+/// 대역으로 **선별 라우팅**(Explorer++ 등 다중 ICM 호스트 관례).
+struct MenuHost {
+    icm2: Option<IContextMenu2>,
+    icm3: Option<IContextMenu3>,
+    /// 이 핸들러가 소유한 서브메뉴 핸들(HMENU 값). 0 = 주 메뉴(매치 실패 폴백 대상).
+    submenu: isize,
+    /// 이 핸들러의 명령 ID 대역 — WM_DRAWITEM/WM_MEASUREITEM itemID 라우팅.
+    first: u32,
+    last: u32,
+}
+
+// 메뉴 표시 구간의 활성 핸들러 목록 — wndproc 포워딩용(UI 스레드 전용).
 thread_local! {
-    static ACTIVE: RefCell<Vec<(Option<IContextMenu2>, Option<IContextMenu3>)>> =
-        const { RefCell::new(Vec::new()) };
+    static ACTIVE: RefCell<Vec<MenuHost>> = const { RefCell::new(Vec::new()) };
+}
+
+impl MenuHost {
+    /// 메뉴 메시지 1건 포워딩 — 확장 예외는 HRESULT로 격리(메뉴 그리기 실패 무시, 원본 동일).
+    fn handle(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let mut result = LRESULT(0);
+        if let Some(icm3) = &self.icm3 {
+            unsafe {
+                let _ = icm3.HandleMenuMsg2(msg, wparam, lparam, Some(&mut result));
+            }
+        } else if let Some(icm2) = &self.icm2 {
+            unsafe {
+                let _ = icm2.HandleMenuMsg(msg, wparam, lparam);
+            }
+        }
+        result
+    }
 }
 
 /// wndproc 훅 — 활성 셸 메뉴가 있으면 메뉴 메시지를 IContextMenu2/3로 포워딩.
@@ -101,29 +130,39 @@ pub fn forward_menu_msg(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRES
         if active.is_empty() {
             return None;
         }
-        // 확장 예외는 HRESULT로 격리 — 메뉴 그리기 실패는 무시(원본 동일).
-        // 전 핸들러에 포워딩(각자 자기 HMENU/항목만 처리) — MENUCHAR는 첫 유효 응답 채택.
-        let mut menuchar = LRESULT(0);
-        for (icm2, icm3) in active {
-            if let Some(icm3) = icm3 {
-                let mut result = LRESULT(0);
-                unsafe {
-                    let _ = icm3.HandleMenuMsg2(msg, wparam, lparam, Some(&mut result));
-                }
-                if msg == WM_MENUCHAR && menuchar.0 == 0 {
-                    menuchar = result;
-                }
-            } else if let Some(icm2) = icm2 {
-                unsafe {
-                    let _ = icm2.HandleMenuMsg(msg, wparam, lparam);
+        // MENUCHAR(니모닉)만 전 핸들러 순회 — 첫 유효 응답 채택
+        if msg == WM_MENUCHAR {
+            let mut out = LRESULT(0);
+            for m in active {
+                let r = m.handle(msg, wparam, lparam);
+                if out.0 == 0 {
+                    out = r;
                 }
             }
+            return Some(out);
         }
-        Some(if msg == WM_MENUCHAR {
-            menuchar
-        } else {
-            LRESULT(0)
-        })
+        // 선별 라우팅(QA 07-27) — INITMENUPOPUP: 열리는 HMENU의 소유 핸들러에만 /
+        // DRAW·MEASUREITEM: itemID 대역 소유 핸들러에만. 미매치 = 주 메뉴 핸들러.
+        let target = match msg {
+            WM_INITMENUPOPUP => {
+                let h = wparam.0 as isize;
+                active.iter().find(|m| m.submenu == h)
+            }
+            _ => {
+                use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT};
+                let id = unsafe {
+                    if msg == WM_DRAWITEM {
+                        (*(lparam.0 as *const DRAWITEMSTRUCT)).itemID
+                    } else {
+                        (*(lparam.0 as *const MEASUREITEMSTRUCT)).itemID
+                    }
+                };
+                active.iter().find(|m| (m.first..=m.last).contains(&id))
+            }
+        };
+        let target = target.or_else(|| active.iter().find(|m| m.submenu == 0))?;
+        target.handle(msg, wparam, lparam);
+        Some(LRESULT(0))
     })
 }
 
@@ -322,7 +361,13 @@ unsafe fn run_menu(
     let Ok(hmenu) = CreatePopupMenu() else {
         return Outcome::Cancelled;
     };
-    ACTIVE.set(vec![(icm.cast().ok(), icm.cast().ok())]);
+    ACTIVE.set(vec![MenuHost {
+        icm2: icm.cast().ok(),
+        icm3: icm.cast().ok(),
+        submenu: 0,
+        first: ID_SHELL_FIRST,
+        last: ID_SHELL_LAST,
+    }]);
     let flags = if extended_verbs {
         CMF_EXTENDEDVERBS
     } else {
@@ -413,9 +458,18 @@ unsafe fn run_menu(
         // 2-2) "새로 만들기" 서브메뉴 병합(07-27 사용자) — 셸 New 확장(CLSID_NewMenu)을
         // 대상 폴더로 직접 초기화해 하단 섹션에 삽입. 실패는 조용히 생략(메뉴는 정상 표시).
         let new_icm = new_menu.and_then(|spec| attach_new_menu(hmenu, spec));
-        if let Some(icm) = &new_icm {
-            // 서브메뉴 lazy 채움(WM_INITMENUPOPUP)을 위해 포워딩 대상에 추가
-            ACTIVE.with_borrow_mut(|a| a.push((icm.cast().ok(), icm.cast().ok())));
+        if let Some((icm, sub)) = &new_icm {
+            // 서브메뉴 lazy 채움(WM_INITMENUPOPUP)을 위해 포워딩 대상에 추가 —
+            // 소유 서브메뉴 핸들·New 대역으로 선별 라우팅(QA 07-27 평탄 삽입 방지)
+            ACTIVE.with_borrow_mut(|a| {
+                a.push(MenuHost {
+                    icm2: icm.cast().ok(),
+                    icm3: icm.cast().ok(),
+                    submenu: sub.0 as isize,
+                    first: ID_NEW_FIRST,
+                    last: ID_NEW_LAST,
+                })
+            });
         }
 
         // 3) 표시 — 모달 메뉴 펌프(메뉴 메시지는 wndproc → forward_menu_msg).
@@ -440,7 +494,7 @@ unsafe fn run_menu(
         }
         if (ID_NEW_FIRST..=ID_NEW_LAST).contains(&sel) {
             // 호스팅한 New 서브메뉴 선택(07-27) — New 확장 ICM으로 invoke 후 생성 diff
-            let (Some(spec), Some(new_icm)) = (new_menu, &new_icm) else {
+            let (Some(spec), Some((new_icm, _))) = (new_menu, &new_icm) else {
                 return Outcome::Cancelled;
             };
             let before = dir_names(&spec.dir);
@@ -502,14 +556,16 @@ unsafe fn invoke(icm: &IContextMenu, hwnd: HWND, offset: u32, pt: POINT) -> wind
 }
 
 /// 셸 New 확장(CLSID_NewMenu)을 `spec.dir`로 초기화해 `hmenu` 하단에 "새로 만들기"
-/// 서브메뉴로 병합(07-27). 성공 시 invoke·포워딩용 IContextMenu 반환 — 실패는 None(생략).
+/// 서브메뉴로 병합(07-27). 성공 시 (invoke용 IContextMenu, 소유 서브메뉴 핸들 —
+/// WM_INITMENUPOPUP 선별 라우팅용) 반환 — 실패는 None(생략).
 unsafe fn attach_new_menu(
     hmenu: windows::Win32::UI::WindowsAndMessaging::HMENU,
     spec: &NewSpec,
-) -> Option<IContextMenu> {
+) -> Option<(IContextMenu, windows::Win32::UI::WindowsAndMessaging::HMENU)> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetMenuItemCount, RemoveMenu, SetMenuItemInfoW, MENUITEMINFOW, MF_BYPOSITION, MIIM_STRING,
+        GetMenuItemCount, GetSubMenu, RemoveMenu, SetMenuItemInfoW, MENUITEMINFOW, MF_BYPOSITION,
+        MIIM_STRING,
     };
     // CLSID_NewMenu — shobjidl에 windows-rs 미노출(탐색기 배경 메뉴의 New 제공자)
     const CLSID_NEW_MENU: windows::core::GUID =
@@ -551,7 +607,8 @@ unsafe fn attach_new_menu(
         ..Default::default()
     };
     let _ = SetMenuItemInfoW(hmenu, pos, true, &mii);
-    Some(icm)
+    let sub = GetSubMenu(hmenu, pos as i32); // 소유 서브메뉴 — INITMENUPOPUP 라우팅 키
+    Some((icm, sub))
 }
 
 /// 폴더의 항목 이름 스냅샷(생성 감지용 07-27) — 셸 invoke는 생성 파일명을 반환하지 않아
