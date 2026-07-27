@@ -1,6 +1,16 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-27 11차 (KST)** — **X-35 마감 — main 병합·push(사용자
+> **갱신: 2026-07-27 12차 (KST)** — **릴리스 `0.12.0` + winget Portable
+> 업데이트 PR(사용자 요청 — choco 제외)**: 0.12.0 승격(X-34 새로 만들기·
+> X-35 삭제 잠금 처리) → 태그 push → **Actions 게이트 전부 통과** →
+> [Release 0.12.0](https://github.com/SosomLab/nexa-dir2/releases/tag/0.12.0)
+> 포터블 3.35MB+설치형 첨부(choco = `CHOCO_PUSH` 꺼짐 자동 제외).
+> winget `SosomLab.NexaDir.Portable` 0.12.0 매니페스트(SHA 실측) →
+> **[winget-pkgs#408280](https://github.com/microsoft/winget-pkgs/pull/408280)
+> 제출(심사 대기)**. [21 §8](21-distribution.md) 채널 표 갱신.
+> [journal/2026-07-27.md](journal/2026-07-27.md).
+>
+> **직전(07-27 11차)** — **X-35 마감 — main 병합·push(사용자
 > 지시)**: 휴지통 삭제 잠금 사전 프로브 + 실패 통지·재시도(레이어드 P+B) +
 > 펼친 하위 폴더 감시(M3-6 α 해소)를 `feat/x35-delete-locked` 5커밋으로
 > **main ff 병합·push·브랜치 삭제**. **217 green·clippy 0·exe 3.36MB**.

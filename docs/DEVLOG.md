@@ -8,6 +8,7 @@
 
 ## 2026-07-27
 
+- **릴리스 0.12.0 + winget Portable 업데이트 PR(사용자 요청 — choco 제외)**: 0.12.0 승격(X-34 새로 만들기·X-35 삭제 잠금 처리 포함) → 태그 push → Actions 게이트 전부 통과 → [Release 0.12.0](https://github.com/SosomLab/nexa-dir2/releases/tag/0.12.0)(포터블+설치형 — choco는 `CHOCO_PUSH` 꺼짐 자동 제외). winget `SosomLab.NexaDir.Portable` 0.12.0 매니페스트(SHA 실측) 작성 → [winget-pkgs#408280](https://github.com/microsoft/winget-pkgs/pull/408280) 제출(심사 대기). [21 §8](21-distribution.md) 채널 표 갱신. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **X-35 마감 — main 병합·push(사용자 지시)**: `feat/x35-delete-locked` 5커밋(사전 프로브+실패 통지·재시도 + 펼친 하위 폴더 감시) **main ff 병합·push·브랜치 삭제**. 217 green·clippy 0·exe 3.36MB. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **X-35 QA 1차 — 펼친 하위 폴더 감시(사용자 QA)**: 잠금 삭제 차단은 정상, 엑셀 `~$` 임시파일이 펼친 하위 폴더에서 정리돼도 잔존 — M3-6 α(비재귀·루트만 감시, 원본도 동일) 해소: `Panel::watch_dirs`(루트+가시 펼침 폴더·상한 64) + watcher 패널별 Vec + `sync_watchers` diff 재구독(재귀 감시 대신 폴더별 비재귀 핸들 — 대형 트리 무부담). 217 green·clippy 0. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **X-35 구현(사용자 지시 — `feat/x35-delete-locked` 1커밋, 실기 QA 후 병합 대기)**: 확정 설계 그대로 — `start_recycle_delete`(사전 잠금 프로브 `CreateFileW(DELETE)` µs 판정 → 잠긴 항목 배치 모달 1회 [건너뛰고 삭제(N)]/[다시 시도]/[취소]·숨김 제외) + `on_delete_message` 사후 `exists()` diff 백스톱(성공분만 부분 undo·실패분 선택 강조+캐럿·실패 모달 [다시 시도]=실패분 재진입) + watcher `pending_delete` 가드 + lang 3종 키 10개(`dialog::show_buttons` 재사용 — comctl32 비의존 유지). 217 green·clippy 0·exe 3.36MB. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).

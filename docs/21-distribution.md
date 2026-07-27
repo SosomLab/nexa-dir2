@@ -211,15 +211,15 @@ Release에 **포터블 + 설치형 동시 첨부**. workflow_dispatch = 게이�
   (raw 조회 200, 2026-07-24). **∴ winget Portable = 첫 승인 채널이자 유일하게 최신
   버전(`0.11.0`)까지 배포된 채널.**
 
-### 채널 상태 요약 (2026-07-24 점검)
+### 채널 상태 요약 (2026-07-27 갱신)
 
 | 채널 | 패키지 | 배포된 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.8.1 → 0.11.0** | ✅ **배포 완료**(#404533·#405973 MERGED) | 없음 — 다음 릴리스 시 버전 업데이트 PR |
+| winget | `SosomLab.NexaDir.Portable` | **0.11.0** (0.12.0 심사 중) | ✅ 배포 완료(#404533·#405973 MERGED) · **0.12.0 업데이트 PR [#408280](https://github.com/microsoft/winget-pkgs/pull/408280) OPEN**(07-27 제출 — SHA 실측 `B3A4C243…`) | 심사 추적 |
 | winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN(#404528) — **`Policy-Test-1.2` waiver 대기** | 없음(권한 밖) |
 | Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 awaiting moderation(자동 3단계 완료) | 없음 |
 | Chocolatey | `nexa-dir.portable` | — | ⏳ 0.8.1 awaiting moderation(자동 3단계 완료) | 없음 |
-| GitHub Release | 포터블 + 설치형 | **0.11.0** | ✅ 상시 | — |
+| GitHub Release | 포터블 + 설치형 | **0.12.0** (07-27 — X-34·X-35) | ✅ 상시 | — |
 
 **해석**: 4개 심사 항목 중 **포터블 winget만 통과**했고, 나머지 3건은 전부 사람 검토
 단계에서 멈춰 있다(설치형 winget = 정책 waiver, choco 2종 = 모더레이션 큐).
