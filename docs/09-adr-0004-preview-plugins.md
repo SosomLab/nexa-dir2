@@ -1,7 +1,7 @@
 # 09 · ADR-0004 — 미리보기 플러그인 시스템 (Starlark 임베드, DR-7 개정)
 
 - 상태: **Accepted** (2026-07-14, 사용자 결정) · 관련: [10 결정](10-decision-record.md) DR-7·DR-8 · 원본 [docs/35 미리보기](../../nexa-dir/docs/35-preview-system.md)·[docs/36 플러그인 개발](../../nexa-dir/docs/36-plugin-development.md)
-- 구현: **S1·S2·S3 1차 ✅ (2026-07-26** — starlark 0.14.2 원장 확정·B2 +4.24MB 실측**)** — 시임·`.star` 런타임·file 핸들/read_text·`preview_map` + **독립 미리보기 창(F3 — 기준 캔버스)** + 샘플 `samples/markdown-viewer`. 개발자 가이드 = [24](24-plugin-dev-guide.md). 잔여 = 공급자 콤보·S4 exif.star
+- 구현: 시임·`preview_map`·독립 미리보기 창·격리 ✅(2026-07-26). **런타임은 [ADR-0005](25-adr-0005-wasm-plugins.md)로 정정** — 본 문서의 Starlark 서술(`.star`·S2/S4)은 **구판**이며 현행은 WASM(`data\plugins\*.wasm`·wasmi). 개발자 가이드 = [24](24-plugin-dev-guide.md) · 참조 구현 = `samples/markdown-viewer-wasm`. 잔여 = 공급자 콤보·핫 리로드·exif.wasm 예시
 - 대상: 미리보기 확장(예: **EXIF 정보 미리보기**) — 향후 다른 확장점(컨텍스트 메뉴 항목 등)으로 일반화 여지.
 
 ## 맥락 (결정 변경)
