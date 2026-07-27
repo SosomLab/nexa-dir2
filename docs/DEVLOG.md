@@ -8,6 +8,7 @@
 
 ## 2026-07-27
 
+- **X-35 구현(사용자 지시 — `feat/x35-delete-locked` 1커밋, 실기 QA 후 병합 대기)**: 확정 설계 그대로 — `start_recycle_delete`(사전 잠금 프로브 `CreateFileW(DELETE)` µs 판정 → 잠긴 항목 배치 모달 1회 [건너뛰고 삭제(N)]/[다시 시도]/[취소]·숨김 제외) + `on_delete_message` 사후 `exists()` diff 백스톱(성공분만 부분 undo·실패분 선택 강조+캐럿·실패 모달 [다시 시도]=실패분 재진입) + watcher `pending_delete` 가드 + lang 3종 키 10개(`dialog::show_buttons` 재사용 — comctl32 비의존 유지). 217 green·clippy 0·exe 3.36MB. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **X-35 휴지통 삭제 실패 무통지 — 분석·설계 확정(사용자 보고 — 코드 무수정)**: 열린 파일 삭제 실패 시 행만 재출현·무통지 — 결함 4건 진단(타이틀 한 줄 통지·배치 1비트 결과·부분 undo 미기록·watcher 가드 부재) + 원본 대비 회귀 3건 확인. 설계 = **레이어드 P+B**(사용자 제안 사전 잠금 프로브 + `exists()` diff 백스톱 + 모달 [건너뛰고 삭제]/[다시 시도] + 부분 undo 복원 + watcher 가드 — 통지·부분 진행은 사용자 확정). IFileOperation은 후속 재검토. TODO X-35 등록. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **X-34 마감 — main 병합·push(사용자 지시)**: QA 1차 픽스 반영 재빌드(exe 3.35MB) 후 `feat/ctx-new-menu` 5커밋 **main ff 병합·push·브랜치 삭제**. 217 green·clippy 0. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **X-34 QA 1차 픽스(사용자 QA — 스크린샷)**: New 템플릿이 서브메뉴 안이 아니라 **주 메뉴에 평탄 삽입**되던 결함 — 진범 = 전 핸들러 브로드캐스트 포워딩(주 메뉴 `WM_INITMENUPOPUP`이 CNewMenu에 전달돼 주 메뉴를 채움) → `MenuHost`(소유 서브메뉴 핸들·명령 대역) **선별 라우팅**으로 전환(INITMENUPOPUP=HMENU 소유자·DRAW/MEASUREITEM=itemID 대역·미매치=주 메뉴 폴백). 66 green·clippy 0. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
