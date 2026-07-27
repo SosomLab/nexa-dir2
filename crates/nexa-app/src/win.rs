@@ -625,7 +625,9 @@ struct State {
     /// 느린 재클릭 리네임 예약 — **MouseUp에서 진입**(드래그가 시작되면 취소 = DnD 우선).
     rename_on_up: bool,
     /// 패널별 폴더 watcher(M3-6) — 활성 탭 현재 폴더 감시(비재귀). 경로 변경 시 재구독.
-    watchers: [Option<crate::watcher::DirWatcher>; 2],
+    /// 패널별 watcher 묶음(M3-6 → X-35 QA 확장): 루트 + **가시 펼침 폴더**(상한
+    /// [`WATCH_CAP`]). 전 항목이 같은 세대를 공유 — 목록 변경 시 통째 재구독.
+    watchers: [Vec<crate::watcher::DirWatcher>; 2],
     watch_gen: u64,
     /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
     dock_drag: Option<usize>,
@@ -1091,7 +1093,7 @@ pub fn run() -> Result<()> {
         dnd_hover_ms: settings.dnd_hover_ms,
         slow_click: None,
         rename_on_up: false,
-        watchers: [None, None],
+        watchers: [Vec::new(), Vec::new()],
         watch_gen: 0,
         dock_drag: None,
         dock_split_drag: false,
@@ -2410,18 +2412,32 @@ unsafe fn do_undo_redo(hwnd: HWND, st: &mut State, redo: bool) {
     reload_both(hwnd, st, &format!(" · {note}"));
 }
 
-/// 패널별 watcher를 현재 폴더와 동기화(M3-6) — 경로 무변경이면 무비용(문자열 비교 2회).
-/// 네비게이션·탭 전환 등 경로가 바뀔 수 있는 모든 경로가 update_status를 지나므로 그곳에서 호출.
+/// 패널당 watcher 대상 상한(X-35 QA — 루트 + 가시 펼침 폴더. 초과분 비감시 = F5 폴백).
+const WATCH_CAP: usize = 64;
+
+/// 패널별 watcher를 현재 폴더 + **가시 펼침 폴더**와 동기화(M3-6 → X-35 QA 확장 —
+/// 엑셀 `~$` 임시파일처럼 펼친 하위 폴더의 외부 변경도 자동 반영. 원본·초판의
+/// 비재귀 α 한계 해소 — 재귀 감시 대신 폴더별 비재귀 핸들이라 C:\ 등 대형 트리
+/// 무부담). 목록 무변경이면 무비용(경로 비교) — 펼침/접힘·탐색이 update_status를
+/// 지나므로 그곳에서 호출.
 unsafe fn sync_watchers(hwnd: HWND, st: &mut State) {
     for i in 0..2 {
-        let want = st.panels[i].root_path();
-        if st.watchers[i].as_ref().is_some_and(|w| w.path == want) {
-            continue;
+        let want = st.panels[i].watch_dirs(WATCH_CAP);
+        // diff 재구독 — 유지분은 그대로(펼침 토글마다 전체 스레드 churn 방지),
+        // 이탈분만 drop(중지 신호)·신규분만 시작. 세대는 watcher별(any 매치 가드).
+        st.watchers[i].retain(|w| want.contains(&w.path));
+        for p in &want {
+            if st.watchers[i].iter().any(|w| &w.path == p) {
+                continue;
+            }
+            st.watch_gen += 1; // 낡은 스레드 통지 무시(세대 가드 — 원본 A-1)
+            if let Some(w) =
+                crate::watcher::DirWatcher::start(hwnd, WM_APP_FSCHANGE, i, st.watch_gen, p)
+            {
+                st.watchers[i].push(w);
+            }
+            // 실패(권한·가상 루트 등) = 그 폴더만 비감시 — 수동 F5 폴백(원본 규약)
         }
-        st.watch_gen += 1; // 낡은 스레드 통지 무시(세대 가드 — 원본 A-1)
-        st.watchers[i] =
-            crate::watcher::DirWatcher::start(hwnd, WM_APP_FSCHANGE, i, st.watch_gen, &want);
-        // 실패(권한 등) = None — 수동 F5 폴백(원본 규약)
     }
 }
 
@@ -5678,7 +5694,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = state_of(hwnd) {
                 let panel = wparam.0.min(1);
                 let gen = lparam.0 as u64;
-                if st.watchers[panel].as_ref().is_some_and(|w| w.gen == gen) {
+                if st.watchers[panel].iter().any(|w| w.gen == gen) {
                     SetTimer(
                         Some(hwnd),
                         TIMER_WATCH_BASE + panel,

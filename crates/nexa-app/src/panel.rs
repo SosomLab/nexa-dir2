@@ -710,6 +710,27 @@ impl Panel {
         self.sync_chrome(inv);
     }
 
+    /// watcher 대상 폴더(M3-6 → X-35 QA 확장): **루트 + 가시 펼침 폴더**(상한 `cap`,
+    /// 표시 순 — 초과분 비감시 = 기존 α와 동일한 F5 폴백). 트리 모드에서 펼친 하위
+    /// 폴더의 외부 변경(엑셀 `~$` 임시파일 정리 등)도 감시되도록 목록을 제공한다.
+    pub fn watch_dirs(&self, cap: usize) -> Vec<PathBuf> {
+        let mut out = vec![self.root_path()];
+        let tree = self.rows().source().tree();
+        for i in 0..tree.visible_len() {
+            if out.len() >= cap {
+                break;
+            }
+            if let Some(r) = tree.row(i) {
+                if r.has_children && r.expanded {
+                    if let Some(p) = tree.node_path(r.id) {
+                        out.push(p.to_path_buf());
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// 삭제 낙관 반영(07-21 QA — 휴지통 워커가 느려도 화면에서 즉시 제거):
     /// 활성 탭에서 대상 경로 행을 표시 제외. FS 무변 — 실패 시 완료 재로드가 원복.
     pub fn hide_paths(&mut self, paths: &[PathBuf], inv: &mut Invalidations) {
