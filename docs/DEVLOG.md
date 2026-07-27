@@ -8,6 +8,7 @@
 
 ## 2026-07-27
 
+- **항목 우클릭 "새로 만들기" + 생성 후 인라인 리네임(사용자 요청 — `feat/ctx-new-menu` 1커밋, QA 후 병합 대기)**: 셸은 New(ShellNew)를 배경 메뉴에만 제공 → **CLSID_NewMenu 직접 호스팅**(IShellExtInit 대상 폴더 초기화·전용 대역 0x7000·포워딩 ACTIVE Vec 확장)으로 항목 메뉴 하단에 배경 메뉴와 동일한 전체 템플릿 서브메뉴 병합. 단일 선택만(파일=부모·폴더=자신 — 다중은 숨김, 사용자 확정)·라벨 앱 언어(`ctx.new` lang 3종)·설정 `ctx_menu_order` row `new` 키. **생성 후 리네임 진입**: 셸 invoke는 파일명 미반환 → 대상 폴더 전후 diff(정확히 1개)로 `Outcome::Created` → 재로드·캐럿·begin_rename(`focus_created_and_rename` 공용화 — 접힌 폴더는 hover_expand 후 진입·배경 메뉴에도 휴리스틱 적용). 217 green·clippy 0·3.34MB. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **로컬 브랜치 정리(사용자 지시 — 선별)**: `feat/md-preview` 삭제(폐기 지시분·자산은 wasm 샘플로 이식 완료·tip `6f47512` 기록) / `feat/x13-launcher-crud`는 **보존**(launcherN.icon = main 미반영 고유 작업·X-13 백로그가 참조). BRANCHES에 사유·SHA 기입. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **플러그인 개발 문서 정리·가이드 24 보강(사용자 요청)**: 프로젝트 구성(Cargo 필수 4항목)·**최소 예제 전체 코드**(19KB — 컴파일+wasmi 런타임 동작 검증 후 수록)·ABI export 표·**빌드→적용→확인 3단**(복사 위치·로드 순서·설정 제어·오류 격리) 추가. 116→193줄, 코드 무변경. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
 - **`.star` → `.wasm` 표기 정정(사용자 QA — main 직커밋)**: wasmi 전환 후 잔존하던 표시 문구를 현행 표면 전체에서 정정 — lang 3종 설정 문구(`data\plugins\*.wasm`)·wiki 개발-플러그인 **wasmi 판 재작성**·기능-설정·설계-결정·ADR-0004 상단 구판 표기. 과거 기록(journal/DEVLOG/BRANCHES)은 규약대로 보존. 217 green·clippy 0. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).

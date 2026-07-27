@@ -1,6 +1,19 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-27 4차 (KST)** — **로컬 브랜치 정리(사용자 지시 —
+> **갱신: 2026-07-27 5차 (KST)** — **항목 우클릭 "새로 만들기" +
+> 생성 후 인라인 리네임(사용자 요청 — `feat/ctx-new-menu` 1커밋,
+> 실기 QA 후 병합 대기)**: 셸은 New를 배경 메뉴에만 제공 →
+> **CLSID_NewMenu 직접 호스팅**(전용 대역 0x7000·포워딩 ACTIVE Vec)으로
+> 항목 메뉴 하단에 배경 메뉴와 동일한 전체 ShellNew 템플릿 서브메뉴 병합.
+> 단일 선택만(파일=부모·폴더=자신·다중 숨김 — 사용자 확정)·라벨 앱 언어
+> `ctx.new`·설정 row `new` 키. **생성 후 리네임**: invoke 전후 폴더
+> diff(정확히 1개)로 `Outcome::Created` → 캐럿·begin_rename
+> (`focus_created_and_rename` 공용화·접힌 폴더는 hover_expand·배경 메뉴
+> 휴리스틱 포함). **217 green·clippy 0·exe 3.34MB**. **QA 대기**: 항목
+> New 템플릿 생성·리네임 진입·다중 숨김·설정 숨김.
+> [journal/2026-07-27.md](journal/2026-07-27.md).
+>
+> **직전(07-27 4차)** — **로컬 브랜치 정리(사용자 지시 —
 > 확인 후 선별)**: `feat/md-preview` **삭제**(07-26 폐기 지시분 ·
 > md/mermaid 자산은 wasm 샘플로 이식 완료 = 중복 · tip `6f47512` 기록) /
 > `feat/x13-launcher-crud` **보존**(`launcherN.icon` 직렬화가 **main
