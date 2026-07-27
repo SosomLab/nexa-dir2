@@ -70,6 +70,20 @@ del.kindRecycle = 휴지통
 del.kindPermanent = 완전 삭제
 del.done = {0}: {1}개 삭제
 del.recycleOp = 휴지통 삭제 {0}개
+del.partialFail = 실패 {0}개
+del.lockedTitle = 삭제할 수 없는 항목
+del.lockedMsg = 다음 {0}개 항목이 다른 프로그램에서 사용 중입니다:
+
+{1}
+del.failTitle = 삭제 실패
+del.failMsg = 다음 {0}개 항목을 삭제하지 못했습니다 (사용 중이거나 접근할 수 없음):
+
+{1}
+del.skipLocked = 건너뛰고 삭제({0}개)
+del.retry = 다시 시도
+del.cancel = 취소
+del.close = 닫기
+del.listMore = …외 {0}개
 rename.fail = 이름변경 실패: {0}
 new.folderBase = 새 폴더
 new.fileBase = 새 파일

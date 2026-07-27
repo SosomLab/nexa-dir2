@@ -71,6 +71,20 @@ del.kindRecycle = Recycle Bin
 del.kindPermanent = permanent
 del.done = {0}: {1} deleted
 del.recycleOp = recycle {0} item(s)
+del.partialFail = {0} failed
+del.lockedTitle = Items In Use
+del.lockedMsg = The following {0} item(s) are in use by another program:
+
+{1}
+del.failTitle = Delete Failed
+del.failMsg = The following {0} item(s) could not be deleted (in use or inaccessible):
+
+{1}
+del.skipLocked = Skip and Delete ({0})
+del.retry = Retry
+del.cancel = Cancel
+del.close = Close
+del.listMore = …and {0} more
 rename.fail = rename failed: {0}
 new.folderBase = New Folder
 new.fileBase = New File

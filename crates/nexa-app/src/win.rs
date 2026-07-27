@@ -2460,37 +2460,7 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
         }
     }
     if !permanent {
-        // 휴지통 삭제 = 워커 스레드(07-21 QA): SHFileOperationW가 소파일 몇 개에도
-        // 3~4초 걸릴 수 있어(셸 네임스페이스·휴지통 메타데이터) UI 스레드 동기 호출이
-        // 앱 전체를 멈추던 문제. 완료는 WM_APP_DELETE로 통지(undo 기록·재로드).
-        if st.pending_delete.is_some() {
-            return; // 동시 1잡 — 진행 중이면 무시(대상 소실 경합 방지)
-        }
-        st.pending_delete = Some(targets.clone());
-        let hwnd_raw = hwnd.0 as isize;
-        let worker_targets = targets.clone();
-        std::thread::spawn(move || unsafe {
-            // 셸 확장 대비 COM 초기화(STA — SHFileOperation 권고. 실패해도 진행)
-            let hr = windows::Win32::System::Com::CoInitializeEx(
-                None,
-                windows::Win32::System::Com::COINIT_APARTMENTTHREADED
-                    | windows::Win32::System::Com::COINIT_DISABLE_OLE1DDE,
-            );
-            let ok = delete_to_recycle_bin(&worker_targets);
-            if hr.is_ok() {
-                windows::Win32::System::Com::CoUninitialize();
-            }
-            let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
-            let _ = PostMessageW(Some(hwnd), WM_APP_DELETE, WPARAM(ok as usize), LPARAM(0));
-        });
-        // 낙관적 숨김(07-21 QA): 셸 휴지통 API가 수 초 걸려도 행은 즉시 화면에서
-        // 제거(탐색기 동일 UX). FS 무변 — 실패하면 완료 재로드가 원복한다.
-        let mut inv = Invalidations::default();
-        st.panels[0].hide_paths(&targets, &mut inv);
-        st.panels[1].hide_paths(&targets, &mut inv);
-        flush_invalidations(hwnd, &mut inv);
-        update_title(hwnd, st, &format!(" · {}", tr("del.progress")));
-        update_status(hwnd, st);
+        start_recycle_delete(hwnd, st, targets);
         return;
     }
     let (mut ok, mut fail) = (0usize, 0usize);
@@ -2508,29 +2478,208 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
     reload_both(hwnd, st, &format!(" · {note}"));
 }
 
-/// 휴지통 삭제 워커 완료(WM_APP_DELETE — 07-21 QA): undo 기록 + 결과 노트 + 재로드.
+/// 휴지통 삭제 시작(X-35 재구성 — 설계 07-27 journal): ① **사전 잠금 프로브** —
+/// 잠긴 항목은 배치 모달 1회로 묻고 선택([건너뛰고 삭제]/[다시 시도]/[취소] —
+/// 탐색기의 항목별 순차 창 대비 클릭 1번·잠긴 항목은 숨기지 않음) ② 나머지를
+/// 워커 배치 삭제 + 낙관적 숨김(07-21 QA 계승) ③ 결과 판정은 [`on_delete_message`]의
+/// 사후 diff 백스톱. 재시도 진입점(실패분 재삭제)이기도 하다.
+unsafe fn start_recycle_delete(hwnd: HWND, st: &mut State, mut targets: Vec<PathBuf>) {
+    if st.pending_delete.is_some() {
+        return; // 동시 1잡 — 진행 중이면 무시(대상 소실 경합 방지)
+    }
+    // ① 사전 프로브 루프 — [다시 시도] = 잠근 앱을 닫은 뒤 재프로브(전체 합류 가능)
+    loop {
+        let locked = probe_locked(&targets);
+        if locked.is_empty() {
+            break;
+        }
+        let remaining = targets.len() - locked.len();
+        let mut buttons = Vec::new();
+        if remaining > 0 {
+            buttons.push(crate::dialog::DlgButton {
+                id: 1,
+                label: trf("del.skipLocked", &[&remaining.to_string()]),
+            });
+        }
+        buttons.push(crate::dialog::DlgButton {
+            id: 2,
+            label: tr("del.retry"),
+        });
+        buttons.push(crate::dialog::DlgButton {
+            id: 3,
+            label: tr("del.cancel"),
+        });
+        let msg = trf(
+            "del.lockedMsg",
+            &[&locked.len().to_string(), &name_list(&locked)],
+        );
+        let dlg_font = st.dlg_font.clone();
+        match crate::dialog::show_buttons(hwnd, &tr("del.lockedTitle"), &msg, &buttons, &dlg_font)
+        {
+            1 => {
+                targets.retain(|p| !locked.contains(p));
+                break;
+            }
+            2 => continue,
+            _ => return, // 취소/닫힘 — 아무것도 안 지움(묻고 선택 규약)
+        }
+    }
+    if targets.is_empty() {
+        return;
+    }
+    // ② 워커 배치 삭제(07-21 QA): SHFileOperationW가 소파일 몇 개에도 3~4초 걸릴 수
+    // 있어(셸 네임스페이스·휴지통 메타데이터) UI 스레드 동기 호출이 앱 전체를 멈추던
+    // 문제. 완료는 WM_APP_DELETE로 통지(부분 undo·diff 백스톱·재로드).
+    st.pending_delete = Some(targets.clone());
+    let hwnd_raw = hwnd.0 as isize;
+    let worker_targets = targets.clone();
+    std::thread::spawn(move || unsafe {
+        // 셸 확장 대비 COM 초기화(STA — SHFileOperation 권고. 실패해도 진행)
+        let hr = windows::Win32::System::Com::CoInitializeEx(
+            None,
+            windows::Win32::System::Com::COINIT_APARTMENTTHREADED
+                | windows::Win32::System::Com::COINIT_DISABLE_OLE1DDE,
+        );
+        let ok = delete_to_recycle_bin(&worker_targets);
+        if hr.is_ok() {
+            windows::Win32::System::Com::CoUninitialize();
+        }
+        let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+        let _ = PostMessageW(Some(hwnd), WM_APP_DELETE, WPARAM(ok as usize), LPARAM(0));
+    });
+    // 낙관적 숨김(07-21 QA): 셸 휴지통 API가 수 초 걸려도 행은 즉시 화면에서
+    // 제거(탐색기 동일 UX). FS 무변 — 실패분은 완료 재로드가 원복+통지한다(X-35).
+    let mut inv = Invalidations::default();
+    st.panels[0].hide_paths(&targets, &mut inv);
+    st.panels[1].hide_paths(&targets, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
+    update_title(hwnd, st, &format!(" · {}", tr("del.progress")));
+    update_status(hwnd, st);
+}
+
+/// 삭제 가능 사전 프로브(X-35 — 사용자 제안 07-27): `DELETE` 권한 + 전체 공유로 열어
+/// 본다 — 다른 프로세스가 공유 삭제 없이 연 파일(Excel 등)은 공유 위반으로 **µs 단위**
+/// 판정(셸 고정 비용 없음). 폴더는 자기 자신만(하위 재귀는 비용 회귀 — 하위 잠김은
+/// 사후 diff 백스톱이 포착). 부재·권한 등 기타 오류 = 잠김 아님(사후 경로가 판정).
+unsafe fn probe_locked(paths: &[PathBuf]) -> Vec<PathBuf> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::{CloseHandle, ERROR_SHARING_VIOLATION};
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    let mut locked = Vec::new();
+    for p in paths {
+        let wide: Vec<u16> = p
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        match CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            DELETE.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, // 폴더 핸들 허용
+            None,
+        ) {
+            Ok(h) => {
+                let _ = CloseHandle(h);
+            }
+            Err(e) if e.code() == ERROR_SHARING_VIOLATION.to_hresult() => locked.push(p.clone()),
+            Err(_) => {} // 부재·권한 등 — 사후 백스톱이 판정
+        }
+    }
+    locked
+}
+
+/// 모달용 파일명 목록(X-35) — 상한 10개 + "외 N개"(과다 목록으로 창이 화면을 넘지 않게).
+fn name_list(paths: &[PathBuf]) -> String {
+    const MAX: usize = 10;
+    let mut lines: Vec<String> = paths
+        .iter()
+        .take(MAX)
+        .map(|p| nexa_ops::leaf_name(p))
+        .collect();
+    if paths.len() > MAX {
+        lines.push(trf("del.listMore", &[&(paths.len() - MAX).to_string()]));
+    }
+    lines.join("\n")
+}
+
+/// 실패 항목 시각화(X-35) — 재로드 후 활성 패널에서 해당 행 선택 + 캐럿(첫 항목).
+/// 어느 항목이 안 지워졌는지 즉시 인지(행 미발견은 무시).
+unsafe fn select_paths(hwnd: HWND, st: &mut State, paths: &[PathBuf]) {
+    use nexa_gui::widgets::SelectOp;
+    let mut inv = Invalidations::default();
+    let mut first = true;
+    for p in paths {
+        let row = {
+            let tree = st.active_panel().rows().source().tree();
+            tree.index_of_path(&p.to_string_lossy())
+        };
+        if let Some(row) = row {
+            let op = if first {
+                SelectOp::Single
+            } else {
+                SelectOp::Toggle
+            };
+            st.active_panel().rows_mut().select_program(row, op, &mut inv);
+            first = false;
+        }
+    }
+    flush_invalidations(hwnd, &mut inv);
+}
+
+/// 휴지통 삭제 워커 완료(WM_APP_DELETE — X-35 재구성): 배치 반환값(1비트) 대신
+/// **사후 diff 백스톱** — 원 위치 잔존 여부로 항목별 성공/실패 판정(사전 프로브의
+/// TOCTOU·폴더 하위 잠김·기타 실패 포착). 성공분만 부분 undo(원본 DeletePaths 규약
+/// 복원) + 실패분은 선택 강조 + 모달 [다시 시도](실패분만 재진입).
 unsafe fn on_delete_message(hwnd: HWND, st: &mut State, ok_flag: bool) {
     let Some(targets) = st.pending_delete.take() else {
         return;
     };
-    let (ok, fail) = if ok_flag {
-        (targets.len(), 0)
-    } else {
-        (0, targets.len())
-    };
-    if ok_flag {
+    let _ = ok_flag; // 배치 반환값은 항목별 판정 불가(X-35) — diff가 판정 원천
+    let (failed, deleted): (Vec<PathBuf>, Vec<PathBuf>) =
+        targets.into_iter().partition(|p| nexa_ops::exists(p));
+    if !deleted.is_empty() {
         // undo 기록(B-13u S2) — undo=휴지통 복원·redo=재삭제. 완전 삭제는 설계상 제외(확인창 방어).
         st.history.push(Box::new(DeleteBatchOp {
-            description: trf("del.recycleOp", &[&ok.to_string()]),
-            paths: targets,
+            description: trf("del.recycleOp", &[&deleted.len().to_string()]),
+            paths: deleted.clone(),
         }));
     }
-    let mut note = trf("del.done", &[&tr("del.kindRecycle"), &ok.to_string()]);
-    if fail > 0 {
-        note = format!("{note} · {}", trf("ops.errors", &[&fail.to_string()]));
+    let mut note = trf("del.done", &[&tr("del.kindRecycle"), &deleted.len().to_string()]);
+    if !failed.is_empty() {
+        note = format!("{note} · {}", trf("del.partialFail", &[&failed.len().to_string()]));
     }
     reload_both(hwnd, st, &format!(" · {note}"));
     update_status(hwnd, st);
+    if failed.is_empty() {
+        return;
+    }
+    // 실패 통지(X-35 — 사용자 확정: 모달 + 재시도) — 재로드로 원복된 실패 행을 먼저
+    // 선택 강조한 뒤 배치 모달 1회. [다시 시도] = 실패분만 재진입(프로브부터 재수행).
+    select_paths(hwnd, st, &failed);
+    let msg = trf(
+        "del.failMsg",
+        &[&failed.len().to_string(), &name_list(&failed)],
+    );
+    let buttons = [
+        crate::dialog::DlgButton {
+            id: 1,
+            label: tr("del.retry"),
+        },
+        crate::dialog::DlgButton {
+            id: 2,
+            label: tr("del.close"),
+        },
+    ];
+    let dlg_font = st.dlg_font.clone();
+    if crate::dialog::show_buttons(hwnd, &tr("del.failTitle"), &msg, &buttons, &dlg_font) == 1 {
+        start_recycle_delete(hwnd, st, failed);
+    }
 }
 
 /// F2 — 캐럿 행 인라인 이름변경 시작(원본 B-6).
@@ -5841,13 +5990,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             if wparam.0 >= TIMER_WATCH_BASE && wparam.0 < TIMER_WATCH_BASE + 2 {
                 // watcher 디바운스 만료(M3-6) — 무간섭 재로드(펼침·선택·캐럿·스크롤 보존).
-                // 편집/전송 중엔 미루고 재무장(재로드가 편집 행 인덱스를 흔들지 않게)
+                // 편집/전송/휴지통 삭제 중엔 미루고 재무장(재로드가 편집 행 인덱스를
+                // 흔들거나 낙관적 숨김 행을 조기 원복하지 않게 — X-35 D4)
                 let panel = wparam.0 - TIMER_WATCH_BASE;
                 let _ = KillTimer(Some(hwnd), wparam.0);
                 if let Some(st) = state_of(hwnd) {
                     if st.panels[panel].rows().is_renaming()
                         || st.panels[panel].pathbar.is_editing()
                         || st.transfer.is_some()
+                        || st.pending_delete.is_some()
                     {
                         SetTimer(Some(hwnd), wparam.0, WATCH_DEBOUNCE_MS, None);
                     } else {

@@ -71,6 +71,20 @@ del.kindRecycle = ごみ箱
 del.kindPermanent = 完全削除
 del.done = {0}: {1} 個削除
 del.recycleOp = ごみ箱へ {0} 個
+del.partialFail = 失敗 {0} 個
+del.lockedTitle = 削除できない項目
+del.lockedMsg = 次の {0} 個の項目は他のプログラムで使用中です:
+
+{1}
+del.failTitle = 削除の失敗
+del.failMsg = 次の {0} 個の項目を削除できませんでした (使用中またはアクセス不可):
+
+{1}
+del.skipLocked = スキップして削除({0} 個)
+del.retry = 再試行
+del.cancel = キャンセル
+del.close = 閉じる
+del.listMore = …ほか {0} 個
 rename.fail = 名前の変更に失敗: {0}
 new.folderBase = 新しいフォルダー
 new.fileBase = 新しいファイル
