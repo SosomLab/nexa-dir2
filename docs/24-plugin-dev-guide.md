@@ -30,33 +30,85 @@
 
 ## 1. 프로젝트 만들기
 
+두 가지 출발점 중 하나를 고른다.
+
 ```
-> xcopy /E samples\markdown-viewer-wasm my-viewer\
+> xcopy /E samples\markdown-viewer-wasm my-viewer\   # 완성형 참조 구현에서 시작
+> cargo new --lib my-viewer                          # 빈 크레이트에서 시작(§1-2)
 ```
 
-핵심 Cargo 설정(독립 크레이트): `crate-type = ["cdylib"]` · `[workspace]`(앱과 분리) ·
-`profile.release` = `opt-level="z"`, `lto`, `panic="abort"`, `strip`.
+### 1-1. 프로젝트 구성
 
-## 2. ABI 계약 (필수 export 2개)
+```
+my-viewer/
+├── Cargo.toml          # cdylib · [workspace] 분리 · release 프로필
+├── src/lib.rs          # ABI(nx_meta/nx_preview) + 렌더 로직
+├── fixtures/           # 로컬 테스트용 예제 파일(선택)
+└── dist/my-viewer.wasm # 배포 산출물(선택 — 저장소 동봉·E2E용)
+```
 
-버퍼 규약 = **선두 4바이트 LE 길이 + UTF-8 본문** 포인터 반환(인스턴스는 호출당
-1회라 leak 무해 — 샘플 `ret()` 참조).
+```toml
+# Cargo.toml — 필수 4항목
+[lib]
+crate-type = ["cdylib"]        # ① wasm 모듈 산출
+
+[workspace]                    # ② 앱 워크스페이스와 분리(타깃이 다름)
+
+[profile.release]              # ③ 크기 최적화(참조 구현 80KB·최소 예제 19KB)
+opt-level = "z"
+lto = true
+panic = "abort"                # ④ 패닉 = 트랩(호스트가 오류 1줄로 격리)
+strip = "symbols"
+```
+
+### 1-2. 최소 예제 (그대로 붙여넣어 동작 — 검증됨)
+
+`.log`/`.ini`를 줄 번호와 함께 보여주는 19KB 플러그인 전체 코드:
 
 ```rust
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn read_text(ptr: *mut u8, cap: i32) -> i32;
+}
+
+/// 반환 버퍼: 선두 4바이트 LE 길이 + UTF-8 본문(인스턴스는 호출당 1회 = leak 무해)
+fn ret(s: &str) -> *mut u8 {
+    let b = s.as_bytes();
+    let mut v = Vec::with_capacity(4 + b.len());
+    v.extend_from_slice(&(b.len() as u32).to_le_bytes());
+    v.extend_from_slice(b);
+    Box::leak(v.into_boxed_slice()).as_mut_ptr()
+}
+
 #[no_mangle]
 pub extern "C" fn nx_meta() -> *mut u8 {
-    // "id\n표시명\next1,ext2"  — exts = 적용 확장자 기본값(설정 preview_map이 재정의)
-    ret("my-viewer\nMy Viewer\nxyz,abc")
+    ret("hello\nHello Viewer\nlog,ini") // id \n 표시명 \n 확장자들
 }
 
 #[no_mangle]
 pub extern "C" fn nx_preview() -> *mut u8 {
-    // 첫 줄 "lines" | "image" + 본문. lines에는 표시 계약(§3) 태그 사용 가능.
-    ret(&format!("lines\n{}", body))
+    let mut buf = vec![0u8; 4096];
+    let n = unsafe { read_text(buf.as_mut_ptr(), 4096) }.max(0) as usize;
+    buf.truncate(n);
+    let text = String::from_utf8_lossy(&buf);
+    let mut out = String::from("lines\n\u{2}h1|Hello Viewer\n"); // \u{2}h1| = 제목 태그
+    for (i, line) in text.lines().take(50).enumerate() {
+        out.push_str(&format!("{:>3} | {}\n", i + 1, line));
+    }
+    ret(out.trim_end())
 }
 ```
 
-`id`는 설정(`preview_map`·사용 여부)의 영구 키 — 개명 금지.
+## 2. ABI 계약 (필수 export 2개)
+
+| export | 반환 | 내용 |
+| --- | --- | --- |
+| `nx_meta()` | 버퍼 ptr | `id\n표시명\next1,ext2` — 3줄. `exts` = 적용 확장자 **기본값**(설정 `preview_map`이 재정의) |
+| `nx_preview()` | 버퍼 ptr | 첫 줄 `lines` 또는 `image` + 이후 본문. `lines` 본문에는 §3 표시 태그 사용 가능 |
+
+버퍼 규약 = **선두 4바이트 LE 길이 + UTF-8 본문** 포인터(위 `ret()` 참조).
+`memory`는 자동 export되므로 별도 선언이 필요 없다.
+`id`는 설정(`preview_map`·사용 여부)의 영구 키 — **개명 금지**.
 
 ## 3. 호스트 API(import "env")와 표시 계약
 
@@ -78,18 +130,43 @@ pub extern "C" fn nx_preview() -> *mut u8 {
 | `\u{1}img\|<경로>` + `\u{1}pad`×n | 인라인 이미지(n+1행 예약 — render_svg 산출 BMP 등) |
 | (무접두) | 본문 — 프로포셔널 |
 
-## 4. 빌드 → 로컬 테스트 → 배포
+## 4. 빌드 → 적용 → 확인
+
+### 4-1. 빌드
 
 ```
-rustup target add wasm32-unknown-unknown                 # 1회
+rustup target add wasm32-unknown-unknown                 # 최초 1회
 cargo build --release --target wasm32-unknown-unknown
-copy target\wasm32-unknown-unknown\release\my_viewer.wasm  <NexaDir>\data\plugins\
+:: 산출: target\wasm32-unknown-unknown\release\<크레이트명>.wasm
 ```
 
-앱 재시작 → 대상 파일 선택 → 도크 미리보기 / **F3**(독립 창). 오류는 미리보기에
-`플러그인 오류(id): …` 1줄. **배포 = `.wasm` 1개**(설치형은
-`%LOCALAPPDATA%\NexaDir\data\plugins\`). 사용 여부는 **설정 → 플러그인** 체크,
-확장자 재지정은 `preview_map=xyz:my-viewer|…`.
+크레이트명의 `-`는 산출물에서 `_`가 된다(`my-viewer` → `my_viewer.wasm`). 파일명은
+자유롭게 바꿔도 되며, **파일명 사전순이 곧 로드 순서**(같은 확장자를 두 플러그인이
+선언하면 앞선 파일이 이김 — 우선하려면 `00-` 접두).
+
+### 4-2. 적용(설치)
+
+| 배포 형태 | 복사 위치 |
+| --- | --- |
+| 포터블 | `<exe 폴더>\data\plugins\my-viewer.wasm` |
+| 설치형(쓰기 불가 위치) | `%LOCALAPPDATA%\NexaDir\data\plugins\my-viewer.wasm` |
+
+폴더가 없으면 만든다. **복사 후 앱 재시작 = 반영**(로드는 미리보기 최초 사용 시
+1회, 이후 캐시). 제거 = 파일 삭제 후 재시작.
+
+### 4-3. 확인·제어
+
+1. 대상 파일 선택 → 하단 도크 **미리보기** 또는 **F3**(독립 창 — 기준 캔버스).
+2. **설정 → 플러그인**: 설치된 목록이 `표시명 (id) — 확장자`로 보이고, **체크 해제
+   = 사용 안 함**(내장 미리보기로 대체·즉시 적용·영속). 목록이 비어 있으면 로드
+   실패이거나 위치·재시작 문제다.
+3. 확장자 강제 지정: `data\settings.cfg`에
+   `preview_map=xyz:my-viewer|txt:my-viewer` (확장자:id를 `|`로 연결 — 플러그인
+   선언보다 우선).
+4. 오류는 미리보기에 `플러그인 오류(id): …` **1줄**로만 표시된다(앱·타 플러그인 무영향).
+
+**배포물 = `.wasm` 1개.** 사용자에게는 "① `data\plugins\`에 복사 ② 재시작" 두 줄만
+안내하면 된다.
 
 ## 5. 자동 테스트(저장소 개발자)
 
