@@ -33,6 +33,20 @@ menu.view.lang.system = Language: System
 menu.help = Help
 menu.help.about = About Nexa Dir
 
+# ── Cloud (X-36) ──
+menu.cloud = Cloud
+cloud.add = Add Connection…
+cloud.goto = Go to Folder
+cloud.web = Open Online
+cloud.copyUrl = Copy URL
+cloud.disconnect = Disconnect
+cloud.connectTo = Connect {0}
+cloud.addNone = No cloud sync clients detected
+cloud.connected = {0} connected
+cloud.removed = {0} disconnected
+cloud.urlCopied = URL copied — paste into a private window to sign in with another account
+cloud.gone = Folder not found — {0}
+
 # ── About (X-26 (3)) ──
 about.title = About Nexa Dir
 about.desc = Ultra-low-memory portable file explorer for Windows

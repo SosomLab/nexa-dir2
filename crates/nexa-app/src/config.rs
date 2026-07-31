@@ -32,6 +32,16 @@ impl LauncherItem {
     }
 }
 
+/// 클라우드 연결(X-36 — 검토서 26 §2. `cloudN=kind|라벨|경로`).
+/// kind = `"onedrive"` | `"googledrive"` | `"dropbox"`(해석은 cloud.rs —
+/// 여기서는 형태만). 라벨의 `|`는 저장 시 `/`로 치환(구분자 보호).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CloudConn {
+    pub kind: String,
+    pub label: String,
+    pub path: String,
+}
+
 /// 설정(원본 ViewOptions·ThemeOptions 대응) — `data\settings.cfg`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
@@ -137,6 +147,9 @@ pub struct Settings {
     pub launcher_items: Option<Vec<LauncherItem>>,
     /// 적용된 시드 버전(launcher.rs `SEED_VERSION`) — 낮으면 기동 시 신규 시드 1회 추가.
     pub launcher_seed: u32,
+    /// 클라우드 연결 목록(X-36 — `cloudN=kind|라벨|경로`, 상한 32).
+    /// 내 PC "클라우드" 섹션 + Cloud 메뉴의 원천. 빈 목록 = 연결 없음.
+    pub cloud_conns: Vec<CloudConn>,
 }
 
 impl Default for Settings {
@@ -191,6 +204,7 @@ impl Default for Settings {
             launcher: true,
             launcher_items: None,
             launcher_seed: 0,
+            cloud_conns: Vec::new(),
         }
     }
 }
@@ -370,6 +384,15 @@ impl Settings {
             u8::from(self.header_italic)
         ));
         out.push_str(&format!("launcher_seed={}\n", self.launcher_seed));
+        // 클라우드 연결(X-36) — 라벨의 구분자 `|`는 `/`로 치환 저장(경로에는 비출현)
+        for (i, c) in self.cloud_conns.iter().enumerate() {
+            out.push_str(&format!(
+                "cloud{i}={}|{}|{}\n",
+                c.kind,
+                c.label.replace('|', "/"),
+                c.path
+            ));
+        }
         if let Some(items) = &self.launcher_items {
             out.push_str(&format!("launcher_count={}\n", items.len()));
             for (i, it) in items.iter().enumerate() {
@@ -558,6 +581,25 @@ impl Settings {
                             label: label.into(),
                             exe: exe.into(),
                             args,
+                        });
+                    }
+                }
+                // 클라우드 연결(X-36 — `cloudN=kind|라벨|경로`, 상한 32·불량 행 무시)
+                k if k.starts_with("cloud") && k["cloud".len()..].parse::<usize>().is_ok() => {
+                    if s.cloud_conns.len() >= 32 {
+                        continue;
+                    }
+                    let mut parts = v.splitn(3, '|');
+                    let (kind, label, path) = (
+                        parts.next().unwrap_or("").trim(),
+                        parts.next().unwrap_or("").trim(),
+                        parts.next().unwrap_or("").trim(),
+                    );
+                    if !kind.is_empty() && !label.is_empty() && !path.is_empty() {
+                        s.cloud_conns.push(CloudConn {
+                            kind: kind.into(),
+                            label: label.into(),
+                            path: path.into(),
                         });
                     }
                 }
@@ -991,6 +1033,18 @@ mod tests {
                 },
             ]),
             launcher_seed: 2,
+            cloud_conns: vec![
+                CloudConn {
+                    kind: "onedrive".into(),
+                    label: "OneDrive – SosomLab".into(),
+                    path: "C:\\Users\\me\\OneDrive - SosomLab".into(),
+                },
+                CloudConn {
+                    kind: "dropbox".into(),
+                    label: "Dropbox – Personal".into(),
+                    path: "D:\\Dropbox".into(),
+                },
+            ],
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");
@@ -1030,6 +1084,17 @@ mod tests {
             Settings::parse("").dnd_hover_ms,
             3000,
             "DnD 호버 기본 3초(X-32)"
+        );
+        assert_eq!(parsed.cloud_conns, s.cloud_conns, "클라우드 연결 왕복(X-36)");
+        assert!(
+            Settings::parse("").cloud_conns.is_empty(),
+            "키 부재 = 연결 없음"
+        );
+        assert!(
+            Settings::parse("cloud0=onedrive|말줄임")
+                .cloud_conns
+                .is_empty(),
+            "필드 부족 행 무시(관용)"
         );
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(

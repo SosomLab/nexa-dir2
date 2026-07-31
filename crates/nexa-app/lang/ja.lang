@@ -33,6 +33,20 @@ menu.view.lang.system = 言語: システム
 menu.help = ヘルプ
 menu.help.about = Nexa Dir について
 
+# ── クラウド(X-36) ──
+menu.cloud = クラウド
+cloud.add = 接続を追加…
+cloud.goto = フォルダーへ移動
+cloud.web = オンラインで表示
+cloud.copyUrl = URL をコピー
+cloud.disconnect = 接続を解除
+cloud.connectTo = {0} を接続
+cloud.addNone = クラウド同期クライアントが見つかりません
+cloud.connected = {0} を接続しました
+cloud.removed = {0} の接続を解除しました
+cloud.urlCopied = URL をコピーしました — プライベート ウィンドウに貼り付けると別のアカウントでサインインできます
+cloud.gone = フォルダーが見つかりません — {0}
+
 # ── About (X-26 (3)) ──
 about.title = Nexa Dir について
 about.desc = Windows 向けの超低メモリ・ポータブルファイルエクスプローラー

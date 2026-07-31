@@ -176,6 +176,15 @@ const CMD_INFO_TOGGLE: u32 = 65;
 const CMD_ABOUT: u32 = 66;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
+/// 클라우드 연결(X-36 — 검토서 26 §2): 연결별 하위 명령 + 연결 추가 후보.
+/// 각 대역 32 상한([`CLOUD_MAX`] — config.rs cloudN 파싱 방어와 동일).
+const CMD_CLOUD_ADD_NONE: u32 = 299; // 감지 후보 0개일 때의 "연결 추가하기" 단독 항목
+const CMD_CLOUD_GOTO_BASE: u32 = 300;
+const CMD_CLOUD_WEB_BASE: u32 = 340;
+const CMD_CLOUD_COPYURL_BASE: u32 = 380;
+const CMD_CLOUD_DISC_BASE: u32 = 420;
+const CMD_CLOUD_ADD_BASE: u32 = 460;
+const CLOUD_MAX: usize = 32;
 
 /// 테마 모드(원본 docs/39 §3 — System/Light/Dark). 영속은 M2-5.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -273,6 +282,8 @@ fn build_menus(
     panel_mode: &str,
     info_single_eff: bool,
     col_width_sync: bool,
+    clouds: &[config::CloudConn],
+    cloud_cands: &[crate::cloud::CloudCandidate],
 ) -> Vec<Menu> {
     let mut view_items = vec![
         // 보기 모드 라디오(07-16 — 원본 FR-A4 1차: 계층/일반/타일)
@@ -342,11 +353,72 @@ fn build_menus(
             items: view_items,
         },
         Menu {
+            // 클라우드(X-36 — 사용자 요청 08-01): 연결 목록(하위 = 바로 가기/온라인
+            // 보기/URL 복사/연결 해제) + 연결 추가하기(감지 후보 하위 — 없으면 안내).
+            title: tr("menu.cloud"),
+            items: build_cloud_items(clouds, cloud_cands),
+        },
+        Menu {
             // 도움말(X-26 ③ — 07-20): About. 홈페이지 항목은 X-26 ①② 완성 시.
             title: tr("menu.help"),
             items: vec![MenuItem::new(CMD_ABOUT, tr("menu.help.about"), "")],
         },
     ]
+}
+
+/// Cloud 메뉴 본문(X-36) — 연결별 하위 메뉴 + "연결 추가하기".
+/// URL 복사 = 프라이빗 창에서 다른 계정 접속용(사용자 요청 08-01 — 브라우저 세션과
+/// 무관하게 주소만 제공).
+fn build_cloud_items(
+    clouds: &[config::CloudConn],
+    cands: &[crate::cloud::CloudCandidate],
+) -> Vec<MenuItem> {
+    let mut items = Vec::new();
+    for (i, c) in clouds.iter().enumerate().take(CLOUD_MAX) {
+        let i = i as u32;
+        items.push(MenuItem::new(0, c.label.clone(), "").with_submenu(vec![
+            MenuItem::new(CMD_CLOUD_GOTO_BASE + i, tr("cloud.goto"), ""),
+            MenuItem::new(CMD_CLOUD_WEB_BASE + i, tr("cloud.web"), ""),
+            MenuItem::new(CMD_CLOUD_COPYURL_BASE + i, tr("cloud.copyUrl"), ""),
+            MenuItem::separator(),
+            MenuItem::new(CMD_CLOUD_DISC_BASE + i, tr("cloud.disconnect"), ""),
+        ]));
+    }
+    if !items.is_empty() {
+        items.push(MenuItem::separator());
+    }
+    let add: Vec<MenuItem> = cands
+        .iter()
+        .enumerate()
+        .take(CLOUD_MAX)
+        .map(|(i, c)| MenuItem::new(CMD_CLOUD_ADD_BASE + i as u32, c.label.clone(), ""))
+        .collect();
+    items.push(if add.is_empty() {
+        // 후보 없음 — 클릭 시 상태바 안내(비활성 항목은 메뉴 위젯 미지원 α)
+        MenuItem::new(CMD_CLOUD_ADD_NONE, tr("cloud.add"), "")
+    } else {
+        MenuItem::new(0, tr("cloud.add"), "").with_submenu(add)
+    });
+    items
+}
+
+/// 감지 후보 중 **미연결**만(X-36 — Cloud 메뉴 "연결 추가하기"·내 PC 우클릭 공용 소스).
+fn cloud_candidates(conns: &[config::CloudConn]) -> Vec<crate::cloud::CloudCandidate> {
+    crate::cloud::detect()
+        .into_iter()
+        .filter(|c| !conns.iter().any(|k| std::path::Path::new(&k.path) == c.path))
+        .collect()
+}
+
+/// 연결 목록 → vfs 추가 루트 동기(X-36 — 실존 폴더만: 잔재 연결은 내 PC에서 숨김).
+fn sync_cloud_roots(conns: &[config::CloudConn]) {
+    nexa_vfs::set_extra_roots(
+        conns
+            .iter()
+            .filter(|c| std::path::Path::new(&c.path).is_dir())
+            .map(|c| (c.label.clone(), c.path.clone()))
+            .collect(),
+    );
 }
 
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
@@ -522,6 +594,11 @@ struct State {
     panel_mode: String,
     /// 정보(도크) 모드 **선호값** "single"|"dual" — 효과는 [`single_info`](싱글 패널 강제).
     info_mode: String,
+    /// 클라우드 연결(X-36 — settings `cloudN` 왕복·Cloud 메뉴/내 PC 섹션 원천).
+    cloud_conns: Vec<config::CloudConn>,
+    /// 마지막 메뉴 구성 시점의 감지 후보 스냅숏(X-36) — 추가 명령 인덱스 해석의 원천
+    /// (메뉴 표시와 실행 사이의 환경 변화로 인덱스가 어긋나지 않게 스냅숏 고정).
+    cloud_cands: Vec<crate::cloud::CloudCandidate>,
     /// 폰트 슬롯(X-12): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
     base_font: String,
     base_font_size: i32,
@@ -992,6 +1069,10 @@ pub fn run() -> Result<()> {
     if settings.launcher_seed < crate::launcher::SEED_VERSION {
         crate::launcher::seed_missing(&mut launcher_items);
     }
+    // 클라우드 연결(X-36): 세션 복원 전에 vfs 루트를 동기해야 ::PC:: 탭 복원 시
+    // 클라우드 섹션이 바로 보인다. 감지 후보는 초기 메뉴 구성과 스냅숏을 공유.
+    sync_cloud_roots(&settings.cloud_conns);
+    let cloud_cands = cloud_candidates(&settings.cloud_conns);
     let state = Box::new(State {
         menubar: MenuBar::new(
             build_menus(
@@ -1006,6 +1087,8 @@ pub fn run() -> Result<()> {
                 &settings.panel_mode,
                 settings.panel_mode == "single" || settings.info_mode == "single",
                 settings.col_width_sync,
+                &settings.cloud_conns,
+                &cloud_cands,
             ),
             m.row_h,
             m.pad_x,
@@ -1030,6 +1113,8 @@ pub fn run() -> Result<()> {
         view_mode: settings.view_mode.clone(),
         panel_mode: settings.panel_mode.clone(),
         info_mode: settings.info_mode.clone(),
+        cloud_conns: settings.cloud_conns.clone(),
+        cloud_cands,
         base_font: settings.base_font.clone(),
         base_font_size: settings.base_font_size,
         ctx_font: settings.ctx_font.clone(),
@@ -1922,6 +2007,14 @@ const CTX_COPY_NAME: u32 = crate::shellmenu::ID_CUSTOM_FIRST + 6;
 /// 가로챔(OS 클립보드 상호운용은 M3-5).
 unsafe fn show_background_context_menu(hwnd: HWND) {
     use crate::shellmenu::{self, CustomItem};
+    // 내 PC(::PC::) 배경 = 실경로가 없어 셸 배경 메뉴 불가 → 클라우드 연결 사용자
+    // 메뉴(X-36 — 사용자 요청 08-01: 특정 클라우드를 선택해 연결).
+    if state_of(hwnd)
+        .map(|st| nexa_vfs::is_virtual_root(st.active_panel().root_path()))
+        .unwrap_or(false)
+    {
+        return show_mypc_cloud_menu(hwnd);
+    }
     // 1단계: State에서 요청 데이터 추출 — 모달 메뉴 펌프 전 참조 종료(ADR-0003 재진입 안전)
     let req = state_of(hwnd).map(|st| {
         let dir = st.active_panel().root_path();
@@ -2208,6 +2301,55 @@ unsafe fn delete_to_recycle_bin(paths: &[PathBuf]) -> bool {
         ..Default::default()
     };
     SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool()
+}
+
+/// 내 PC 배경 우클릭 사용자 메뉴(X-36 — 사용자 요청 08-01): 감지된 클라우드를 선택해
+/// **연결하기**. 연결된 항목은 체크 표시(회색 정보성 — 재선택 = 무동작). 네이티브
+/// TrackPopupMenuEx 모달 — show_tab_menu 규약(State 참조 없이 표시·결과만 재획득 반영).
+unsafe fn show_mypc_cloud_menu(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenuEx, MF_CHECKED,
+        MF_GRAYED, MF_STRING, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
+    };
+    // 1단계: 스냅숏 추출(모달 펌프 전 State 참조 종료)
+    let snap = state_of(hwnd).map(|st| {
+        let cands = cloud_candidates(&st.cloud_conns);
+        st.cloud_cands = cands.clone(); // 실행 시 인덱스 해석 원천과 동기
+        (cands, st.cloud_conns.clone())
+    });
+    let Some((cands, conns)) = snap else { return };
+    let Ok(menu) = CreatePopupMenu() else { return };
+    // 후보(활성 — 선택 = 연결) 다음 연결됨(체크·회색), 둘 다 없으면 안내 1줄(회색)
+    for (i, c) in cands.iter().enumerate().take(CLOUD_MAX) {
+        let label = HSTRING::from(trf("cloud.connectTo", &[&c.label]));
+        let _ = AppendMenuW(menu, MF_STRING, 1 + i, PCWSTR(label.as_ptr()));
+    }
+    for c in conns.iter().take(CLOUD_MAX) {
+        let label = HSTRING::from(c.label.as_str());
+        let _ = AppendMenuW(menu, MF_GRAYED | MF_CHECKED, 0, PCWSTR(label.as_ptr()));
+    }
+    if cands.is_empty() && conns.is_empty() {
+        let label = HSTRING::from(tr("cloud.addNone"));
+        let _ = AppendMenuW(menu, MF_GRAYED, 0, PCWSTR(label.as_ptr()));
+    }
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    let cmd = TrackPopupMenuEx(
+        menu,
+        (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD).0,
+        pt.x,
+        pt.y,
+        hwnd,
+        None,
+    );
+    let _ = DestroyMenu(menu);
+    let idx = cmd.0 as usize;
+    if idx >= 1 {
+        if let Some(st) = state_of(hwnd) {
+            // Cloud 메뉴 "연결 추가"와 같은 경로 — 스냅숏 인덱스로 발화
+            run_command(hwnd, st, CMD_CLOUD_ADD_BASE + (idx - 1) as u32);
+        }
+    }
 }
 
 /// 화면 좌표의 드롭 대상 폴더(M3-5 S3, dnd.rs 훅) — 폴더 행=그 폴더·그 외=좌표 패널의 루트.
@@ -3590,6 +3732,94 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             apply_lang(hwnd, st, &mut inv);
             persist_settings(st);
         }
+        // 클라우드(X-36 — 사용자 요청 08-01): 연결별 하위 명령 + 연결 추가.
+        CMD_CLOUD_ADD_NONE => {
+            flush_invalidations(hwnd, &mut inv);
+            update_title(hwnd, st, &format!(" · {}", tr("cloud.addNone")));
+            update_status(hwnd, st);
+            return;
+        }
+        id if (CMD_CLOUD_GOTO_BASE..CMD_CLOUD_GOTO_BASE + CLOUD_MAX as u32).contains(&id) => {
+            // 바로 가기 — 현재 탭에서 연결 폴더로 이동(소실 폴더는 상태바 안내)
+            let i = (id - CMD_CLOUD_GOTO_BASE) as usize;
+            if let Some(c) = st.cloud_conns.get(i) {
+                let p = std::path::PathBuf::from(&c.path);
+                if p.is_dir() {
+                    st.active_panel().navigate_to(p, ctx, &mut inv);
+                } else {
+                    let note = trf("cloud.gone", &[&c.label]);
+                    flush_invalidations(hwnd, &mut inv);
+                    update_title(hwnd, st, &format!(" · {note}"));
+                    update_status(hwnd, st);
+                    return;
+                }
+            }
+        }
+        id if (CMD_CLOUD_WEB_BASE..CMD_CLOUD_WEB_BASE + CLOUD_MAX as u32).contains(&id) => {
+            // 온라인 보기 — 기본 브라우저(로그인은 브라우저 세션 소관 — 검토서 26 §2)
+            let i = (id - CMD_CLOUD_WEB_BASE) as usize;
+            if let Some(c) = st.cloud_conns.get(i) {
+                let url = crate::cloud::web_url(&c.kind);
+                if !url.is_empty() {
+                    let wide = HSTRING::from(url);
+                    allow_foreground_handoff(); // 이미 떠 있는 브라우저도 앞으로(07-31)
+                    let _ = windows::Win32::UI::Shell::ShellExecuteW(
+                        Some(hwnd),
+                        w!("open"),
+                        PCWSTR(wide.as_ptr()),
+                        None,
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+                    );
+                }
+            }
+        }
+        id if (CMD_CLOUD_COPYURL_BASE..CMD_CLOUD_COPYURL_BASE + CLOUD_MAX as u32)
+            .contains(&id) =>
+        {
+            // URL 복사(사용자 요청 08-01) — 프라이빗 창에 붙여넣어 다른 계정으로 접속
+            let i = (id - CMD_CLOUD_COPYURL_BASE) as usize;
+            if let Some(c) = st.cloud_conns.get(i) {
+                let url = crate::cloud::web_url(&c.kind);
+                if !url.is_empty() {
+                    crate::clipboard::write_text(hwnd, url);
+                    flush_invalidations(hwnd, &mut inv);
+                    update_title(hwnd, st, &format!(" · {}", tr("cloud.urlCopied")));
+                    update_status(hwnd, st);
+                    return;
+                }
+            }
+        }
+        id if (CMD_CLOUD_DISC_BASE..CMD_CLOUD_DISC_BASE + CLOUD_MAX as u32).contains(&id) => {
+            // 연결 해제 — 목록·설정·내 PC 섹션에서 제거(로컬 폴더·클라이언트는 무접촉)
+            let i = (id - CMD_CLOUD_DISC_BASE) as usize;
+            if i < st.cloud_conns.len() {
+                let removed = st.cloud_conns.remove(i);
+                apply_cloud_change(hwnd, st, &mut inv);
+                flush_invalidations(hwnd, &mut inv);
+                update_title(hwnd, st, &format!(" · {}", trf("cloud.removed", &[&removed.label])));
+                update_status(hwnd, st);
+                return;
+            }
+        }
+        id if (CMD_CLOUD_ADD_BASE..CMD_CLOUD_ADD_BASE + CLOUD_MAX as u32).contains(&id) => {
+            // 연결 추가 — 메뉴 구성 시점 후보 스냅숏(cloud_cands) 기준 인덱스
+            let i = (id - CMD_CLOUD_ADD_BASE) as usize;
+            if let Some(c) = st.cloud_cands.get(i).cloned() {
+                if st.cloud_conns.len() < CLOUD_MAX {
+                    st.cloud_conns.push(config::CloudConn {
+                        kind: c.kind.into(),
+                        label: c.label.replace('|', "/"),
+                        path: c.path.to_string_lossy().into_owned(),
+                    });
+                    apply_cloud_change(hwnd, st, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                    update_title(hwnd, st, &format!(" · {}", trf("cloud.connected", &[&c.label])));
+                    update_status(hwnd, st);
+                    return;
+                }
+            }
+        }
         _ => {}
     }
     flush_invalidations(hwnd, &mut inv);
@@ -3618,6 +3848,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     st.langs = i18n::discover(&data);
     let code = i18n::resolve_code(&st.lang_setting, &system_ui_lang(), &st.langs);
     i18n::activate(i18n::load(&code, &data));
+    st.cloud_cands = cloud_candidates(&st.cloud_conns); // 라벨 i18n 무관·스냅숏 갱신 겸용
     st.menubar.set_menus(
         build_menus(
             st.show_hidden,
@@ -3631,6 +3862,8 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             &st.panel_mode,
             single_info(st),
             st.col_width_sync,
+            &st.cloud_conns,
+            &st.cloud_cands,
         ),
         inv,
     );
@@ -3652,6 +3885,40 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     let cols = columns(st.dpi);
     st.panels[0].set_metrics(m, cols.clone(), inv);
     st.panels[1].set_metrics(m, cols, inv);
+    let _ = InvalidateRect(Some(hwnd), None, false);
+}
+
+/// 클라우드 연결 변경 반영(X-36) — 영속·vfs 루트·메뉴 재구성·열린 내 PC 뷰 재로드.
+/// 연결 추가/해제의 공용 마감(한 작업 = 한 반영).
+unsafe fn apply_cloud_change(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
+    persist_settings(st);
+    sync_cloud_roots(&st.cloud_conns);
+    st.cloud_cands = cloud_candidates(&st.cloud_conns);
+    st.menubar.set_menus(
+        build_menus(
+            st.show_hidden,
+            st.show_dotfiles,
+            st.panels[0].dock_visible(),
+            st.launcher_visible,
+            st.theme_mode,
+            &st.lang_setting,
+            &st.langs,
+            &st.view_mode,
+            &st.panel_mode,
+            single_info(st),
+            st.col_width_sync,
+            &st.cloud_conns,
+            &st.cloud_cands,
+        ),
+        inv,
+    );
+    // 열린 내 PC 뷰에 즉시 반영(활성 탭만 — 비활성 탭은 전환 시 재로드 경로가 처리)
+    let ctx = st.nav_ctx();
+    for p in 0..2 {
+        if nexa_vfs::is_virtual_root(st.panels[p].root_path()) {
+            st.panels[p].reopen_filtered(ctx, inv);
+        }
+    }
     let _ = InvalidateRect(Some(hwnd), None, false);
 }
 
@@ -4517,6 +4784,7 @@ fn current_settings(st: &State) -> Settings {
         launcher: st.launcher_visible,
         launcher_items: Some(st.launcher_items.clone()),
         launcher_seed: crate::launcher::SEED_VERSION,
+        cloud_conns: st.cloud_conns.clone(),
     }
 }
 

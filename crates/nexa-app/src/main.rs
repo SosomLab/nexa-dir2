@@ -18,6 +18,9 @@ mod bulkrename;
 mod clipboard;
 #[cfg(windows)]
 mod conpty;
+/// 클라우드 동기화 클라이언트 탐지(X-36 — 순수 파서는 전 플랫폼 테스트).
+#[cfg_attr(not(windows), allow(dead_code))]
+mod cloud;
 /// Win32 커스텀 컨트롤 라이브러리(사용자 요청 07-16 — searchbox 등).
 #[cfg(windows)]
 mod ctl;
