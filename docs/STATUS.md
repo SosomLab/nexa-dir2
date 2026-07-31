@@ -1,7 +1,17 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-31 15차 (KST)** — **전 소스 안정성 감사(사용자 요청 —
-> `fix/stability-hardening`, 실기 QA 후 병합 대기)**: 워커 6곳·unwrap
+> **갱신: 2026-07-31 16차 (KST)** — **3건 마감 — main 병합·push(사용자
+> 지시)**: 오늘 작업 3브랜치(`feat/dist-zip-assets` ZIP 자산 ·
+> `fix/foreground-activation` 포그라운드 양도 · `fix/stability-hardening`
+> 안정성 감사 7건) 선형 스택 **main ff 병합·push·브랜치 삭제**(BRANCHES
+> 표 이동). **219 green·clippy 0·exe 3.20MB(B2)**. 잔여 실기 QA(사용 중
+> 확인): 다음 태그 Release 자산 5종·zip 다운로드 무차단 / PowerPoint 띄운
+> 채 .pptx 더블클릭 → 창 앞으로 / OneDrive 엑셀 저장 반복 → 자동 갱신
+> 유지 / 터미널 여닫기 → 스레드 무누적.
+> [journal/2026-07-31.md](journal/2026-07-31.md).
+>
+> **직전(07-31 15차)** — **전 소스 안정성 감사(사용자 요청 —
+> `fix/stability-hardening`)**: 워커 6곳·unwrap
 > 131건·핸들 수명 전수(전제 = panic=abort). 결함 6건 수정 — **S1/S2**
 > watcher 죽음(버퍼 넘침 오판·재구독 불가 — **OneDrive 간헐 무갱신의
 > 유력 원인**) → ENUM_DIR 복구+`alive` 자가 치유 · **S3** conpty 종료
