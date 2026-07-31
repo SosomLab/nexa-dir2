@@ -1,6 +1,19 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-01 3차 (KST)** — **클라우드 연계 검토(사용자 요청 —
+> **갱신: 2026-08-01 4차 (KST)** — **X-36 클라우드 연결 구현(사용자
+> 요청 — `feat/x36-cloud-connections` 4커밋, 실기 QA 중)**: 검토서 26
+> §2 Phase A + 메뉴 요구 + **URL 복사**(프라이빗 창 다계정 접속 —
+> 추가 요청). MenuBar **하위 메뉴**(nexa-gui 플라이아웃) · vfs 링크형
+> Entry(`target`·`extra_roots`) → **내 PC 클라우드 섹션** ·
+> cloud.rs 탐지(OneDrive 레지스트리[BusinessN 다계정]·GDrive 볼륨
+> 라벨·Dropbox info.json — 네트워크 0·crate 0) · config `cloudN` ·
+> **Cloud 메뉴**(바로 가기/온라인 보기/URL 복사/연결 해제 + 연결
+> 추가하기) · **This PC 우클릭 연결 메뉴**. **224 green·clippy 0·
+> 3.24MB(B2)**·release 기동 스모크. **QA 대기**: 연결 추가(양 경로)→
+> 내 PC 진입→바로 가기→온라인 보기→URL 복사→해제→재시작 영속.
+> [journal/2026-08-01.md](journal/2026-08-01.md).
+>
+> **직전(08-01 3차)** — **클라우드 연계 검토(사용자 요청 —
 > `docs/cloud-integration-study`, 병합 대기)**: **[26 검토서]
 > (26-cloud-integration-study.md) 신설 — 2단계 분리 권고**. **Phase A
 > (X-36)** = 동기화 폴더 탐지(OneDrive 레지스트리[BusinessN 다계정]·
