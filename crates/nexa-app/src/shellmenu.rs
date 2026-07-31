@@ -552,6 +552,9 @@ unsafe fn invoke(icm: &IContextMenu, hwnd: HWND, offset: u32, pt: POINT) -> wind
         ptInvoke: pt,
         ..Default::default()
     };
+    // "열기"·"연결 프로그램"·"편집" 등이 **이미 떠 있는** 프로그램에 위임될 때도
+    // 그 창이 앞으로 오도록 포그라운드 권한을 넘긴다(win.rs 주석 참조).
+    crate::win::allow_foreground_handoff();
     icm.InvokeCommand(&inv as *const _ as *const CMINVOKECOMMANDINFO)
 }
 

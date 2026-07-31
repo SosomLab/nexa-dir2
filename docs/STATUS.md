@@ -1,6 +1,19 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-31 13차 (KST)** — **ZIP 자산 + SHA256SUMS 추가
+> **갱신: 2026-07-31 14차 (KST)** — **연 프로그램이 뒤에 숨는 결함
+> 픽스(사용자 QA — `fix/foreground-activation`, 실기 QA 후 병합 대기)**:
+> 파워포인트 등을 더블클릭하면 문서는 열리나 **창이 활성화되지 않고 뒤에
+> 숨던** 결함. 원인 = **Windows 포그라운드 잠금** — `ShellExecute`·
+> `InvokeCommand`는 연결 프로그램이 **이미 떠 있으면** DDE/COM으로 기존
+> 프로세스에 위임하는데, 그 프로세스는 우리 자식이 아니라 권한을 물려받지
+> 못해 `SetForegroundWindow`가 거부된다(Office는 단일 인스턴스라 새 문서도
+> 같은 경로). 수정 = `win::allow_foreground_handoff()`
+> (`AllowSetForegroundWindow(ASFW_ANY)`)를 실행 위임 **4개소**(더블클릭·
+> 셸 우클릭 열기·퀵 런처·About 링크)에 적용 — 탐색기 동일 규약.
+> **217 green·clippy 0**. **QA 대기**(자동 검증 불가 — 핵심 = PowerPoint를
+> 띄워 둔 채 다른 .pptx 더블클릭). [journal/2026-07-31.md](journal/2026-07-31.md).
+>
+> **직전(07-31 13차)** — **ZIP 자산 + SHA256SUMS 추가
 > (사용자 요청 — `feat/dist-zip-assets`, 병합 대기)**: 브라우저 Release exe
 > 다운로드 **보안 차단** 보고 대응. 원인 = 무서명(DR-3) exe에 대한
 > SmartScreen **다운로드 평판 필터**. release.yml에 zip 2종(exe+안내

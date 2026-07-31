@@ -154,6 +154,8 @@ pub unsafe fn launch(hwnd: HWND, item: &LauncherItem, folder: &Path) -> bool {
     } else {
         PCWSTR(params.as_ptr())
     };
+    // 이미 떠 있는 프로그램에 위임되는 경우에도 창이 앞으로 오도록(win.rs 주석 참조).
+    crate::win::allow_foreground_handoff();
     let h = ShellExecuteW(
         Some(hwnd),
         w!("open"),

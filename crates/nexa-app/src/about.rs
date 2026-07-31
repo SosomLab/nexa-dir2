@@ -163,6 +163,8 @@ unsafe extern "system" fn about_proc(
                 if let Some(url) = link_at(hwnd, &*state) {
                     // 기본 브라우저로 열기(파일 실행 shell_open과 동일 동사)
                     let wide = windows::core::HSTRING::from(url);
+                    // 이미 떠 있는 브라우저에 위임될 때도 창이 앞으로 오도록(win.rs 주석 참조).
+                    crate::win::allow_foreground_handoff();
                     let _ = windows::Win32::UI::Shell::ShellExecuteW(
                         Some(hwnd),
                         w!("open"),

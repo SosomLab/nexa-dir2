@@ -4537,11 +4537,28 @@ unsafe fn guarded_shell_open(hwnd: HWND, file: &std::path::Path) {
     shell_open(hwnd, file);
 }
 
+/// 실행 위임 직전 **포그라운드 권한 양도**(사용자 QA 07-31 — 연 프로그램이 뒤에 숨는 결함).
+///
+/// Windows는 포그라운드 창을 가진 프로세스만 `SetForegroundWindow`를 허용한다
+/// (foreground lock). `ShellExecute`·`IContextMenu::InvokeCommand`는 연결 프로그램이
+/// **이미 떠 있으면** 새 프로세스를 만들지 않고 DDE/COM으로 그 기존 프로세스에 열기를
+/// 위임하는데(PowerPoint 등 Office가 대표적), 그 프로세스는 우리가 만든 자식이 아니라
+/// 권한을 물려받지 못한다 → 문서는 열리지만 창은 뒤에 숨고 작업 표시줄만 깜빡인다.
+/// 탐색기와 동일하게 호출 **직전** `AllowSetForegroundWindow(ASFW_ANY)`로 권한을 넘긴다.
+///
+/// 호출자가 포그라운드가 아니면 실패하지만, 그 경우는 애초에 우리가 창을 가리지 않으므로
+/// 무시해도 된다(반환값 무시가 의도).
+pub(crate) unsafe fn allow_foreground_handoff() {
+    use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+    let _ = AllowSetForegroundWindow(ASFW_ANY);
+}
+
 /// 파일 실행(더블클릭·Enter·Alt+↓ — QA 07-14) — 기본 연결 프로그램(탐색기 동일).
 unsafe fn shell_open(hwnd: HWND, file: &std::path::Path) {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let wide = HSTRING::from(file.as_os_str());
+    allow_foreground_handoff();
     let _ = ShellExecuteW(
         Some(hwnd),
         w!("open"),
