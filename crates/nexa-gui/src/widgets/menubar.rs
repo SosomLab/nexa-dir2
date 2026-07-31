@@ -21,6 +21,9 @@ pub struct MenuItem {
     /// 체크 표시(토글 항목 — `Some(true)` = ✓).
     pub checked: Option<bool>,
     pub separator: bool,
+    /// 하위 메뉴(X-36 — 클라우드 연결별 동작). 비면 리프. **1단계만**(중첩 플라이아웃
+    /// 미지원 — 필요 시 후속). 하위가 있으면 `id`는 발화하지 않고 펼침만 한다.
+    pub submenu: Vec<MenuItem>,
 }
 
 impl MenuItem {
@@ -31,10 +34,16 @@ impl MenuItem {
             shortcut: shortcut.into(),
             checked: None,
             separator: false,
+            submenu: Vec::new(),
         }
     }
     pub fn checked(mut self, on: bool) -> Self {
         self.checked = Some(on);
+        self
+    }
+    /// 하위 메뉴 부여(빌더) — 이 항목은 클릭/hover 시 오른쪽 플라이아웃으로 펼쳐진다.
+    pub fn with_submenu(mut self, items: Vec<MenuItem>) -> Self {
+        self.submenu = items;
         self
     }
     pub fn separator() -> Self {
@@ -44,6 +53,7 @@ impl MenuItem {
             shortcut: String::new(),
             checked: None,
             separator: true,
+            submenu: Vec::new(),
         }
     }
 }
@@ -63,10 +73,15 @@ pub struct MenuBar {
     open: Option<usize>,
     hover_title: Option<usize>,
     hover_item: Option<usize>,
+    /// 펼쳐진 하위 메뉴의 부모 항목 인덱스(X-36 — 드롭다운 안 기준).
+    open_sub: Option<usize>,
+    hover_sub: Option<usize>,
     pending: Option<u32>,
     /// 페인트 캐시: 제목 x 범위·드롭다운 rect(항목 높이 = row_h).
     title_ranges: RefCell<Vec<(i32, i32)>>,
     drop_rect: RefCell<Rect>,
+    /// 하위 플라이아웃 rect 캐시(X-36 — paint에서 확정).
+    sub_rect: RefCell<Rect>,
 }
 
 impl MenuBar {
@@ -79,9 +94,12 @@ impl MenuBar {
             open: None,
             hover_title: None,
             hover_item: None,
+            open_sub: None,
+            hover_sub: None,
             pending: None,
             title_ranges: RefCell::new(Vec::new()),
             drop_rect: RefCell::new(Rect::default()),
+            sub_rect: RefCell::new(Rect::default()),
         }
     }
 
@@ -108,23 +126,31 @@ impl MenuBar {
         inv.push(self.bounds);
     }
 
-    /// 토글 항목 체크 상태 갱신(id 기준).
+    /// 토글 항목 체크 상태 갱신(id 기준 — 하위 메뉴 1단계 포함).
     pub fn set_checked(&mut self, id: u32, on: bool, inv: &mut Invalidations) {
         for m in &mut self.menus {
             for it in &mut m.items {
                 if it.id == id && it.checked.is_some() {
                     it.checked = Some(on);
                 }
+                for sub in &mut it.submenu {
+                    if sub.id == id && sub.checked.is_some() {
+                        sub.checked = Some(on);
+                    }
+                }
             }
         }
         inv.push(self.bounds);
     }
 
-    /// 드롭다운 닫기(외부 클릭·Esc·명령 실행 후).
+    /// 드롭다운 닫기(외부 클릭·Esc·명령 실행 후) — 하위 플라이아웃 동반 정리.
     pub fn close(&mut self, inv: &mut Invalidations) {
         if self.open.take().is_some() {
             self.hover_item = None;
+            self.open_sub = None;
+            self.hover_sub = None;
             inv.push(*self.drop_rect.borrow());
+            inv.push(*self.sub_rect.borrow());
             inv.push(self.bounds);
         }
     }
@@ -158,6 +184,33 @@ impl MenuBar {
         let idx = ((y - rect.y) / self.row_h) as usize;
         (idx < self.menus[open].items.len()).then_some(idx)
     }
+
+    /// 하위 플라이아웃 항목 인덱스(X-36 — 펼쳐져 있을 때).
+    fn sub_item_at(&self, x: i32, y: i32) -> Option<usize> {
+        let open = self.open?;
+        let parent = self.open_sub?;
+        let rect = *self.sub_rect.borrow();
+        if rect.w == 0 || !rect.contains(Point { x, y }) {
+            return None;
+        }
+        let idx = ((y - rect.y) / self.row_h) as usize;
+        (idx < self.menus[open].items[parent].submenu.len()).then_some(idx)
+    }
+
+    /// 하위 플라이아웃 전환(X-36) — 이전/새 rect 무효화 공용.
+    fn set_open_sub(&mut self, sub: Option<usize>, inv: &mut Invalidations) {
+        if self.open_sub == sub {
+            return;
+        }
+        inv.push(*self.sub_rect.borrow()); // 이전 플라이아웃 지우기
+        self.open_sub = sub;
+        self.hover_sub = None;
+        if sub.is_some() {
+            // 정확한 rect는 paint에서 확정 — 보수적 추정(드롭다운 오른쪽·동일 폭 계열)
+            let drop = *self.drop_rect.borrow();
+            inv.push(Rect::new(drop.right(), drop.y, drop.w.max(320), drop.h));
+        }
+    }
 }
 
 impl Widget for MenuBar {
@@ -176,10 +229,19 @@ impl Widget for MenuBar {
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
         match *ev {
             InputEvent::MouseDown { x, y, .. } => {
-                if let Some(i) = self.title_at(x, y) {
+                if let Some(si) = self.sub_item_at(x, y) {
+                    // 하위 플라이아웃 클릭(X-36) — 리프 발화 후 전체 닫기
+                    let (open, parent) = (self.open.unwrap(), self.open_sub.unwrap());
+                    let it = &self.menus[open].items[parent].submenu[si];
+                    if !it.separator {
+                        self.pending = Some(it.id);
+                    }
+                    self.close(inv);
+                } else if let Some(i) = self.title_at(x, y) {
                     // 제목 클릭: 열기/닫기 토글
                     self.open = if self.open == Some(i) { None } else { Some(i) };
                     self.hover_item = None;
+                    self.set_open_sub(None, inv);
                     inv.push(self.bounds);
                     inv.push(*self.drop_rect.borrow()); // 이전 드롭다운 지우기
                     if let Some(open) = self.open {
@@ -188,10 +250,17 @@ impl Widget for MenuBar {
                 } else if let Some(item) = self.item_at(x, y) {
                     let open = self.open.unwrap();
                     let it = &self.menus[open].items[item];
-                    if !it.separator {
-                        self.pending = Some(it.id);
+                    if !it.submenu.is_empty() {
+                        // 하위 보유 항목 클릭 = 펼침 토글(발화 없음 — X-36)
+                        let next = (self.open_sub != Some(item)).then_some(item);
+                        self.set_open_sub(next, inv);
+                        inv.push(*self.drop_rect.borrow());
+                    } else {
+                        if !it.separator {
+                            self.pending = Some(it.id);
+                        }
+                        self.close(inv);
                     }
-                    self.close(inv);
                 } else if self.is_open() {
                     self.close(inv); // 외부 클릭 = 닫기
                 }
@@ -199,20 +268,32 @@ impl Widget for MenuBar {
             InputEvent::MouseMove { x, y } => {
                 let ht = self.title_at(x, y);
                 let hi = self.item_at(x, y);
-                if ht != self.hover_title || hi != self.hover_item {
+                let hs = self.sub_item_at(x, y);
+                if ht != self.hover_title || hi != self.hover_item || hs != self.hover_sub {
                     // 열린 상태에서 다른 제목 hover = 그 메뉴로 전환(표준 메뉴 UX)
                     if let (Some(t), Some(_)) = (ht, self.open) {
                         if self.open != Some(t) {
                             self.open = Some(t);
+                            self.set_open_sub(None, inv);
                             inv.push(*self.drop_rect.borrow()); // 이전 드롭다운 지우기
                             inv.push(self.drop_area_estimate(t)); // 새 드롭다운 영역(근사)
                         }
                     }
+                    // 드롭다운 항목 hover = 하위 펼침/닫힘(표준 메뉴 UX — X-36).
+                    // 플라이아웃 위 hover(hs)는 부모 펼침 유지.
+                    if let (Some(open), Some(i)) = (self.open, hi) {
+                        let has_sub = !self.menus[open].items[i].submenu.is_empty();
+                        self.set_open_sub(has_sub.then_some(i), inv);
+                    } else if hs.is_none() && hi.is_none() && self.open_sub.is_some() {
+                        // 드롭다운/플라이아웃 밖 — 유지(닫기는 클릭/제목 전환에서)
+                    }
                     self.hover_title = ht;
                     self.hover_item = hi;
+                    self.hover_sub = hs;
                     inv.push(self.bounds);
                     if self.is_open() {
                         inv.push(*self.drop_rect.borrow());
+                        inv.push(*self.sub_rect.borrow());
                     }
                 }
             }
@@ -251,6 +332,7 @@ impl Widget for MenuBar {
         // 드롭다운(오버레이 — 콘텐츠 위)
         let Some(open) = self.open else {
             *self.drop_rect.borrow_mut() = Rect::default();
+            *self.sub_rect.borrow_mut() = Rect::default();
             return;
         };
         let items = &self.menus[open].items;
@@ -296,15 +378,20 @@ impl Widget for MenuBar {
             let label_x = cell.x + self.pad_x * 2 + ctx.text_width("✓");
             let label_rc = Rect::new(label_x, iy, cell.right() - label_x, self.row_h);
             ctx.text_opaque(label_x, ity, label_rc, &it.label, theme.text, bg);
-            // 단축키(우측 정렬)
-            if !it.shortcut.is_empty() {
-                let sw = ctx.text_width(&it.shortcut);
+            // 단축키(우측 정렬) — 하위 보유 항목은 ▸ 마커(X-36)
+            let right_hint = if !it.submenu.is_empty() {
+                "▸"
+            } else {
+                it.shortcut.as_str()
+            };
+            if !right_hint.is_empty() {
+                let sw = ctx.text_width(right_hint);
                 let sx = cell.right() - self.pad_x - sw;
                 ctx.text_opaque(
                     sx,
                     ity,
                     Rect::new(sx, iy, sw, self.row_h),
-                    &it.shortcut,
+                    right_hint,
                     theme.text_dim,
                     bg,
                 );
@@ -319,6 +406,84 @@ impl Widget for MenuBar {
         ctx.fill_rect(Rect::new(rect.x, rect.y, 1, rect.h), theme.border);
         ctx.fill_rect(Rect::new(rect.right() - 1, rect.y, 1, rect.h), theme.border);
         *self.drop_rect.borrow_mut() = rect;
+
+        // 하위 플라이아웃(X-36) — 부모 항목 오른쪽에 2차 오버레이(1단계만)
+        let sub = self
+            .open_sub
+            .filter(|&p| p < items.len() && !items[p].submenu.is_empty());
+        let Some(parent) = sub else {
+            *self.sub_rect.borrow_mut() = Rect::default();
+            return;
+        };
+        let subs = &items[parent].submenu;
+        let mut sw = 0;
+        for it in subs {
+            let iw = ctx.text_width(&it.label)
+                + ctx.text_width(&it.shortcut)
+                + self.pad_x * 6
+                + ctx.text_width("✓");
+            sw = sw.max(iw);
+        }
+        let srect = Rect::new(
+            rect.right(),
+            rect.y + parent as i32 * self.row_h,
+            sw,
+            self.row_h * subs.len() as i32,
+        );
+        for (i, it) in subs.iter().enumerate() {
+            let iy = srect.y + i as i32 * self.row_h;
+            let cell = Rect::new(srect.x, iy, srect.w, self.row_h);
+            if it.separator {
+                ctx.fill_rect(cell, theme.field_bg);
+                ctx.fill_rect(
+                    Rect::new(
+                        cell.x + self.pad_x,
+                        iy + self.row_h / 2,
+                        cell.w - self.pad_x * 2,
+                        1,
+                    ),
+                    theme.border,
+                );
+                continue;
+            }
+            let bg = if self.hover_sub == Some(i) {
+                theme.sel_bg
+            } else {
+                theme.field_bg
+            };
+            let ity = iy + (self.row_h - (self.row_h * 4) / 5) / 2;
+            let check = match it.checked {
+                Some(true) => "✓",
+                _ => "",
+            };
+            ctx.text_opaque(cell.x + self.pad_x, ity, cell, check, theme.accent, bg);
+            let label_x = cell.x + self.pad_x * 2 + ctx.text_width("✓");
+            let label_rc = Rect::new(label_x, iy, cell.right() - label_x, self.row_h);
+            ctx.text_opaque(label_x, ity, label_rc, &it.label, theme.text, bg);
+            if !it.shortcut.is_empty() {
+                let scw = ctx.text_width(&it.shortcut);
+                let sx = cell.right() - self.pad_x - scw;
+                ctx.text_opaque(
+                    sx,
+                    ity,
+                    Rect::new(sx, iy, scw, self.row_h),
+                    &it.shortcut,
+                    theme.text_dim,
+                    bg,
+                );
+            }
+        }
+        ctx.fill_rect(Rect::new(srect.x, srect.y, srect.w, 1), theme.border);
+        ctx.fill_rect(
+            Rect::new(srect.x, srect.bottom() - 1, srect.w, 1),
+            theme.border,
+        );
+        ctx.fill_rect(Rect::new(srect.x, srect.y, 1, srect.h), theme.border);
+        ctx.fill_rect(
+            Rect::new(srect.right() - 1, srect.y, 1, srect.h),
+            theme.border,
+        );
+        *self.sub_rect.borrow_mut() = srect;
     }
 }
 
@@ -426,5 +591,47 @@ mod tests {
         let (mut m, mut inv) = bar();
         m.set_checked(10, false, &mut inv);
         assert_eq!(m.menus[1].items[0].checked, Some(false));
+    }
+
+    /// X-36: 하위 메뉴 — 부모 클릭 = 펼침(발화 없음) → 플라이아웃 항목 클릭 = 발화·닫기.
+    #[test]
+    fn submenu_opens_on_parent_and_fires_on_sub_item() {
+        let mut inv = Invalidations::default();
+        let menus = vec![Menu {
+            title: "Cloud".into(),
+            items: vec![MenuItem::new(0, "OneDrive", "").with_submenu(vec![
+                MenuItem::new(301, "바로 가기", ""),
+                MenuItem::new(341, "온라인 보기", ""),
+            ])],
+        }];
+        let mut m = MenuBar::new(menus, 20, 6);
+        m.set_bounds(Rect::new(0, 0, 800, 22), &mut inv);
+        m.paint(&mut Probe, &Theme::dark());
+        down(&mut m, &mut inv, 10, 5); // "Cloud" 열기
+        m.paint(&mut Probe, &Theme::dark());
+        down(&mut m, &mut inv, 20, 22 + 10); // 부모 항목 클릭 = 펼침만
+        assert_eq!(m.take_command(), None, "하위 보유 항목은 발화하지 않음");
+        assert!(m.is_open(), "펼침 유지");
+        m.paint(&mut Probe, &Theme::dark()); // 플라이아웃 rect 캐시
+        let sub = *m.sub_rect.borrow();
+        assert!(sub.w > 0, "플라이아웃 rect 확정");
+        down(&mut m, &mut inv, sub.x + 10, sub.y + 10); // 하위 항목 0
+        assert_eq!(m.take_command(), Some(301));
+        assert!(!m.is_open(), "발화 후 전체 닫힘");
+    }
+
+    /// X-36: set_checked가 하위 항목까지 갱신.
+    #[test]
+    fn set_checked_reaches_submenu_items() {
+        let mut inv = Invalidations::default();
+        let menus = vec![Menu {
+            title: "Cloud".into(),
+            items: vec![MenuItem::new(0, "OneDrive", "")
+                .with_submenu(vec![MenuItem::new(500, "토글", "").checked(false)])],
+        }];
+        let mut m = MenuBar::new(menus, 20, 6);
+        m.set_bounds(Rect::new(0, 0, 800, 22), &mut inv);
+        m.set_checked(500, true, &mut inv);
+        assert_eq!(m.menus[0].items[0].submenu[0].checked, Some(true));
     }
 }
