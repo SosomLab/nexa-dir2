@@ -8,6 +8,7 @@
 
 ## 2026-08-01
 
+- **CLAUDE.md 노후화 정정 + 기록 마감·push(사용자 지시)**: §1 최신 릴리스 `0.12.0` 반영·§7-2 채널 전제 08-01 기준 정정(07-31 점검 예고분 이행) 후 **08-01 4커밋 main push**(배포 점검 기록·winget 매니페스트 수정·CLAUDE.md·기록 마감 — 전부 main 직커밋, 병합 브랜치 없음). 잔여 = 실기 QA 4건·외부 심사 3건 추적·백로그(TODO §7). 상세 [journal/2026-08-01.md](journal/2026-08-01.md).
 - **winget 설치형 #404528 피드백 처리(사용자 승인)**: `Needs-Author-Feedback`(`DisplayVersion`=PackageVersion 동일값 제거 요청) 대응 — 포크 PR 브랜치 installer.yaml 1줄 제거(**커밋 `7e49694`**, gh contents API·계정 kiros33 전환 후 원복) + 회신 코멘트 + 로컬 사본 `packaging/winget/0.8.1` 동기. author 쪽 블로커 해소 — 잔여(`Policy-Test-1.2` waiver·라벨 해제)는 모더레이터 몫, 상태 추적만. [21 §8](21-distribution.md) 표 갱신. 상세 [journal/2026-08-01.md](journal/2026-08-01.md).
 
 ## 2026-07-31

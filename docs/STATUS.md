@@ -1,6 +1,15 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-01 1차 (KST)** — **winget 설치형 #404528 피드백
+> **갱신: 2026-08-01 2차 (KST)** — **CLAUDE.md 노후화 정정 + 기록
+> 마감·push(사용자 지시)**: §1 최신 릴리스 `0.12.0`·§7-2 채널 전제
+> 08-01 기준 정정 후 **08-01 4커밋 main push**(배포 점검·winget
+> 매니페스트 수정·CLAUDE.md·기록 마감 — 전부 main 직커밋). **잔여**:
+> 실기 QA 4건(pptx 활성화·OneDrive 갱신·터미널 스레드·다음 태그 자산
+> 5종) · 외부 심사 3건 추적(winget 설치형 waiver·choco 2종 큐 — 승인 시
+> `CHOCO_PUSH` 재개) · 백로그([TODO](TODO.md) §7).
+> [journal/2026-08-01.md](journal/2026-08-01.md).
+>
+> **직전(08-01 1차)** — **winget 설치형 #404528 피드백
 > 처리(사용자 승인)**: `DisplayVersion` 제거 요청(07-31 부착
 > `Needs-Author-Feedback`) 대응 — 포크 PR 브랜치 installer.yaml 1줄
 > 제거(**커밋 `7e49694`** — gh contents API·kiros33 전환 후 원복) +
