@@ -233,13 +233,17 @@ impl Tree {
         depth: u32,
     ) -> io::Result<Vec<NodeId>> {
         let mut ids = Vec::new();
-        let push = |tree: &mut Tree, e: nexa_vfs::Entry, ids: &mut Vec<NodeId>| {
+        let push = |tree: &mut Tree, mut e: nexa_vfs::Entry, ids: &mut Vec<NodeId>| {
             if !tree.filter.allows(&e.name, e.attrs) {
                 return; // 숨김/점 파일 필터(트리에 아예 생성 안 함)
             }
             let id = tree.nodes.len() as NodeId;
-            // 가상 루트의 드라이브 항목은 이름이 절대 경로(`C:\`) — join이 부모 대체
-            let path = dir.join(&e.name);
+            // 가상 루트의 드라이브 항목은 이름이 절대 경로(`C:\`) — join이 부모 대체.
+            // 링크형(target — X-36 클라우드 연결)은 표시명과 무관하게 실경로를 쓴다.
+            let path = match e.target.take() {
+                Some(t) => std::path::PathBuf::from(t),
+                None => dir.join(&e.name),
+            };
             tree.nodes.push(Node {
                 id,
                 parent,
@@ -259,6 +263,10 @@ impl Tree {
         if nexa_vfs::is_virtual_root(dir) {
             // 가상 최상위 "내 PC"(X-17) — 드라이브 목록을 일반 항목처럼 흘려보낸다
             for e in nexa_vfs::drive_entries() {
+                push(self, e, &mut ids);
+            }
+            // 추가 루트(X-36 — 클라우드 연결): 표시명 항목·진입은 target 실경로
+            for e in nexa_vfs::extra_root_entries() {
                 push(self, e, &mut ids);
             }
         } else {

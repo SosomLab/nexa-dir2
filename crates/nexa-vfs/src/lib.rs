@@ -19,6 +19,10 @@ pub struct Entry {
     /// Windows 파일 속성 비트(FILE_ATTRIBUTE_*). Windows 외에는 0.
     /// 열거 시 이미 조회한 메타데이터에서 꺼내므로 추가 syscall이 없다(숨김 필터의 무료 원천).
     pub attrs: u32,
+    /// 링크형 항목의 실제 대상 경로(X-36 — 클라우드 연결 등 **표시명 ≠ 경로**).
+    /// `Some`이면 트리 노드 경로는 `parent.join(name)` 대신 이 값을 쓴다.
+    /// 일반 열거(`read_dir_entries`)·드라이브 항목은 `None`.
+    pub target: Option<String>,
 }
 
 /// 열거 메타데이터에서 Windows 파일 속성 비트를 꺼낸다(비Windows=0).
@@ -61,6 +65,7 @@ pub fn read_dir_entries(
             size,
             modified,
             attrs,
+            target: None,
         })
     });
     Ok(iter)
@@ -90,10 +95,41 @@ pub fn drive_entries() -> Vec<Entry> {
                 size: 0,
                 modified: None, // 드라이브는 수정일 개념 없음 — 표시층에서 빈 셀
                 attrs: 0,
+                target: None,
             });
         }
     }
     out
+}
+
+/// 가상 최상위에 합류할 **추가 루트**(X-36 — 클라우드 연결 등 앱 정의 항목) 전역 등록부.
+/// (표시명, 실경로) 쌍 — 표시명은 사용자 라벨, 진입은 [`Entry::target`] 경유 실경로.
+/// 앱(nexa-app)이 설정 로드/변경 시 갱신하고, [`MY_PC`] 열거가 드라이브 뒤에 합류한다.
+/// 탐지·직렬화는 앱 소관(이 크레이트는 플랫폼 중립 유지 — 검토서 26 §2-4).
+static EXTRA_ROOTS: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
+
+/// 추가 루트 목록 교체(전량) — 실존 프로브는 호출자 몫.
+pub fn set_extra_roots(roots: Vec<(String, String)>) {
+    *EXTRA_ROOTS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = roots;
+}
+
+/// 등록된 추가 루트를 Entry로 열거(가상 최상위 전용 — 드라이브 목록 뒤 합류).
+pub fn extra_root_entries() -> Vec<Entry> {
+    EXTRA_ROOTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|(label, path)| Entry {
+            name: label.clone(),
+            kind: FileKind::Dir,
+            size: 0,
+            modified: None,
+            attrs: 0,
+            target: Some(path.clone()),
+        })
+        .collect()
 }
 
 /// 저장소 공급자 추상화. (로컬/SFTP/S3/클라우드)
@@ -137,10 +173,24 @@ mod tests {
             size: 5,
             modified: None,
             attrs: 0,
+            target: None,
         };
         assert_eq!(e.kind, FileKind::File);
         assert_eq!(e.name, "a.txt");
         assert_eq!(e.size, 5);
+    }
+
+    /// X-36: 추가 루트 등록 → 표시명·target 실경로 Entry로 열거.
+    #[test]
+    fn extra_roots_roundtrip() {
+        set_extra_roots(vec![("OneDrive – Test".into(), "C:\\Users\\t\\OneDrive".into())]);
+        let e = extra_root_entries();
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].name, "OneDrive – Test");
+        assert_eq!(e[0].target.as_deref(), Some("C:\\Users\\t\\OneDrive"));
+        assert_eq!(e[0].kind, FileKind::Dir);
+        set_extra_roots(Vec::new());
+        assert!(extra_root_entries().is_empty());
     }
 
     #[test]
