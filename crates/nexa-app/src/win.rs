@@ -843,9 +843,11 @@ fn root_path() -> PathBuf {
 }
 
 fn open_start_tree(path: &std::path::Path) -> Tree {
-    Tree::open(path).unwrap_or_else(|e| {
-        eprintln!("{} 열기 실패({e}) — C:\\ 로 대체", path.display());
-        Tree::open("C:\\").expect("C:\\ 열기 실패")
+    Tree::open(path).ok().unwrap_or_else(|| {
+        eprintln!("{} 열기 실패 — 가용 루트로 대체", path.display());
+        // C:\ 고정 폴백은 C: 부재/잠김 시스템에서 기동 abort(07-31 안정성 QA) —
+        // 전 드라이브·홈 순회로 대체(panel::open_any_root 공용).
+        crate::panel::open_any_root().expect("가용 루트 없음 — 전 드라이브·홈 열기 실패")
     })
 }
 
@@ -854,6 +856,16 @@ pub fn run() -> Result<()> {
     let tz = unsafe { tz_offset_min() };
     // 설정/세션 로드(data\ — 없으면 기본값. M2-5. 구 .txt는 1회성 마이그레이션 폴백)
     let data = config::data_dir();
+    // panic 크래시 로그(07-31 안정성 QA) — 릴리스는 panic=abort라 어느 스레드의
+    // panic이든 무통보 즉사한다. 후크는 abort **전에** 실행되므로 위치·메시지를
+    // data\crash.txt에 남겨 재현 불가 보고("그냥 꺼졌다")의 유일한 단서를 확보한다.
+    // 기본 후크(stderr 출력)는 GUI 앱이라 어차피 보이지 않는다 — 대체 손실 없음.
+    {
+        let dir = data.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = config::save(&dir, "crash.txt", &format!("{info}"));
+        }));
+    }
     let settings = config::load_migrated(&data, SETTINGS_FILE, config::SETTINGS_FILE_OLD)
         .map(|t| Settings::parse(&t))
         .unwrap_or_default();
@@ -2425,7 +2437,10 @@ unsafe fn sync_watchers(hwnd: HWND, st: &mut State) {
         let want = st.panels[i].watch_dirs(WATCH_CAP);
         // diff 재구독 — 유지분은 그대로(펼침 토글마다 전체 스레드 churn 방지),
         // 이탈분만 drop(중지 신호)·신규분만 시작. 세대는 watcher별(any 매치 가드).
-        st.watchers[i].retain(|w| want.contains(&w.path));
+        // 죽은 스레드(is_alive=false — 폴더 소실·오류 종료)도 솎아 아래에서 재구독
+        // (07-31 안정성 QA: 경로만 비교하면 죽은 watcher가 "감시 중"으로 남아
+        // 그 폴더가 영구 무갱신 = OneDrive 간헐 무갱신 보고의 잔여 경로).
+        st.watchers[i].retain(|w| want.contains(&w.path) && w.is_alive());
         for p in &want {
             if st.watchers[i].iter().any(|w| &w.path == p) {
                 continue;
@@ -2560,8 +2575,8 @@ unsafe fn start_recycle_delete(hwnd: HWND, st: &mut State, mut targets: Vec<Path
         if hr.is_ok() {
             windows::Win32::System::Com::CoUninitialize();
         }
-        let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
-        let _ = PostMessageW(Some(hwnd), WM_APP_DELETE, WPARAM(ok as usize), LPARAM(0));
+        // 유실 = pending_delete 영구 고착(자동 갱신 정지·이후 삭제 차단) — 재시도 통지
+        post_final_notify(hwnd_raw, WM_APP_DELETE, ok as usize, 0);
     });
     // 낙관적 숨김(07-21 QA): 셸 휴지통 API가 수 초 걸려도 행은 즉시 화면에서
     // 제거(탐색기 동일 UX). FS 무변 — 실패분은 완료 재로드가 원복+통지한다(X-35).
@@ -2924,7 +2939,7 @@ unsafe fn start_transfer(
                 match ev {
                     nexa_ops::Event::Plan { sizes, total_bytes } => {
                         sh.total_bytes.store(total_bytes, Ordering::Relaxed);
-                        *sh.items.lock().unwrap() = sizes
+                        *plock(&sh.items) = sizes
                             .iter()
                             .map(|&s| crate::dialog::SegItem {
                                 size: s,
@@ -2935,25 +2950,25 @@ unsafe fn start_transfer(
                         post();
                     }
                     nexa_ops::Event::ItemStart { index, dest } => {
-                        *sh.in_flight.lock().unwrap() = Some(dest.to_path_buf());
+                        *plock(&sh.in_flight) = Some(dest.to_path_buf());
                         // 항목 시작 시점의 누적 바이트 = 이 항목 done 산출 기준
                         item_base = sh.done_bytes.load(Ordering::Relaxed);
-                        if let Some(it) = sh.items.lock().unwrap().get_mut(index) {
+                        if let Some(it) = plock(&sh.items).get_mut(index) {
                             it.status = crate::dialog::SegStatus::Active;
                         }
                     }
                     nexa_ops::Event::Bytes(p) => {
                         sh.done_bytes.store(p.done_bytes, Ordering::Relaxed);
                         sh.total_bytes.store(p.total_bytes, Ordering::Relaxed);
-                        if let Some(it) = sh.items.lock().unwrap().get_mut(p.item_index) {
+                        if let Some(it) = plock(&sh.items).get_mut(p.item_index) {
                             it.done = p.done_bytes.saturating_sub(item_base).min(it.size);
                         }
                         // 4MB 청크 단위 통지 — 저빈도라 스로틀 불요
                         post();
                     }
                     nexa_ops::Event::ItemEnd { index, status } => {
-                        *sh.in_flight.lock().unwrap() = None;
-                        if let Some(it) = sh.items.lock().unwrap().get_mut(index) {
+                        *plock(&sh.in_flight) = None;
+                        if let Some(it) = plock(&sh.items).get_mut(index) {
                             it.status = match status {
                                 nexa_ops::ItemStatus::Done => {
                                     it.done = it.size;
@@ -2969,10 +2984,9 @@ unsafe fn start_transfer(
             },
             &sh.cancel,
         );
-        *sh.outcome.lock().unwrap() = Some(out);
-        unsafe {
-            let _ = PostMessageW(Some(hwnd), WM_APP_TRANSFER, WPARAM(gen as usize), LPARAM(1));
-        }
+        *plock(&sh.outcome) = Some(out);
+        // 유실 = st.transfer 영구 고착(이후 전송 차단·자동 갱신 정지) — 재시도 통지
+        post_final_notify(hwnd_raw, WM_APP_TRANSFER, gen as usize, 1);
     });
     // 진행 창(QA 07-14 — 커스텀 프로그레스 컨트롤·[취소]) — 비모달, 완료 시 자동 닫힘(Drop).
     // 설정 transfer_close_ms=0 = 창 미표시(제목줄 %만 — 사용자 요청 07-21).
@@ -3013,7 +3027,7 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         if let Some(p) = &mut job.progress {
             // 세그먼트 스냅샷 + 파일 {cur}/{count}(07-21) — cur = 진행 중 항목 번호,
             // 없으면 종결된 수(시작 전 0/N·전량 종결 N/N).
-            let items = job.shared.items.lock().unwrap().clone();
+            let items = plock(&job.shared.items).clone();
             let count = if items.is_empty() {
                 job.item_count
             } else {
@@ -3046,7 +3060,7 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
     // 대기 = 설정 transfer_close_ms 07-21). 호스트 타이머는 백스톱: 구조체 지연 해제.
     if let Some(mut p) = job.progress.take() {
         // 마지막 스냅샷 반영(최종 바이트·세그먼트 상태 — 취소 시 부분 진행 정직 표기)
-        let items = job.shared.items.lock().unwrap().clone();
+        let items = plock(&job.shared.items).clone();
         let count = if items.is_empty() {
             job.item_count
         } else {
@@ -3066,13 +3080,7 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
         st.transfer_close = Some(p);
         SetTimer(Some(hwnd), TIMER_PROG_CLOSE, ms as u32 + 500, None);
     }
-    let out = job
-        .shared
-        .outcome
-        .lock()
-        .unwrap()
-        .take()
-        .unwrap_or_default();
+    let out = plock(&job.shared.outcome).take().unwrap_or_default();
     // undo 기록(M3-3, 원본 B-13u) — 수행된 (원본, 최종 대상) 쌍만. 취소돼도 수행분은 기록.
     if !out.transferred.is_empty() {
         let n = out.transferred.len().to_string();
@@ -4517,10 +4525,37 @@ fn transfer_blocks(st: &State, path: &std::path::Path) -> bool {
     let Some(job) = &st.transfer else {
         return false;
     };
-    let guard = job.shared.in_flight.lock().unwrap();
+    let guard = plock(&job.shared.in_flight);
     guard
         .as_ref()
         .is_some_and(|dest| nexa_ops::is_same_or_sub(dest, path))
+}
+
+/// poison 내성 lock(07-31 안정성 QA) — 워커↔UI **공유 Mutex** 전용.
+///
+/// 릴리스는 panic=abort라 poison이 존재할 수 없지만, 디버그에서는 한 스레드가 락을 쥔 채
+/// panic하면 반대편의 `lock().unwrap()`이 **연쇄 panic**한다(워커 죽음 → UI 죽음).
+/// 보호 대상이 전부 값 스냅숏(진행률·결과·경로)이라 반쯤 쓴 상태도 다음 통지가 덮는다
+/// — into_inner로 그대로 진행하는 것이 앱 전체 중단보다 항상 낫다.
+pub(crate) fn plock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// 워커 **완료 통지** PostMessage — 유한 재시도(07-31 안정성 QA).
+///
+/// `pending_delete`(삭제)·`st.transfer`(전송)는 완료 통지 1발로만 해제된다. 통지가
+/// 유실되면(메시지 큐 포화 10K 등) 두 상태가 **영구 고착** — 자동 갱신 정지(watcher
+/// 디바운스가 무한 재무장) + 이후 삭제/전송 전부 차단. 진행률 통지는 유실돼도 다음
+/// 통지가 덮으므로 기존 단발 유지, **종결 통지만** 이 헬퍼를 쓴다.
+/// 창 소멸(종료 중)로 실패가 계속되면 5초 후 포기 — 프로세스 종료 경로라 무해.
+fn post_final_notify(hwnd_raw: isize, msg: u32, w: usize, l: isize) {
+    let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+    for _ in 0..50 {
+        if unsafe { PostMessageW(Some(hwnd), msg, WPARAM(w), LPARAM(l)) }.is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// 파일 실행 게이트(07-21) — 전송 중 대상은 완료까지 열기 차단(부분 파일 실행 방지).
@@ -5734,7 +5769,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             t.exited = true;
                         } else {
                             let sb0 = t.screen.scrollback_count();
-                            let data = std::mem::take(&mut *t.pty.output.lock().unwrap());
+                            let data = std::mem::take(&mut *plock(&t.pty.output));
                             t.screen.feed(&data);
                             if t.view_off > 0 {
                                 // 스크롤백 보기 중 새 출력 = 보던 위치 고정(WT 규약, QA 07-14)

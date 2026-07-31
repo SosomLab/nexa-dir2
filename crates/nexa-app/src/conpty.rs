@@ -8,16 +8,19 @@
 use std::sync::{Arc, Mutex};
 
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, HWND, LPARAM, WPARAM,
+};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 use windows::Win32::System::Console::{
     ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT,
-    INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, STARTUPINFOEXW,
+    CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+    InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROCESS_INFORMATION, STARTUPINFOEXW,
 };
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
@@ -165,7 +168,7 @@ impl ConPty {
                     if valid > 0 {
                         let text = String::from_utf8_lossy(&pending[..valid]).into_owned();
                         pending.drain(..valid);
-                        out.lock().unwrap().push_str(&text);
+                        crate::win::plock(&out).push_str(&text);
                         unsafe {
                             let _ =
                                 PostMessageW(Some(hwnd), msg, WPARAM(panel), LPARAM(gen as isize));
@@ -177,19 +180,38 @@ impl ConPty {
                 }
             });
         }
-        // 종료 대기 스레드 — Exited 통지(원본 WaitForExitAsync)
+        // 종료 대기 스레드 — Exited 통지(원본 WaitForExitAsync).
+        // 스레드에는 **복제 핸들**을 넘긴다(07-31 안정성 QA — watcher 동일 규약):
+        // Drop이 원본 process 핸들을 닫은 뒤 핸들 값이 재활용되면 원시값을 든
+        // 대기 스레드가 **무관 객체를 영원히 대기**(스레드 누수 + 낡은 통지)한다.
+        // 복제 실패(사실상 불발)는 원시값 폴백 — 종전 동작 유지.
         {
-            let (hwnd_raw, proc_raw) = (hwnd.0 as isize, pi.hProcess.0 as isize);
+            let mut proc_thread = HANDLE(pi.hProcess.0);
+            let dup_ok = DuplicateHandle(
+                GetCurrentProcess(),
+                pi.hProcess,
+                GetCurrentProcess(),
+                &mut proc_thread,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            )
+            .is_ok();
+            let (hwnd_raw, proc_raw) = (hwnd.0 as isize, proc_thread.0 as isize);
             std::thread::spawn(move || {
                 let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+                let proc = HANDLE(proc_raw as *mut core::ffi::c_void);
                 unsafe {
-                    WaitForSingleObject(HANDLE(proc_raw as *mut core::ffi::c_void), INFINITE);
+                    WaitForSingleObject(proc, INFINITE);
                     let _ = PostMessageW(
                         Some(hwnd),
                         msg,
                         WPARAM(panel | EXIT_FLAG),
                         LPARAM(gen as isize),
                     );
+                    if dup_ok {
+                        let _ = CloseHandle(proc); // 스레드 소유 복제분
+                    }
                 }
             });
         }

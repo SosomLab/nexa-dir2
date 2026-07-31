@@ -1,6 +1,19 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-31 14차 (KST)** — **연 프로그램이 뒤에 숨는 결함
+> **갱신: 2026-07-31 15차 (KST)** — **전 소스 안정성 감사(사용자 요청 —
+> `fix/stability-hardening`, 실기 QA 후 병합 대기)**: 워커 6곳·unwrap
+> 131건·핸들 수명 전수(전제 = panic=abort). 결함 6건 수정 — **S1/S2**
+> watcher 죽음(버퍼 넘침 오판·재구독 불가 — **OneDrive 간헐 무갱신의
+> 유력 원인**) → ENUM_DIR 복구+`alive` 자가 치유 · **S3** conpty 종료
+> 대기 원시 핸들 경쟁(영구 대기 누수) → `DuplicateHandle` · **S4/S5**
+> 삭제·전송 완료 통지 유실 = 상태 영구 고착 → `post_final_notify` 재시도 ·
+> **S6** 기동 `C:\ expect` abort → `open_any_root()` 순회 · **S7** 공유
+> Mutex poison 내성 `plock()` + panic 후크 `data\crash.txt`. **219
+> green(신규 2)·clippy 0·3.20MB(B2)·스모크 6초 생존**. **QA 대기**:
+> OneDrive 엑셀 저장 반복 → 자동 갱신 유지.
+> [journal/2026-07-31.md](journal/2026-07-31.md).
+>
+> **직전(07-31 14차)** — **연 프로그램이 뒤에 숨는 결함
 > 픽스(사용자 QA — `fix/foreground-activation`, 실기 QA 후 병합 대기)**:
 > 파워포인트 등을 더블클릭하면 문서는 열리나 **창이 활성화되지 않고 뒤에
 > 숨던** 결함. 원인 = **Windows 포그라운드 잠금** — `ShellExecute`·

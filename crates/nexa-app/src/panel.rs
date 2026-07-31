@@ -12,6 +12,17 @@ use nexa_tree::Tree;
 use crate::nav::History;
 use crate::source::TreeSource;
 
+/// 최후 폴백 루트(07-31 안정성 QA) — C:\가 없거나 잠긴 시스템(비표준 시스템 드라이브
+/// 문자·BitLocker 잠김·VM)에서 기동 panic(release=abort)을 막는다.
+/// C:\ → 전 드라이브 루트(A~Z) → 홈 순서로 첫 성공 트리. 전부 실패 = None
+/// (호출부 expect — 읽을 수 있는 루트가 하나도 없는 시스템은 탐색기 자체가 무의미).
+pub(crate) fn open_any_root() -> Option<Tree> {
+    let mut cands = vec![PathBuf::from("C:\\")];
+    cands.extend((b'A'..=b'Z').map(|c| PathBuf::from(format!("{}:\\", c as char))));
+    cands.extend(std::env::var_os("USERPROFILE").map(PathBuf::from));
+    cands.into_iter().find_map(|p| Tree::open(&p).ok())
+}
+
 /// 네비게이션 컨텍스트 — 가시성 필터(전역 ViewOptions)·타임존(호스트 소유).
 #[derive(Clone, Copy, Debug)]
 pub struct NavCtx {
@@ -176,8 +187,9 @@ impl Panel {
         if valid.is_empty() {
             valid.push((
                 Tree::open_filtered(fallback, ctx.show_hidden, ctx.show_dotfiles)
-                    .or_else(|_| Tree::open("C:\\"))
-                    .expect("C:\\ 열기 실패"),
+                    .ok()
+                    .or_else(open_any_root)
+                    .expect("가용 루트 없음 — 전 드라이브·홈 열기 실패"),
                 Vec::new(),
             ));
         }
@@ -1186,6 +1198,13 @@ fn open_source(path: &Path, ctx: NavCtx) -> Option<TreeSource> {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// 07-31 안정성 QA: 어떤 Windows 시스템에서도 시작 폴백이 루트 하나는 찾는다
+    /// (C:\ 고정 expect의 기동 abort 대체 — S6).
+    #[test]
+    fn open_any_root_finds_a_root() {
+        assert!(open_any_root().is_some());
+    }
 
     fn ctx() -> NavCtx {
         NavCtx {
