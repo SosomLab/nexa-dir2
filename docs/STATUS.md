@@ -1,6 +1,16 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-31 16차 (KST)** — **3건 마감 — main 병합·push(사용자
+> **갱신: 2026-07-31 17차 (KST)** — **winget·choco 배포 상태 점검(사용자
+> 요청 — 원천 실측)**: ① **winget Portable 0.12.0(#408280) MERGED**
+> (07-27 제출 당일 승인 — 릴리스와 완전 동기화된 유일 패키지 매니저 채널)
+> ② **winget 설치형(#404528)** — 07-31 `Needs-Author-Feedback` 부착:
+> `DisplayVersion` 제거 요청(모더레이터 자동화). **"조치 불요" 전제
+> 깨짐** — 포크 수정 push 필요(무응답 시 자동 클로즈·사용자 승인 대기.
+> `Policy-Test-1.2` waiver는 그 후에도 모더레이터 몫) ③ choco 2종 0.8.1
+> "Ready for review" 무변동(12일째). [21 §8](21-distribution.md) 채널 표
+> 갱신. [journal/2026-07-31.md](journal/2026-07-31.md).
+>
+> **직전(07-31 16차)** — **3건 마감 — main 병합·push(사용자
 > 지시)**: 오늘 작업 3브랜치(`feat/dist-zip-assets` ZIP 자산 ·
 > `fix/foreground-activation` 포그라운드 양도 · `fix/stability-hardening`
 > 안정성 감사 7건) 선형 스택 **main ff 병합·push·브랜치 삭제**(BRANCHES

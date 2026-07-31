@@ -218,6 +218,11 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   waiver 상황을 문의하는 정도). 맥 환경이라
   `winget validate`/`winget install` 로컬 검증은 불가 — 스키마 수기 대조 + YAML 파싱까지만
   하고 **CI 검증에 의존**한다. (PR 체크리스트에도 그대로 명시했다. CLA 미서명이면 봇이 요청한다.)
+  **07-31 상태 변화 — "조치 불요" 전제 깨짐**: 모더레이터(stephengillie, 자동화 봇 build
+  1799) 코멘트로 **`Needs-Author-Feedback` 부착** — "`DisplayVersion`이 `PackageVersion`과
+  동일값이므로 **제거하라**"(installer.yaml `AppsAndFeaturesEntries.DisplayVersion: 0.8.1`,
+  로컬 사본 `packaging/winget/0.8.1/` 30행 동일). winget-pkgs는 Needs-Author-Feedback
+  무응답 PR을 일정 기간 후 자동 클로즈하므로 **포크 브랜치에 수정 커밋 push가 필요**하다.
 
 ### 포터블 변형 — `SosomLab.NexaDir.Portable`
 
@@ -246,19 +251,19 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   (raw 조회 200, 2026-07-24). **∴ winget Portable = 첫 승인 채널이자 유일하게 최신
   버전(`0.11.0`)까지 배포된 채널.**
 
-### 채널 상태 요약 (2026-07-27 갱신)
+### 채널 상태 요약 (2026-07-31 갱신 — 원천 실측: PR 라벨·choco 페이지)
 
 | 채널 | 패키지 | 배포된 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.11.0** (0.12.0 심사 중) | ✅ 배포 완료(#404533·#405973 MERGED) · **0.12.0 업데이트 PR [#408280](https://github.com/microsoft/winget-pkgs/pull/408280) OPEN**(07-27 제출 — SHA 실측 `B3A4C243…`) | 심사 추적 |
-| winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN(#404528) — **`Policy-Test-1.2` waiver 대기** | 없음(권한 밖) |
-| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 awaiting moderation(자동 3단계 완료) | 없음 |
-| Chocolatey | `nexa-dir.portable` | — | ⏳ 0.8.1 awaiting moderation(자동 3단계 완료) | 없음 |
-| GitHub Release | 포터블 + 설치형 | **0.12.0** (07-27 — X-34·X-35) | ✅ 상시 | — |
+| winget | `SosomLab.NexaDir.Portable` | **0.12.0** | ✅ 배포 완료 — [#408280](https://github.com/microsoft/winget-pkgs/pull/408280) **MERGED**(07-27 21:42 KST, 제출 당일 — `Moderator-Approved`·`Publish-Pipeline-Succeeded`) | — |
+| winget | `SosomLab.NexaDir`(설치형) | — | ⚠️ OPEN(#404528) — `Policy-Test-1.2` 잔존 + **07-31 `Needs-Author-Feedback` 부착**: `DisplayVersion` 제거 요청(모더레이터 자동화 코멘트) | **필요** — 포크 브랜치 수정 push(무응답 시 자동 클로즈) |
+| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 "Ready for review"(07-19 제출 후 12일째 무변동 — 자동 3단계 완료·사람 검토 대기) | 없음 |
+| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일 | 없음 |
+| GitHub Release | 포터블 + 설치형 | **0.12.0** (07-27 — X-34·X-35) | ✅ 상시. 다음 태그부터 자산 5종(§5-1 zip 2 + SHA256SUMS) | — |
 
-**해석**: 4개 심사 항목 중 **포터블 winget만 통과**했고, 나머지 3건은 전부 사람 검토
-단계에서 멈춰 있다(설치형 winget = 정책 waiver, choco 2종 = 모더레이션 큐).
-공통점은 **자동 검증은 모두 통과**했다는 것 — 매니페스트·패키지 자체의 결함은 없다.
+**해석(07-31)**: winget Portable은 0.12.0까지 **완전 최신** — 유일하게 릴리스와 동기화된
+패키지 매니저 채널. 설치형 winget은 waiver 대기에서 **author 액션 대기로 전환**됐다
+(사소한 매니페스트 수정 — 처리하면 waiver 판단만 남는다). choco 2종은 순수 큐 대기.
 
 ### 다음 버전 절차
 
