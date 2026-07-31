@@ -256,7 +256,7 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
 | 채널 | 패키지 | 배포된 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
 | winget | `SosomLab.NexaDir.Portable` | **0.12.0** | ✅ 배포 완료 — [#408280](https://github.com/microsoft/winget-pkgs/pull/408280) **MERGED**(07-27 21:42 KST, 제출 당일 — `Moderator-Approved`·`Publish-Pipeline-Succeeded`) | — |
-| winget | `SosomLab.NexaDir`(설치형) | — | ⚠️ OPEN(#404528) — `Policy-Test-1.2` 잔존 + **07-31 `Needs-Author-Feedback` 부착**: `DisplayVersion` 제거 요청(모더레이터 자동화 코멘트) | **필요** — 포크 브랜치 수정 push(무응답 시 자동 클로즈) |
+| winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN(#404528) — `DisplayVersion` 제거 요청은 **08-01 조치 완료**(포크 커밋 `7e49694`+회신 코멘트·로컬 사본 동기). `Policy-Test-1.2` waiver·라벨 해제는 모더레이터 몫 | 없음(재추적) |
 | Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 "Ready for review"(07-19 제출 후 12일째 무변동 — 자동 3단계 완료·사람 검토 대기) | 없음 |
 | Chocolatey | `nexa-dir.portable` | — | ⏳ 동일 | 없음 |
 | GitHub Release | 포터블 + 설치형 | **0.12.0** (07-27 — X-34·X-35) | ✅ 상시. 다음 태그부터 자산 5종(§5-1 zip 2 + SHA256SUMS) | — |

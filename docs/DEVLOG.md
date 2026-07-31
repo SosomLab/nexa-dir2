@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-08-01
+
+- **winget 설치형 #404528 피드백 처리(사용자 승인)**: `Needs-Author-Feedback`(`DisplayVersion`=PackageVersion 동일값 제거 요청) 대응 — 포크 PR 브랜치 installer.yaml 1줄 제거(**커밋 `7e49694`**, gh contents API·계정 kiros33 전환 후 원복) + 회신 코멘트 + 로컬 사본 `packaging/winget/0.8.1` 동기. author 쪽 블로커 해소 — 잔여(`Policy-Test-1.2` waiver·라벨 해제)는 모더레이터 몫, 상태 추적만. [21 §8](21-distribution.md) 표 갱신. 상세 [journal/2026-08-01.md](journal/2026-08-01.md).
+
 ## 2026-07-31
 
 - **winget·choco 배포 상태 점검(사용자 요청 — 원천 실측)**: ① **winget Portable 0.12.0(#408280) MERGED**(07-27 제출 당일 — "심사 대기" 기록 정정. 릴리스와 완전 동기화된 유일 채널) ② **winget 설치형(#404528) "조치 불요" 전제 깨짐** — 07-31 모더레이터 자동화가 `Needs-Author-Feedback` 부착(`DisplayVersion`=PackageVersion 동일값 제거 요청·무응답 시 자동 클로즈 → **포크 수정 push 필요**, 사용자 승인 대기. `Policy-Test-1.2`는 잔존) ③ choco 2종 0.8.1 "Ready for review" 무변동(12일째 큐). [21 §8](21-distribution.md) 채널 표 갱신. 상세 [journal/2026-07-31.md](journal/2026-07-31.md).

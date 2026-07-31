@@ -1,6 +1,15 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-31 17차 (KST)** — **winget·choco 배포 상태 점검(사용자
+> **갱신: 2026-08-01 1차 (KST)** — **winget 설치형 #404528 피드백
+> 처리(사용자 승인)**: `DisplayVersion` 제거 요청(07-31 부착
+> `Needs-Author-Feedback`) 대응 — 포크 PR 브랜치 installer.yaml 1줄
+> 제거(**커밋 `7e49694`** — gh contents API·kiros33 전환 후 원복) +
+> 회신 코멘트 + 로컬 사본 동기. **author 쪽 블로커 해소** — 잔여
+> (`Policy-Test-1.2` waiver·라벨 해제)는 모더레이터 몫, 상태 추적만.
+> [21 §8](21-distribution.md) 표 갱신.
+> [journal/2026-08-01.md](journal/2026-08-01.md).
+>
+> **직전(07-31 17차)** — **winget·choco 배포 상태 점검(사용자
 > 요청 — 원천 실측)**: ① **winget Portable 0.12.0(#408280) MERGED**
 > (07-27 제출 당일 승인 — 릴리스와 완전 동기화된 유일 패키지 매니저 채널)
 > ② **winget 설치형(#404528)** — 07-31 `Needs-Author-Feedback` 부착:
