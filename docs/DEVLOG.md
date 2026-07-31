@@ -8,6 +8,7 @@
 
 ## 2026-08-01
 
+- **클라우드 연계 검토(사용자 요청 — `docs/cloud-integration-study` 1커밋)**: This PC 클라우드 노출 + 기능 플러그인 클라이언트 요청 2건 → **[26 검토서](26-cloud-integration-study.md) 신설·2단계 분리 권고**. **Phase A(X-36)** = 동기화 폴더 탐지(OneDrive `Accounts\*`·DriveFS·Dropbox `info.json`·iCloud) → `::PC::` "클라우드" 섹션(X-17 join-대체 재사용·crate 0·B2/B3 무변·선행 = Entry 표시명 분리·함정 = 온디맨드 플레이스홀더/watcher[07-31 S1·S2 기해소]) · **Phase B(X-37)** = 제2종 플러그인(`kind: cloud`·공급자 ABI·호스트 `nx_http`[WinHTTP — B3 +1]·DPAPI 토큰·OAuth2 PKCE·**연결 모델 = 클라우드별 2+계정·토큰 플러그인 비노출**·Provider 승격 `::CLOUD:` 읽기 전용 1차 — ADR-0006 전제). 대안 기각 3종(셸 네임스페이스·rclone·직접 소켓). TODO X-36/X-37 등록·README 색인. 원본 대조는 맥 세션 유보. 착수 = 사용자 결정 5건(검토서 §6). 상세 [journal/2026-08-01.md](journal/2026-08-01.md).
 - **CLAUDE.md 노후화 정정 + 기록 마감·push(사용자 지시)**: §1 최신 릴리스 `0.12.0` 반영·§7-2 채널 전제 08-01 기준 정정(07-31 점검 예고분 이행) 후 **08-01 4커밋 main push**(배포 점검 기록·winget 매니페스트 수정·CLAUDE.md·기록 마감 — 전부 main 직커밋, 병합 브랜치 없음). 잔여 = 실기 QA 4건·외부 심사 3건 추적·백로그(TODO §7). 상세 [journal/2026-08-01.md](journal/2026-08-01.md).
 - **winget 설치형 #404528 피드백 처리(사용자 승인)**: `Needs-Author-Feedback`(`DisplayVersion`=PackageVersion 동일값 제거 요청) 대응 — 포크 PR 브랜치 installer.yaml 1줄 제거(**커밋 `7e49694`**, gh contents API·계정 kiros33 전환 후 원복) + 회신 코멘트 + 로컬 사본 `packaging/winget/0.8.1` 동기. author 쪽 블로커 해소 — 잔여(`Policy-Test-1.2` waiver·라벨 해제)는 모더레이터 몫, 상태 추적만. [21 §8](21-distribution.md) 표 갱신. 상세 [journal/2026-08-01.md](journal/2026-08-01.md).
 

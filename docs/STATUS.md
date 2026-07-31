@@ -1,6 +1,18 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-01 2차 (KST)** — **CLAUDE.md 노후화 정정 + 기록
+> **갱신: 2026-08-01 3차 (KST)** — **클라우드 연계 검토(사용자 요청 —
+> `docs/cloud-integration-study`, 병합 대기)**: **[26 검토서]
+> (26-cloud-integration-study.md) 신설 — 2단계 분리 권고**. **Phase A
+> (X-36)** = 동기화 폴더 탐지(OneDrive 레지스트리[BusinessN 다계정]·
+> DriveFS·Dropbox info.json·iCloud) → `::PC::` "클라우드" 섹션(X-17
+> join-대체 재사용·crate 0·예산 무변) · **Phase B(X-37)** = 기능 플러그인
+> (`kind: cloud`·공급자 ABI·호스트 `nx_http`[WinHTTP — B3 +1]·OAuth2
+> PKCE·**연결 모델 = 클라우드별 2+계정·토큰 플러그인 비노출**·읽기 전용
+> 1차 — **ADR-0006 전제**). TODO X-36/X-37 등록. **착수 = 사용자 결정
+> 5건 대기**(검토서 §6 — Phase A 승인·B 순서·범위·client_id·ADR).
+> [journal/2026-08-01.md](journal/2026-08-01.md).
+>
+> **직전(08-01 2차)** — **CLAUDE.md 노후화 정정 + 기록
 > 마감·push(사용자 지시)**: §1 최신 릴리스 `0.12.0`·§7-2 채널 전제
 > 08-01 기준 정정 후 **08-01 4커밋 main push**(배포 점검·winget
 > 매니페스트 수정·CLAUDE.md·기록 마감 — 전부 main 직커밋). **잔여**:

@@ -37,6 +37,7 @@
 | [12 패키징](12-packaging-single-exe.md) | 단일 exe·영속 규율·서명 |
 | [21 배포](21-distribution.md) | ★ 배포 2채널(포터블·설치형) + Chocolatey·winget 채널 상태 |
 | [23 macOS·Linux 확장 타당성](23-cross-platform-feasibility.md) | ★ 크로스 플랫폼 검토서 — 실측 결합도(중립 40%)·DR 충돌·선택지 4종·스파이크 권고 |
+| [26 클라우드 연계 검토](26-cloud-integration-study.md) | ★ This PC 클라우드 노출(Phase A)·기능 플러그인 클라이언트(Phase B — ABI v2·OAuth·다계정 연결 모델) |
 | [ctl 컨트롤 라이브러리](ctl/README.md) | ★ Nexa Controls — 컨트롤 14종 문서 색인·공통 규약(판매용) |
 
 ### ADR · 기능 설계 (개별 결정 상세)
