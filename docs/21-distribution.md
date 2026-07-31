@@ -12,6 +12,7 @@
 | **설치형(보조)** | `NexaDir-Setup-<버전>.exe` | 시작 메뉴·바탕화면·제거 목록 원하는 사용자 | exe 옆 `data\`(사용자별 설치) 또는 `%LOCALAPPDATA%\NexaDir\data`(폴백) |
 
 두 채널 모두 **버전 태그 push 1회**로 GitHub Release에 자동 첨부된다(release.yml).
+자산은 exe 2종 + **zip 2종 + `SHA256SUMS.txt`**(§5-1) = 5개.
 
 ## 2. 포터블 — 최소파일 규율
 
@@ -56,6 +57,36 @@ data_dir() [프로세스당 1회 판정 — OnceLock]
 **ISCC로 설치형 빌드**(windows-latest 내장 Inno Setup 6, `/DAppVersion` 주입) →
 Release에 **포터블 + 설치형 동시 첨부**. workflow_dispatch = 게이트+아티팩트만.
 
+## 5-1. ZIP 자산 + 체크섬 (2026-07-31 — 사용자 다운로드 차단 보고 대응)
+
+**문제**: 무서명(DR-3) exe는 브라우저의 **SmartScreen 다운로드 평판 필터**에 차단되는
+사례가 있다. 서명이 없으면 게시자 평판이 축적되지 않고 파일 해시 평판은 버전마다
+0에서 다시 시작하므로, 릴리스를 거듭해도 개선되지 않는다.
+
+**조치**: exe를 zip으로 감싼 자산을 **추가**한다(기존 exe 자산은 유지).
+
+| 단계 | zip 효과 |
+| --- | --- |
+| 브라우저 다운로드 차단 | ✅ 해소 — exe 확장자 평판 필터를 타지 않음 |
+| 실행 시 SmartScreen 경고 | ❌ 남음 — Explorer·WinRAR·7-Zip 22.00+ 는 압축 해제 시 MOTW 전파 |
+| Defender 검사 · Smart App Control | ❌ 무관 |
+
+- **기존 exe 자산은 절대 교체하지 않는다** — winget(§8)·choco(§7) 매니페스트가
+  URL+SHA256으로 직접 참조하므로 교체 시 3채널이 동시에 깨진다.
+- 자산 5종: `NexaDir-<버전>-win-x64.exe` · `NexaDir-Setup-<버전>.exe` ·
+  `NexaDir-<버전>-win-x64.zip` · `NexaDir-Setup-<버전>.zip` · `SHA256SUMS.txt`.
+- zip에는 exe + **`README.txt`**(무서명 경고 예고·[추가 정보]>[실행] 안내·
+  `Get-FileHash` 대조법 · 한/영 · UTF-8 BOM) 동봉.
+- **안내는 포터블 zip 우선.** 설치형 zip은 압축을 풀어도 UAC "알 수 없는 게시자"
+  프롬프트가 추가되고, 설치 프로그램 자체가 Defender 휴리스틱에 더 잘 걸린다.
+- 구현 주의: `run: |` 안에서 PowerShell here-string(`@" ... "@`)은 종료자가 컬럼 0이어야
+  해 **YAML 블록 스칼라를 깨뜨린다**. 문자열 배열 + `Set-Content`로 작성할 것.
+
+**근본 해결이 아님.** 서명 경로 현황은 [12 §4](12-packaging-single-exe.md) 참조 —
+EV의 SmartScreen 즉시 통과는 2024년 폐지, Azure Artifact Signing은 한국 이용 불가,
+SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일한 무료 경로는
+**Microsoft Store(MSIX 재서명)** 이며 별건 검토 대상이다.
+
 ## 6. 검증 체크리스트 (실기 QA)
 
 - [ ] 포터블: 임의 폴더에서 실행 → `data\` 생성·설정 영속.
@@ -63,6 +94,10 @@ Release에 **포터블 + 설치형 동시 첨부**. workflow_dispatch = 게이�
 - [ ] 설치형(관리자): Program Files 설치 → `%LOCALAPPDATA%\NexaDir\data` 폴백 확인.
 - [ ] 제거 → 데이터 보존·재설치 시 설정 복원.
 - [ ] 태그 push → Release에 산출물 2종 첨부(다음 버전 태그에서 확인).
+- [ ] 태그 push → Release 자산 **5종**(exe 2 + zip 2 + SHA256SUMS.txt) 첨부(§5-1).
+- [ ] 브라우저에서 **zip 다운로드가 차단되지 않는지** 확인(원 증상 재현 대조).
+- [ ] zip 해제 → `README.txt` 한글 정상 표시 → exe 실행(SmartScreen 경고는 예상 동작).
+- [ ] `Get-FileHash`가 `SHA256SUMS.txt` 값과 일치.
 - [ ] `choco install nexa-dir` → Program Files 설치·시작 메뉴 등재 → `choco uninstall nexa-dir` → 데이터 보존.
 
 ## 7. Chocolatey — 3번째 채널 (packaging/chocolatey, 2026-07-19)

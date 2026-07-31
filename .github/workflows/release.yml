@@ -52,6 +52,66 @@ jobs:
           Get-Item installer\out\NexaDir-Setup-*.exe | ForEach-Object {
             Write-Output "설치형: $($_.Name) = $([math]::Round($_.Length / 1MB, 2)) MB"
           }
+      # ZIP 자산(docs/21 §5-1, 2026-07-31): 무서명(DR-3) exe는 브라우저의 SmartScreen
+      # 다운로드 평판 필터에 차단되는 사례가 있다. zip으로 감싸면 그 단계를 피한다
+      # (실행 시 경고는 남음 — MOTW가 압축 해제 시 전파되므로). winget·choco 매니페스트가
+      # URL·체크섬으로 참조하는 원본 exe 자산은 **그대로 두고** zip을 덧붙이기만 한다.
+      - name: ZIP 자산 추가 — 다운로드 필터 완화 (기존 exe 자산 유지)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          # here-string(@" ... "@)은 종료자가 컬럼 0이어야 해 YAML 블록 스칼라를 깨뜨린다.
+          # 배열 + Set-Content로 같은 결과를 낸다(CRLF는 Set-Content가 붙인다).
+          $notice = @(
+            "Nexa Dir $ver — 실행 안내 / How to run"
+            ""
+            "이 빌드에는 코드 서명 인증서가 없습니다(DR-3 무서명 배포 방침)."
+            "따라서 처음 실행할 때 Windows SmartScreen이 아래 경고를 표시합니다."
+            ""
+            '    "Windows의 PC 보호 — 알 수 없는 게시자"'
+            ""
+            "[추가 정보] > [실행]을 누르면 정상 실행됩니다."
+            ""
+            "무결성 확인(권장) — Release 페이지의 SHA256SUMS.txt 값과 대조하세요."
+            ""
+            "    PowerShell> Get-FileHash .\NexaDir-$ver-win-x64.exe -Algorithm SHA256"
+            ""
+            "배포처: https://github.com/SosomLab/nexa-dir2/releases"
+            "문의:   kiros33@gmail.com"
+            ""
+            "--------------------------------------------------------------------"
+            "This build is not code-signed. Windows SmartScreen shows an"
+            '"unknown publisher" warning on first run: [More info] > [Run anyway].'
+            "Verify the SHA-256 against SHA256SUMS.txt on the release page."
+          )
+          Set-Content -Path README.txt -Value $notice -Encoding utf8BOM
+          Compress-Archive -Path "NexaDir-$ver-win-x64.exe", README.txt `
+            -DestinationPath "NexaDir-$ver-win-x64.zip" -CompressionLevel Optimal
+          Compress-Archive -Path "installer\out\NexaDir-Setup-$ver.exe", README.txt `
+            -DestinationPath "NexaDir-Setup-$ver.zip" -CompressionLevel Optimal
+          Get-Item NexaDir-*.zip | ForEach-Object {
+            Write-Output "zip: $($_.Name) = $([math]::Round($_.Length / 1MB, 2)) MB"
+          }
+
+      - name: SHA256SUMS.txt — 자산 4종 체크섬 (README.txt 무결성 확인 안내의 대조본)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          $assets = @(
+            "NexaDir-$ver-win-x64.exe"
+            "NexaDir-$ver-win-x64.zip"
+            "installer\out\NexaDir-Setup-$ver.exe"
+            "NexaDir-Setup-$ver.zip"
+          )
+          $lines = foreach ($a in $assets) {
+            $h = (Get-FileHash -Algorithm SHA256 $a).Hash.ToLower()
+            "$h  $(Split-Path $a -Leaf)"
+          }
+          Set-Content -Path SHA256SUMS.txt -Value $lines -Encoding ascii
+          Get-Content SHA256SUMS.txt | ForEach-Object { Write-Output $_ }
+
       - name: Chocolatey nupkg 팩 — 버전·체크섬 주입 (2패키지, docs/21 §7)
         if: github.ref_type == 'tag'
         shell: pwsh
@@ -95,12 +155,16 @@ jobs:
           path: |
             NexaDir-*-win-x64.exe
             installer/out/NexaDir-Setup-*.exe
+            NexaDir-*.zip
+            SHA256SUMS.txt
             packaging/chocolatey/out/*.nupkg
-      - name: GitHub Release 생성·포터블+설치형 첨부 (태그 push에서만)
+      - name: GitHub Release 생성·자산 첨부 (태그 push에서만 — exe 2 + zip 2 + 체크섬)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: |
             NexaDir-*-win-x64.exe
             installer/out/NexaDir-Setup-*.exe
+            NexaDir-*.zip
+            SHA256SUMS.txt
           generate_release_notes: true

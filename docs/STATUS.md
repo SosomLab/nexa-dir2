@@ -1,6 +1,18 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-07-27 12차 (KST)** — **릴리스 `0.12.0` + winget Portable
+> **갱신: 2026-07-31 13차 (KST)** — **ZIP 자산 + SHA256SUMS 추가
+> (사용자 요청 — `feat/dist-zip-assets`, 병합 대기)**: 브라우저 Release exe
+> 다운로드 **보안 차단** 보고 대응. 원인 = 무서명(DR-3) exe에 대한
+> SmartScreen **다운로드 평판 필터**. release.yml에 zip 2종(exe+안내
+> `README.txt`) + `SHA256SUMS.txt` 스텝 신설 — **기존 exe 자산은 유지**
+> (winget·choco가 URL+SHA256 직참조). 결과 자산 5종. 로컬 dry-run 검증
+> 완료, 실 검증은 다음 태그 push. 함께 **서명 경로 재조사**([12 §4-1](12-packaging-single-exe.md)
+> 신설) — EV 즉시 통과 2024년 폐지·Azure Artifact Signing 한국 불가·
+> SignPath Foundation 라이선스 결격 → 경고 완전 해소는 **Microsoft
+> Store(MSIX)** 뿐(재검토 대상·착수는 사용자 결정 대기).
+> [journal/2026-07-31.md](journal/2026-07-31.md).
+>
+> **직전(07-27 12차)** — **릴리스 `0.12.0` + winget Portable
 > 업데이트 PR(사용자 요청 — choco 제외)**: 0.12.0 승격(X-34 새로 만들기·
 > X-35 삭제 잠금 처리) → 태그 push → **Actions 게이트 전부 통과** →
 > [Release 0.12.0](https://github.com/SosomLab/nexa-dir2/releases/tag/0.12.0)

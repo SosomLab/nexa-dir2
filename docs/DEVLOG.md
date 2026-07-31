@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-07-31
+
+- **ZIP 자산 + SHA256SUMS 추가(사용자 요청 — `feat/dist-zip-assets` 1커밋)**: 사용자가 브라우저에서 Release exe 다운로드를 **보안 차단**당한 건 대응. 원인 = 무서명(DR-3) exe에 대한 브라우저 SmartScreen **다운로드 평판 필터**(서명 없으면 게시자 평판 미축적·해시 평판은 버전마다 0에서 재시작). 조치 = release.yml에 스텝 2개 신설 — `NexaDir-<버전>-win-x64.zip`·`NexaDir-Setup-<버전>.zip`(각각 exe + 안내 `README.txt` 한/영 UTF-8 BOM) + 자산 4종 `SHA256SUMS.txt`. **기존 exe 자산은 유지**(winget·choco 매니페스트가 URL+SHA256 직참조 — 교체 시 3채널 동시 파손). 결과 자산 5종. 함정 = `run: |` 안 PowerShell here-string 종료자가 컬럼 0이라 YAML 블록 스칼라 파손 → 문자열 배열+`Set-Content`로 우회. 로컬 dry-run 검증(zip 엔트리·BOM·체크섬 형식) 완료, 실 검증은 다음 태그 push. 상세 [journal/2026-07-31.md](journal/2026-07-31.md).
+- **서명 경로 재조사 — [12 §4-1](12-packaging-single-exe.md) 신설(기존 기록 2건 정정)**: MS 공식 문서 기준 ① **EV의 SmartScreen 즉시 통과는 2024년 폐지**(OV와 동일·프리미엄 근거 소멸) ② **Azure Artifact Signing은 한국 이용 불가**(조직=미·캐·EU·영/개인=미·캐 지역 제한) ③ SignPath Foundation은 "OSI 승인 + 상업 듀얼 라이선싱 금지" 요구로 PolyForm NC(DR-6)+상업 라이선스 정책에 **이중 결격**. → 서명은 어느 경로든 초기 경고를 없애지 못하고 *버전 간 평판 승계*만 준다. 경고를 실제로 없애는 유일 경로 = **Microsoft Store(MSIX 재서명·무료·등록비 2026 폐지)** — [00-vision](00-vision.md)의 MSIX 배제 전제가 무너져 재검토 대상(착수는 사용자 결정 대기·MSIX 컨테이너 실측 + `broadFileSystemAccess` 심사가 관문). 상세 [journal/2026-07-31.md](journal/2026-07-31.md).
+
 ## 2026-07-27
 
 - **릴리스 0.12.0 + winget Portable 업데이트 PR(사용자 요청 — choco 제외)**: 0.12.0 승격(X-34 새로 만들기·X-35 삭제 잠금 처리 포함) → 태그 push → Actions 게이트 전부 통과 → [Release 0.12.0](https://github.com/SosomLab/nexa-dir2/releases/tag/0.12.0)(포터블+설치형 — choco는 `CHOCO_PUSH` 꺼짐 자동 제외). winget `SosomLab.NexaDir.Portable` 0.12.0 매니페스트(SHA 실측) 작성 → [winget-pkgs#408280](https://github.com/microsoft/winget-pkgs/pull/408280) 제출(심사 대기). [21 §8](21-distribution.md) 채널 표 갱신. 상세 [journal/2026-07-27.md](journal/2026-07-27.md).
