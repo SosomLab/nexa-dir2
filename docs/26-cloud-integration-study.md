@@ -147,6 +147,31 @@ Files 계층 소관 = Phase A 영역).
 
 ### 3-3. 인증·다계정 (요청 ③의 핵심)
 
+**흐름(08-01 사용자 질의 — OAuth2 Authorization Code + PKCE, 3사 공통 표준)**:
+
+```
+1 code_verifier 랜덤 → challenge=SHA256(verifier)   [CNG bcrypt — 인박스]
+2 루프백 리스너 http://127.0.0.1:{랜덤포트}/         [ws2_32 — 인박스]
+3 인증 URL ShellExecute → 브라우저에서 로그인·동의   (앱은 비밀번호 비접촉)
+4 302 리디렉션 → code 1회 수신 → "창을 닫으세요" 응답·리스너 종료
+5 code+verifier POST → access+refresh 토큰           [WinHTTP — B3 +1]
+6 DPAPI 암호화 → data\secrets\cloudN.tok             [crypt32 — 인박스]
+이후: access 만료(~1h) → refresh로 무개입 자동 갱신. refresh 철회/만료 시만 재로그인.
+```
+
+| | OneDrive(Graph) | Dropbox | Google Drive |
+| --- | --- | --- | --- |
+| PKCE 공용 클라이언트 | ✅ | ✅ (`token_access_type=offline`) | ✅ (루프백 공식 지원) |
+| scope 예 | `Files.Read.All`+`offline_access` | `files.content.read` | `drive.readonly`(restricted 심사)/`drive.file` |
+| refresh 수명 | 90일 슬라이딩 | 무기한 | 무기한(앱 미검증 시 7일) |
+
+- 사전 준비 = 3사 개발자 콘솔 앱 등록 → client_id(무료). PKCE라 **client_secret
+  불요·exe 미동봉**(공개돼도 무해한 값만 포함).
+- **포터블 특기**: DPAPI는 사용자+PC 바인딩 — `data\`를 타 PC로 옮기면 토큰 복호가
+  **의도적으로 실패** = 재로그인(USB에 평문 토큰이 굴러다니지 않는 안전 특성으로
+  명시·안내 1줄).
+
+
 - **OAuth2 PKCE 공용 클라이언트**(시크릿 불요 — MS Graph·Google·Dropbox 모두 지원):
   브라우저 열기(ShellExecute 기존) + **루프백 리디렉션 1회 수신**(ws2_32 인박스 최소
   리스너). 토큰 저장 = **DPAPI 암호화**(crypt32 인박스) `data\secrets\` — X-15
