@@ -479,6 +479,19 @@ fn sync_cloud_roots(conns: &[config::CloudConn]) {
     );
 }
 
+/// 두 패널의 진행 배지를 현재 상태와 동기(X-37 — 사용자 확정 08-01 B안).
+/// 클라우드 경로를 보고 있고 그 연결에 진행 중 요청이 있으면 배지를 켠다.
+/// paint 시점이 아니라 상태 변화 지점에서 호출한다(무효화 최소화).
+unsafe fn sync_cloud_badges(st: &mut State, inv: &mut Invalidations) {
+    for p in 0..2 {
+        let busy = nexa_vfs::cloud_parts(st.panels[p].root_path())
+            .map(|(i, _)| crate::cloudfs::is_busy(i))
+            .unwrap_or(false);
+        let text = busy.then(|| tr("cloud.loading"));
+        st.panels[p].set_busy(text, inv);
+    }
+}
+
 /// 클라우드 열거 콜백 등록(기동 1회 — X-37 2차).
 ///
 /// UI 스레드에서 캐시만 본다. 미스면 **빈 목록을 즉시 반환**하고 워커를 1회 기동해
@@ -512,8 +525,19 @@ unsafe fn install_cloud_lister(hwnd: HWND) {
                 return Some(Vec::new()); // 토큰 없음(타 PC 등) — 재로그인 필요
             }
             crate::cloudfs::request(hwnd_raw, idx, inner, info);
+            // 로딩 중 = **플레이스홀더 행 1개**(사용자 QA 08-01: 빈 목록이라
+            // 동작 중인지 식별이 안 됐다). 완료 통지가 실제 목록으로 교체한다.
+            // target = 현재 폴더 자신 — 실수로 열어도 같은 폴더 재진입이라 무해.
+            return Some(vec![nexa_vfs::Entry {
+                name: crate::i18n::tr("cloud.loading"),
+                kind: nexa_core::FileKind::File,
+                size: 0,
+                modified: None,
+                attrs: 0,
+                target: Some(nexa_vfs::cloud_root(idx) + inner),
+            }]);
         }
-        Some(Vec::new()) // 로딩 중 = 빈 목록(완료 통지가 재로드)
+        Some(Vec::new()) // 연결 정보 없음 — 빈 목록
     }));
 }
 
@@ -3782,6 +3806,12 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     update_dock_info(st, &mut inv); // 선택 변경 → 도크 정보(M4-1 — 변경 시에만 무효화)
     uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
     sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
+    {
+        // 클라우드 진행 배지(X-37) — 경로 변경·재로드가 모두 이 길목을 지난다
+        let mut binv = Invalidations::default();
+        sync_cloud_badges(st, &mut binv);
+        flush_invalidations(hwnd, &mut binv);
+    }
                              // 세션 자동 저장(07-15): 탭/경로 변경 플래그 → 디바운스 재무장(변경 폭주 = 타이머
                              // 연장 = 중간 상태 무효화, 조용해진 뒤 마지막 상태만 1회 flush — 원본 SESS 코얼레싱)
                              // 보기 모드 라디오 동기(07-16 — 탭별): 활성 패널·활성 탭 기준. 탭 전환/네비/명령

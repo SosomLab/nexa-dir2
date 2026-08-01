@@ -49,6 +49,7 @@ cloud.connected = {0} connected
 cloud.removed = {0} disconnected
 cloud.urlCopied = URL copied — paste into a private window to sign in with another account
 cloud.gone = Folder not found — {0}
+cloud.loading = Loading…
 # Connect Cloud — OAuth direct connection (X-37, ADR-0006)
 cloud.connect = Connect Cloud
 cloud.auth.prompt = Sign in to {0} in your browser.\n\nTo use a DIFFERENT account than the one already signed in, copy the URL below and open it in a private/incognito window.\n\n{1}

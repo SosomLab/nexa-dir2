@@ -97,6 +97,8 @@ pub struct Panel {
     dock_visible: bool,
     /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
     nav_up_align: nexa_gui::widgets::ScrollAlign,
+    /// 진행 배지 문구(X-37 — 클라우드 로딩/전송. `None` = 숨김).
+    busy: Option<String>,
     /// 정렬 옵션(G-13·07-15) — **새 소스(탐색·재로드·새 탭)에도 재적용**하기 위해 보관.
     sort_folders_first: bool,
     sort_case: bool,
@@ -136,6 +138,7 @@ impl Panel {
             dock: InfoDock::new("", m.row_h, m.pad_x),
             dock_visible: false,
             nav_up_align: nexa_gui::widgets::ScrollAlign::default(),
+            busy: None,
             sort_folders_first: true,
             sort_case: false,
             ta_opts: (
@@ -444,8 +447,44 @@ impl Panel {
         self.navbtns.paint(ctx, theme);
         self.pathbar.paint(ctx, theme);
         self.tabbar.paint(ctx, theme);
+        // 진행 배지(X-37 — 클라우드 로딩/전송): 목록 위 **우하단 플로팅**.
+        // 목록과 분리돼 있어 선택·키보드에 영향이 없다(사용자 확정 08-01 B안).
+        self.paint_busy_badge(ctx, theme);
         // 자동완성 팝업(PATH-SUG) — 리스트 위 오버레이라 마지막에
         self.pathbar.paint_suggest(ctx, theme);
+    }
+
+    /// 우하단 플로팅 배지 — [`set_busy`]로 설정된 문구가 있을 때만 그린다.
+    fn paint_busy_badge(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let Some(text) = &self.busy else { return };
+        let b = self.rows().bounds();
+        if b.w < 80 || b.h < 24 {
+            return; // 너무 좁으면 생략(레이아웃 붕괴 방지)
+        }
+        ctx.select_font(nexa_gui::FontSlot::Base, false, false);
+        let (padx, pady) = (10, 5);
+        let tw = ctx.text_width(text);
+        let (w, h) = (tw + padx * 2, 22);
+        // 우하단 여백 12px — 스크롤바와 겹치지 않도록 안쪽으로
+        let x = (b.right() - w - 12).max(b.x);
+        let y = (b.bottom() - h - 12).max(b.y);
+        let box_rc = nexa_gui::Rect::new(x, y, w, h);
+        ctx.fill_rect(box_rc, theme.sel_bg);
+        // 1px 테두리(배경 대비 확보)
+        ctx.fill_rect(nexa_gui::Rect::new(x, y, w, 1), theme.accent);
+        ctx.fill_rect(nexa_gui::Rect::new(x, y + h - 1, w, 1), theme.accent);
+        ctx.fill_rect(nexa_gui::Rect::new(x, y, 1, h), theme.accent);
+        ctx.fill_rect(nexa_gui::Rect::new(x + w - 1, y, 1, h), theme.accent);
+        ctx.text_opaque(x + padx, y + pady, box_rc, text, theme.text, theme.sel_bg);
+    }
+
+    /// 진행 배지 문구 설정(`None` = 숨김). 변경 시에만 무효화한다.
+    pub fn set_busy(&mut self, text: Option<String>, inv: &mut Invalidations) {
+        if self.busy == text {
+            return;
+        }
+        self.busy = text;
+        inv.push(self.rows().bounds()); // 배지는 목록 영역 안 — 그 범위만
     }
 
     /// 탭 바·경로 바를 활성 탭 상태와 동기화.

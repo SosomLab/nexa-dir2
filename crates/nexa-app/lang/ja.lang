@@ -49,6 +49,7 @@ cloud.connected = {0} を接続しました
 cloud.removed = {0} の接続を解除しました
 cloud.urlCopied = URL をコピーしました — プライベート ウィンドウに貼り付けると別のアカウントでサインインできます
 cloud.gone = フォルダーが見つかりません — {0}
+cloud.loading = 読み込み中…
 # Connect Cloud — OAuth 直接接続(X-37, ADR-0006)
 cloud.connect = クラウドに直接接続
 cloud.auth.prompt = ブラウザーで {0} にサインインしてください。\n\nすでにサインイン済みのアカウントとは**別のアカウント**で接続するには、下の URL をコピーしてプライベート ウィンドウで開いてください。\n\n{1}

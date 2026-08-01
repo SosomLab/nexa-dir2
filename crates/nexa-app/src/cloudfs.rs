@@ -82,6 +82,11 @@ pub fn invalidate_all() {
     g.get_or_insert_with(HashMap::new).clear();
 }
 
+/// 이 연결에 **진행 중인 목록 요청이 있는가**(진행 배지 판정 — UI 스레드).
+pub fn is_busy(idx: usize) -> bool {
+    with_inflight(|s| s.iter().any(|(i, _)| *i == idx))
+}
+
 /// 이미 요청 중이면 `false`(중복 기동 금지), 아니면 표시하고 `true`.
 fn claim(idx: usize, inner: &str) -> bool {
     with_inflight(|s| s.insert((idx, inner.to_string())))
