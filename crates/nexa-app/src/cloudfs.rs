@@ -26,6 +26,9 @@ type ListCache = HashMap<CacheKey, Vec<Entry>>;
 
 /// 목록 캐시.
 static CACHE: Mutex<Option<ListCache>> = Mutex::new(None);
+/// 항목 ID 캐시 — 키 = (연결, 항목 내부 경로) → 서비스 파일 ID(X-37 3차 다운로드).
+/// Google Drive는 경로 주소 지정이 없어 ID가 필수라 목록 시점에 함께 적재한다.
+static IDS: Mutex<Option<HashMap<CacheKey, String>>> = Mutex::new(None);
 /// 진행 중 요청(중복 기동 방지) — 트리가 같은 폴더를 여러 번 열거해도 워커는 1개.
 static INFLIGHT: Mutex<Option<HashSet<CacheKey>>> = Mutex::new(None);
 
@@ -51,14 +54,32 @@ fn cache_put(idx: usize, inner: &str, entries: Vec<Entry>) {
     });
 }
 
+/// 항목 ID 조회·저장(다운로드 시 Google Drive가 요구).
+fn id_put(idx: usize, item_inner: &str, id: &str) {
+    let mut g = crate::win::plock(&IDS);
+    g.get_or_insert_with(HashMap::new)
+        .insert((idx, item_inner.to_string()), id.to_string());
+}
+fn id_get(idx: usize, item_inner: &str) -> Option<String> {
+    let mut g = crate::win::plock(&IDS);
+    g.get_or_insert_with(HashMap::new)
+        .get(&(idx, item_inner.to_string()))
+        .cloned()
+}
+
 /// 연결 1개의 캐시 전부 무효화(F5·연결 해제·재인증).
 pub fn invalidate(idx: usize) {
     with_cache(|c| c.retain(|(i, _), _| *i != idx));
+    let mut g = crate::win::plock(&IDS);
+    g.get_or_insert_with(HashMap::new)
+        .retain(|(i, _), _| *i != idx);
 }
 
 /// 전체 무효화(연결 목록 재배치 등).
 pub fn invalidate_all() {
     with_cache(|c| c.clear());
+    let mut g = crate::win::plock(&IDS);
+    g.get_or_insert_with(HashMap::new).clear();
 }
 
 /// 이미 요청 중이면 `false`(중복 기동 금지), 아니면 표시하고 `true`.
@@ -187,6 +208,10 @@ fn parse_list(svc: &Service, body: &str, idx: usize, inner: &str) -> Vec<Entry> 
                 .unwrap_or(0);
             let modified = oauth::json_str(o, if is_google { "modifiedTime" } else { "lastModifiedDateTime" })
                 .and_then(|s| parse_rfc3339(&s));
+            // 항목 ID 적재(다운로드용 — Google은 필수·OneDrive는 경로로도 가능)
+            if let Some(id) = oauth::json_str(o, "id") {
+                id_put(idx, &format!("{inner}/{name}"), &id);
+            }
             Some(Entry {
                 target: Some(nexa_vfs::cloud_child(idx, inner, &name)),
                 name,
@@ -197,6 +222,119 @@ fn parse_list(svc: &Service, body: &str, idx: usize, inner: &str) -> Vec<Entry> 
             })
         })
         .collect()
+}
+
+// ── 다운로드(X-37 3차 — 읽기 scope로 가능) ────────────────────────────────────
+
+/// 단일 파일 다운로드 상한(메모리 적재 방식 — 스트리밍은 후속).
+const DOWNLOAD_LIMIT: usize = 512 * 1024 * 1024;
+
+/// 다운로드 작업 1건 — 클라우드 항목 → 로컬 대상 경로.
+#[derive(Clone)]
+pub struct DownloadItem {
+    pub inner: String,
+    pub dest: std::path::PathBuf,
+}
+
+/// 다운로드 완료 통지(WM_APP_CLOUD_DOWNLOAD lparam — 수신 측이 Box 회수).
+pub struct DownloadResult {
+    /// 성공한 로컬 경로들(열기·재로드 대상).
+    pub done: Vec<std::path::PathBuf>,
+    /// 실패 사유(빈 문자열 = 전건 성공).
+    pub err: String,
+    /// 완료 후 그 파일을 **연결 프로그램으로 열지** 여부(더블클릭 경로).
+    pub open_after: bool,
+}
+
+/// 다운로드 시작(비동기 — 워커). 완료 시 `WM_APP_CLOUD_DOWNLOAD` 통지.
+pub fn start_download(
+    hwnd_raw: isize,
+    idx: usize,
+    items: Vec<DownloadItem>,
+    conn: ConnInfo,
+    open_after: bool,
+) {
+    std::thread::spawn(move || {
+        let mut done = Vec::new();
+        let mut err = String::new();
+        match token_for(&conn) {
+            Err(e) => err = e,
+            Ok(access) => {
+                for it in &items {
+                    match download_one(idx, &conn, &access, it) {
+                        Ok(()) => done.push(it.dest.clone()),
+                        Err(e) => {
+                            err = e;
+                            break; // 첫 실패에서 중단(부분 결과는 done에 남는다)
+                        }
+                    }
+                }
+            }
+        }
+        let boxed = Box::new(DownloadResult {
+            done,
+            err,
+            open_after,
+        });
+        crate::win::post_cloud_download(hwnd_raw, Box::into_raw(boxed) as isize);
+    });
+}
+
+/// refresh → access 토큰(워커 전용).
+fn token_for(conn: &ConnInfo) -> Result<String, String> {
+    let svc = oauth::service_of(&conn.kind).ok_or("unknown service")?;
+    oauth::refresh(&svc, &conn.client_id, &conn.refresh)
+        .map(|t| t.access)
+        .map_err(|e| tr_key(e.key()))
+}
+
+/// 항목 1개 다운로드 → 로컬 파일 기록(원자적: 임시 파일 → rename).
+fn download_one(
+    idx: usize,
+    conn: &ConnInfo,
+    access: &str,
+    it: &DownloadItem,
+) -> Result<(), String> {
+    let bytes = match conn.kind.as_str() {
+        "onedrive" => {
+            // 사전 인증 downloadUrl을 먼저 받고, 그 URL에는 **인증 헤더를 붙이지 않는다**
+            let enc = it
+                .inner
+                .trim_start_matches('/')
+                .split('/')
+                .map(oauth::percent)
+                .collect::<Vec<_>>()
+                .join("/");
+            let meta = oauth::http_get(
+                &format!(
+                    "https://graph.microsoft.com/v1.0/me/drive/root:/{enc}\
+                     ?$select=@microsoft.graph.downloadUrl"
+                ),
+                access,
+            )?;
+            let url = oauth::json_str(&meta, "@microsoft.graph.downloadUrl")
+                .ok_or("no downloadUrl")?;
+            oauth::http_get_bytes(&url, None, DOWNLOAD_LIMIT)?
+        }
+        "googledrive" => {
+            let id = id_get(idx, &it.inner).ok_or("file id unknown — 목록을 새로 고치세요")?;
+            oauth::http_get_bytes(
+                &format!("https://www.googleapis.com/drive/v3/files/{id}?alt=media"),
+                Some(access),
+                DOWNLOAD_LIMIT,
+            )?
+        }
+        _ => return Err("download not supported for this service".into()),
+    };
+    if let Some(dir) = it.dest.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = it.dest.with_extension("nexadl.part");
+    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &it.dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 /// RFC3339(`2026-08-01T12:34:56Z`) → SystemTime. 시간대 오프셋은 무시(UTC 가정 —

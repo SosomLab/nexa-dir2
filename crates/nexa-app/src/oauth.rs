@@ -589,14 +589,33 @@ pub fn json_has(json: &str, key: &str) -> bool {
 /// `application/x-www-form-urlencoded` POST → 응답 본문(UTF-8).
 #[cfg(windows)]
 pub fn http_post_form(url: &str, body: &str) -> Result<String, String> {
-    winhttp_request(url, "POST", Some(body), None)
+    winhttp_request(url, "POST", Some(body), None, TEXT_LIMIT)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
 /// Bearer GET → 응답 본문(UTF-8).
 #[cfg(windows)]
 pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
-    winhttp_request(url, "GET", None, Some(bearer))
+    winhttp_request(url, "GET", None, Some(bearer), TEXT_LIMIT)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
+
+/// GET → **원본 바이트**(X-37 3차 다운로드 — 이진 파일 무손상).
+/// `bearer`가 `None`이면 인증 헤더를 붙이지 않는다 — Graph의 `downloadUrl`은
+/// **사전 인증된 URL**이라 Authorization을 함께 보내면 거부될 수 있다.
+#[cfg(windows)]
+pub fn http_get_bytes(url: &str, bearer: Option<&str>, limit: usize) -> Result<Vec<u8>, String> {
+    winhttp_request(url, "GET", None, bearer, limit)
+}
+
+#[cfg(not(windows))]
+pub fn http_get_bytes(_u: &str, _b: Option<&str>, _l: usize) -> Result<Vec<u8>, String> {
+    Err("windows only".into())
+}
+
+/// 텍스트 응답(토큰·JSON 메타) 상한 — 폭주 방어.
+#[cfg(windows)]
+const TEXT_LIMIT: usize = 8 * 1024 * 1024;
 
 #[cfg(not(windows))]
 pub fn http_post_form(_url: &str, _body: &str) -> Result<String, String> {
@@ -613,7 +632,8 @@ fn winhttp_request(
     method: &str,
     body: Option<&str>,
     bearer: Option<&str>,
-) -> Result<String, String> {
+    limit: usize,
+) -> Result<Vec<u8>, String> {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Networking::WinHttp::{
         WinHttpConnect, WinHttpCrackUrl, WinHttpOpen, WinHttpOpenRequest,
@@ -711,12 +731,12 @@ fn winhttp_request(
             }
             chunk.truncate(read as usize);
             out.extend_from_slice(&chunk);
-            if out.len() > 8 * 1024 * 1024 {
-                break; // 응답 폭주 방어(토큰/메타 응답은 KB 단위)
+            if out.len() > limit {
+                return Err("response too large".into()); // 상한 초과 = 명시 실패
             }
         }
         drop((rguard, cguard, guard));
-        Ok(String::from_utf8_lossy(&out).into_owned())
+        Ok(out)
     }
 }
 

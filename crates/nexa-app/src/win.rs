@@ -128,9 +128,17 @@ const WM_APP_CLOUD_AUTH: u32 = 0x800E;
 /// 클라우드 목록 적재 완료(X-37 2차) — lparam = Box<cloudfs::ListResult> 원시 포인터.
 const WM_APP_CLOUD_LIST: u32 = 0x800F;
 
+/// 클라우드 다운로드 완료(X-37 3차) — lparam = Box<cloudfs::DownloadResult>.
+const WM_APP_CLOUD_DOWNLOAD: u32 = 0x8010;
+
 /// 클라우드 목록 워커 → UI 통지(cloudfs에서 호출 — 종결 통지라 재시도 게시).
 pub(crate) fn post_cloud_list(hwnd_raw: isize, payload: isize) {
     post_final_notify(hwnd_raw, WM_APP_CLOUD_LIST, 0, payload);
+}
+
+/// 클라우드 다운로드 워커 → UI 통지.
+pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
+    post_final_notify(hwnd_raw, WM_APP_CLOUD_DOWNLOAD, 0, payload);
 }
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
@@ -3073,6 +3081,77 @@ unsafe fn focus_created_and_rename(hwnd: HWND, st: &mut State, path: &Path) {
 
 /// 전송 시작(M3-1, 원본 TransferPathsInto의 UI측) — 워커 스레드 + PostMessage 통지.
 /// 충돌은 α 정책 = 전부 건너뜀(확인 모달은 후속 — 원본 확인창 자리). 동시 1잡.
+/// 워커에 넘길 연결 정보 스냅숏(X-37 — State 참조 없이 자족).
+fn cloud_conn_info(st: &State, idx: usize) -> Option<crate::cloudfs::ConnInfo> {
+    let c = st.cloud_conns.get(idx)?;
+    if !c.is_api() {
+        return None;
+    }
+    let svc = crate::oauth::service_of(&c.kind)?;
+    let settings = current_settings(st);
+    let refresh = crate::secret::load_token(idx)?;
+    Some(crate::cloudfs::ConnInfo {
+        kind: c.kind.clone(),
+        client_id: svc.resolve_client_id(settings.client_id(&c.kind)).to_string(),
+        refresh,
+    })
+}
+
+/// 클라우드 다운로드 스테이징 폴더(더블클릭 열기 — 임시 파일).
+fn cloud_temp_dir() -> PathBuf {
+    std::env::temp_dir().join("NexaDir").join("cloud")
+}
+
+/// 클라우드 항목들을 **로컬로 다운로드**(X-37 3차 — 붙여넣기·DnD·더블클릭 공용).
+///
+/// `dest_dir`가 `None`이면 임시 폴더로 받고 완료 후 연결 프로그램으로 연다.
+/// 읽기 scope(`Files.Read`)만으로 동작하며, 폴더는 1차 범위 밖(파일만).
+unsafe fn start_cloud_download(
+    hwnd: HWND,
+    st: &mut State,
+    sources: &[PathBuf],
+    dest_dir: Option<&std::path::Path>,
+) -> bool {
+    // 전부 같은 연결의 **파일**이어야 한다(폴더 재귀 다운로드는 후속)
+    let mut idx_seen: Option<usize> = None;
+    let mut items = Vec::new();
+    let tmp = cloud_temp_dir();
+    let dir = dest_dir.unwrap_or(&tmp);
+    for p in sources {
+        let Some((i, inner)) = nexa_vfs::cloud_parts(p) else {
+            continue;
+        };
+        if *idx_seen.get_or_insert(i) != i {
+            continue; // 다중 연결 혼합은 첫 연결만(경계 단순화)
+        }
+        let name = inner.rsplit('/').next().unwrap_or_default().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        items.push(crate::cloudfs::DownloadItem {
+            inner,
+            dest: dir.join(&name),
+        });
+    }
+    let (Some(idx), false) = (idx_seen, items.is_empty()) else {
+        return false;
+    };
+    let Some(conn) = cloud_conn_info(st, idx) else {
+        update_title(hwnd, st, &format!(" · {}", tr("cloud.err.noToken")));
+        return true; // 처리는 했다(오류 안내) — 호출자는 폴백하지 않는다
+    };
+    let n = items.len().to_string();
+    update_title(hwnd, st, &format!(" · {}", trf("cloud.downloading", &[&n])));
+    crate::cloudfs::start_download(
+        hwnd.0 as isize,
+        idx,
+        items,
+        conn,
+        dest_dir.is_none(), // 임시 폴더 = 받은 뒤 열기
+    );
+    true
+}
+
 /// 클라우드 API 경로는 **현재 읽기 전용**(X-37 2차 — 쓰기는 4차 슬라이스).
 ///
 /// 전송 엔진·삭제·리네임·새로 만들기는 전부 `std::fs` 전제라 센티널 경로에서
@@ -3101,11 +3180,20 @@ unsafe fn start_transfer(
     if sources.is_empty() || st.transfer.is_some() {
         return;
     }
-    // 클라우드는 읽기 전용 — 원본·대상 어느 쪽이든 API 경로면 차단(X-37 2차)
-    let mut check: Vec<&std::path::Path> = sources.iter().map(|p| p.as_path()).collect();
-    check.push(dest.as_path());
-    if cloud_readonly_block(hwnd, st, &check) {
+    // 클라우드 → 로컬 = **다운로드**(X-37 3차). 대상이 클라우드면 업로드라 아직 차단.
+    let src_cloud = sources
+        .iter()
+        .any(|p| nexa_vfs::cloud_parts(p).is_some());
+    let dest_cloud = nexa_vfs::cloud_parts(&dest).is_some();
+    if dest_cloud {
+        cloud_readonly_block(hwnd, st, &[dest.as_path()]);
         return;
+    }
+    if src_cloud {
+        // 복사·이동 무관하게 다운로드(원본 삭제는 쓰기 slice 이후)
+        if start_cloud_download(hwnd, st, &sources, Some(dest.as_path())) {
+            return;
+        }
     }
     st.transfer_gen += 1;
     let gen = st.transfer_gen;
@@ -5130,6 +5218,14 @@ fn post_final_notify(hwnd_raw: isize, msg: u32, w: usize, l: isize) {
 
 /// 파일 실행 게이트(07-21) — 전송 중 대상은 완료까지 열기 차단(부분 파일 실행 방지).
 unsafe fn guarded_shell_open(hwnd: HWND, file: &std::path::Path) {
+    // 클라우드 파일(X-37 3차): 임시 폴더로 받은 뒤 연결 프로그램으로 연다.
+    if nexa_vfs::cloud_parts(file).is_some() {
+        if let Some(st) = state_of(hwnd) {
+            start_cloud_download(hwnd, st, std::slice::from_ref(&file.to_path_buf()), None);
+            update_status(hwnd, st);
+        }
+        return;
+    }
     if let Some(st) = state_of(hwnd) {
         if transfer_blocks(st, file) {
             let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(
@@ -6510,6 +6606,42 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let where_ = if res.inner.is_empty() { "/" } else { &res.inner };
                         update_title(hwnd, st, &format!(" · {} ({where_})", res.err));
                     }
+                    update_status(hwnd, st);
+                }
+            }
+            LRESULT(0)
+        }
+        // 클라우드 다운로드 완료(X-37 3차) — 열기 요청이면 연결 프로그램 실행,
+        // 아니면 대상 폴더를 보고 있는 패널만 재로드.
+        m if m == WM_APP_CLOUD_DOWNLOAD => {
+            if lparam.0 != 0 {
+                let res = *Box::from_raw(lparam.0 as *mut crate::cloudfs::DownloadResult);
+                if let Some(st) = state_of(hwnd) {
+                    if res.open_after {
+                        for p in &res.done {
+                            allow_foreground_handoff(); // 연 프로그램을 앞으로(07-31)
+                            let wide = HSTRING::from(p.as_os_str());
+                            let _ = windows::Win32::UI::Shell::ShellExecuteW(
+                                Some(hwnd),
+                                w!("open"),
+                                PCWSTR(wide.as_ptr()),
+                                None,
+                                None,
+                                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+                            );
+                        }
+                    } else {
+                        reload_both(hwnd, st, "");
+                    }
+                    let note = if !res.err.is_empty() {
+                        format!(" · {}", res.err)
+                    } else {
+                        format!(
+                            " · {}",
+                            trf("cloud.downloaded", &[&res.done.len().to_string()])
+                        )
+                    };
+                    update_title(hwnd, st, &note);
                     update_status(hwnd, st);
                 }
             }
