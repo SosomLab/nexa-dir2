@@ -37,6 +37,14 @@ pub struct Service {
     /// MS는 불요. 네이티브 앱의 이 값은 바이너리에서 추출 가능해 "비밀"이 아니며,
     /// 실효 방어선은 리디렉션 URI 화이트리스트다(ADR-0006 §2-4). 빈 값 = 미전송.
     pub default_client_secret: &'static str,
+    /// 리디렉션 후보 포트 — **앞에서부터 바인딩을 시도**하고 첫 성공을 쓴다.
+    /// 비어 있으면 [`PREFERRED_PORT`] 우선 + 점유 시 OS 임의 포트 폴백.
+    /// 등록값과 정확 일치를 요구하는 제공자(Dropbox)는 **등록한 포트만** 나열한다
+    /// — 임의 포트로 폴백해 봐야 제공자가 거부하므로 폴백이 오히려 해롭다.
+    pub redirect_ports: &'static [u16],
+    /// 리디렉션 URI를 `/`로 끝내는가. 정확 일치 제공자는 **등록한 표기 그대로**
+    /// 보내야 한다(Dropbox 콘솔 등록값에 슬래시가 없으면 여기도 없어야 한다).
+    pub redirect_slash: bool,
 }
 
 /// OneDrive — Entra 앱 등록 **무료**. `Files.Read`(내 파일 읽기)는 사용자 동의만으로
@@ -54,6 +62,8 @@ pub const ONEDRIVE: Service = Service {
     // 포털 리디렉션 URI 등록값 = `http://localhost`(포트는 MS가 무시 — PREFERRED_PORT 참조).
     default_client_id: "6685a1af-8493-40c5-984f-63c2825d2cdd",
     default_client_secret: "", // MS는 PKCE 공개 클라이언트 — 시크릿 불요
+    redirect_ports: &[],       // localhost면 포트 무시 — 선호 포트 + 임의 폴백
+    redirect_slash: true,
 };
 /// Google Drive — `drive.readonly`는 **restricted scope**라 CASA 연간 유료 감사
 /// (연 $500~4,500)+매년 재검증이 필요하다. 미등록 시 사용자 자기 ID 입력이 유일 경로
@@ -82,6 +92,8 @@ pub const GOOGLEDRIVE: Service = Service {
     // 로그인 + 해당 세션의 PKCE verifier가 필요하다.
     // 사용자 재정의: 설정 `cloud_client_secret_googledrive`.
     default_client_secret: "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",
+    redirect_ports: &[], // 데스크톱 클라이언트는 루프백 임의 포트 허용
+    redirect_slash: true,
 };
 /// Dropbox — 앱 등록 **무료**. 개발 상태는 최대 500명이나 **50명 연결 시 2주 내
 /// 프로덕션 승인 신청**이 필요하다(심사 무료).
@@ -97,6 +109,10 @@ pub const DROPBOX: Service = Service {
     // SosomLab 등록 App key/secret(사용자 제공 08-01 — Google과 같은 동봉 방침)
     default_client_id: "ofcq452qsemy4cb",
     default_client_secret: "ksl2usd747tfgut",
+    // 콘솔 등록값(사용자 08-01) — `http://localhost:5368{2,3,4}` **슬래시 없음**.
+    // 앞에서부터 시도해 비어 있는 첫 포트를 쓴다(다중 실행·잔여 소켓 대비 3개).
+    redirect_ports: &[53682, 53683, 53684],
+    redirect_slash: false,
 };
 
 /// 지원 서비스 전체(Connect Cloud 메뉴 순서).
@@ -313,10 +329,11 @@ fn auth_url(svc: &Service, client_id: &str, redirect: &str, challenge: &str, sta
 /// - **Microsoft**: `localhost`는 **포트를 무시**하고 매칭(그 외에는 포트까지 일치해야 함).
 ///   `http` + `127.0.0.1` 등록은 포털 입력란으로 불가(매니페스트 직접 수정 필요).
 /// - **Google**(데스크톱 클라이언트): 루프백은 임의 포트 허용.
-/// - **Dropbox**: 등록한 URI와 **정확히 일치**해야 한다 → 임의 포트면 매번 실패.
+/// - **Dropbox**: 등록한 URI와 **정확히 일치**해야 한다(포트·슬래시까지) → 자체
+///   후보 포트 목록을 [`Service::redirect_ports`]에 둔다. 이 상수는 쓰지 않는다.
 ///
-/// 세 규칙을 동시에 만족하는 유일한 조합 = **`http://localhost:<고정 포트>/`**.
-/// 포트가 점유돼 있으면 임의 포트로 폴백한다(Microsoft·Google은 계속 동작).
+/// 따라서 이 값은 **포트를 따지지 않는 제공자(MS·Google)의 기본 포트**다.
+/// 점유 시 임의 포트로 폴백한다.
 pub const PREFERRED_PORT: u16 = 42813;
 
 /// 진행 중 인증 세션 — 브라우저에 띄울 URL과 대기용 리스너를 함께 보유.
@@ -349,17 +366,36 @@ impl AuthSession {
         if client_id.trim().is_empty() {
             return Err(AuthError::NoClientId);
         }
-        // 고정 포트 우선 — 실패(점유) 시 OS 임의 할당. 루프백 한정이라 외부 노출 없음.
-        let v4 = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, PREFERRED_PORT))
-            .or_else(|_| TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
-            .map_err(|_| AuthError::Listener)?;
+        // 후보 포트를 앞에서부터 순환하며 바인딩(사용자 지시 08-01 — Dropbox는
+        // 53682/3/4 등록). 루프백 한정이라 외부 노출은 없다.
+        let fixed = !svc.redirect_ports.is_empty();
+        let cands: &[u16] = if fixed {
+            svc.redirect_ports
+        } else {
+            &[PREFERRED_PORT]
+        };
+        let v4 = cands
+            .iter()
+            .find_map(|p| TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, *p)).ok())
+            // 정확 일치 제공자는 임의 포트로 폴백해도 어차피 거부당한다 — 여기서
+            // 실패시켜 원인이 드러나게 한다(후보 전부 점유 = 중복 실행 등).
+            .or_else(|| {
+                (!fixed)
+                    .then(|| TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).ok())
+                    .flatten()
+            })
+            .ok_or(AuthError::Listener)?;
         let port = v4.local_addr().map_err(|_| AuthError::Listener)?.port();
         let mut listeners = vec![v4];
         // `localhost`가 ::1로 먼저 해석되는 환경 대비 — 같은 포트로 IPv6도 시도(실패 무시)
         if let Ok(v6) = TcpListener::bind(SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0)) {
             listeners.push(v6);
         }
-        let redirect = format!("http://localhost:{port}/");
+        let redirect = if svc.redirect_slash {
+            format!("http://localhost:{port}/")
+        } else {
+            format!("http://localhost:{port}") // Dropbox 등록 표기와 정확 일치
+        };
         let verifier = gen_verifier();
         let mut sbuf = [0u8; 16];
         rand_bytes(&mut sbuf);
@@ -1081,6 +1117,24 @@ mod tests {
             .parse()
             .expect("포트 파싱");
         assert!(port > 0);
+    }
+
+    /// Dropbox는 등록 URI와 **정확 일치**를 요구한다(08-01 사용자 콘솔 등록:
+    /// `http://localhost:5368{2,3,4}` — 슬래시 없음). 포트가 후보 밖으로 새거나
+    /// 슬래시가 붙으면 인증 화면 대신 `invalid redirect_uri`가 뜬다.
+    #[test]
+    fn dropbox_redirect_matches_registered_form() {
+        let s = AuthSession::begin(DROPBOX, "cid", "sec").expect("루프백 리스너");
+        assert!(!s.redirect.ends_with('/'), "redirect={}", s.redirect);
+        let port: u16 = s.redirect["http://localhost:".len()..]
+            .parse()
+            .expect("포트 파싱");
+        assert!(
+            DROPBOX.redirect_ports.contains(&port),
+            "등록 포트 밖 = 제공자가 거부: {port}"
+        );
+        // 임의 포트 폴백 금지 — 등록 목록만 쓴다
+        assert_eq!(DROPBOX.redirect_ports, &[53682, 53683, 53684]);
     }
 
     #[test]
