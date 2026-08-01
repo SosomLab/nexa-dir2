@@ -19,6 +19,10 @@ cargo test
 # Windows 코드 포함 전체 타입 검증 (macOS에서)
 cargo check --target x86_64-pc-windows-msvc --workspace
 
+# 비Windows 컴파일 검증 (Windows에서) — CI core 잡과 같은 cfg 경로를 로컬에서 재현
+rustup target add x86_64-unknown-linux-gnu          # 최초 1회
+cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu
+
 # 실행 (Windows)
 cargo run -p nexa-app
 
@@ -36,6 +40,12 @@ cargo build --release -p nexa-app
 
 `.github/workflows/ci.yml` — push/PR마다:
 - **core**(ubuntu·macos): `cargo test`
+  > **Windows에서 개발할 때 이 잡이 사각지대다**(08-02 CI 2연속 실패). Windows에서
+  > `cargo test`가 아무리 green이어도, `#[cfg(windows)]` 블록이 통째로 사라지는
+  > 비Windows 경로에서는 **타입 추론이 끊기거나**(`Vec::new()`의 원소 타입 —
+  > E0282) **임포트가 미사용**이 되어 컴파일이 깨질 수 있다. Windows 전용 모듈을
+  > 추가·게이팅했다면 push 전에 위 §2의 `--target x86_64-unknown-linux-gnu`
+  > 검사를 돌린다(링크 불필요 — `cargo check`로 충분).
 - **windows**(windows-latest): `cargo test` + `cargo build --release` + **예산 게이트** — B2(exe >10MB fail) · B3 = `scripts/budget-b3.ps1`(화이트리스트 **단일 출처**, CI·로컬 공용. 인박스 DLL이 늘어나는 변경은 push 전에 로컬로 `pwsh scripts/budget-b3.ps1` 실행해 확인하고 근거와 함께 갱신)
 
 ## 5. 릴리스 파이프라인 (M5-2 — GitHub Releases)

@@ -5,7 +5,10 @@
 //! 라벨). 연결(영속)은 설정 `cloudN`([`crate::config::CloudConn`]) 소관, 내 PC 노출은
 //! `nexa_vfs::set_extra_roots` 경유. 탐지 실패·잔재 레지스트리는 **실존 프로브**로 방어.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+/// 드라이브 루트 판정(`detect_googledrive`)에만 쓰여 Windows 전용이다.
+#[cfg(windows)]
+use std::path::Path;
 
 /// 탐지된 클라우드 후보 — 아직 "연결"은 아니다(연결 추가 메뉴·This PC 우클릭의 소스).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,7 +32,9 @@ pub fn web_url(kind: &str) -> &'static str {
 
 /// 전체 탐지 — 실존하는 폴더만(제거 잔재 방어). 순서 = OneDrive → Google Drive → Dropbox.
 pub fn detect() -> Vec<CloudCandidate> {
-    let mut out = Vec::new();
+    // 타입 명시 — 비Windows에서는 아래 cfg 블록이 통째로 사라져 추론 근거가 없다
+    // (08-02 CI: E0282. Windows에서는 detect_* 인자로 추론돼 드러나지 않았다).
+    let mut out: Vec<CloudCandidate> = Vec::new();
     #[cfg(windows)]
     {
         unsafe { detect_onedrive(&mut out) };
