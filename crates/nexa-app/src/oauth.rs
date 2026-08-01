@@ -9,7 +9,7 @@
 //! 리디렉션은 **127.0.0.1 한정**이라 외부 노출이 없다.
 
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, TcpListener};
 use std::time::{Duration, Instant};
 
 /// 서비스별 엔드포인트·scope(ADR-0006 §2-4).
@@ -42,7 +42,9 @@ pub const ONEDRIVE: Service = Service {
     token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
     scope: "offline_access Files.Read User.Read",
     me_url: "https://graph.microsoft.com/v1.0/me",
-    default_client_id: "", // TODO(SosomLab 등록): Entra 앱 ID — 무료·즉시 가능
+    // SosomLab 등록(08-01) — Entra 앱 "NexaDir". PKCE 공개 클라이언트라 시크릿 아님.
+    // 포털 리디렉션 URI 등록값 = `http://localhost`(포트는 MS가 무시 — PREFERRED_PORT 참조).
+    default_client_id: "6685a1af-8493-40c5-984f-63c2825d2cdd",
 };
 /// Google Drive — `drive.readonly`는 **restricted scope**라 CASA 연간 유료 감사
 /// (연 $500~4,500)+매년 재검증이 필요하다. 미등록 시 사용자 자기 ID 입력이 유일 경로
@@ -263,11 +265,26 @@ fn auth_url(svc: &Service, client_id: &str, redirect: &str, challenge: &str, sta
     u
 }
 
+/// 루프백 **고정 선호 포트**(08-01 QA — Entra `redirect_uri` 불일치 오류 계기).
+///
+/// 제공자별 매칭 규칙이 갈린다:
+/// - **Microsoft**: `localhost`는 **포트를 무시**하고 매칭(그 외에는 포트까지 일치해야 함).
+///   `http` + `127.0.0.1` 등록은 포털 입력란으로 불가(매니페스트 직접 수정 필요).
+/// - **Google**(데스크톱 클라이언트): 루프백은 임의 포트 허용.
+/// - **Dropbox**: 등록한 URI와 **정확히 일치**해야 한다 → 임의 포트면 매번 실패.
+///
+/// 세 규칙을 동시에 만족하는 유일한 조합 = **`http://localhost:<고정 포트>/`**.
+/// 포트가 점유돼 있으면 임의 포트로 폴백한다(Microsoft·Google은 계속 동작).
+pub const PREFERRED_PORT: u16 = 42813;
+
 /// 진행 중 인증 세션 — 브라우저에 띄울 URL과 대기용 리스너를 함께 보유.
 /// **URL을 먼저 꺼내 사용자에게 보여줄 수 있다**(프라이빗 창 붙여넣기 — 사용자 요청 08-01).
 pub struct AuthSession {
     pub url: String,
-    listener: TcpListener,
+    /// 루프백 리스너 — IPv4(127.0.0.1) + 가능하면 IPv6(::1) **동시 대기**.
+    /// `localhost`가 시스템에 따라 `::1`로 먼저 해석되므로 한쪽만 열면 브라우저가
+    /// 닿지 못할 수 있다(MS가 `127.0.0.1`을 권하는 바로 그 이유).
+    listeners: Vec<TcpListener>,
     verifier: String,
     state: String,
     redirect: String,
@@ -277,15 +294,25 @@ pub struct AuthSession {
 
 impl AuthSession {
     /// 루프백 리스너를 열고 인증 URL을 조립한다(네트워크 요청 없음 — 즉시 반환).
+    ///
+    /// [`PREFERRED_PORT`] 우선(Dropbox 정확 일치 대응) → 점유 시 임의 포트 폴백.
+    /// 리디렉션 호스트는 **`localhost`** — Microsoft가 `localhost`에 한해 포트를
+    /// 무시하고, `http`+`127.0.0.1`은 포털에서 등록조차 할 수 없기 때문(08-01 QA).
     pub fn begin(svc: Service, client_id: &str) -> Result<AuthSession, AuthError> {
         if client_id.trim().is_empty() {
             return Err(AuthError::NoClientId);
         }
-        // 포트 0 = OS 임의 할당. 127.0.0.1 한정이라 외부 노출·방화벽 예외 불요.
-        let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        // 고정 포트 우선 — 실패(점유) 시 OS 임의 할당. 루프백 한정이라 외부 노출 없음.
+        let v4 = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, PREFERRED_PORT))
+            .or_else(|_| TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .map_err(|_| AuthError::Listener)?;
-        let port = listener.local_addr().map_err(|_| AuthError::Listener)?.port();
-        let redirect = format!("http://127.0.0.1:{port}/");
+        let port = v4.local_addr().map_err(|_| AuthError::Listener)?.port();
+        let mut listeners = vec![v4];
+        // `localhost`가 ::1로 먼저 해석되는 환경 대비 — 같은 포트로 IPv6도 시도(실패 무시)
+        if let Ok(v6) = TcpListener::bind(SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0)) {
+            listeners.push(v6);
+        }
+        let redirect = format!("http://localhost:{port}/");
         let verifier = gen_verifier();
         let mut sbuf = [0u8; 16];
         rand_bytes(&mut sbuf);
@@ -293,7 +320,7 @@ impl AuthSession {
         let url = auth_url(&svc, client_id, &redirect, &challenge_of(&verifier), &state);
         Ok(AuthSession {
             url,
-            listener,
+            listeners,
             verifier,
             state,
             redirect,
@@ -344,13 +371,22 @@ impl AuthSession {
 
     /// 루프백 리디렉션 1회 수신 → `code` 추출(+`state` 대조). 브라우저에는 안내 응답.
     fn wait_code(&self, timeout: Duration) -> Result<String, AuthError> {
-        self.listener
-            .set_nonblocking(true)
-            .map_err(|_| AuthError::Listener)?;
+        for l in &self.listeners {
+            l.set_nonblocking(true).map_err(|_| AuthError::Listener)?;
+        }
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            match self.listener.accept() {
-                Ok((mut stream, _)) => {
+            // IPv4·IPv6 루프백을 번갈아 폴링(먼저 도착한 쪽이 승부)
+            let accepted = self
+                .listeners
+                .iter()
+                .find_map(|l| match l.accept() {
+                    Ok(p) => Some(Ok(p)),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
+                    Err(e) => Some(Err(e)),
+                });
+            match accepted {
+                Some(Ok((mut stream, _))) => {
                     let mut buf = [0u8; 4096];
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                     let n = stream.read(&mut buf).unwrap_or(0);
@@ -386,10 +422,8 @@ impl AuthSession {
                     }
                     return Ok(code.unwrap_or_default());
                 }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(120));
-                }
-                Err(_) => return Err(AuthError::Listener),
+                Some(Err(_)) => return Err(AuthError::Listener),
+                None => std::thread::sleep(Duration::from_millis(120)),
             }
         }
         Err(AuthError::Timeout)
@@ -697,6 +731,33 @@ mod tests {
         assert_eq!(query_param(q, "code").as_deref(), Some("A/B"));
         assert_eq!(query_param(q, "state").as_deref(), Some("xyz"));
         assert_eq!(query_param(q, "error"), None);
+    }
+
+    /// 08-01 QA 회귀: 리디렉션은 **`localhost`**(Microsoft가 이 호스트에 한해 포트를
+    /// 무시하고, `http`+`127.0.0.1`은 포털 등록 자체가 불가) + 고정 선호 포트
+    /// (Dropbox 정확 일치 대응). 호스트가 `127.0.0.1`로 회귀하면 Entra가
+    /// `invalid_request: redirect_uri is not valid`로 거부한다.
+    #[test]
+    fn redirect_uri_uses_localhost_and_preferred_port() {
+        let s = AuthSession::begin(ONEDRIVE, "cid").expect("루프백 리스너");
+        assert!(
+            s.redirect.starts_with("http://localhost:"),
+            "redirect={}",
+            s.redirect
+        );
+        assert!(s.redirect.ends_with('/'), "경로 없는 URI는 슬래시 종단");
+        assert!(
+            !s.redirect.contains("127.0.0.1"),
+            "127.0.0.1은 포털 등록 불가 — 회귀 금지"
+        );
+        // 인증 URL에도 인코딩되어 실려야 한다
+        assert!(s.url.contains(&percent(&s.redirect)));
+        // 선호 포트가 비어 있으면 그 포트를 쓴다(점유 시 폴백은 허용)
+        let port: u16 = s.redirect["http://localhost:".len()..]
+            .trim_end_matches('/')
+            .parse()
+            .expect("포트 파싱");
+        assert!(port > 0);
     }
 
     #[test]
