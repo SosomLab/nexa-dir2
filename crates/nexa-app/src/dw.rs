@@ -28,6 +28,8 @@ pub fn colorref(c: Color) -> COLORREF {
 }
 
 /// 레이아웃 캐시 상한 — 초과 시 전체 비움(가시 행 수백 개 대비 충분한 여유).
+/// 대형 글리프 레이아웃 캐시 네임스페이스 오프셋(음수 폭 영역과 겹치지 않게).
+const GLYPH_LG_NS: i32 = 1_000_000;
 const LAYOUT_CACHE_CAP: usize = 4096;
 /// 측정 전용 레이아웃의 가상 최대 폭(px) — 트리밍이 걸리지 않는 충분히 큰 값.
 const MEASURE_W: i32 = 1 << 20;
@@ -152,6 +154,9 @@ pub struct DwBackend {
     formats: HashMap<u8, (IDWriteTextFormat, IDWriteInlineObject)>,
     /// 현재 선택 스타일(DrawCtx::select_font — 위젯이 페인트 시작에 지정).
     cur_style: std::cell::Cell<u8>,
+    /// 다음 글리프를 대형(15 DIP)으로 그린다 — [`DrawCtx::glyph_opaque_lg`] 한정
+    /// 플래그(08-01 패널 네비 바). cur_style과 같은 Cell 규약.
+    large_glyph: std::cell::Cell<bool>,
     renderer: IDWriteTextRenderer,
     color: Rc<Cell<COLORREF>>,
     /// 큰 글리프(버튼 화살표 등) 포맷 — 15 DIP·가로 중앙 정렬.
@@ -161,6 +166,8 @@ pub struct DwBackend {
     mdl2_format: IDWriteTextFormat,
     /// MDL2 셰브론용 소형(9 DIP — 원본 디스클로저 FontSize 9 규약).
     mdl2_small_format: IDWriteTextFormat,
+    /// 패널 네비 바용 대형(15 DIP — 사용자 지시 08-01: 11px는 잘 안 보인다).
+    mdl2_large_format: IDWriteTextFormat,
     /// 터미널 모노스페이스 포맷(M4-3 — 기본 Consolas 12 DIP, 셀 그리드 정렬.
     /// 설정 `term_font`로 교체 — 미설치 글리프는 DWrite 시스템 폴백이 해석).
     mono_format: IDWriteTextFormat,
@@ -278,6 +285,8 @@ impl DwBackend {
         let mdl2_format = mk_mdl2(11.0)?;
         // 디스클로저 셰브론(원본 9px 규약 — 트리 마커 ▶/▼)
         let mdl2_small_format = mk_mdl2(9.0)?;
+        // 패널 네비 바 [홈][←][→][↑](사용자 지시 08-01)
+        let mdl2_large_format = mk_mdl2(15.0)?;
 
         // 터미널 모노스페이스(M4-3) — 기본 Consolas(비스타+ 인박스)·랩 없음·세로 중앙.
         // 설정 `term_font`(QA 07-14): **쉼표 목록 = 폴백 체인**(WT식 "D2Coding,
@@ -359,11 +368,13 @@ impl DwBackend {
             brt,
             formats,
             cur_style: std::cell::Cell::new(0),
+            large_glyph: std::cell::Cell::new(false),
             renderer,
             color,
             icon_format,
             mdl2_format,
             mdl2_small_format,
+            mdl2_large_format,
             mono_format,
             mono_fallback,
             mono_glyphs: RefCell::new(HashMap::new()),
@@ -777,15 +788,18 @@ impl DrawCtx for DwCtx<'_> {
         if text.is_empty() || clip.w <= 0 {
             return;
         }
+        let large = self.back.large_glyph.get();
         unsafe {
             let ppd = self.back.pixels_per_dip();
             // 아이콘 포맷 캐시 = **음수 폭 네임스페이스**(본문 캐시와 분리 — clip.w > 0
             // 보장이므로 -clip.w는 충돌 없음). 히트 경로 무할당(X-16).
+            // 대형 글리프는 같은 (폭, 문자)라도 레이아웃이 다르므로 별도 네임스페이스.
+            let ns = if large { -clip.w - GLYPH_LG_NS } else { -clip.w };
             let layout = self
                 .back
                 .layouts
                 .borrow()
-                .get(&-clip.w)
+                .get(&ns)
                 .and_then(|m| m.get(text))
                 .cloned();
             let layout = match layout {
@@ -795,8 +809,15 @@ impl DrawCtx for DwCtx<'_> {
                     // U+E700 대역 PUA = Segoe MDL2 Assets(원본 내비/디스클로저 규약).
                     // 셰브론(E70D/E70E/E76B/E76C)은 소형 9 DIP(원본 디스클로저).
                     let fmt = match text.chars().next() {
-                        Some(c @ '\u{E700}'..='\u{E8FF}') => {
-                            if matches!(c, '\u{E70D}' | '\u{E70E}' | '\u{E76B}' | '\u{E76C}') {
+                        // MDL2 대역은 E700..F8FF 전체 — EA8A(HomeSolid) 같은 E8FF
+                        // 초과 글리프가 본문 폰트로 새면 tofu가 된다(08-01).
+                        Some(c @ '\u{E700}'..='\u{F8FF}') => {
+                            if large {
+                                &self.back.mdl2_large_format
+                            } else if matches!(
+                                c,
+                                '\u{E70D}' | '\u{E70E}' | '\u{E76B}' | '\u{E76C}'
+                            ) {
                                 &self.back.mdl2_small_format
                             } else {
                                 &self.back.mdl2_format
@@ -818,7 +839,7 @@ impl DrawCtx for DwCtx<'_> {
                         self.back.layout_count.set(0);
                     }
                     cache
-                        .entry(-clip.w)
+                        .entry(ns)
                         .or_default()
                         .insert(text.to_owned(), l.clone());
                     self.back.layout_count.set(self.back.layout_count.get() + 1);
@@ -833,6 +854,13 @@ impl DrawCtx for DwCtx<'_> {
                 clip.y as f32 / ppd,
             );
         }
+    }
+
+    fn glyph_opaque_lg(&mut self, clip: Rect, text: &str, fg: Color, bg: Color) {
+        // 대형 플래그를 세우고 같은 경로를 탄다(사용자 지시 08-01 — 네비 바 15 DIP)
+        self.back.large_glyph.set(true);
+        self.glyph_opaque(clip, text, fg, bg);
+        self.back.large_glyph.set(false);
     }
 
     fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) -> bool {

@@ -86,6 +86,8 @@ pub struct Toolbar {
     /// 고정 버튼 폭(px). `None` = 글리프 폭 기반. 패널 네비 버튼처럼
     /// 레이아웃이 폭을 미리 알아야 할 때 사용(버튼은 간격 없이 연속 배치).
     button_w: Option<i32>,
+    /// 큰 글리프로 그린다(08-01 — 패널 네비 바. 실제 크기는 백엔드 규약).
+    large_glyphs: bool,
     hover: Option<usize>,
     pending: Option<u32>,
     ranges: RefCell<Vec<(i32, i32)>>,
@@ -99,10 +101,17 @@ impl Toolbar {
             row_h: row_h.max(1),
             pad_x,
             button_w: None,
+            large_glyphs: false,
             hover: None,
             pending: None,
             ranges: RefCell::new(Vec::new()),
         }
+    }
+
+    /// 큰 글리프 모드(08-01 — 패널 네비 바 [홈][←][→][↑]). 크기는 백엔드가 정한다.
+    pub fn with_large_glyphs(mut self) -> Self {
+        self.large_glyphs = true;
+        self
     }
 
     /// 고정 버튼 폭 모드(선두 여백 없이 bounds 시작부터 연속 배치).
@@ -169,6 +178,11 @@ impl Toolbar {
     pub fn is_button_at(&self, x: i32, y: i32) -> bool {
         self.button_at(x, y)
             .is_some_and(|i| !self.buttons[i].separator)
+    }
+
+    /// hover 중인 버튼 id(08-01 — 네비 바 hover 회귀 테스트용).
+    pub fn hovered_id(&self) -> Option<u32> {
+        self.buttons.get(self.hover?).map(|b| b.id)
     }
 
     /// hover 중인 버튼의 툴팁(07-18) — `(id, 텍스트, 버튼 rect[클라이언트])`.
@@ -325,11 +339,15 @@ impl Widget for Toolbar {
                         .glyph
                         .chars()
                         .next()
-                        .is_some_and(|c| ('\u{E700}'..='\u{E8FF}').contains(&c))
+                        .is_some_and(|c| ('\u{E700}'..='\u{F8FF}').contains(&c))
                 {
                     // 고정 폭(네비) 또는 **MDL2 PUA 글리프**(설정 ⚙ 등 — 07-18:
                     // 본문 폰트 경로는 tofu) — 글리프 렌더로 셀 중앙에
-                    ctx.glyph_opaque(cell, &btn.glyph, fg, bg);
+                    if self.large_glyphs {
+                        ctx.glyph_opaque_lg(cell, &btn.glyph, fg, bg);
+                    } else {
+                        ctx.glyph_opaque(cell, &btn.glyph, fg, bg);
+                    }
                 } else {
                     ctx.text_opaque(cell.x + self.pad_x, ty, cell, &btn.glyph, fg, bg);
                 }

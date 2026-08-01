@@ -135,7 +135,9 @@ impl Panel {
         rows.set_columns(columns.clone(), &mut inv);
         let mut p = Panel {
             tabbar: TabBar::new(m.row_h, m.pad_x),
-            navbtns: Toolbar::new(nav_buttons(), m.row_h, m.pad_x).with_button_width(nav_btn_w(&m)),
+            navbtns: Toolbar::new(nav_buttons(), m.row_h, m.pad_x)
+                .with_button_width(nav_btn_w(&m))
+                .with_large_glyphs(),
             pathbar: PathBar::new(root.to_string_lossy(), m.row_h, m.pad_x),
             dock: InfoDock::new("", m.row_h, m.pad_x),
             dock_visible: false,
@@ -1273,10 +1275,11 @@ fn nav_btn_w(m: &PanelMetrics) -> i32 {
 /// 패널 네비 버튼 정의([홈][←][→][↑] — 원본 docs/20 §2 네비게이션 바 + 홈).
 /// 글리프 = **Segoe MDL2 Assets**(사용자 확정 07-18 — 원본 NavBtnStyle 동일:
 /// Back U+E72B·Forward U+E72A·Up U+E74A, glyph_opaque가 PUA 대역 라우팅).
-/// 홈 U+E80F는 사용자 지시 08-01 — **맨 앞**(홈/이전/이후/상위).
+/// 홈 U+EA8A(HomeSolid — 채운 집)는 사용자 확정 08-01: **맨 앞**(홈/이전/이후/상위),
+/// 네비 4개 모두 15 DIP(11 DIP는 식별이 어렵다는 QA).
 fn nav_buttons() -> Vec<ToolButton> {
     [
-        (BTN_HOME, "\u{E80F}"),
+        (BTN_HOME, "\u{EA8A}"),
         (BTN_BACK, "\u{E72B}"),
         (BTN_FORWARD, "\u{E72A}"),
         (BTN_UP, "\u{E74A}"),
@@ -1420,6 +1423,20 @@ mod tests {
         assert!(nexa_vfs::is_virtual_root(p.root_path()));
         p.nav_back(ctx(), &mut inv);
         assert_eq!(p.root_path(), deep);
+    }
+
+    #[test]
+    fn nav_home_button_hovers_like_the_others() {
+        // 08-01: [홈]도 hover 강조 대상 — 셀 범위·활성 상태가 나머지와 동일해야 한다
+        let base = fixture("navhover");
+        let (mut p, mut inv) = panel(&base);
+        p.navigate_to(base.join("sub"), ctx(), &mut inv); // This PC가 아니어야 [홈] 활성
+        p.paint(&mut PaintProbe, &Theme::dark()); // 셀 범위 캐시
+        p.on_event(&InputEvent::MouseMove { x: 10, y: 30 }, &mut inv); // 첫 버튼 = [홈]
+        assert!(p.navbtns.hovered_id() == Some(BTN_HOME), "[홈] hover");
+        p.on_event(&InputEvent::MouseMove { x: 36, y: 30 }, &mut inv); // 둘째 = [←]
+        assert!(p.navbtns.hovered_id() == Some(BTN_BACK), "[←] hover");
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

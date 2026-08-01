@@ -78,6 +78,12 @@ pub trait DrawCtx {
         self.text_opaque(tx, ty, clip, text, fg, bg);
     }
 
+    /// [`Self::glyph_opaque`]의 **큰 글리프** 변형(사용자 지시 08-01 — 패널 네비 바).
+    /// 크기 선택은 백엔드 몫이라 위젯이 DIP를 알 필요가 없다. 기본 = 같은 크기.
+    fn glyph_opaque_lg(&mut self, clip: Rect, text: &str, fg: Color, bg: Color) {
+        self.glyph_opaque(clip, text, fg, bg);
+    }
+
     // ── AA 도형 프리미티브(07-17 — ctl raster QA: 곡선·사선은 AA 백엔드가 그린다.
     //    규약: GDI+ 등 래스터라이저 호출은 **DrawCtx 구현체에만** 존재 — 위젯/컨트롤은
     //    이 인터페이스만 사용. 기본 = no-op(텍스트·테스트 백엔드 비구현 허용). ──
