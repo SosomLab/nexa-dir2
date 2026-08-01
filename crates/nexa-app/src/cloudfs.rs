@@ -335,6 +335,9 @@ pub struct DownloadItem {
     pub dest: std::path::PathBuf,
     /// 폴더면 워커가 하위를 재귀 전개한다(파일이면 그대로 받는다).
     pub is_dir: bool,
+    /// 목록에서 알아낸 바이트 크기 — **진행률 총량을 미리 확정**하는 데 쓴다
+    /// (0이면 미상. 사용자 QA 08-01: 미리 모르면 세그먼트가 한 칸으로 뭉쳤다).
+    pub size: u64,
 }
 
 /// 전송 진행 공유 상태(로컬 복사와 **같은 구조·같은 진행 창**을 쓴다 — 사용자 확정).
@@ -386,15 +389,20 @@ pub fn start_download(
                     }
                 }
                 if err.is_empty() {
-                    // 세그먼트 초기화(파일 수 기준 — 크기는 받으면서 채운다)
+                    // 세그먼트·총량을 **미리** 확정(목록에서 크기를 이미 안다).
+                    // 크기 미상(0)은 1로 두어 세그먼트가 사라지지 않게 한다.
                     *crate::win::plock(&shared.items) = flat
                         .iter()
-                        .map(|_| crate::dialog::SegItem {
-                            size: 0,
+                        .map(|it| crate::dialog::SegItem {
+                            size: it.size.max(1),
                             done: 0,
                             status: crate::dialog::SegStatus::Pending,
                         })
                         .collect();
+                    shared.total_bytes.store(
+                        flat.iter().map(|it| it.size.max(1)).sum(),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
                     let mut base: u64 = 0;
                     for (i, it) in flat.iter().enumerate() {
                         if shared.cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -411,8 +419,7 @@ pub fn start_download(
                                     .done_bytes
                                     .store(base, std::sync::atomic::Ordering::Relaxed);
                                 if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
-                                    sg.size = got;
-                                    sg.done = got;
+                                    sg.done = sg.size; // 총량은 미리 확정한 값 유지
                                     sg.status = crate::dialog::SegStatus::Done;
                                 }
                                 done.push(it.dest.clone());
@@ -642,6 +649,7 @@ pub fn start_cross_copy(
                     inner: src_inner.clone(),
                     dest: tmp.clone(),
                     is_dir: false,
+                    size: 0, // 계정 간 복사는 건수 기준 진행(바이트는 파일마다 상이)
                 };
                 download_one(src_idx, &src_conn, &src_access, &dl, &shared, 0, hwnd_raw)?;
                 let up = WriteOp::Upload {
@@ -688,15 +696,23 @@ pub fn start_write(
         use std::sync::atomic::Ordering;
         let mut done = 0usize;
         let mut err = String::new();
-        // 세그먼트 = 작업 건수(바이트 총량은 업로드 시 파일 크기로 누적)
-        *crate::win::plock(&shared.items) = ops
+        // 세그먼트 크기 = **실제 바이트**(사용자 QA 08-01: 건수를 바이트 자리에
+        // 넣어 "0 B / 6 B"처럼 표시되던 단위 혼선을 제거). 업로드는 로컬 파일
+        // 크기를 미리 잴 수 있고, 메타데이터 연산(삭제·이름변경·폴더)은 0이라
+        // 최소 1로 두어 세그먼트가 사라지지 않게 한다.
+        let sizes: Vec<u64> = ops.iter().map(op_bytes).collect();
+        *crate::win::plock(&shared.items) = sizes
             .iter()
-            .map(|_| crate::dialog::SegItem {
-                size: 1,
+            .map(|b| crate::dialog::SegItem {
+                size: (*b).max(1),
                 done: 0,
                 status: crate::dialog::SegStatus::Pending,
             })
             .collect();
+        shared
+            .total_bytes
+            .store(sizes.iter().map(|b| (*b).max(1)).sum(), Ordering::Relaxed);
+        let mut base: u64 = 0;
         match token_for(&conn) {
             Err(e) => err = e,
             Ok(access) => {
@@ -709,15 +725,26 @@ pub fn start_write(
                         sg.status = crate::dialog::SegStatus::Active;
                     }
                     crate::win::post_cloud_progress(hwnd_raw);
-                    match apply_write(idx, &conn, &access, op) {
+                    // 대용량 업로드는 청크마다 누적 바이트를 올린다(취소도 그 경계에서)
+                    let seg_base = base;
+                    let sh = shared.clone();
+                    let mut on_chunk = move |sent: u64| -> bool {
+                        if sh.cancel.load(Ordering::Relaxed) {
+                            return false;
+                        }
+                        sh.done_bytes.store(seg_base + sent, Ordering::Relaxed);
+                        crate::win::post_cloud_progress(hwnd_raw);
+                        true
+                    };
+                    match apply_write_prog(idx, &conn, &access, op, Some(&mut on_chunk)) {
                         Ok(()) => {
                             done += 1;
+                            base += sizes[i].max(1);
                             if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
-                                sg.done = 1;
+                                sg.done = sg.size;
                                 sg.status = crate::dialog::SegStatus::Done;
                             }
-                            shared.done_bytes.store(done as u64, Ordering::Relaxed);
-                            shared.total_bytes.store(ops.len() as u64, Ordering::Relaxed);
+                            shared.done_bytes.store(base, Ordering::Relaxed);
                             crate::win::post_cloud_progress(hwnd_raw);
                         }
                         Err(e) => {
@@ -747,15 +774,39 @@ fn enc_path(inner: &str) -> String {
         .join("/")
 }
 
+/// 쓰기 1건이 옮기는 **바이트 수**(진행률 총량 산정 — 로컬 계측만, 네트워크 없음).
+/// 메타데이터 연산(삭제·이름변경·폴더 생성·서버 사이드 복사/이동)은 0.
+fn op_bytes(op: &WriteOp) -> u64 {
+    match op {
+        WriteOp::Upload { src, .. } => std::fs::metadata(src).map(|m| m.len()).unwrap_or(0),
+        WriteOp::UploadTree { src, .. } => nexa_ops::size_of(src),
+        _ => 0,
+    }
+}
+
 /// 쓰기 1건 수행.
 fn apply_write(idx: usize, conn: &ConnInfo, access: &str, op: &WriteOp) -> Result<(), String> {
+    apply_write_prog(idx, conn, access, op, None)
+}
+
+/// 진행 보고가 붙은 쓰기 — `prog`는 (연결 내 누적 바이트) 콜백.
+/// 청크 업로드처럼 오래 걸리는 경로에서만 의미가 있다.
+#[allow(clippy::type_complexity)]
+fn apply_write_prog(
+    idx: usize,
+    conn: &ConnInfo,
+    access: &str,
+    op: &WriteOp,
+    prog: Option<&mut dyn FnMut(u64) -> bool>,
+) -> Result<(), String> {
+    let mut prog = prog;
     match conn.kind.as_str() {
         "dropbox" => return apply_write_dropbox(access, op),
         "googledrive" => return apply_write_google(idx, access, op),
         _ => {}
     }
     match op {
-        WriteOp::Upload { src, dest_inner } => upload_onedrive(access, src, dest_inner),
+        WriteOp::Upload { src, dest_inner } => upload_onedrive(access, src, dest_inner, prog.take()),
         WriteOp::Delete { inner } => oauth::http_send(
             &format!(
                 "https://graph.microsoft.com/v1.0/me/drive/root:/{}",
@@ -1240,7 +1291,7 @@ fn upload_tree(access: &str, src: &std::path::Path, dest_inner: &str) -> Result<
         let child_dest = format!("{dest_inner}/{cname}");
         match ent.file_type() {
             Ok(t) if t.is_dir() => upload_tree(access, &child, &child_dest)?,
-            Ok(t) if t.is_file() => upload_onedrive(access, &child, &child_dest)?,
+            Ok(t) if t.is_file() => upload_onedrive(access, &child, &child_dest, None)?,
             _ => {} // 심볼릭 링크 등은 건너뜀
         }
     }
@@ -1269,6 +1320,7 @@ fn expand_tree(
                 inner: child_inner,
                 dest: child_dest,
                 is_dir: false, // 전개 결과는 항상 파일
+                size: e.size,
             });
         }
     }
@@ -1277,7 +1329,12 @@ fn expand_tree(
 
 /// OneDrive 업로드 — 작은 파일은 단순 PUT, 큰 파일은 **업로드 세션 청크 스트리밍**
 /// (파일 전체를 메모리에 올리지 않는다).
-fn upload_onedrive(access: &str, src: &std::path::Path, dest_inner: &str) -> Result<(), String> {
+fn upload_onedrive(
+    access: &str,
+    src: &std::path::Path,
+    dest_inner: &str,
+    mut on_chunk: Option<&mut dyn FnMut(u64) -> bool>,
+) -> Result<(), String> {
     use std::io::{Read, Seek, SeekFrom};
     let meta = std::fs::metadata(src).map_err(|e| e.to_string())?;
     let total = meta.len();
@@ -1326,6 +1383,11 @@ fn upload_onedrive(access: &str, src: &std::path::Path, dest_inner: &str) -> Res
             None,
         )?;
         off += want as u64;
+        if let Some(cb) = on_chunk.as_deref_mut() {
+            if !cb(off) {
+                return Err(oauth::CANCELLED.into()); // 청크 경계 취소
+            }
+        }
     }
     Ok(())
 }

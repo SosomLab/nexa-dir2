@@ -3239,22 +3239,14 @@ unsafe fn start_cloud_download(
         if name.is_empty() {
             continue;
         }
-        // 폴더 여부는 트리 노드에서 판정(워커가 재귀 전개 — X-37 5차)
-        let is_dir = st
-            .panels
-            .iter()
-            .find_map(|pn| {
-                let tree = pn.rows().source().tree();
-                (0..tree.visible_len()).find_map(|i| {
-                    let r = tree.row(i)?;
-                    (tree.node_path(r.id) == Some(p.as_path())).then_some(r.has_children)
-                })
-            })
-            .unwrap_or(false);
+        // 폴더 여부·크기를 트리 노드에서 읽는다(크기는 진행률 총량 선확정용 —
+        // 사용자 QA 08-01: 미리 모르면 세그먼트가 한 칸으로 뭉치고 단위도 어긋난다)
+        let (is_dir, size) = cloud_row_info(st, p).unwrap_or((false, 0));
         items.push(crate::cloudfs::DownloadItem {
             inner,
             dest: dir.join(&name),
             is_dir,
+            size,
         });
     }
     let (Some(idx), false) = (idx_seen, items.is_empty()) else {
@@ -3343,16 +3335,21 @@ fn new_cloud_shared() -> Arc<TransferShared> {
     })
 }
 
-/// 열려 있는 트리에서 이 경로가 폴더인가(클라우드 항목의 재귀 여부 판정).
-fn cloud_row_is_dir(st: &State, path: &std::path::Path) -> bool {
-    st.panels.iter().any(|pn| {
+/// 열려 있는 트리에서 이 경로의 `(폴더 여부, 바이트 크기)`를 읽는다.
+/// 클라우드 항목은 목록 조회 시 크기를 이미 받아 두므로 추가 요청이 없다.
+fn cloud_row_info(st: &State, path: &std::path::Path) -> Option<(bool, u64)> {
+    st.panels.iter().find_map(|pn| {
         let tree = pn.rows().source().tree();
-        (0..tree.visible_len()).any(|i| {
-            tree.row(i)
-                .map(|r| tree.node_path(r.id) == Some(path) && r.has_children)
-                .unwrap_or(false)
+        (0..tree.visible_len()).find_map(|i| {
+            let r = tree.row(i)?;
+            (tree.node_path(r.id) == Some(path)).then_some((r.has_children, r.size))
         })
     })
+}
+
+/// 폴더 여부만 필요한 곳(계정 간 복사의 재귀 판정).
+fn cloud_row_is_dir(st: &State, path: &std::path::Path) -> bool {
+    cloud_row_info(st, path).map(|(d, _)| d).unwrap_or(false)
 }
 
 /// 클라우드 쓰기 작업 시작(X-37 4차) — 업로드·삭제·이름 변경·새 폴더 공용.
@@ -3373,9 +3370,16 @@ unsafe fn start_cloud_write(
     };
     let n = ops.len().to_string();
     update_title(hwnd, st, &format!(" · {}", trf(busy_key, &[&n])));
-    // 업로드·복사도 같은 진행 창(세그먼트 = 작업 건수 — 바이트는 업로드 청크가 보고)
+    // 진행 창은 **바이트를 옮기는 작업에만** 띄운다(사용자 QA 08-01 — 삭제·이름
+    // 변경·폴더 생성·서버 사이드 복사는 바이트가 없어 "0 B / 3 B"가 무의미했다).
+    let moves_bytes = ops.iter().any(|o| {
+        matches!(
+            o,
+            crate::cloudfs::WriteOp::Upload { .. } | crate::cloudfs::WriteOp::UploadTree { .. }
+        )
+    });
     let shared = new_cloud_shared();
-    if st.transfer_close_ms > 0 {
+    if moves_bytes && st.transfer_close_ms > 0 {
         st.cloud_progress = crate::dialog::Progress::open(
             hwnd,
             &tr("ops.progressTitle"),
