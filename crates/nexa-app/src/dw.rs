@@ -154,7 +154,7 @@ pub struct DwBackend {
     formats: HashMap<u8, (IDWriteTextFormat, IDWriteInlineObject)>,
     /// 현재 선택 스타일(DrawCtx::select_font — 위젯이 페인트 시작에 지정).
     cur_style: std::cell::Cell<u8>,
-    /// 다음 글리프를 대형(15 DIP)으로 그린다 — [`DrawCtx::glyph_opaque_lg`] 한정
+    /// 다음 글리프를 대형(13 DIP)으로 그린다 — [`DrawCtx::glyph_opaque_lg`] 한정
     /// 플래그(08-01 패널 네비 바). cur_style과 같은 Cell 규약.
     large_glyph: std::cell::Cell<bool>,
     renderer: IDWriteTextRenderer,
@@ -166,7 +166,8 @@ pub struct DwBackend {
     mdl2_format: IDWriteTextFormat,
     /// MDL2 셰브론용 소형(9 DIP — 원본 디스클로저 FontSize 9 규약).
     mdl2_small_format: IDWriteTextFormat,
-    /// 패널 네비 바용 대형(15 DIP — 사용자 지시 08-01: 11px는 잘 안 보인다).
+    /// 패널 네비 바용 대형(13 DIP — 사용자 확정 08-01: 11px는 잘 안 보인다.
+    /// 15는 과했고 13이면 충분하다는 실기 판단).
     mdl2_large_format: IDWriteTextFormat,
     /// 터미널 모노스페이스 포맷(M4-3 — 기본 Consolas 12 DIP, 셀 그리드 정렬.
     /// 설정 `term_font`로 교체 — 미설치 글리프는 DWrite 시스템 폴백이 해석).
@@ -285,8 +286,8 @@ impl DwBackend {
         let mdl2_format = mk_mdl2(11.0)?;
         // 디스클로저 셰브론(원본 9px 규약 — 트리 마커 ▶/▼)
         let mdl2_small_format = mk_mdl2(9.0)?;
-        // 패널 네비 바 [홈][←][→][↑](사용자 지시 08-01)
-        let mdl2_large_format = mk_mdl2(15.0)?;
+        // 패널 네비 바 [홈][←][→][↑](사용자 확정 08-01 — 15 → 13으로 조정)
+        let mdl2_large_format = mk_mdl2(13.0)?;
 
         // 터미널 모노스페이스(M4-3) — 기본 Consolas(비스타+ 인박스)·랩 없음·세로 중앙.
         // 설정 `term_font`(QA 07-14): **쉼표 목록 = 폴백 체인**(WT식 "D2Coding,
@@ -857,7 +858,7 @@ impl DrawCtx for DwCtx<'_> {
     }
 
     fn glyph_opaque_lg(&mut self, clip: Rect, text: &str, fg: Color, bg: Color) {
-        // 대형 플래그를 세우고 같은 경로를 탄다(사용자 지시 08-01 — 네비 바 15 DIP)
+        // 대형 플래그를 세우고 같은 경로를 탄다(사용자 확정 08-01 — 네비 바 13 DIP)
         self.back.large_glyph.set(true);
         self.glyph_opaque(clip, text, fg, bg);
         self.back.large_glyph.set(false);

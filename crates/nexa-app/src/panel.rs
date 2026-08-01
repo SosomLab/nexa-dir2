@@ -1276,7 +1276,7 @@ fn nav_btn_w(m: &PanelMetrics) -> i32 {
 /// 글리프 = **Segoe MDL2 Assets**(사용자 확정 07-18 — 원본 NavBtnStyle 동일:
 /// Back U+E72B·Forward U+E72A·Up U+E74A, glyph_opaque가 PUA 대역 라우팅).
 /// 홈 U+EA8A(HomeSolid — 채운 집)는 사용자 확정 08-01: **맨 앞**(홈/이전/이후/상위),
-/// 네비 4개 모두 15 DIP(11 DIP는 식별이 어렵다는 QA).
+/// 네비 4개 모두 13 DIP(11 DIP는 식별이 어렵다는 QA — 15는 과해 13으로 확정).
 fn nav_buttons() -> Vec<ToolButton> {
     [
         (BTN_HOME, "\u{EA8A}"),
