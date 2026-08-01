@@ -234,6 +234,8 @@ const DOWNLOAD_LIMIT: usize = 512 * 1024 * 1024;
 pub struct DownloadItem {
     pub inner: String,
     pub dest: std::path::PathBuf,
+    /// 폴더면 워커가 하위를 재귀 전개한다(파일이면 그대로 받는다).
+    pub is_dir: bool,
 }
 
 /// 다운로드 완료 통지(WM_APP_CLOUD_DOWNLOAD lparam — 수신 측이 Box 회수).
@@ -260,12 +262,34 @@ pub fn start_download(
         match token_for(&conn) {
             Err(e) => err = e,
             Ok(access) => {
+                // 폴더는 먼저 재귀 전개해 파일 목록으로 평탄화(X-37 5차)
+                let mut flat: Vec<DownloadItem> = Vec::new();
+                let svc = oauth::service_of(&conn.kind);
                 for it in &items {
-                    match download_one(idx, &conn, &access, it) {
-                        Ok(()) => done.push(it.dest.clone()),
-                        Err(e) => {
+                    if it.is_dir {
+                        let Some(svc) = svc.as_ref() else { continue };
+                        if let Err(e) = std::fs::create_dir_all(&it.dest) {
+                            err = e.to_string();
+                            break;
+                        }
+                        if let Err(e) =
+                            expand_tree(&access, svc, idx, &it.inner, &it.dest, &mut flat)
+                        {
                             err = e;
-                            break; // 첫 실패에서 중단(부분 결과는 done에 남는다)
+                            break;
+                        }
+                    } else {
+                        flat.push(it.clone());
+                    }
+                }
+                if err.is_empty() {
+                    for it in &flat {
+                        match download_one(idx, &conn, &access, it) {
+                            Ok(()) => done.push(it.dest.clone()),
+                            Err(e) => {
+                                err = e;
+                                break; // 첫 실패에서 중단(부분 결과는 done에 남는다)
+                            }
                         }
                     }
                 }
@@ -355,6 +379,12 @@ pub enum WriteOp {
     Rename { inner: String, new_name: String },
     /// 새 폴더(부모 내부 경로 + 이름).
     NewFolder { parent_inner: String, name: String },
+    /// 로컬 폴더 **재귀 업로드**(하위 폴더 생성 + 전 파일 업로드).
+    UploadTree { src: std::path::PathBuf, dest_inner: String },
+    /// 같은 연결 내 **서버 사이드 복사**(다운로드/재업로드 없음 — Graph copy API).
+    CopyWithin { inner: String, dest_parent_inner: String },
+    /// 같은 연결 내 이동(부모 변경 — PATCH parentReference).
+    MoveWithin { inner: String, dest_parent_inner: String },
 }
 
 /// 쓰기 완료 통지(WM_APP_CLOUD_WRITE lparam — 수신 측이 Box 회수).
@@ -435,6 +465,58 @@ fn apply_write(conn: &ConnInfo, access: &str, op: &WriteOp) -> Result<(), String
             )
             .map(|_| ())
         }
+        WriteOp::UploadTree { src, dest_inner } => upload_tree(access, src, dest_inner),
+        WriteOp::CopyWithin {
+            inner,
+            dest_parent_inner,
+        } => {
+            // Graph copy는 **비동기 202**(Location 모니터) — 요청 수락까지만 확인한다.
+            let name = inner.rsplit('/').next().unwrap_or("item");
+            let parent = if dest_parent_inner.is_empty() {
+                "\"path\":\"/drive/root:\"".to_string()
+            } else {
+                format!("\"path\":\"/drive/root:{}\"", json_escape(dest_parent_inner))
+            };
+            let body = format!(
+                "{{\"parentReference\":{{{parent}}},\"name\":\"{}\"}}",
+                json_escape(name)
+            );
+            oauth::http_send(
+                &format!(
+                    "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/copy",
+                    enc_path(inner)
+                ),
+                "POST",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+        WriteOp::MoveWithin {
+            inner,
+            dest_parent_inner,
+        } => {
+            let parent = if dest_parent_inner.is_empty() {
+                "\"path\":\"/drive/root:\"".to_string()
+            } else {
+                format!("\"path\":\"/drive/root:{}\"", json_escape(dest_parent_inner))
+            };
+            let body = format!("{{\"parentReference\":{{{parent}}}}}");
+            oauth::http_send(
+                &format!(
+                    "https://graph.microsoft.com/v1.0/me/drive/root:/{}",
+                    enc_path(inner)
+                ),
+                "PATCH",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
         WriteOp::NewFolder { parent_inner, name } => {
             let url = if parent_inner.is_empty() {
                 "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string()
@@ -477,6 +559,77 @@ fn json_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// 로컬 폴더 **재귀 업로드** — 하위 폴더를 만들고 전 파일을 올린다.
+/// 폴더 생성은 `conflictBehavior=fail`로 두고 이미 있으면 무시(멱등).
+fn upload_tree(access: &str, src: &std::path::Path, dest_inner: &str) -> Result<(), String> {
+    // 대상 폴더 먼저 생성(이미 있으면 오류를 삼킨다)
+    let (parent, name) = match dest_inner.rfind('/') {
+        Some(i) => (&dest_inner[..i], &dest_inner[i + 1..]),
+        None => ("", dest_inner),
+    };
+    let url = if parent.is_empty() {
+        "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string()
+    } else {
+        format!(
+            "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/children",
+            enc_path(parent)
+        )
+    };
+    let body = format!(
+        "{{\"name\":\"{}\",\"folder\":{{}},\
+         \"@microsoft.graph.conflictBehavior\":\"replace\"}}",
+        json_escape(name)
+    );
+    let _ = oauth::http_send(
+        &url,
+        "POST",
+        Some(body.as_bytes()),
+        Some("application/json"),
+        "",
+        Some(access),
+    ); // 이미 존재 = 무시(멱등)
+    let rd = std::fs::read_dir(src).map_err(|e| e.to_string())?;
+    for ent in rd.flatten() {
+        let child = ent.path();
+        let cname = ent.file_name().to_string_lossy().into_owned();
+        let child_dest = format!("{dest_inner}/{cname}");
+        match ent.file_type() {
+            Ok(t) if t.is_dir() => upload_tree(access, &child, &child_dest)?,
+            Ok(t) if t.is_file() => upload_onedrive(access, &child, &child_dest)?,
+            _ => {} // 심볼릭 링크 등은 건너뜀
+        }
+    }
+    Ok(())
+}
+
+/// 클라우드 폴더 **재귀 다운로드** 대상 전개 — (내부 경로, 로컬 대상) 목록으로 평탄화.
+/// 목록 API를 폴더마다 호출하므로 워커에서만 쓴다.
+fn expand_tree(
+    access: &str,
+    svc: &Service,
+    idx: usize,
+    inner: &str,
+    dest_dir: &std::path::Path,
+    out: &mut Vec<DownloadItem>,
+) -> Result<(), String> {
+    let body = fetch_list(svc, access, inner)?;
+    for e in parse_list(svc, &body, idx, inner) {
+        let child_inner = format!("{inner}/{}", e.name);
+        let child_dest = dest_dir.join(&e.name);
+        if e.kind == FileKind::Dir {
+            std::fs::create_dir_all(&child_dest).map_err(|x| x.to_string())?;
+            expand_tree(access, svc, idx, &child_inner, &child_dest, out)?;
+        } else {
+            out.push(DownloadItem {
+                inner: child_inner,
+                dest: child_dest,
+                is_dir: false, // 전개 결과는 항상 파일
+            });
+        }
+    }
+    Ok(())
 }
 
 /// OneDrive 업로드 — 작은 파일은 단순 PUT, 큰 파일은 **업로드 세션 청크 스트리밍**

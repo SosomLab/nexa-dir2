@@ -165,6 +165,49 @@ pub fn cloud_child(idx: usize, parent_inner: &str, name: &str) -> String {
     format!("{CLOUD_PREFIX}{idx}::{parent_inner}/{name}")
 }
 
+/// 클라우드 연결의 **표시 라벨**(등록된 추가 루트에서 조회 — 예 "OneDrive – a@b.com").
+/// 미등록이면 `None`.
+pub fn cloud_label(idx: usize) -> Option<String> {
+    let root = cloud_root(idx);
+    EXTRA_ROOTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(_, p)| *p == root)
+        .map(|(label, _)| label.clone())
+}
+
+/// 사람이 읽는 경로 표기(X-37 — 센티널 노출 금지).
+/// `::CLOUD:0::/Docs/a.txt` → `OneDrive – a@b.com\Docs\a.txt`.
+/// 클라우드 경로가 아니면 `None`(호출자가 원래 표기를 쓴다).
+pub fn cloud_display(path: impl AsRef<Path>) -> Option<String> {
+    let (idx, inner) = cloud_parts(path)?;
+    let label = cloud_label(idx).unwrap_or_else(|| format!("Cloud {idx}"));
+    if inner.is_empty() {
+        return Some(label);
+    }
+    Some(format!("{label}{}", inner.replace('/', "\\")))
+}
+
+/// 클라우드 경로의 **마지막 세그먼트**(탭 제목용). 루트면 연결 라벨.
+pub fn cloud_leaf(path: impl AsRef<Path>) -> Option<String> {
+    let (idx, inner) = cloud_parts(path)?;
+    match inner.rsplit('/').next().filter(|s| !s.is_empty()) {
+        Some(name) => Some(name.to_string()),
+        None => Some(cloud_label(idx).unwrap_or_else(|| format!("Cloud {idx}"))),
+    }
+}
+
+/// 클라우드 경로의 **부모**(상위 이동). 루트의 부모 = 내 PC.
+pub fn cloud_parent(path: impl AsRef<Path>) -> Option<String> {
+    let (idx, inner) = cloud_parts(path)?;
+    if inner.is_empty() {
+        return Some(MY_PC.to_string());
+    }
+    let cut = inner.rfind('/').unwrap_or(0);
+    Some(format!("{CLOUD_PREFIX}{idx}::{}", &inner[..cut]))
+}
+
 /// 클라우드 열거 콜백 — 앱(nexa-app)이 등록한다. 이 크레이트는 네트워크를 모른다.
 /// 반환 `None` = 아직 로딩 중(빈 목록으로 표시하고 완료 통지가 재로드).
 type CloudLister = Box<dyn Fn(usize, &str) -> Option<Vec<Entry>> + Send + Sync>;
@@ -246,6 +289,30 @@ mod tests {
         // 조립 → 분해 왕복
         let p = cloud_child(4, "/x", "y");
         assert_eq!(cloud_parts(&p), Some((4, "/x/y".into())));
+    }
+
+    /// X-37 5차: 표시명·leaf·부모 — **센티널이 UI에 노출되면 안 된다**.
+    #[test]
+    fn cloud_display_leaf_and_parent() {
+        set_extra_roots(vec![("OneDrive – a@b.com".into(), cloud_root(0))]);
+        assert_eq!(cloud_label(0).as_deref(), Some("OneDrive – a@b.com"));
+        assert_eq!(cloud_display("::CLOUD:0::").as_deref(), Some("OneDrive – a@b.com"));
+        assert_eq!(
+            cloud_display("::CLOUD:0::/Docs/a.txt").as_deref(),
+            Some("OneDrive – a@b.com\\Docs\\a.txt")
+        );
+        assert!(cloud_display("C:\\x").is_none(), "일반 경로는 원래 표기 유지");
+        // 탭 제목 = 마지막 세그먼트, 루트는 연결 라벨
+        assert_eq!(cloud_leaf("::CLOUD:0::/Docs").as_deref(), Some("Docs"));
+        assert_eq!(cloud_leaf("::CLOUD:0::").as_deref(), Some("OneDrive – a@b.com"));
+        // 상위 이동: 하위 → 부모, 루트 → 내 PC
+        assert_eq!(cloud_parent("::CLOUD:0::/Docs/x").as_deref(), Some("::CLOUD:0::/Docs"));
+        assert_eq!(cloud_parent("::CLOUD:0::/Docs").as_deref(), Some("::CLOUD:0::"));
+        assert_eq!(cloud_parent("::CLOUD:0::").as_deref(), Some(MY_PC));
+        assert!(cloud_parent("D:\\a").is_none());
+        // 미등록 연결도 패닉 없이 폴백 라벨
+        assert_eq!(cloud_display("::CLOUD:9::").as_deref(), Some("Cloud 9"));
+        set_extra_roots(Vec::new());
     }
 
     /// 콜백 미등록이어도 클라우드 경로는 빈 목록(패닉 없음) · 비클라우드는 None.

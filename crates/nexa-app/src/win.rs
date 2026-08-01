@@ -1513,6 +1513,8 @@ unsafe fn update_title(hwnd: HWND, st: &State, note: &str) {
     let root = p.root_path();
     let root_disp = if nexa_vfs::is_virtual_root(&root) {
         tr("nav.mypc")
+    } else if let Some(d) = nexa_vfs::cloud_display(&root) {
+        d // 클라우드(X-37) — 센티널 노출 금지
     } else {
         root.display().to_string()
     };
@@ -1715,16 +1717,19 @@ fn dock_info(p: &Panel) -> Vec<String> {
                     lines.push(trf("info.modified", &[&modified]));
                 }
                 if let Some(path) = tree.node_path(r.id) {
-                    lines.push(trf("info.path", &[&path.to_string_lossy()]));
+                    // 클라우드는 센티널 대신 라벨 경로(X-37)
+                    let disp = nexa_vfs::cloud_display(path)
+                        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                    lines.push(trf("info.path", &[&disp]));
                 }
                 return lines;
             }
         }
     }
-    vec![trf(
-        "info.currentFolder",
-        &[&p.root_path().to_string_lossy()],
-    )]
+    let root = p.root_path();
+    let disp = nexa_vfs::cloud_display(&root)
+        .unwrap_or_else(|| root.to_string_lossy().into_owned());
+    vec![trf("info.currentFolder", &[&disp])]
 }
 
 /// 단일 선택 파일의 미리보기(M4-2 → ADR-0004 S1: 공급자 시임 경유).
@@ -3156,9 +3161,22 @@ unsafe fn start_cloud_download(
         if name.is_empty() {
             continue;
         }
+        // 폴더 여부는 트리 노드에서 판정(워커가 재귀 전개 — X-37 5차)
+        let is_dir = st
+            .panels
+            .iter()
+            .find_map(|pn| {
+                let tree = pn.rows().source().tree();
+                (0..tree.visible_len()).find_map(|i| {
+                    let r = tree.row(i)?;
+                    (tree.node_path(r.id) == Some(p.as_path())).then_some(r.has_children)
+                })
+            })
+            .unwrap_or(false);
         items.push(crate::cloudfs::DownloadItem {
             inner,
             dest: dir.join(&name),
+            is_dir,
         });
     }
     let (Some(idx), false) = (idx_seen, items.is_empty()) else {
@@ -3202,24 +3220,6 @@ unsafe fn start_cloud_write(
     true
 }
 
-/// 클라우드 API 경로는 **현재 읽기 전용**(X-37 2차 — 쓰기는 4차 슬라이스).
-///
-/// 전송 엔진·삭제·리네임·새로 만들기는 전부 `std::fs` 전제라 센티널 경로에서
-/// 알 수 없는 오류로 실패한다. 조용히 깨지는 대신 **명시적으로 막고 안내**한다
-/// (사용자 QA 08-01 — 클라우드 패널에 붙여넣기 실패 보고).
-/// 대상 경로 중 하나라도 클라우드면 `true`(호출자는 즉시 반환).
-unsafe fn cloud_readonly_block(hwnd: HWND, st: &mut State, paths: &[&std::path::Path]) -> bool {
-    if !paths.iter().any(|p| nexa_vfs::cloud_parts(p).is_some()) {
-        return false;
-    }
-    let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(
-        windows::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
-    );
-    update_title(hwnd, st, &format!(" · {}", tr("cloud.readonly")));
-    update_status(hwnd, st);
-    true
-}
-
 unsafe fn start_transfer(
     hwnd: HWND,
     st: &mut State,
@@ -3236,30 +3236,67 @@ unsafe fn start_transfer(
         .any(|p| nexa_vfs::cloud_parts(p).is_some());
     let dest_cloud = nexa_vfs::cloud_parts(&dest).is_some();
     if dest_cloud {
-        // 로컬 → 클라우드 = **업로드**(X-37 4차). 클라우드→클라우드는 아직 미지원.
-        if src_cloud {
-            cloud_readonly_block(hwnd, st, &[dest.as_path()]);
-            return;
-        }
         let Some((idx, dest_inner)) = nexa_vfs::cloud_parts(&dest) else {
             return;
         };
-        let ops: Vec<crate::cloudfs::WriteOp> = sources
-            .iter()
-            .filter(|p| p.is_file()) // 폴더 재귀 업로드는 후속
-            .filter_map(|p| {
-                let name = p.file_name()?.to_string_lossy().into_owned();
-                Some(crate::cloudfs::WriteOp::Upload {
-                    src: p.clone(),
-                    dest_inner: format!("{dest_inner}/{name}"),
+        let ops: Vec<crate::cloudfs::WriteOp> = if src_cloud {
+            // 클라우드 → 클라우드(X-37 5차): 같은 연결이면 **서버 사이드** 복사/이동
+            // (다운로드·재업로드 없음). 다른 연결 간은 아직 미지원.
+            let same = sources
+                .iter()
+                .filter_map(nexa_vfs::cloud_parts)
+                .all(|(i, _)| i == idx);
+            if !same {
+                update_title(hwnd, st, &format!(" · {}", tr("cloud.err.crossAccount")));
+                return;
+            }
+            sources
+                .iter()
+                .filter_map(nexa_vfs::cloud_parts)
+                .map(|(_, inner)| match op {
+                    nexa_ops::Op::Move => crate::cloudfs::WriteOp::MoveWithin {
+                        inner,
+                        dest_parent_inner: dest_inner.clone(),
+                    },
+                    _ => crate::cloudfs::WriteOp::CopyWithin {
+                        inner,
+                        dest_parent_inner: dest_inner.clone(),
+                    },
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            // 로컬 → 클라우드 = 업로드(폴더는 재귀 — X-37 5차)
+            sources
+                .iter()
+                .filter_map(|p| {
+                    let name = p.file_name()?.to_string_lossy().into_owned();
+                    let dest_inner = format!("{dest_inner}/{name}");
+                    if p.is_dir() {
+                        Some(crate::cloudfs::WriteOp::UploadTree {
+                            src: p.clone(),
+                            dest_inner,
+                        })
+                    } else if p.is_file() {
+                        Some(crate::cloudfs::WriteOp::Upload {
+                            src: p.clone(),
+                            dest_inner,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
         if ops.is_empty() {
             update_title(hwnd, st, &format!(" · {}", tr("cloud.err.filesOnly")));
             return;
         }
-        start_cloud_write(hwnd, st, idx, ops, "cloud.uploading");
+        let key = if src_cloud {
+            "cloud.copying"
+        } else {
+            "cloud.uploading"
+        };
+        start_cloud_write(hwnd, st, idx, ops, key);
         return;
     }
     if src_cloud {

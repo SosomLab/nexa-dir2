@@ -57,6 +57,9 @@ impl Tab {
         if nexa_vfs::is_virtual_root(p) {
             return crate::i18n::tr("nav.mypc"); // 가상 최상위(X-17)
         }
+        if let Some(leaf) = nexa_vfs::cloud_leaf(p) {
+            return leaf; // 클라우드(X-37) — 센티널 대신 폴더명/연결 라벨
+        }
         match p.file_name() {
             Some(n) => n.to_string_lossy().into_owned(),
             // 드라이브 루트: "D:\" → "D:"(사용자 확정 07-19 — 후행 \ 제거)
@@ -458,6 +461,8 @@ impl Panel {
         let at_mypc = nexa_vfs::is_virtual_root(&root);
         let path = if at_mypc {
             crate::i18n::tr("nav.mypc")
+        } else if let Some(d) = nexa_vfs::cloud_display(&root) {
+            d // 클라우드(X-37) — "OneDrive – a@b.com\Docs"
         } else {
             root.to_string_lossy().into_owned()
         };
@@ -821,6 +826,13 @@ impl Panel {
         let left = self.root_path();
         if nexa_vfs::is_virtual_root(&left) {
             return; // 내 PC = 최상위
+        }
+        // 클라우드(X-37): 센티널은 OS 경로 규칙을 안 타므로 전용 부모 계산.
+        // 연결 루트의 부모 = 내 PC(드라이브 루트와 같은 규약).
+        if let Some(parent) = nexa_vfs::cloud_parent(&left) {
+            self.navigate_to(PathBuf::from(parent), ctx, inv);
+            self.select_path(&left, inv);
+            return;
         }
         match left.parent().map(Path::to_path_buf) {
             Some(parent) if !parent.as_os_str().is_empty() => {
