@@ -87,6 +87,11 @@ pub fn is_busy(idx: usize) -> bool {
     with_inflight(|s| s.iter().any(|(i, _)| *i == idx))
 }
 
+/// `(연결, 경로)` 튜플용 편의 래퍼(cloud_parts 결과를 그대로 넘길 때).
+pub fn is_busy_of((idx, _inner): (usize, String)) -> bool {
+    is_busy(idx)
+}
+
 /// 이미 요청 중이면 `false`(중복 기동 금지), 아니면 표시하고 `true`.
 fn claim(idx: usize, inner: &str) -> bool {
     with_inflight(|s| s.insert((idx, inner.to_string())))

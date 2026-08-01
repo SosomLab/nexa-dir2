@@ -490,14 +490,33 @@ fn sync_cloud_roots(conns: &[config::CloudConn]) {
     );
 }
 
+/// 이 패널이 해당 연결의 항목을 **표시 중인가**(X-37 — 재로드·배지 판정 공용).
+///
+/// 사용자 QA 08-01: 루트 경로만 보면 **내 PC에서 펼친 클라우드 하위**가 누락된다
+/// (`::PC::`는 클라우드 경로가 아니라 매칭에 걸리지 않아 `불러오는 중…`이 남았다).
+/// 클라우드 행은 내 PC 아래 또는 클라우드 경로 안에만 존재하므로 두 경우를 함께 본다.
+fn panel_shows_cloud(p: &Panel, idx: usize) -> bool {
+    let root = p.root_path();
+    nexa_vfs::is_virtual_root(&root)
+        || nexa_vfs::cloud_parts(&root)
+            .map(|(i, _)| i == idx)
+            .unwrap_or(false)
+}
+
 /// 두 패널의 진행 배지를 현재 상태와 동기(X-37 — 사용자 확정 08-01 B안).
 /// 클라우드 경로를 보고 있고 그 연결에 진행 중 요청이 있으면 배지를 켠다.
 /// paint 시점이 아니라 상태 변화 지점에서 호출한다(무효화 최소화).
 unsafe fn sync_cloud_badges(st: &mut State, inv: &mut Invalidations) {
     for p in 0..2 {
-        let busy = nexa_vfs::cloud_parts(st.panels[p].root_path())
-            .map(|(i, _)| crate::cloudfs::is_busy(i))
-            .unwrap_or(false);
+        let root = st.panels[p].root_path();
+        let busy = if nexa_vfs::is_virtual_root(&root) {
+            // 내 PC — 펼친 클라우드 하위가 로딩 중일 수 있다(연결 무관 판정)
+            (0..st.cloud_conns.len()).any(crate::cloudfs::is_busy)
+        } else {
+            nexa_vfs::cloud_parts(&root)
+                .map(crate::cloudfs::is_busy_of)
+                .unwrap_or(false)
+        };
         let text = busy.then(|| tr("cloud.loading"));
         st.panels[p].set_busy(text, inv);
     }
@@ -4164,7 +4183,10 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
         }
         CMD_REFRESH => {
             // 클라우드 경로면 캐시를 버리고 재조회(F5 = 강제 새로고침 — X-37 2차)
-            if let Some((i, _)) = nexa_vfs::cloud_parts(st.active_panel().root_path()) {
+            let root = st.active_panel().root_path();
+            if nexa_vfs::is_virtual_root(&root) {
+                crate::cloudfs::invalidate_all(); // 내 PC = 펼친 클라우드 하위 전부
+            } else if let Some((i, _)) = nexa_vfs::cloud_parts(&root) {
                 crate::cloudfs::invalidate(i);
             }
             st.active_panel().reopen_filtered(ctx, &mut inv);
@@ -6866,10 +6888,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let mut inv = Invalidations::default();
                     let ctx = st.nav_ctx();
                     for p in 0..2 {
-                        let hit = nexa_vfs::cloud_parts(st.panels[p].root_path())
-                            .map(|(i, _)| i == res.idx)
-                            .unwrap_or(false);
-                        if hit {
+                        if panel_shows_cloud(&st.panels[p], res.idx) {
                             st.panels[p].reopen_filtered(ctx, &mut inv);
                         }
                     }
@@ -6936,10 +6955,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let mut inv = Invalidations::default();
                     let ctx = st.nav_ctx();
                     for p in 0..2 {
-                        if nexa_vfs::cloud_parts(st.panels[p].root_path())
-                            .map(|(i, _)| i == res.idx)
-                            .unwrap_or(false)
-                        {
+                        if panel_shows_cloud(&st.panels[p], res.idx) {
                             st.panels[p].reopen_filtered(ctx, &mut inv);
                         }
                     }
