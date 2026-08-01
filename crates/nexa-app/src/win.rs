@@ -564,7 +564,7 @@ unsafe fn install_cloud_lister(hwnd: HWND) {
                 size: 0,
                 modified: None,
                 attrs: 0,
-                target: Some(nexa_vfs::cloud_root(idx) + inner),
+                target: Some(crate::cloudfs::notice_row_path(idx, inner)),
             }]);
         }
         Some(Vec::new()) // 연결 정보 없음 — 빈 목록

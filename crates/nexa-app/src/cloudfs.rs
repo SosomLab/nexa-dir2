@@ -103,6 +103,13 @@ fn release(idx: usize, inner: &str) {
     });
 }
 
+/// 안내 행(로딩·오류) 전용 경로 — 부모 폴더와 **같은 경로가 되지 않도록** 고유
+/// 이름을 붙인다. 종전엔 부모와 동일해 `index_of_path`·펼침 복원이 엉킬 수 있었다.
+/// 제어문자는 실제 파일명에 쓰일 수 없어 충돌이 원천 차단된다.
+pub fn notice_row_path(idx: usize, inner: &str) -> String {
+    nexa_vfs::cloud_child(idx, inner, "\u{1}notice")
+}
+
 /// 워커 결과(WM_APP_CLOUD_LIST lparam — 수신 측이 Box 회수).
 pub struct ListResult {
     pub idx: usize,
@@ -126,7 +133,24 @@ pub fn request(hwnd_raw: isize, idx: usize, inner: &str, conn: ConnInfo) {
                 cache_put(idx, &inner_owned, entries);
                 String::new()
             }
-            Err(e) => e,
+            Err(e) => {
+                // 실패도 **캐시에 담는다**(사용자 QA 08-01): 담지 않으면 재로드마다
+                // 재요청이 나가 로딩 표시가 영원히 남고 원인도 보이지 않았다.
+                // 목록 자리에 사유를 그대로 띄워 자가 진단이 되게 한다. F5 = 재시도.
+                cache_put(
+                    idx,
+                    &inner_owned,
+                    vec![Entry {
+                        name: format!("[!] {e}"),
+                        kind: FileKind::File,
+                        size: 0,
+                        modified: None,
+                        attrs: 0,
+                        target: Some(notice_row_path(idx, &inner_owned)),
+                    }],
+                );
+                e
+            }
         };
         release(idx, &inner_owned);
         let boxed = Box::new(ListResult {
@@ -189,11 +213,10 @@ fn fetch_list(svc: &Service, access: &str, idx: usize, inner: &str) -> Result<St
         }
         "googledrive" => {
             // 부모 ID 기준 조회 — 루트는 예약어 `root`, 하위는 목록 시점에 캐시한 ID.
-            let parent = if inner.is_empty() {
-                "root".to_string()
-            } else {
-                id_get(idx, inner).ok_or("folder id unknown — 상위 폴더를 새로 고치세요")?
-            };
+            // 하위는 캐시된 ID를 쓰되, **재시작 직후처럼 캐시가 비면 루트부터
+            // 되짚어 해석**한다(사용자 QA 08-01: 세션 복원으로 하위 경로에서 시작하면
+            // ID가 없어 영영 로딩이었다 — "상위 갔다 오면 됨"이 그 증거).
+            let parent = resolve_google_id(access, idx, inner)?;
             let url = format!(
                 "https://www.googleapis.com/drive/v3/files\
                  ?q={}+in+parents+and+trashed%3Dfalse\
@@ -219,6 +242,38 @@ fn fetch_list(svc: &Service, access: &str, idx: usize, inner: &str) -> Result<St
         }
         _ => Err("unsupported service".into()),
     }
+}
+
+/// Google Drive 폴더 ID 해석 — 캐시 우선, 없으면 **루트부터 한 단계씩 목록 조회**해
+/// 경로를 따라 내려가며 ID를 채운다(ID 캐시는 메모리 전용이라 재시작 후 비어 있다).
+fn resolve_google_id(access: &str, idx: usize, inner: &str) -> Result<String, String> {
+    if inner.is_empty() {
+        return Ok("root".into());
+    }
+    if let Some(id) = id_get(idx, inner) {
+        return Ok(id);
+    }
+    let mut cur = "root".to_string();
+    let mut acc = String::new();
+    for seg in inner.trim_start_matches('/').split('/') {
+        acc = format!("{acc}/{seg}");
+        if let Some(id) = id_get(idx, &acc) {
+            cur = id;
+            continue;
+        }
+        // 부모를 한 번 조회하면 parse_list가 자식 ID들을 캐시에 적재한다
+        let url = format!(
+            "https://www.googleapis.com/drive/v3/files\
+             ?q={}+in+parents+and+trashed%3Dfalse\
+             &fields=files(id,name,size,mimeType,modifiedTime)&pageSize=500",
+            oauth::percent(&format!("'{cur}'"))
+        );
+        let body = oauth::http_get(&url, access)?;
+        let parent_inner = acc.rfind('/').map(|i| &acc[..i]).unwrap_or("");
+        let _ = parse_list(&oauth::GOOGLEDRIVE, &body, idx, parent_inner);
+        cur = id_get(idx, &acc).ok_or_else(|| format!("folder not found: {acc}"))?;
+    }
+    Ok(cur)
 }
 
 /// 응답 → [`Entry`] 변환(표시명은 이름, 진입 경로는 `target` 센티널).

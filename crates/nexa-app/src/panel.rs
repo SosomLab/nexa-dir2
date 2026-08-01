@@ -1197,6 +1197,13 @@ impl Panel {
             }
         }
         if let Some(p) = self.pathbar.take_navigation() {
+            // 클라우드 표시 경로(X-37) — 경로 바는 라벨 표기를 보여주므로 세그먼트
+            // 클릭 시 그 문자열이 온다. 센티널로 되돌린 뒤 탐색(사용자 QA 08-01:
+            // 연결 라벨 조각을 눌러도 이동이 안 되던 결함).
+            if let Some(sentinel) = nexa_vfs::cloud_from_display(&p) {
+                self.navigate_to(PathBuf::from(sentinel), ctx, inv);
+                return;
+            }
             // 환경변수 해석(원본 PathInterpreter — %VAR%·$env:VAR·따옴표, PATH-SUG 동반)
             let p = crate::pathinput::expand_env(&p);
             // shell: 특수 폴더(07-17 — shell:startup 등, 탐색기 동일). 비Windows = 원문.

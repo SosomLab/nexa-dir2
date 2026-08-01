@@ -208,6 +208,33 @@ pub fn cloud_parent(path: impl AsRef<Path>) -> Option<String> {
     Some(format!("{CLOUD_PREFIX}{idx}::{}", &inner[..cut]))
 }
 
+/// **표시 경로 → 센티널 경로** 역변환(X-37 — 경로 바 세그먼트 클릭).
+///
+/// 경로 바는 사람이 읽는 `OneDrive – a@b.com\Docs`를 보여주므로, 세그먼트를 누르면
+/// 그 문자열이 그대로 탐색 요청으로 온다. 등록된 연결 라벨과 대조해 원래
+/// `::CLOUD:idx::/Docs`로 되돌린다. 대응하는 연결이 없으면 `None`(일반 경로 취급).
+pub fn cloud_from_display(display: &str) -> Option<String> {
+    let roots = EXTRA_ROOTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // 라벨이 긴 것부터 대조(짧은 라벨이 접두사인 경우 오매칭 방지)
+    let mut cands: Vec<&(String, String)> = roots.iter().collect();
+    cands.sort_by_key(|(l, _)| std::cmp::Reverse(l.len()));
+    for (label, path) in cands {
+        let (idx, _) = cloud_parts(path)?;
+        if display == label {
+            return Some(cloud_root(idx));
+        }
+        if let Some(rest) = display.strip_prefix(label) {
+            if let Some(tail) = rest.strip_prefix('\\').or_else(|| rest.strip_prefix('/')) {
+                let inner = tail.replace('\\', "/");
+                return Some(format!("{CLOUD_PREFIX}{idx}::/{inner}"));
+            }
+        }
+    }
+    None
+}
+
 /// 클라우드 열거 콜백 — 앱(nexa-app)이 등록한다. 이 크레이트는 네트워크를 모른다.
 /// 반환 `None` = 아직 로딩 중(빈 목록으로 표시하고 완료 통지가 재로드).
 type CloudLister = Box<dyn Fn(usize, &str) -> Option<Vec<Entry>> + Send + Sync>;
@@ -312,6 +339,32 @@ mod tests {
         assert!(cloud_parent("D:\\a").is_none());
         // 미등록 연결도 패닉 없이 폴백 라벨
         assert_eq!(cloud_display("::CLOUD:9::").as_deref(), Some("Cloud 9"));
+        set_extra_roots(Vec::new());
+    }
+
+    /// X-37: 표시 경로 → 센티널 역변환(경로 바 세그먼트 클릭).
+    #[test]
+    fn cloud_from_display_roundtrip() {
+        set_extra_roots(vec![
+            ("OneDrive – a@b.com".into(), cloud_root(0)),
+            ("Google Drive – a@b.com".into(), cloud_root(1)),
+        ]);
+        assert_eq!(
+            cloud_from_display("OneDrive – a@b.com").as_deref(),
+            Some("::CLOUD:0::")
+        );
+        assert_eq!(
+            cloud_from_display(r"Google Drive – a@b.com\Benthic").as_deref(),
+            Some("::CLOUD:1::/Benthic")
+        );
+        assert_eq!(
+            cloud_from_display(r"OneDrive – a@b.com\Docs\Sub").as_deref(),
+            Some("::CLOUD:0::/Docs/Sub")
+        );
+        assert!(cloud_from_display(r"C:\Users").is_none(), "일반 경로는 통과");
+        // display → from_display 왕복
+        let disp = cloud_display("::CLOUD:1::/Benthic").unwrap();
+        assert_eq!(cloud_from_display(&disp).as_deref(), Some("::CLOUD:1::/Benthic"));
         set_extra_roots(Vec::new());
     }
 
