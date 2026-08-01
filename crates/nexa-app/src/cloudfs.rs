@@ -625,6 +625,31 @@ pub fn start_cross_copy(
                     flat.push((it.src_inner.clone(), it.dest_inner.clone()));
                 }
             }
+            // **대상 폴더를 먼저 만든다**(사용자 QA 08-01: 평탄화한 파일만 올리면
+            // 대상에 폴더가 없어 실패한다 — Google은 부모 ID가 필수).
+            // 부모부터 만들어야 자식이 부모를 찾으므로 깊이 오름차순으로 정렬.
+            let mut dirs: Vec<String> = Vec::new();
+            for it in &items {
+                if it.is_dir {
+                    dirs.push(it.dest_inner.clone());
+                }
+            }
+            for (_, dest_inner) in &flat {
+                if let Some(cut) = dest_inner.rfind('/') {
+                    let parent = dest_inner[..cut].to_string();
+                    if !parent.is_empty() {
+                        dirs.push(parent);
+                    }
+                }
+            }
+            dirs.sort_by_key(|d| (d.matches('/').count(), d.clone()));
+            dirs.dedup();
+            for d in &dirs {
+                if shared.cancel.load(Ordering::Relaxed) {
+                    return Err(oauth::CANCELLED.into());
+                }
+                ensure_folder(dst_idx, &dst_conn, &dst_access, d)?;
+            }
             *crate::win::plock(&shared.items) = flat
                 .iter()
                 .map(|_| crate::dialog::SegItem {
@@ -772,6 +797,73 @@ fn enc_path(inner: &str) -> String {
         .map(oauth::percent)
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// 대상 폴더가 **있게 보장**한다(멱등) — 계정 간 복사가 파일을 올리기 전에 호출.
+///
+/// 원본을 평탄화해 파일만 올리면 대상에 폴더가 없어 실패한다(특히 Google은 부모
+/// ID가 필수). 이미 있으면 조용히 통과한다.
+fn ensure_folder(idx: usize, conn: &ConnInfo, access: &str, inner: &str) -> Result<(), String> {
+    if inner.is_empty() || inner == "/" {
+        return Ok(());
+    }
+    let (parent, name) = match inner.rfind('/') {
+        Some(i) => (&inner[..i], &inner[i + 1..]),
+        None => ("", inner),
+    };
+    match conn.kind.as_str() {
+        "googledrive" => {
+            if resolve_google_id(access, idx, inner).is_ok() {
+                return Ok(()); // 이미 존재
+            }
+            apply_write(
+                idx,
+                conn,
+                access,
+                &WriteOp::NewFolder {
+                    parent_inner: parent.to_string(),
+                    name: name.to_string(),
+                },
+            )
+        }
+        "onedrive" => {
+            // conflictBehavior=fail — 이미 있으면 오류가 오지만 그건 성공으로 친다
+            let url = if parent.is_empty() {
+                "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string()
+            } else {
+                format!(
+                    "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/children",
+                    enc_path(parent)
+                )
+            };
+            let body = format!(
+                "{{\"name\":\"{}\",\"folder\":{{}},\
+                 \"@microsoft.graph.conflictBehavior\":\"fail\"}}",
+                json_escape(name)
+            );
+            let _ = oauth::http_send(
+                &url,
+                "POST",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            );
+            Ok(())
+        }
+        _ => {
+            let _ = apply_write(
+                idx,
+                conn,
+                access,
+                &WriteOp::NewFolder {
+                    parent_inner: parent.to_string(),
+                    name: name.to_string(),
+                },
+            );
+            Ok(()) // Dropbox 등 — 이미 있으면 오류를 삼킨다
+        }
+    }
 }
 
 /// 쓰기 1건이 옮기는 **바이트 수**(진행률 총량 산정 — 로컬 계측만, 네트워크 없음).
@@ -1063,14 +1155,9 @@ fn upload_dropbox(access: &str, src: &std::path::Path, dest: &str) -> Result<(),
 /// Google Drive 쓰기 — ID 기반(경로 주소 지정 없음). 업로드는 multipart.
 fn apply_write_google(idx: usize, access: &str, op: &WriteOp) -> Result<(), String> {
     // 부모/항목 ID — 루트는 예약어, 그 외는 목록 시점에 적재한 캐시에서 조회.
-    let parent_id = |inner: &str| -> Result<String, String> {
-        if inner.is_empty() {
-            Ok("root".into())
-        } else {
-            id_get(idx, inner)
-                .ok_or_else(|| format!("folder id unknown for {inner} — 상위 폴더를 새로 고치세요"))
-        }
-    };
+    // 캐시 미스여도 루트부터 되짚어 해석한다(계정 간 복사처럼 목록을 거치지 않고
+    // 바로 쓰는 경로에서 ID가 없어 실패하던 것을 해소 — 사용자 QA 08-01).
+    let parent_id = |inner: &str| -> Result<String, String> { resolve_google_id(access, idx, inner) };
     let item_id = |inner: &str| -> Result<String, String> {
         id_get(idx, inner)
             .ok_or_else(|| format!("item id unknown for {inner} — 목록을 새로 고치세요"))
@@ -1116,15 +1203,19 @@ fn apply_write_google(idx: usize, access: &str, op: &WriteOp) -> Result<(), Stri
                   \"parents\":[\"{pid}\"]}}",
                 json_escape(name)
             );
-            oauth::http_send(
+            let r = oauth::http_send(
                 "https://www.googleapis.com/drive/v3/files",
                 "POST",
                 Some(body.as_bytes()),
                 Some("application/json"),
                 "",
                 Some(access),
-            )
-            .map(|_| ())
+            )?;
+            // 새 폴더 ID를 캐시에 심어 **자식이 곧바로 부모를 찾을 수 있게** 한다
+            if let Some(new_id) = oauth::json_str(&r, "id") {
+                id_put(idx, &format!("{parent_inner}/{name}"), &new_id);
+            }
+            Ok(())
         }
         WriteOp::Delete { inner } => oauth::http_send(
             &format!("https://www.googleapis.com/drive/v3/files/{}", item_id(inner)?),
@@ -1271,9 +1362,11 @@ fn upload_tree(access: &str, src: &std::path::Path, dest_inner: &str) -> Result<
             enc_path(parent)
         )
     };
+    // `fail` — 이미 있으면 오류가 오지만 그건 성공으로 친다(멱등).
+    // `replace`는 **기존 폴더를 통째로 갈아치울 수 있어** 쓰지 않는다(08-01 점검).
     let body = format!(
         "{{\"name\":\"{}\",\"folder\":{{}},\
-         \"@microsoft.graph.conflictBehavior\":\"replace\"}}",
+         \"@microsoft.graph.conflictBehavior\":\"fail\"}}",
         json_escape(name)
     );
     let _ = oauth::http_send(
@@ -1283,7 +1376,7 @@ fn upload_tree(access: &str, src: &std::path::Path, dest_inner: &str) -> Result<
         Some("application/json"),
         "",
         Some(access),
-    ); // 이미 존재 = 무시(멱등)
+    );
     let rd = std::fs::read_dir(src).map_err(|e| e.to_string())?;
     for ent in rd.flatten() {
         let child = ent.path();
