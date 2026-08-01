@@ -51,8 +51,12 @@ pub struct CloudConn {
 
 impl CloudConn {
     /// API 직접 연결인가(X-37 — 토큰 보유·로컬 경로 없음).
+    ///
+    /// 판정 기준은 **경로 유무**다. 종전에는 `account`가 차 있어야 API로 쳤는데,
+    /// 계정 조회에 실패한 제공자(08-01 Dropbox — RPC가 POST 전용이라 GET이 빈손)가
+    /// 통째로 내 PC에서 사라졌다. 라벨이 부실한 것과 연결이 없는 것은 별개다.
     pub fn is_api(&self) -> bool {
-        self.path.is_empty() && !self.account.is_empty()
+        self.path.is_empty() && !self.kind.is_empty()
     }
 }
 

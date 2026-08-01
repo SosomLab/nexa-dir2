@@ -45,6 +45,8 @@ pub struct Service {
     /// 리디렉션 URI를 `/`로 끝내는가. 정확 일치 제공자는 **등록한 표기 그대로**
     /// 보내야 한다(Dropbox 콘솔 등록값에 슬래시가 없으면 여기도 없어야 한다).
     pub redirect_slash: bool,
+    /// [`Self::me_url`]을 **POST**로 호출하는가(Dropbox RPC는 GET을 받지 않는다).
+    pub me_post: bool,
 }
 
 /// OneDrive — Entra 앱 등록 **무료**. `Files.Read`(내 파일 읽기)는 사용자 동의만으로
@@ -64,6 +66,7 @@ pub const ONEDRIVE: Service = Service {
     default_client_secret: "", // MS는 PKCE 공개 클라이언트 — 시크릿 불요
     redirect_ports: &[],       // localhost면 포트 무시 — 선호 포트 + 임의 폴백
     redirect_slash: true,
+    me_post: false,
 };
 /// Google Drive — `drive.readonly`는 **restricted scope**라 CASA 연간 유료 감사
 /// (연 $500~4,500)+매년 재검증이 필요하다. 미등록 시 사용자 자기 ID 입력이 유일 경로
@@ -94,6 +97,7 @@ pub const GOOGLEDRIVE: Service = Service {
     default_client_secret: "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",
     redirect_ports: &[], // 데스크톱 클라이언트는 루프백 임의 포트 허용
     redirect_slash: true,
+    me_post: false,
 };
 /// Dropbox — 앱 등록 **무료**. 개발 상태는 최대 500명이나 **50명 연결 시 2주 내
 /// 프로덕션 승인 신청**이 필요하다(심사 무료).
@@ -105,7 +109,9 @@ pub const DROPBOX: Service = Service {
     // 쓰기 슬라이스(X-37 4차) 이후 업로드·삭제·이름 변경·폴더 생성을 하므로
     // **write 스코프가 필수**다(읽기 전용만 요청하면 API가 403으로 거절 — 08-01).
     scope: "files.metadata.write files.metadata.read files.content.write files.content.read account_info.read",
-    me_url: "", // Dropbox는 POST 전용이라 1차 생략(라벨 = 서비스명 + 연결 시각)
+    // Dropbox RPC는 **POST 전용**이라 me_post로 호출한다(08-01 QA: 계정을 못 받아
+    // 라벨이 "Dropbox – account"가 되고, 계정 빈 값 때문에 내 PC에서도 누락됐다).
+    me_url: "https://api.dropboxapi.com/2/users/get_current_account",
     // SosomLab 등록 App key/secret(사용자 제공 08-01 — Google과 같은 동봉 방침)
     default_client_id: "ofcq452qsemy4cb",
     default_client_secret: "ksl2usd747tfgut",
@@ -113,6 +119,7 @@ pub const DROPBOX: Service = Service {
     // 앞에서부터 시도해 비어 있는 첫 포트를 쓴다(다중 실행·잔여 소켓 대비 3개).
     redirect_ports: &[53682, 53683, 53684],
     redirect_slash: false,
+    me_post: true,
 };
 
 /// 지원 서비스 전체(Connect Cloud 메뉴 순서).
@@ -445,7 +452,14 @@ impl AuthSession {
             return Err(AuthError::Exchange(msg));
         }
         if !self.svc.me_url.is_empty() {
-            if let Ok(me) = http_get(self.svc.me_url, &t.access) {
+            // Dropbox RPC는 인자 없는 POST(본문·Content-Type 모두 없어야 한다 —
+            // 빈 본문에 application/json을 붙이면 400을 돌려준다).
+            let me = if self.svc.me_post {
+                http_post_bearer(self.svc.me_url, &t.access)
+            } else {
+                http_get(self.svc.me_url, &t.access)
+            };
+            if let Ok(me) = me {
                 // 서비스마다 키가 다르다: Graph = userPrincipalName/mail,
                 // Google Drive about = emailAddress, 기타 = email/displayName.
                 t.account = json_str(&me, "userPrincipalName")
@@ -710,6 +724,25 @@ pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
         .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
+/// 인자 없는 **POST**(Dropbox RPC — `users/get_current_account` 등).
+/// 본문도 Content-Type도 붙이지 않는다: Dropbox는 빈 본문에 `application/json`을
+/// 얹으면 400을 돌려준다.
+#[cfg(windows)]
+pub fn http_post_bearer(url: &str, bearer: &str) -> Result<String, String> {
+    winhttp_request(
+        url,
+        "POST",
+        None,
+        None,
+        "",
+        Some(bearer),
+        TEXT_LIMIT,
+        None,
+        None,
+    )
+    .map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
 /// GET → **원본 바이트**(X-37 3차 다운로드 — 이진 파일 무손상).
 /// `bearer`가 `None`이면 인증 헤더를 붙이지 않는다 — Graph의 `downloadUrl`은
 /// **사전 인증된 URL**이라 Authorization을 함께 보내면 거부될 수 있다.
@@ -844,6 +877,10 @@ pub fn http_post_form(_url: &str, _body: &str) -> Result<String, String> {
 }
 #[cfg(not(windows))]
 pub fn http_get(_url: &str, _bearer: &str) -> Result<String, String> {
+    Err("windows only".into())
+}
+#[cfg(not(windows))]
+pub fn http_post_bearer(_url: &str, _bearer: &str) -> Result<String, String> {
     Err("windows only".into())
 }
 

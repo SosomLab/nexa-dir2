@@ -4616,11 +4616,13 @@ unsafe fn on_cloud_auth(hwnd: HWND, st: &mut State, res: CloudAuthResult) {
         account.clone()
     };
     let label = format!("{} – {}", res.display, who).replace('|', "/");
-    // 같은 종류+계정이 이미 있으면 갱신(재인증 — 중복 행 방지)
+    // 같은 종류+계정이 이미 있으면 갱신(재인증 — 중복 행 방지). 계정을 못 받아
+    // 비어 있던 기존 연결도 같은 종류면 흡수한다(08-01 Dropbox — 안 그러면 계정
+    // 조회가 고쳐진 뒤 재연결할 때 빈 계정 행이 유령으로 남는다).
     let idx = st
         .cloud_conns
         .iter()
-        .position(|c| c.kind == res.kind && c.account == account && c.is_api())
+        .position(|c| c.kind == res.kind && c.is_api() && (c.account == account || c.account.is_empty()))
         .unwrap_or_else(|| {
             st.cloud_conns.push(config::CloudConn {
                 kind: res.kind.into(),
@@ -4631,6 +4633,7 @@ unsafe fn on_cloud_auth(hwnd: HWND, st: &mut State, res: CloudAuthResult) {
             st.cloud_conns.len() - 1
         });
     st.cloud_conns[idx].label = label;
+    st.cloud_conns[idx].account = account; // 빈 계정 행 흡수 시 채워 넣기
     if !crate::secret::save_token(idx, &refresh) {
         // 토큰 보관 실패 = 재시작 시 재로그인 필요(연결 자체는 유지·안내만)
         update_title(hwnd, st, &format!(" · {}", tr("cloud.err.tokenSave")));
