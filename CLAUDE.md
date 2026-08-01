@@ -35,6 +35,7 @@
 
 - **맥 = 일상 개발**: `cargo test`(코어) + `cargo check --target x86_64-pc-windows-msvc`(**UI 코드까지 타입 검증** — WinUI 시절과 달리 가능).
 - **Windows PC/CI = 실행·QA·예산 실측**. CI(windows-latest)가 실행 신뢰 원천.
+- **비Windows 경로도 반드시 검사**(08-02 교훈 — core 잡이 07-27부터 일주일 넘게 붉었다): Windows `cargo test`가 green이어도 cfg 소거 경로는 미검증 → `cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu`([docs/18 §2·§4](docs/18-build-and-test.md)).
 
 ## 5. 작업 규약
 
@@ -50,12 +51,13 @@
 
 1. 이 CLAUDE.md + [docs/STATUS.md](docs/STATUS.md) → 2. [DEVLOG](docs/DEVLOG.md) 최상단 + 최신 journal → 3. 할 일 = [docs/TODO.md](docs/TODO.md)(M0-1부터 순차).
 
-## 7. 다음 단계 (2026-07-24 갱신)
+## 7. 다음 단계 (2026-08-02 갱신)
 
-> M0~M5는 전부 완료(`0.1.0`~`0.6.0`), 이후 포스트 M5 UX 고도화로 `0.11.0`까지 릴리스됨.
+> M0~M5는 전부 완료(`0.1.0`~`0.6.0`), 이후 포스트 M5 UX 고도화로 `0.13.0`까지 릴리스됨.
 > 아래는 **지금 열려 있는 것**만. 최신 현황은 항상 [docs/STATUS.md](docs/STATUS.md).
 
 1. **실기 QA 잔여분 소화** — 사용자 QA가 병목. 새 기능보다 우선.
 2. **배포 채널 심사 대기 4건**(우리 측 조치 불요·상태만 추적 — 08-02 기준): winget Portable 0.13.0(#410978 제출) · winget 설치형(#404528 — `Needs-Author-Feedback` 해제됨, `Policy-Test-1.2` waiver = 모더레이터 몫) · Chocolatey 2종(**큐 대기가 아니라 07-20 바이러스 스캔 플래그** — 무서명 exe 오탐, 모더레이터 면제 필요). 승인 시 `CHOCO_PUSH` 스위치를 켜 후속 버전 재개. → [21 §7·§8](docs/21-distribution.md)
-3. **백로그 진행** — [docs/TODO.md](docs/TODO.md) §7: X-11 원본 패리티 갭 건별([19](docs/19-parity-gap.md)) · X-2 플러그인(wasmi 전환 완료 — 잔여 콤보·핫 리로드) · X-16 최적화 잔여 · X-13 2/2.
-4. **X-33 macOS·Linux 확장** — 검토 완료([23](docs/23-cross-platform-feasibility.md)), **착수 여부는 사용자 결정 대기**. 진행 시 다음 액션 = 맥 렌더 스파이크(결정 아님) + DR-1/2/8 개정 ADR-0005.
+3. **클라우드 배포 선행 조건 3건**(X-37 잔여 = 코드 아님·본인 사용은 무관 — [ADR-0006 §2-4-1](docs/27-adr-0006-cloud-oauth.md)): Dropbox 프로덕션 승인(무료·수일 — 가장 쉽고 효과 큼) · Entra 게시자 확인(조직 계정 동의 차단 해소 — 커스텀 도메인 필요) · Google CASA(보류 — 프로덕션 게시로 7일 만료만 제거하는 절충 가능).
+4. **백로그 진행** — [docs/TODO.md](docs/TODO.md) §7: X-11 원본 패리티 갭 건별([19](docs/19-parity-gap.md)) · X-2 플러그인(wasmi 전환 완료 — 잔여 콤보·핫 리로드) · X-16 최적화 잔여 · X-13 2/2.
+5. **X-33 macOS·Linux 확장** — 검토 완료([23](docs/23-cross-platform-feasibility.md)), **착수 여부는 사용자 결정 대기**. 진행 시 다음 액션 = 맥 렌더 스파이크(결정 아님) + DR-1/2/8 개정 ADR(신규 번호 = ADR-0007).

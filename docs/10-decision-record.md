@@ -13,7 +13,7 @@
 | **DR-4** | 코어 재사용 | 원본 `nexa-core`/`nexa-vfs`/`nexa-tree`를 **rlib 직접 링크로 이식**(cdylib/C ABI/ABI 버전 폐지). 의미 변경은 새 ADR | 원본 ADR-0004 계승 |
 | **DR-5** | UX/디자인 | 원본 **M1 기능 패리티** 목표. 디자인 규약(프로툴 고밀도·다크 기본·키보드 우선·원본 docs/39 테마 토큰) 계승 | 원본 DR-2 계승 |
 | **DR-6** | 라이선스 | 본체 **PolyForm Noncommercial 1.0.0**(개인무료/상업유료) · 의존성 **퍼미시브 온리**(GPL/AGPL 금지) | 원본 DR-5·의존성 정책 계승 |
-| **DR-7** | 플러그인/미리보기 | **개정(2026-07-14, 사용자)**: .NET SDK 비이관은 유지하되 **Starlark 임베드 플러그인 도입**(미리보기 확장 — 예: EXIF. 선언 EXTS+설정 매핑+다중 매치 콤보). 내장(텍스트/WIC 이미지)은 폴백 존치. WASM은 계속 보류 | → [ADR-0004](09-adr-0004-preview-plugins.md) |
+| **DR-7** | 플러그인/미리보기 | **재개정(2026-07-26, 사용자 — [ADR-0005](25-adr-0005-wasm-plugins.md))**: 런타임 = **WASM(wasmi)** — `data\plugins\*.wasm` 단일 아티팩트·fuel/메모리 격리. 시임·설정 매핑·독립 창 계약은 유지. ~~개정(2026-07-14): Starlark 임베드~~(실구축 후 교체 — 표현력 병목·크로스플랫폼 정합). .NET SDK 비이관과 내장(텍스트/WIC 이미지) 폴백 존치는 초판 그대로 | → [ADR-0004](09-adr-0004-preview-plugins.md)(시임·매핑) · [ADR-0005](25-adr-0005-wasm-plugins.md)(런타임) |
 | **DR-8** | 외부 crate | 기본 0 지향. 추가는 건별 기록(§2) + 예산 영향 평가. `windows`/`windows-sys`는 승인 | [05 §3 C3](05-requirements.md) |
 
 ### 1-1. ADR 색인
@@ -23,7 +23,9 @@
 | **ADR-0001** | 스택 — 올 러스트 + Win32 + 커스텀 드로잉 | **Accepted** | [06](06-adr-0001-stack.md) |
 | **ADR-0002** | 텍스트 렌더링 — **DirectWrite GDI interop 채택**(실측: 벤치 −28%·RSS +4.1MB 예산 내·TextLayout 확장성) | **Accepted** | [07](07-adr-0002-rendering.md) |
 | **ADR-0003** | 셸 컨텍스트 메뉴 — 클래식 IContextMenu 호스팅(원본 ADR-0005 계승·자기 wndproc 포워딩) | **Accepted** | [08](08-adr-0003-shell-context-menu.md) |
-| **ADR-0004** | 미리보기 플러그인 — **Starlark 임베드**(DR-7 개정·선언 EXTS+설정 매핑+공급자 콤보) | **Accepted** | [09](09-adr-0004-preview-plugins.md) |
+| **ADR-0004** | 미리보기 플러그인 — 시임·선언 EXTS+설정 매핑+공급자 콤보(DR-7 개정) | **Accepted** — 단, **런타임 결정은 ADR-0005로 대체**(Starlark → wasmi) | [09](09-adr-0004-preview-plugins.md) |
+| **ADR-0005** | 플러그인 런타임 — **wasmi 채택**(`.wasm` 단일 아티팩트·fuel/메모리 격리·크로스플랫폼 정합. wasmtime JIT = B2 초과로 기각) | **Accepted** | [25](25-adr-0005-wasm-plugins.md) |
+| **ADR-0006** | 클라우드 직접 연결 인증 — **OAuth2 PKCE + 루프백 리디렉션 + WinHTTP + DPAPI 토큰 보관**(DR-2 B3 화이트리스트 +4 개정 동반) | **Accepted** | [27](27-adr-0006-cloud-oauth.md) |
 
 ### 1-2. 승인된 외부 crate (DR-8 원장, append)
 
@@ -44,6 +46,9 @@
 
 ## 3. 다음 단계
 
-1. M0 스캐폴딩 — 워크스페이스·코어 3크레이트 이식·Win32 창 스파이크·CI. → [02](02-roadmap.md)
-2. M0 종료 게이트: 빈 창 RSS/exe 크기/임포트 실측 → ADR-0001 확증.
-3. ADR-0002(렌더링) 확정 후 M1 뷰어 착수.
+> **이 절은 확정일(07-11) 시점의 M0 착수 계획이었다.** M0~M5는 전부 완료(`0.1.0`~`0.6.0`)됐고
+> 이후 포스트 M5로 `0.13.0`까지 배포됐다 — **현재 진행 상태는 [STATUS](STATUS.md) §5**,
+> 순차 백로그는 [TODO](TODO.md)가 원천이다(이 문서는 결정 기록 SSOT이지 진행 기록이 아니다).
+
+1. ~~M0 스캐폴딩~~ ✅ · ~~M0 종료 게이트(빈 창 RSS/exe/임포트 → ADR-0001 확증)~~ ✅ · ~~ADR-0002 확정 후 M1 착수~~ ✅.
+2. 열려 있는 결정 = **X-33 크로스 플랫폼**(착수 시 DR-1/2/8 개정 ADR 필요 — [23](23-cross-platform-feasibility.md)) · **X-15 오프라인 라이선스**(착수 시 ADR) · **MSIX 재검토**([12 §4-1](12-packaging-single-exe.md) — 무서명 경고를 없애는 유일 경로).
