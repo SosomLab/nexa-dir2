@@ -658,6 +658,7 @@ pub fn http_post_form(url: &str, body: &str) -> Result<String, String> {
         "",
         None,
         TEXT_LIMIT,
+        None,
     )
     .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
@@ -665,7 +666,7 @@ pub fn http_post_form(url: &str, body: &str) -> Result<String, String> {
 /// Bearer GET → 응답 본문(UTF-8).
 #[cfg(windows)]
 pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
-    winhttp_request(url, "GET", None, None, "", Some(bearer), TEXT_LIMIT)
+    winhttp_request(url, "GET", None, None, "", Some(bearer), TEXT_LIMIT, None)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
@@ -673,8 +674,30 @@ pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
 /// `bearer`가 `None`이면 인증 헤더를 붙이지 않는다 — Graph의 `downloadUrl`은
 /// **사전 인증된 URL**이라 Authorization을 함께 보내면 거부될 수 있다.
 #[cfg(windows)]
+#[allow(dead_code)] // 진행 통지 없는 단순 GET — Dropbox content API 등 후속 사용처 대비
 pub fn http_get_bytes(url: &str, bearer: Option<&str>, limit: usize) -> Result<Vec<u8>, String> {
-    winhttp_request(url, "GET", None, None, "", bearer, limit)
+    winhttp_request(url, "GET", None, None, "", bearer, limit, None)
+}
+
+/// 진행 통지가 붙은 GET(X-37 진행률) — 콜백이 `false`를 돌리면 [`CANCELLED`] 오류.
+#[cfg(windows)]
+pub fn http_get_bytes_progress(
+    url: &str,
+    bearer: Option<&str>,
+    limit: usize,
+    on_progress: &mut dyn FnMut(u64, u64) -> bool,
+) -> Result<Vec<u8>, String> {
+    winhttp_request(url, "GET", None, None, "", bearer, limit, Some(on_progress))
+}
+
+#[cfg(not(windows))]
+pub fn http_get_bytes_progress(
+    _u: &str,
+    _b: Option<&str>,
+    _l: usize,
+    _p: &mut dyn FnMut(u64, u64) -> bool,
+) -> Result<Vec<u8>, String> {
+    Err("windows only".into())
 }
 
 /// 임의 메서드 + 바이너리/JSON 본문(X-37 4차 쓰기 — PUT/POST/PATCH/DELETE).
@@ -688,7 +711,7 @@ pub fn http_send(
     extra: &str,
     bearer: Option<&str>,
 ) -> Result<String, String> {
-    winhttp_request(url, method, body, content_type, extra, bearer, TEXT_LIMIT)
+    winhttp_request(url, method, body, content_type, extra, bearer, TEXT_LIMIT, None)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
@@ -703,7 +726,7 @@ pub fn http_send_bytes(
     bearer: Option<&str>,
     limit: usize,
 ) -> Result<Vec<u8>, String> {
-    winhttp_request(url, method, body, content_type, extra, bearer, limit)
+    winhttp_request(url, method, body, content_type, extra, bearer, limit, None)
 }
 
 #[cfg(not(windows))]
@@ -737,6 +760,9 @@ pub fn http_get_bytes(_u: &str, _b: Option<&str>, _l: usize) -> Result<Vec<u8>, 
     Err("windows only".into())
 }
 
+/// 사용자 취소를 나타내는 오류 문자열(호출자가 실패와 구분해 조용히 마감).
+pub const CANCELLED: &str = "__nexa_cancelled__";
+
 /// 텍스트 응답(토큰·JSON 메타) 상한 — 폭주 방어.
 #[cfg(windows)]
 const TEXT_LIMIT: usize = 8 * 1024 * 1024;
@@ -751,6 +777,7 @@ pub fn http_get(_url: &str, _bearer: &str) -> Result<String, String> {
 }
 
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn winhttp_request(
     url: &str,
     method: &str,
@@ -759,13 +786,16 @@ fn winhttp_request(
     extra_headers: &str,
     bearer: Option<&str>,
     limit: usize,
+    // 청크마다 (누적 바이트, 전체 바이트[0=미상])을 통지. `false` 반환 = 취소.
+    on_progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
 ) -> Result<Vec<u8>, String> {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Networking::WinHttp::{
         WinHttpConnect, WinHttpCrackUrl, WinHttpOpen, WinHttpOpenRequest,
         WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
         WinHttpSendRequest, URL_COMPONENTS, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-        WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+        WINHTTP_FLAG_SECURE, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_QUERY_STATUS_CODE,
     };
     unsafe {
         let wurl = HSTRING::from(url);
@@ -850,6 +880,25 @@ fn winhttp_request(
             &mut sz,
             std::ptr::null_mut(),
         );
+        // 전체 크기(Content-Length) — 없으면 0(진행률은 불확정 표시)
+        let mut total: u64 = 0;
+        {
+            let mut clen: u32 = 0;
+            let mut csz = std::mem::size_of::<u32>() as u32;
+            if WinHttpQueryHeaders(
+                req,
+                WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                PCWSTR::null(),
+                Some(&mut clen as *mut u32 as *mut core::ffi::c_void),
+                &mut csz,
+                std::ptr::null_mut(),
+            )
+            .is_ok()
+            {
+                total = clen as u64;
+            }
+        }
+        let mut progress = on_progress;
         let mut out = Vec::new();
         loop {
             let mut avail = 0u32;
@@ -872,6 +921,11 @@ fn winhttp_request(
             out.extend_from_slice(&chunk);
             if out.len() > limit {
                 return Err("response too large".into()); // 상한 초과 = 명시 실패
+            }
+            if let Some(cb) = progress.as_deref_mut() {
+                if !cb(out.len() as u64, total) {
+                    return Err(CANCELLED.into()); // 사용자 취소 — 호출자가 식별
+                }
             }
         }
         drop((rguard, cguard, guard));

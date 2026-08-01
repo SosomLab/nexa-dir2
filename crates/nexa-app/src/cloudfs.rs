@@ -277,6 +277,9 @@ pub struct DownloadItem {
     pub is_dir: bool,
 }
 
+/// 전송 진행 공유 상태(로컬 복사와 **같은 구조·같은 진행 창**을 쓴다 — 사용자 확정).
+pub type Shared = std::sync::Arc<crate::win::TransferShared>;
+
 /// 다운로드 완료 통지(WM_APP_CLOUD_DOWNLOAD lparam — 수신 측이 Box 회수).
 pub struct DownloadResult {
     /// 성공한 로컬 경로들(열기·재로드 대상).
@@ -294,6 +297,7 @@ pub fn start_download(
     items: Vec<DownloadItem>,
     conn: ConnInfo,
     open_after: bool,
+    shared: Shared,
 ) {
     std::thread::spawn(move || {
         let mut done = Vec::new();
@@ -322,10 +326,41 @@ pub fn start_download(
                     }
                 }
                 if err.is_empty() {
-                    for it in &flat {
-                        match download_one(idx, &conn, &access, it) {
-                            Ok(()) => done.push(it.dest.clone()),
+                    // 세그먼트 초기화(파일 수 기준 — 크기는 받으면서 채운다)
+                    *crate::win::plock(&shared.items) = flat
+                        .iter()
+                        .map(|_| crate::dialog::SegItem {
+                            size: 0,
+                            done: 0,
+                            status: crate::dialog::SegStatus::Pending,
+                        })
+                        .collect();
+                    let mut base: u64 = 0;
+                    for (i, it) in flat.iter().enumerate() {
+                        if shared.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            err = oauth::CANCELLED.into();
+                            break;
+                        }
+                        if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                            sg.status = crate::dialog::SegStatus::Active;
+                        }
+                        match download_one(idx, &conn, &access, it, &shared, base, hwnd_raw) {
+                            Ok(got) => {
+                                base += got;
+                                shared
+                                    .done_bytes
+                                    .store(base, std::sync::atomic::Ordering::Relaxed);
+                                if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                                    sg.size = got;
+                                    sg.done = got;
+                                    sg.status = crate::dialog::SegStatus::Done;
+                                }
+                                done.push(it.dest.clone());
+                            }
                             Err(e) => {
+                                if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                                    sg.status = crate::dialog::SegStatus::Failed;
+                                }
                                 err = e;
                                 break; // 첫 실패에서 중단(부분 결과는 done에 남는다)
                             }
@@ -352,12 +387,30 @@ fn token_for(conn: &ConnInfo) -> Result<String, String> {
 }
 
 /// 항목 1개 다운로드 → 로컬 파일 기록(원자적: 임시 파일 → rename).
+#[allow(clippy::too_many_arguments)]
 fn download_one(
     idx: usize,
     conn: &ConnInfo,
     access: &str,
     it: &DownloadItem,
-) -> Result<(), String> {
+    shared: &Shared,
+    base: u64,
+    hwnd_raw: isize,
+) -> Result<u64, String> {
+    use std::sync::atomic::Ordering;
+    // 청크마다 누적 바이트 갱신 + 진행 창 통지(스로틀 없이도 저빈도 — 청크가 크다)
+    let mut on_prog = |got: u64, total: u64| -> bool {
+        if shared.cancel.load(Ordering::Relaxed) {
+            return false; // 취소 — HTTP 계층이 CANCELLED로 중단
+        }
+        shared.done_bytes.store(base + got, Ordering::Relaxed);
+        if total > 0 {
+            let cur = shared.total_bytes.load(Ordering::Relaxed);
+            shared.total_bytes.store(cur.max(base + total), Ordering::Relaxed);
+        }
+        crate::win::post_cloud_progress(hwnd_raw);
+        true
+    };
     let bytes = match conn.kind.as_str() {
         "onedrive" => {
             // 사전 인증 downloadUrl을 먼저 받고, 그 URL에는 **인증 헤더를 붙이지 않는다**
@@ -377,14 +430,15 @@ fn download_one(
             )?;
             let url = oauth::json_str(&meta, "@microsoft.graph.downloadUrl")
                 .ok_or("no downloadUrl")?;
-            oauth::http_get_bytes(&url, None, DOWNLOAD_LIMIT)?
+            oauth::http_get_bytes_progress(&url, None, DOWNLOAD_LIMIT, &mut on_prog)?
         }
         "googledrive" => {
             let id = id_get(idx, &it.inner).ok_or("file id unknown — 목록을 새로 고치세요")?;
-            oauth::http_get_bytes(
+            oauth::http_get_bytes_progress(
                 &format!("https://www.googleapis.com/drive/v3/files/{id}?alt=media"),
                 Some(access),
                 DOWNLOAD_LIMIT,
+                &mut on_prog,
             )?
         }
         "dropbox" => {
@@ -405,12 +459,14 @@ fn download_one(
     if let Some(dir) = it.dest.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
+    let n = bytes.len() as u64;
     let tmp = it.dest.with_extension("nexadl.part");
     std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &it.dest).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         e.to_string()
-    })
+    })?;
+    Ok(n)
 }
 
 // ── 쓰기(X-37 4차 — Files.ReadWrite scope 필요·재로그인 전제) ─────────────────
@@ -449,17 +505,53 @@ pub struct WriteResult {
 }
 
 /// 쓰기 시작(비동기 — 워커). 완료 시 `WM_APP_CLOUD_WRITE` 통지 + 캐시 무효화.
-pub fn start_write(hwnd_raw: isize, idx: usize, ops: Vec<WriteOp>, conn: ConnInfo) {
+pub fn start_write(
+    hwnd_raw: isize,
+    idx: usize,
+    ops: Vec<WriteOp>,
+    conn: ConnInfo,
+    shared: Shared,
+) {
     std::thread::spawn(move || {
+        use std::sync::atomic::Ordering;
         let mut done = 0usize;
         let mut err = String::new();
+        // 세그먼트 = 작업 건수(바이트 총량은 업로드 시 파일 크기로 누적)
+        *crate::win::plock(&shared.items) = ops
+            .iter()
+            .map(|_| crate::dialog::SegItem {
+                size: 1,
+                done: 0,
+                status: crate::dialog::SegStatus::Pending,
+            })
+            .collect();
         match token_for(&conn) {
             Err(e) => err = e,
             Ok(access) => {
-                for op in &ops {
+                for (i, op) in ops.iter().enumerate() {
+                    if shared.cancel.load(Ordering::Relaxed) {
+                        err = oauth::CANCELLED.into();
+                        break;
+                    }
+                    if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                        sg.status = crate::dialog::SegStatus::Active;
+                    }
+                    crate::win::post_cloud_progress(hwnd_raw);
                     match apply_write(idx, &conn, &access, op) {
-                        Ok(()) => done += 1,
+                        Ok(()) => {
+                            done += 1;
+                            if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                                sg.done = 1;
+                                sg.status = crate::dialog::SegStatus::Done;
+                            }
+                            shared.done_bytes.store(done as u64, Ordering::Relaxed);
+                            shared.total_bytes.store(ops.len() as u64, Ordering::Relaxed);
+                            crate::win::post_cloud_progress(hwnd_raw);
+                        }
                         Err(e) => {
+                            if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                                sg.status = crate::dialog::SegStatus::Failed;
+                            }
                             err = e;
                             break;
                         }

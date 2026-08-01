@@ -64,6 +64,7 @@ cloud.err.exchange = 토큰 교환에 실패했습니다
 cloud.err.tokenSave = 연결됨 — 다만 토큰을 저장하지 못해 다시 로그인이 필요합니다
 cloud.err.full = 클라우드 연결이 너무 많습니다
 cloud.readonly = 클라우드 연결은 현재 읽기 전용입니다 — 업로드·삭제·이름 변경은 아직 지원하지 않습니다
+cloud.progressLabel = 클라우드와 전송 중…
 cloud.downloading = 클라우드에서 {0}개 파일 내려받는 중…
 cloud.downloaded = {0}개 파일 내려받음
 cloud.err.noToken = 로그인 정보가 없습니다 — 이 클라우드를 다시 연결하세요

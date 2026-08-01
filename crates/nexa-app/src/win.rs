@@ -138,6 +138,8 @@ pub(crate) fn post_cloud_list(hwnd_raw: isize, payload: isize) {
 
 /// 클라우드 쓰기 완료(X-37 4차) — lparam = Box<cloudfs::WriteResult>.
 const WM_APP_CLOUD_WRITE: u32 = 0x8011;
+/// 클라우드 전송 진행 틱(X-37 — 진행 창 갱신. 페이로드 없음).
+const WM_APP_CLOUD_PROGRESS: u32 = 0x8012;
 
 /// 클라우드 다운로드 워커 → UI 통지.
 pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
@@ -147,6 +149,15 @@ pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
 /// 클라우드 쓰기 워커 → UI 통지.
 pub(crate) fn post_cloud_write(hwnd_raw: isize, payload: isize) {
     post_final_notify(hwnd_raw, WM_APP_CLOUD_WRITE, 0, payload);
+}
+
+/// 클라우드 전송 진행 틱(X-37 — 로컬 복사와 같은 진행 창 갱신).
+/// 진행 통지는 **유실돼도 다음 틱이 덮으므로** 단발 게시(종결 통지만 재시도).
+pub(crate) fn post_cloud_progress(hwnd_raw: isize) {
+    unsafe {
+        let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+        let _ = PostMessageW(Some(hwnd), WM_APP_CLOUD_PROGRESS, WPARAM(0), LPARAM(0));
+    }
 }
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
@@ -723,6 +734,10 @@ struct State {
     cloud_client_ids: Vec<(String, String)>,
     /// 서비스별 client_secret(Google 전용 — 데스크톱 앱도 토큰 교환 시 요구).
     cloud_client_secrets: Vec<(String, String)>,
+    /// 클라우드 전송 진행 창(X-37 — 로컬 복사와 **같은 위젯**을 재사용).
+    cloud_progress: Option<crate::dialog::Progress>,
+    /// 그 전송의 공유 상태(워커가 바이트·세그먼트를 갱신, UI가 읽는다).
+    cloud_shared: Option<Arc<TransferShared>>,
     /// 폰트 슬롯(X-12): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
     base_font: String,
     base_font_size: i32,
@@ -933,13 +948,13 @@ impl TermState {
 }
 
 /// 전송 워커와 UI 스레드가 공유하는 상태(원자/뮤텍스 — 워커는 State 접근 금지).
-struct TransferShared {
-    cancel: AtomicBool,
-    done_bytes: AtomicU64,
-    total_bytes: AtomicU64,
+pub(crate) struct TransferShared {
+    pub(crate) cancel: AtomicBool,
+    pub(crate) done_bytes: AtomicU64,
+    pub(crate) total_bytes: AtomicU64,
     outcome: Mutex<Option<nexa_ops::Outcome>>,
     /// 항목별 세그먼트 진행(07-21 — Plan 수신 시 고정 길이로 채워짐. 진행 창 표시용).
-    items: Mutex<Vec<crate::dialog::SegItem>>,
+    pub(crate) items: Mutex<Vec<crate::dialog::SegItem>>,
     /// 현재 쓰는 중인 대상 경로(07-21) — 완료 전 더블클릭 실행/드래그 이동 차단.
     in_flight: Mutex<Option<PathBuf>>,
 }
@@ -1243,6 +1258,8 @@ pub fn run() -> Result<()> {
         cloud_cands,
         cloud_client_ids: settings.cloud_client_ids.clone(),
         cloud_client_secrets: settings.cloud_client_secrets.clone(),
+        cloud_progress: None,
+        cloud_shared: None,
         base_font: settings.base_font.clone(),
         base_font_size: settings.base_font_size,
         ctx_font: settings.ctx_font.clone(),
@@ -3230,14 +3247,76 @@ unsafe fn start_cloud_download(
     };
     let n = items.len().to_string();
     update_title(hwnd, st, &format!(" · {}", trf("cloud.downloading", &[&n])));
+    // 로컬 복사와 **같은 진행 창**(세그먼트 바·취소) 재사용 — 사용자 확정 08-01.
+    // 임시 폴더 다운로드(더블클릭 열기)는 보통 순식간이라 창을 띄우지 않는다.
+    let shared = Arc::new(TransferShared {
+        cancel: AtomicBool::new(false),
+        done_bytes: AtomicU64::new(0),
+        total_bytes: AtomicU64::new(0),
+        outcome: Mutex::new(None),
+        items: Mutex::new(Vec::new()),
+        in_flight: Mutex::new(None),
+    });
+    if dest_dir.is_some() && st.transfer_close_ms > 0 {
+        st.cloud_progress = crate::dialog::Progress::open(
+            hwnd,
+            &tr("ops.progressTitle"),
+            &tr("cloud.progressLabel"),
+            &st.dlg_font,
+        );
+    }
+    st.cloud_shared = Some(shared.clone());
     crate::cloudfs::start_download(
         hwnd.0 as isize,
         idx,
         items,
         conn,
         dest_dir.is_none(), // 임시 폴더 = 받은 뒤 열기
+        shared,
     );
     true
+}
+
+/// 클라우드 전송 진행 창 갱신(WM_APP_CLOUD_PROGRESS) — 취소 폴링 포함.
+unsafe fn on_cloud_progress(hwnd: HWND, st: &mut State) {
+    let Some(shared) = st.cloud_shared.clone() else {
+        return;
+    };
+    let (d, t) = (
+        shared.done_bytes.load(Ordering::Relaxed),
+        shared.total_bytes.load(Ordering::Relaxed),
+    );
+    if let Some(p) = &mut st.cloud_progress {
+        let items = plock(&shared.items).clone();
+        let count = items.len();
+        let cur = items
+            .iter()
+            .position(|i| i.status == crate::dialog::SegStatus::Active)
+            .map(|i| i + 1)
+            .unwrap_or_else(|| {
+                items
+                    .iter()
+                    .filter(|i| i.status != crate::dialog::SegStatus::Pending)
+                    .count()
+            });
+        p.update(d, t, items, cur, count);
+        if p.cancelled() {
+            shared.cancel.store(true, Ordering::Relaxed); // 워커가 청크 사이에서 감지
+        }
+    }
+    let pct = (d * 100).checked_div(t).unwrap_or(0);
+    update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &[&pct.to_string()])));
+}
+
+/// 클라우드 전송 마감 — 진행 창을 완료 표기로 바꾸고 공유 상태 해제.
+unsafe fn finish_cloud_progress(hwnd: HWND, st: &mut State, note: &str) {
+    st.cloud_shared = None;
+    if let Some(mut p) = st.cloud_progress.take() {
+        let ms = st.transfer_close_ms.max(1);
+        p.set_done(note, ms);
+        st.transfer_close = Some(p); // 기존 카운트다운 슬롯 재사용
+        SetTimer(Some(hwnd), TIMER_PROG_CLOSE, ms as u32 + 500, None);
+    }
 }
 
 /// 클라우드 쓰기 작업 시작(X-37 4차) — 업로드·삭제·이름 변경·새 폴더 공용.
@@ -3258,7 +3337,25 @@ unsafe fn start_cloud_write(
     };
     let n = ops.len().to_string();
     update_title(hwnd, st, &format!(" · {}", trf(busy_key, &[&n])));
-    crate::cloudfs::start_write(hwnd.0 as isize, idx, ops, conn);
+    // 업로드·복사도 같은 진행 창(세그먼트 = 작업 건수 — 바이트는 업로드 청크가 보고)
+    let shared = Arc::new(TransferShared {
+        cancel: AtomicBool::new(false),
+        done_bytes: AtomicU64::new(0),
+        total_bytes: AtomicU64::new(0),
+        outcome: Mutex::new(None),
+        items: Mutex::new(Vec::new()),
+        in_flight: Mutex::new(None),
+    });
+    if st.transfer_close_ms > 0 {
+        st.cloud_progress = crate::dialog::Progress::open(
+            hwnd,
+            &tr("ops.progressTitle"),
+            &tr("cloud.progressLabel"),
+            &st.dlg_font,
+        );
+    }
+    st.cloud_shared = Some(shared.clone());
+    crate::cloudfs::start_write(hwnd.0 as isize, idx, ops, conn, shared);
     true
 }
 
@@ -6787,6 +6884,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        // 클라우드 전송 진행 틱(X-37) — 진행 창 갱신 + 취소 폴링
+        m if m == WM_APP_CLOUD_PROGRESS => {
+            if let Some(st) = state_of(hwnd) {
+                on_cloud_progress(hwnd, st);
+            }
+            LRESULT(0)
+        }
         // 클라우드 다운로드 완료(X-37 3차) — 열기 요청이면 연결 프로그램 실행,
         // 아니면 대상 폴더를 보고 있는 패널만 재로드.
         m if m == WM_APP_CLOUD_DOWNLOAD => {
@@ -6809,15 +6913,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     } else {
                         reload_both(hwnd, st, "");
                     }
-                    let note = if !res.err.is_empty() {
-                        format!(" · {}", res.err)
+                    let done_txt = if res.err == crate::oauth::CANCELLED {
+                        tr("ops.canceled")
+                    } else if !res.err.is_empty() {
+                        res.err
                     } else {
-                        format!(
-                            " · {}",
-                            trf("cloud.downloaded", &[&res.done.len().to_string()])
-                        )
+                        trf("cloud.downloaded", &[&res.done.len().to_string()])
                     };
-                    update_title(hwnd, st, &note);
+                    finish_cloud_progress(hwnd, st, &done_txt);
+                    update_title(hwnd, st, &format!(" · {done_txt}"));
                     update_status(hwnd, st);
                 }
             }
@@ -6842,11 +6946,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     flush_invalidations(hwnd, &mut inv);
                     let note = if res.err.is_empty() {
                         trf("cloud.writeDone", &[&res.done.to_string()])
+                    } else if res.err == crate::oauth::CANCELLED {
+                        tr("ops.canceled")
                     } else if res.err.contains("403") || res.err.contains("401") {
                         tr("cloud.err.reauth") // scope 상향 전 토큰 = 재연결 필요
                     } else {
                         res.err
                     };
+                    finish_cloud_progress(hwnd, st, &note);
                     update_title(hwnd, st, &format!(" · {note}"));
                     update_status(hwnd, st);
                 }

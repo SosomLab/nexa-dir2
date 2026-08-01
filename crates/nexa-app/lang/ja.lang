@@ -65,6 +65,7 @@ cloud.err.exchange = トークン交換に失敗しました
 cloud.err.tokenSave = 接続しましたが、トークンを保存できず再サインインが必要です
 cloud.err.full = クラウド接続が多すぎます
 cloud.readonly = クラウド接続は現在読み取り専用です — アップロード・削除・名前変更はまだ対応していません
+cloud.progressLabel = クラウドと転送中…
 cloud.downloading = クラウドから {0} 個のファイルをダウンロード中…
 cloud.downloaded = {0} 個のファイルをダウンロードしました
 cloud.err.noToken = サインイン情報がありません — このクラウドを再接続してください
