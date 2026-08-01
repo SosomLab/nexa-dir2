@@ -1307,6 +1307,10 @@ mod tests {
 
     /// 07-31 안정성 QA: 어떤 Windows 시스템에서도 시작 폴백이 루트 하나는 찾는다
     /// (C:\ 고정 expect의 기동 abort 대체 — S6).
+    ///
+    /// **Windows 한정** — 후보가 `C:\`·드라이브 문자·`%USERPROFILE%`뿐이라
+    /// 비Windows에서는 어느 것도 존재하지 않아 항상 `None`이다(08-02 CI).
+    #[cfg(windows)]
     #[test]
     fn open_any_root_finds_a_root() {
         assert!(open_any_root().is_some());

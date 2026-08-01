@@ -41,10 +41,14 @@ fn sample_wasm_plugin_end_to_end() {
         joined.contains("굵게") && !joined.contains("**굵게**"),
         "인라인 마커 정리"
     );
-    // Mermaid — flowchart: Windows = 이미지 마커(SVG→BMP), 비지원 = 텍스트 폴백
+    // Mermaid flowchart는 **3단 폴백**이다: Windows = 이미지 마커(SVG→BMP) →
+    // 아트 → 렌더 미지원 환경(호스트 render_svg 없음)에서는 **원문 모노 블록**.
+    // 종전 단언은 앞의 둘만 인정해 비Windows CI에서 실패했다(08-02).
     assert!(
-        joined.contains("\u{1}img|") || joined.contains('▼'),
-        "flowchart 이미지 마커/아트: {joined}"
+        joined.contains("\u{1}img|")     // 이미지
+            || joined.contains('▼')       // 아트
+            || joined.contains("graph TD"), // 원문 보존 폴백
+        "flowchart 이미지/아트/원문 폴백 중 하나: {joined}"
     );
     assert!(joined.contains("Client"), "sequence participant 별칭");
     assert!(joined.contains('▶') || joined.contains('◀'), "sequence 화살표");
