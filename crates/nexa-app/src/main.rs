@@ -28,7 +28,10 @@ mod oauth;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod secret;
 /// 클라우드 API 탐색 캐시·워커(X-37 2차 — ADR-0006 §3).
-#[cfg_attr(not(windows), allow(dead_code))]
+/// **Windows 전용** — 진행 창(`dialog`)·통지(`win`)와 직접 맞물려 있어 중립화 실익이
+/// 없다(08-02 CI: 비Windows 잡이 `crate::win`/`dialog` 미해석으로 실패했다).
+/// 소비자도 `win.rs` 하나뿐이라 `ctl`/`watcher`와 같은 게이팅으로 맞춘다.
+#[cfg(windows)]
 mod cloudfs;
 /// Win32 커스텀 컨트롤 라이브러리(사용자 요청 07-16 — searchbox 등).
 #[cfg(windows)]
