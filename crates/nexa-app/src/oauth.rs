@@ -62,7 +62,10 @@ pub const GOOGLEDRIVE: Service = Service {
     // 대가: 테스트 모드의 refresh 토큰은 **7일 후 만료**(재로그인 필요) — 공개 배포 시
     // CASA 감사 필요(ADR-0006 §2-4).
     scope: "https://www.googleapis.com/auth/drive",
-    me_url: "https://www.googleapis.com/oauth2/v3/userinfo",
+    // 계정 표시명은 **Drive API의 about**으로 얻는다 — `oauth2/v3/userinfo`는
+    // `openid`/`userinfo.email` scope를 따로 요구해 콘솔 설정이 늘어난다.
+    // `about?fields=user`는 이미 가진 `drive` scope만으로 emailAddress를 준다.
+    me_url: "https://www.googleapis.com/drive/v3/about?fields=user",
     // SosomLab 등록(08-01) — GCP 프로젝트 "Nexa Dir" 데스크톱 클라이언트.
     default_client_id: "976847412158-jds0ouedo18itg1fotcuoe0lc00b6oe8.apps.googleusercontent.com",
 };
@@ -366,11 +369,15 @@ impl AuthSession {
         }
         if !self.svc.me_url.is_empty() {
             if let Ok(me) = http_get(self.svc.me_url, &t.access) {
+                // 서비스마다 키가 다르다: Graph = userPrincipalName/mail,
+                // Google Drive about = emailAddress, 기타 = email/displayName.
                 t.account = json_str(&me, "userPrincipalName")
                     .or_else(|| json_str(&me, "mail"))
+                    .or_else(|| json_str(&me, "emailAddress"))
                     .or_else(|| json_str(&me, "email"))
                     .or_else(|| json_str(&me, "displayName"))
                     .or_else(|| json_str(&me, "name"))
+                    .filter(|s| !s.is_empty())
                     .unwrap_or_default();
             }
         }
