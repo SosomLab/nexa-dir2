@@ -269,6 +269,12 @@ impl Tree {
             for e in nexa_vfs::extra_root_entries() {
                 push(self, e, &mut ids);
             }
+        } else if let Some(entries) = nexa_vfs::cloud_entries(dir) {
+            // 클라우드 API 경로(X-37 2차) — 앱이 등록한 콜백이 캐시에서 제공.
+            // 로딩 중이면 빈 목록이고, 완료 통지가 재로드를 건다(네트워크는 워커 몫).
+            for e in entries {
+                push(self, e, &mut ids);
+            }
         } else {
             for entry in read_dir_entries(dir)? {
                 let Ok(e) = entry else { continue };

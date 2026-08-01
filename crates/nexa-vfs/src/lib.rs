@@ -140,6 +140,56 @@ pub trait Provider {
     fn scheme(&self) -> &str;
 }
 
+/// 클라우드 API 연결 경로의 **센티널 접두사**(X-37 2차 — ADR-0006 §3).
+/// 형식 = `::CLOUD:<연결 인덱스>::<클라우드 내부 경로>`
+/// (예: `::CLOUD:0::` = 그 연결의 루트 · `::CLOUD:0::/Documents`).
+/// [`MY_PC`]와 같은 규약 — 콜론은 파일명에 불가해 실경로와 충돌하지 않는다.
+pub const CLOUD_PREFIX: &str = "::CLOUD:";
+
+/// `path`가 클라우드 API 경로면 `(연결 인덱스, 내부 경로)`. 아니면 `None`.
+/// 내부 경로는 빈 문자열(루트) 또는 `/`로 시작하는 경로.
+pub fn cloud_parts(path: impl AsRef<Path>) -> Option<(usize, String)> {
+    let s = path.as_ref().to_str()?;
+    let rest = s.strip_prefix(CLOUD_PREFIX)?;
+    let (idx, tail) = rest.split_once("::")?;
+    Some((idx.parse().ok()?, tail.to_string()))
+}
+
+/// 클라우드 연결 루트 경로 문자열.
+pub fn cloud_root(idx: usize) -> String {
+    format!("{CLOUD_PREFIX}{idx}::")
+}
+
+/// 클라우드 하위 경로(부모 + 자식 이름) — 트리 `join` 대체용.
+pub fn cloud_child(idx: usize, parent_inner: &str, name: &str) -> String {
+    format!("{CLOUD_PREFIX}{idx}::{parent_inner}/{name}")
+}
+
+/// 클라우드 열거 콜백 — 앱(nexa-app)이 등록한다. 이 크레이트는 네트워크를 모른다.
+/// 반환 `None` = 아직 로딩 중(빈 목록으로 표시하고 완료 통지가 재로드).
+type CloudLister = Box<dyn Fn(usize, &str) -> Option<Vec<Entry>> + Send + Sync>;
+static CLOUD_LISTER: std::sync::RwLock<Option<CloudLister>> = std::sync::RwLock::new(None);
+
+/// 클라우드 열거 콜백 등록(앱 기동 시 1회).
+pub fn set_cloud_lister(f: CloudLister) {
+    *CLOUD_LISTER
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(f);
+}
+
+/// 클라우드 경로 열거 — 등록된 콜백에 위임. 클라우드 경로가 아니면 `None`.
+/// 콜백 미등록·로딩 중이면 **빈 목록**(트리는 정상 동작하고 완료 후 재로드된다).
+pub fn cloud_entries(path: impl AsRef<Path>) -> Option<Vec<Entry>> {
+    let (idx, inner) = cloud_parts(path)?;
+    let guard = CLOUD_LISTER
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Some(match guard.as_ref() {
+        Some(f) => f(idx, &inner).unwrap_or_default(),
+        None => Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +228,31 @@ mod tests {
         assert_eq!(e.kind, FileKind::File);
         assert_eq!(e.name, "a.txt");
         assert_eq!(e.size, 5);
+    }
+
+    /// X-37 2차: 클라우드 센티널 경로 분해·조립.
+    #[test]
+    fn cloud_path_parts_and_build() {
+        assert_eq!(cloud_parts("::CLOUD:0::"), Some((0, String::new())));
+        assert_eq!(
+            cloud_parts("::CLOUD:2::/Docs/a.txt"),
+            Some((2, "/Docs/a.txt".into()))
+        );
+        assert_eq!(cloud_parts("C:\\Users"), None);
+        assert_eq!(cloud_parts(MY_PC), None);
+        assert_eq!(cloud_root(3), "::CLOUD:3::");
+        assert_eq!(cloud_child(1, "", "Docs"), "::CLOUD:1::/Docs");
+        assert_eq!(cloud_child(1, "/Docs", "a.txt"), "::CLOUD:1::/Docs/a.txt");
+        // 조립 → 분해 왕복
+        let p = cloud_child(4, "/x", "y");
+        assert_eq!(cloud_parts(&p), Some((4, "/x/y".into())));
+    }
+
+    /// 콜백 미등록이어도 클라우드 경로는 빈 목록(패닉 없음) · 비클라우드는 None.
+    #[test]
+    fn cloud_entries_without_lister_is_empty() {
+        assert_eq!(cloud_entries("::CLOUD:9::").map(|v| v.len()), Some(0));
+        assert!(cloud_entries("D:\\tmp").is_none());
     }
 
     /// X-36: 추가 루트 등록 → 표시명·target 실경로 Entry로 열거.

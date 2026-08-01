@@ -27,6 +27,9 @@ mod oauth;
 /// 토큰 DPAPI 보관(X-37 — ADR-0006).
 #[cfg_attr(not(windows), allow(dead_code))]
 mod secret;
+/// 클라우드 API 탐색 캐시·워커(X-37 2차 — ADR-0006 §3).
+#[cfg_attr(not(windows), allow(dead_code))]
+mod cloudfs;
 /// Win32 커스텀 컨트롤 라이브러리(사용자 요청 07-16 — searchbox 등).
 #[cfg(windows)]
 mod ctl;

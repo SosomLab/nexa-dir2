@@ -536,6 +536,54 @@ pub fn json_str(json: &str, key: &str) -> Option<String> {
     }
 }
 
+/// JSON 배열 `"key": [ {...}, {...} ]`의 **원소 객체들을 문자열로 분리**(X-37 2차).
+/// 중첩 중괄호·문자열 안 괄호를 존중하는 최소 스캐너 — 각 원소는 [`json_str`]로 읽는다.
+/// 배열이 없거나 형식 밖이면 빈 Vec(관용 — crate 0 유지, DR-8).
+pub fn json_objects(json: &str, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let pat = format!("\"{key}\"");
+    let Some(p) = json.find(&pat) else { return out };
+    let rest = &json[p + pat.len()..];
+    let Some(open) = rest.find('[') else { return out };
+    let body = &rest[open + 1..];
+    let (mut depth, mut start, mut in_str, mut esc) = (0i32, 0usize, false, false);
+    for (i, ch) in body.char_indices() {
+        if in_str {
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_str = true,
+            '{' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(body[start..=i].to_string());
+                }
+            }
+            ']' if depth == 0 => break, // 배열 종료
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 객체에 해당 키가 **존재**하는가(값 무관 — Graph의 `folder`/`file` 판별용).
+pub fn json_has(json: &str, key: &str) -> bool {
+    json.contains(&format!("\"{key}\""))
+}
+
 // ── HTTP(WinHTTP — ADR-0006 §2-2. TLS는 schannel 위임) ────────────────────────
 
 /// `application/x-www-form-urlencoded` POST → 응답 본문(UTF-8).
@@ -771,6 +819,27 @@ mod tests {
         assert!(!u.contains("client_secret"), "PKCE = 시크릿 미사용");
         let d = auth_url(&DROPBOX, "cid", "http://127.0.0.1:1/", "c", "s");
         assert!(d.contains("token_access_type=offline"));
+    }
+
+    /// X-37 2차: Graph 응답의 `value` 배열 원소 분리(중첩·문자열 안 괄호 존중).
+    #[test]
+    fn json_objects_splits_nested_array() {
+        let j = r#"{"value":[
+            {"id":"1","name":"Docs","folder":{"childCount":3}},
+            {"id":"2","name":"a}b.txt","file":{"mimeType":"text/plain"},"size":10}
+        ],"@odata.nextLink":"x"}"#;
+        let objs = json_objects(j, "value");
+        assert_eq!(objs.len(), 2, "원소 2개 — 중첩 객체가 경계를 깨지 않음");
+        assert_eq!(json_str(&objs[0], "name").as_deref(), Some("Docs"));
+        assert!(json_has(&objs[0], "folder") && !json_has(&objs[0], "file"));
+        assert_eq!(
+            json_str(&objs[1], "name").as_deref(),
+            Some("a}b.txt"),
+            "문자열 안 중괄호 무시"
+        );
+        assert!(json_has(&objs[1], "file"));
+        assert_eq!(json_str(&objs[1], "size").as_deref(), Some("10"));
+        assert!(json_objects("{}", "value").is_empty(), "배열 부재 = 빈 Vec");
     }
 
     #[test]

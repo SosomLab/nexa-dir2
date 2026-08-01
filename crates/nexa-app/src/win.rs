@@ -125,6 +125,13 @@ const WM_APP_DELETE: u32 = 0x800D;
 /// 클라우드 OAuth 워커 완료 통지(X-37 — ADR-0006). lparam = Box<CloudAuthResult> 원시
 /// 포인터(수신 측이 회수). 네트워크·브라우저 대기가 있어 UI 스레드 수행 금지.
 const WM_APP_CLOUD_AUTH: u32 = 0x800E;
+/// 클라우드 목록 적재 완료(X-37 2차) — lparam = Box<cloudfs::ListResult> 원시 포인터.
+const WM_APP_CLOUD_LIST: u32 = 0x800F;
+
+/// 클라우드 목록 워커 → UI 통지(cloudfs에서 호출 — 종결 통지라 재시도 게시).
+pub(crate) fn post_cloud_list(hwnd_raw: isize, payload: isize) {
+    post_final_notify(hwnd_raw, WM_APP_CLOUD_LIST, 0, payload);
+}
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -424,15 +431,62 @@ fn cloud_candidates(conns: &[config::CloudConn]) -> Vec<crate::cloud::CloudCandi
         .collect()
 }
 
-/// 연결 목록 → vfs 추가 루트 동기(X-36 — 실존 폴더만: 잔재 연결은 내 PC에서 숨김).
+/// 연결 목록 → vfs 추가 루트 동기(X-36/X-37).
+///
+/// - **동기화 폴더 연결**: 실존 폴더만(잔재 연결은 내 PC에서 숨김).
+/// - **API 직접 연결**(X-37 2차): 로컬 경로가 없으므로 `::CLOUD:<idx>::` 센티널로
+///   노출한다 — 진입 시 트리가 클라우드 열거 콜백을 탄다.
 fn sync_cloud_roots(conns: &[config::CloudConn]) {
     nexa_vfs::set_extra_roots(
         conns
             .iter()
-            .filter(|c| std::path::Path::new(&c.path).is_dir())
-            .map(|c| (c.label.clone(), c.path.clone()))
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if c.is_api() {
+                    Some((c.label.clone(), nexa_vfs::cloud_root(i)))
+                } else if std::path::Path::new(&c.path).is_dir() {
+                    Some((c.label.clone(), c.path.clone()))
+                } else {
+                    None
+                }
+            })
             .collect(),
     );
+}
+
+/// 클라우드 열거 콜백 등록(기동 1회 — X-37 2차).
+///
+/// UI 스레드에서 캐시만 본다. 미스면 **빈 목록을 즉시 반환**하고 워커를 1회 기동해
+/// 완료 시 `WM_APP_CLOUD_LIST`가 재로드를 건다(네트워크는 절대 UI 스레드에 없다).
+unsafe fn install_cloud_lister(hwnd: HWND) {
+    let hwnd_raw = hwnd.0 as isize;
+    nexa_vfs::set_cloud_lister(Box::new(move |idx, inner| {
+        if let Some(hit) = crate::cloudfs::cache_get(idx, inner) {
+            return Some(hit);
+        }
+        // 미적재 — 워커 기동에 필요한 정보를 State에서 스냅숏(재진입 안전: 즉시 종료)
+        let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+        let info = state_of(hwnd).and_then(|st| {
+            let c = st.cloud_conns.get(idx)?;
+            if !c.is_api() {
+                return None;
+            }
+            let svc = crate::oauth::service_of(&c.kind)?;
+            let settings = current_settings(st);
+            Some(crate::cloudfs::ConnInfo {
+                kind: c.kind.clone(),
+                client_id: svc.resolve_client_id(settings.client_id(&c.kind)).to_string(),
+                refresh: crate::secret::load_token(idx).unwrap_or_default(),
+            })
+        });
+        if let Some(info) = info {
+            if info.refresh.is_empty() {
+                return Some(Vec::new()); // 토큰 없음(타 PC 등) — 재로그인 필요
+            }
+            crate::cloudfs::request(hwnd_raw, idx, inner, info);
+        }
+        Some(Vec::new()) // 로딩 중 = 빈 목록(완료 통지가 재로드)
+    }));
 }
 
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
@@ -3726,7 +3780,13 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             do_undo_redo(hwnd, st, id == CMD_REDO);
             return; // 결과 노트 보존(말미 update_title("")이 지우지 않도록)
         }
-        CMD_REFRESH => st.active_panel().reopen_filtered(ctx, &mut inv),
+        CMD_REFRESH => {
+            // 클라우드 경로면 캐시를 버리고 재조회(F5 = 강제 새로고침 — X-37 2차)
+            if let Some((i, _)) = nexa_vfs::cloud_parts(st.active_panel().root_path()) {
+                crate::cloudfs::invalidate(i);
+            }
+            st.active_panel().reopen_filtered(ctx, &mut inv);
+        }
         CMD_NAV_BACK => st.active_panel().nav_back(ctx, &mut inv),
         CMD_NAV_FORWARD => st.active_panel().nav_forward(ctx, &mut inv),
         CMD_NAV_UP => st.active_panel().nav_up(ctx, &mut inv),
@@ -3760,8 +3820,13 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             // 바로 가기 — 현재 탭에서 연결 폴더로 이동(소실 폴더는 상태바 안내)
             let i = (id - CMD_CLOUD_GOTO_BASE) as usize;
             if let Some(c) = st.cloud_conns.get(i) {
-                let p = std::path::PathBuf::from(&c.path);
-                if p.is_dir() {
+                // API 직접 연결(X-37 2차)은 로컬 경로가 없다 — 센티널로 진입
+                let p = if c.is_api() {
+                    std::path::PathBuf::from(nexa_vfs::cloud_root(i))
+                } else {
+                    std::path::PathBuf::from(&c.path)
+                };
+                if c.is_api() || p.is_dir() {
                     st.active_panel().navigate_to(p, ctx, &mut inv);
                 } else {
                     let note = trf("cloud.gone", &[&c.label]);
@@ -3815,12 +3880,9 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 // API 연결이면 토큰도 폐기(흔적 정리) — 인덱스가 당겨지므로 꼬리 재배치
                 if removed.is_api() {
                     crate::secret::clear_from(i);
-                    for (j, c) in st.cloud_conns.iter().enumerate().skip(i) {
-                        if c.is_api() {
-                            let _ = j; // 토큰 재저장은 재인증 시 수행(1차 — 재로그인 요구)
-                        }
-                    }
                 }
+                // 인덱스가 당겨지므로 캐시는 전량 무효화(키가 인덱스 기반)
+                crate::cloudfs::invalidate_all();
                 apply_cloud_change(hwnd, st, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
                 update_title(hwnd, st, &format!(" · {}", trf("cloud.removed", &[&removed.label])));
@@ -5223,6 +5285,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
             let ptr = cs.lpCreateParams as *mut State;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
+            // 클라우드 열거 콜백(X-37 2차) — State 설치 직후 등록(세션 복원 전에
+            // 걸어야 `::CLOUD:` 탭이 복원될 때도 열거가 동작한다)
+            install_cloud_lister(hwnd);
             if let Some(st) = ptr.as_mut() {
                 st.dpi = GetDpiForWindow(hwnd);
                 let mut inv = Invalidations::default();
@@ -6374,6 +6439,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         m if m == WM_APP_DELETE => {
             if let Some(st) = state_of(hwnd) {
                 on_delete_message(hwnd, st, wparam.0 == 1);
+            }
+            LRESULT(0)
+        }
+        // 클라우드 목록 적재 완료(X-37 2차) — 캐시가 찼으니 그 경로를 보고 있는
+        // 패널만 재로드(무간섭 — 펼침·선택·캐럿 보존). 실패는 상태바 1줄.
+        m if m == WM_APP_CLOUD_LIST => {
+            if lparam.0 != 0 {
+                let res = *Box::from_raw(lparam.0 as *mut crate::cloudfs::ListResult);
+                if let Some(st) = state_of(hwnd) {
+                    let mut inv = Invalidations::default();
+                    let ctx = st.nav_ctx();
+                    for p in 0..2 {
+                        let hit = nexa_vfs::cloud_parts(st.panels[p].root_path())
+                            .map(|(i, _)| i == res.idx)
+                            .unwrap_or(false);
+                        if hit {
+                            st.panels[p].reopen_filtered(ctx, &mut inv);
+                        }
+                    }
+                    flush_invalidations(hwnd, &mut inv);
+                    if !res.err.is_empty() {
+                        // 어느 폴더에서 실패했는지 함께 — 루트는 "/"로 표기
+                        let where_ = if res.inner.is_empty() { "/" } else { &res.inner };
+                        update_title(hwnd, st, &format!(" · {} ({where_})", res.err));
+                    }
+                    update_status(hwnd, st);
+                }
             }
             LRESULT(0)
         }
