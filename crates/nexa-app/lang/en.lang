@@ -60,6 +60,7 @@ cloud.err.denied = Sign-in was denied
 cloud.err.exchange = Token exchange failed
 cloud.err.tokenSave = Connected, but the token could not be saved — sign-in will be required again
 cloud.err.full = Too many cloud connections
+cloud.readonly = Cloud connections are read-only for now — upload, delete and rename are not supported yet
 
 # ── About (X-26 (3)) ──
 about.title = About Nexa Dir

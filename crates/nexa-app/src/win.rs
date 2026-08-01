@@ -1033,6 +1033,10 @@ pub fn run() -> Result<()> {
     let fallback = root_path();
     let arg_given = std::env::args_os().nth(1).is_some();
     // argv 경로 = 명시 의도 → 세션 대신 그 경로로 시작. 그 외 = 세션 복원(원본 SESS)
+    // 클라우드 추가 루트 동기 — **패널 복원보다 먼저**(사용자 QA 08-01).
+    // 세션에 `::PC::` 탭이 있으면 여기서 등록된 목록으로 열거되므로, 뒤에 두면
+    // 기동 직후 클라우드 행이 빠지고 F5를 눌러야 나타난다.
+    sync_cloud_roots(&settings.cloud_conns);
     let (left, right, active_panel) = if arg_given {
         (
             Panel::new(open_start_tree(&fallback), ctx, m, columns(96)),
@@ -1139,9 +1143,7 @@ pub fn run() -> Result<()> {
     if settings.launcher_seed < crate::launcher::SEED_VERSION {
         crate::launcher::seed_missing(&mut launcher_items);
     }
-    // 클라우드 연결(X-36): 세션 복원 전에 vfs 루트를 동기해야 ::PC:: 탭 복원 시
-    // 클라우드 섹션이 바로 보인다. 감지 후보는 초기 메뉴 구성과 스냅숏을 공유.
-    sync_cloud_roots(&settings.cloud_conns);
+    // 감지 후보 — 초기 메뉴 구성과 스냅숏을 공유(추가 루트 동기는 패널 복원 전에 완료).
     let cloud_cands = cloud_candidates(&settings.cloud_conns);
     let state = Box::new(State {
         menubar: MenuBar::new(
@@ -2687,6 +2689,11 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
     if targets.is_empty() {
         return;
     }
+    // 클라우드는 읽기 전용(X-37 2차) — 삭제는 4차 슬라이스
+    let refs: Vec<&std::path::Path> = targets.iter().map(|p| p.as_path()).collect();
+    if cloud_readonly_block(hwnd, st, &refs) {
+        return;
+    }
     if permanent {
         use windows::Win32::UI::WindowsAndMessaging::{
             MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
@@ -2949,6 +2956,10 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
             .map(|p| p.to_path_buf())
     };
     let Some(path) = path else { return };
+    // 클라우드는 읽기 전용(X-37 2차) — 이름 변경은 4차 슬라이스
+    if cloud_readonly_block(hwnd, st, &[path.as_path()]) {
+        return;
+    }
     // 바로가기 확장자 숨김(QA 07-14 — 탐색기 NeverShowExt): 표시/편집은 이름만,
     // 실제 리네임에는 원래 .lnk를 복원
     let mut new_name = new_name.to_string();
@@ -2983,6 +2994,10 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
 /// 새로 만들기(M3-2, 원본 BG-N1/N2) — 생성 → 재로드 → 그 행 즉시 인라인 이름변경(RevealAndRename).
 unsafe fn create_new(hwnd: HWND, st: &mut State, folder: bool) {
     let dir = st.active_panel().root_path();
+    // 클라우드는 읽기 전용(X-37 2차) — 새로 만들기는 4차 슬라이스
+    if cloud_readonly_block(hwnd, st, &[dir.as_path()]) {
+        return;
+    }
     let created = if folder {
         nexa_ops::create_new_dir(&dir, &tr("new.folderBase"))
     } else {
@@ -3058,6 +3073,24 @@ unsafe fn focus_created_and_rename(hwnd: HWND, st: &mut State, path: &Path) {
 
 /// 전송 시작(M3-1, 원본 TransferPathsInto의 UI측) — 워커 스레드 + PostMessage 통지.
 /// 충돌은 α 정책 = 전부 건너뜀(확인 모달은 후속 — 원본 확인창 자리). 동시 1잡.
+/// 클라우드 API 경로는 **현재 읽기 전용**(X-37 2차 — 쓰기는 4차 슬라이스).
+///
+/// 전송 엔진·삭제·리네임·새로 만들기는 전부 `std::fs` 전제라 센티널 경로에서
+/// 알 수 없는 오류로 실패한다. 조용히 깨지는 대신 **명시적으로 막고 안내**한다
+/// (사용자 QA 08-01 — 클라우드 패널에 붙여넣기 실패 보고).
+/// 대상 경로 중 하나라도 클라우드면 `true`(호출자는 즉시 반환).
+unsafe fn cloud_readonly_block(hwnd: HWND, st: &mut State, paths: &[&std::path::Path]) -> bool {
+    if !paths.iter().any(|p| nexa_vfs::cloud_parts(p).is_some()) {
+        return false;
+    }
+    let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(
+        windows::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
+    );
+    update_title(hwnd, st, &format!(" · {}", tr("cloud.readonly")));
+    update_status(hwnd, st);
+    true
+}
+
 unsafe fn start_transfer(
     hwnd: HWND,
     st: &mut State,
@@ -3066,6 +3099,12 @@ unsafe fn start_transfer(
     op: nexa_ops::Op,
 ) {
     if sources.is_empty() || st.transfer.is_some() {
+        return;
+    }
+    // 클라우드는 읽기 전용 — 원본·대상 어느 쪽이든 API 경로면 차단(X-37 2차)
+    let mut check: Vec<&std::path::Path> = sources.iter().map(|p| p.as_path()).collect();
+    check.push(dest.as_path());
+    if cloud_readonly_block(hwnd, st, &check) {
         return;
     }
     st.transfer_gen += 1;
@@ -5285,12 +5324,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
             let ptr = cs.lpCreateParams as *mut State;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
-            // 클라우드 열거 콜백(X-37 2차) — State 설치 직후 등록(세션 복원 전에
-            // 걸어야 `::CLOUD:` 탭이 복원될 때도 열거가 동작한다)
+            // 클라우드 열거 콜백(X-37 2차) — State 설치 직후 등록. 패널 복원은 창 생성
+            // **전**에 끝나므로(run()), `::CLOUD:` 탭은 이 시점엔 빈 목록 상태다 →
+            // 아래에서 1회 재열거해 워커를 깨운다(사용자 QA 08-01: 기동 시 미표시).
             install_cloud_lister(hwnd);
             if let Some(st) = ptr.as_mut() {
                 st.dpi = GetDpiForWindow(hwnd);
                 let mut inv = Invalidations::default();
+                let ctx = st.nav_ctx();
+                for p in 0..2 {
+                    if nexa_vfs::cloud_parts(st.panels[p].root_path()).is_some() {
+                        st.panels[p].reopen_filtered(ctx, &mut inv);
+                    }
+                }
                 let m = panel_metrics(st.dpi);
                 let cols = columns(st.dpi);
                 st.panels[0].set_metrics(m, cols.clone(), &mut inv);
