@@ -5724,9 +5724,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let mut inv = Invalidations::default();
                 let ctx = st.nav_ctx();
                 for p in 0..2 {
-                    if nexa_vfs::cloud_parts(st.panels[p].root_path()).is_some() {
-                        st.panels[p].reopen_filtered(ctx, &mut inv);
-                    }
+                    // **비활성 탭까지** 재열기 — 세션 복원 탭들은 콜백 등록 전에
+                    // 만들어져 비어 있다(사용자 QA 08-01: 다른 클라우드 탭만 증상).
+                    st.panels[p].reopen_cloud_tabs(ctx, &mut inv);
                 }
                 let m = panel_metrics(st.dpi);
                 let cols = columns(st.dpi);
@@ -6888,9 +6888,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let mut inv = Invalidations::default();
                     let ctx = st.nav_ctx();
                     for p in 0..2 {
-                        if panel_shows_cloud(&st.panels[p], res.idx) {
-                            st.panels[p].reopen_filtered(ctx, &mut inv);
-                        }
+                        // 적재가 끝났으니 **모든 클라우드·내 PC 탭**을 갱신한다.
+                        // 활성 탭만 갱신하면 다른 탭이 로딩 표시로 남는다(QA 08-01).
+                        let _ = panel_shows_cloud(&st.panels[p], res.idx);
+                        st.panels[p].reopen_cloud_tabs(ctx, &mut inv);
                     }
                     flush_invalidations(hwnd, &mut inv);
                     if !res.err.is_empty() {
@@ -6955,9 +6956,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let mut inv = Invalidations::default();
                     let ctx = st.nav_ctx();
                     for p in 0..2 {
-                        if panel_shows_cloud(&st.panels[p], res.idx) {
-                            st.panels[p].reopen_filtered(ctx, &mut inv);
-                        }
+                        // 적재가 끝났으니 **모든 클라우드·내 PC 탭**을 갱신한다.
+                        // 활성 탭만 갱신하면 다른 탭이 로딩 표시로 남는다(QA 08-01).
+                        let _ = panel_shows_cloud(&st.panels[p], res.idx);
+                        st.panels[p].reopen_cloud_tabs(ctx, &mut inv);
                     }
                     flush_invalidations(hwnd, &mut inv);
                     let note = if res.err.is_empty() {

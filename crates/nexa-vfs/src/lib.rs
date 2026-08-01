@@ -221,7 +221,12 @@ pub fn cloud_from_display(display: &str) -> Option<String> {
     let mut cands: Vec<&(String, String)> = roots.iter().collect();
     cands.sort_by_key(|(l, _)| std::cmp::Reverse(l.len()));
     for (label, path) in cands {
-        let (idx, _) = cloud_parts(path)?;
+        // 동기화 폴더 **링크**(X-36)는 실경로라 클라우드 센티널이 아니다 → 건너뛴다.
+        // 여기서 `?`를 쓰면 그런 항목 하나 때문에 함수 전체가 None이 되어
+        // 다른 연결의 조각 클릭까지 죽는다(사용자 QA 08-01의 진범).
+        let Some((idx, _)) = cloud_parts(path) else {
+            continue;
+        };
         if display == label {
             return Some(cloud_root(idx));
         }
@@ -346,6 +351,8 @@ mod tests {
     #[test]
     fn cloud_from_display_roundtrip() {
         set_extra_roots(vec![
+            // 동기화 폴더 링크(실경로)가 섞여 있어도 다른 연결이 죽지 않아야 한다
+            ("OneDrive – 회사".into(), "C:\\Users\\me\\OneDrive - Corp".into()),
             ("OneDrive – a@b.com".into(), cloud_root(0)),
             ("Google Drive – a@b.com".into(), cloud_root(1)),
         ]);

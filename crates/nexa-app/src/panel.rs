@@ -1094,6 +1094,30 @@ impl Panel {
     /// 가시성 필터 토글·파일 조작 후 현 위치 재열기(히스토리 무이동).
     /// **무간섭 갱신**(원본 NAV-UPFOCUS 계승 — M3-6 선행): 펼침·선택·캐럿·스크롤을
     /// 스냅샷 후 새 소스에 복원한다(소실 항목은 개별 무시 — 외부 변경).
+    /// 클라우드·내 PC 탭을 **전부**(비활성 포함) 재열기(X-37 — 사용자 QA 08-01).
+    ///
+    /// 탭의 트리는 각자 만들어진 시점의 내용을 들고 있고 **탭 전환만으로는 재열거되지
+    /// 않는다**. 기동 시 비활성 탭은 열거 콜백 등록 전에 만들어져 비어 있었고, 목록
+    /// 적재가 끝나도 활성 탭만 갱신돼 다른 탭은 계속 로딩으로 보였다.
+    /// 열거는 캐시 기반이라 네트워크를 다시 타지 않는다(미적재분만 워커 기동).
+    pub fn reopen_cloud_tabs(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
+        let saved = self.active;
+        let mut touched = false;
+        for i in 0..self.tabs.len() {
+            let root = self.tabs[i].rows.source().tree().root_path().to_path_buf();
+            if nexa_vfs::cloud_parts(&root).is_none() && !nexa_vfs::is_virtual_root(&root) {
+                continue; // 로컬 탭은 그대로(watcher 소관)
+            }
+            self.active = i; // reopen_filtered가 활성 탭 기준이라 잠시 이동
+            self.reopen_filtered(ctx, inv);
+            touched = true;
+        }
+        self.active = saved;
+        if touched {
+            self.sync_chrome(inv); // 탭 바·경로 바를 실제 활성 탭으로 원복
+        }
+    }
+
     pub fn reopen_filtered(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
         let path = self.root_path();
         let Some(src) = open_source(&path, ctx) else {
