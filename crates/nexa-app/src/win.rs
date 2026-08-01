@@ -4089,8 +4089,10 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.toolbar
                 .set_checked(CMD_COLW_SYNC, st.col_width_sync, &mut inv);
             if st.col_width_sync {
-                let w = st.panels[st.active].col_widths();
-                st.panels[1 - st.active].apply_col_widths(&w, &mut inv);
+                // 폭만 맞추면 컬럼 **구성**(표시·순서)이 다를 때 어긋난 채 남는다
+                // — 표시 순 대응이라 서로 다른 컬럼에 폭이 실린다(08-01).
+                let cols = st.panels[st.active].columns_snapshot();
+                st.panels[1 - st.active].apply_columns(&cols, &mut inv);
             }
             let settings = current_settings(st);
             let _ = config::save(&config::data_dir(), SETTINGS_FILE, &settings.serialize());
@@ -5815,6 +5817,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if !w.is_empty() {
                         st.panels[i].apply_col_widths(&w, &mut inv);
                     }
+                }
+                // 동기 설정이 켜져 있으면 **시작 시점에 좌측 기준으로 맞춘다**
+                // (사용자 지시 08-01). 세션의 두 패널 컬럼은 각자 저장돼 있어
+                // 설정을 켜기 전에 갈라진 값이 그대로 복원될 수 있고, 그러면
+                // 사용자가 직접 폭을 건드리기 전까지 어긋난 채로 보인다.
+                if st.col_width_sync {
+                    let cols = st.panels[0].columns_snapshot();
+                    st.panels[1].apply_columns(&cols, &mut inv);
                 }
                 sync_focus_visuals(st, &mut inv);
                 st.menubar.set_metrics(m.row_h, m.pad_x, &mut inv);
