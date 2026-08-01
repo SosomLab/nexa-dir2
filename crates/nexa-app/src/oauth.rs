@@ -1,6 +1,7 @@
 //! 클라우드 OAuth2 인증(X-37 — [ADR-0006](../../../docs/27-adr-0006-cloud-oauth.md)).
 //!
-//! **Authorization Code + PKCE**(공용 클라이언트 — `client_secret` 미사용·미동봉).
+//! **Authorization Code + PKCE**. MS는 순수 공개 클라이언트(시크릿 없음)이고,
+//! Google·Dropbox는 등록 앱의 시크릿을 함께 보낸다(동봉 — 사용자 확정).
 //! 흐름: verifier/challenge 생성(CNG) → 루프백 리스너(ws2_32) → 기본 브라우저로 인증
 //! URL 열기 → `code` 1회 수신 → WinHTTP로 토큰 교환 → 호출자가 DPAPI로 보관.
 //!
@@ -31,10 +32,10 @@ pub struct Service {
     /// NexaDir 명의 기본 client_id. **빈 문자열 = 아직 미등록**(사용자 설정 필수).
     /// 등록 완료 시 이 상수만 채우면 전 사용자에게 즉시 적용된다(ADR-0006 §2-4).
     pub default_client_id: &'static str,
-    /// **Google 전용** — Google은 데스크톱 앱에도 토큰 교환 시 `client_secret`을
-    /// 요구한다(PKCE로 대체 불가. MS·Dropbox는 불요). Google 공식 문서가 네이티브
-    /// 앱의 이 값을 "비밀이 아니다"라고 명시하므로 client_id와 같은 취급으로 동봉한다.
-    /// 빈 문자열 = 전송하지 않음.
+    /// 토큰 교환에 함께 보낼 시크릿. **Google·Dropbox 사용**(Google은 데스크톱
+    /// 앱에도 요구 — PKCE로 대체 불가. Dropbox는 등록 앱 시크릿을 그대로 쓴다).
+    /// MS는 불요. 네이티브 앱의 이 값은 바이너리에서 추출 가능해 "비밀"이 아니며,
+    /// 실효 방어선은 리디렉션 URI 화이트리스트다(ADR-0006 §2-4). 빈 값 = 미전송.
     pub default_client_secret: &'static str,
 }
 
@@ -89,10 +90,13 @@ pub const DROPBOX: Service = Service {
     display: "Dropbox",
     auth_url: "https://www.dropbox.com/oauth2/authorize",
     token_url: "https://api.dropboxapi.com/oauth2/token",
-    scope: "files.metadata.read files.content.read account_info.read",
+    // 쓰기 슬라이스(X-37 4차) 이후 업로드·삭제·이름 변경·폴더 생성을 하므로
+    // **write 스코프가 필수**다(읽기 전용만 요청하면 API가 403으로 거절 — 08-01).
+    scope: "files.metadata.write files.metadata.read files.content.write files.content.read account_info.read",
     me_url: "", // Dropbox는 POST 전용이라 1차 생략(라벨 = 서비스명 + 연결 시각)
-    default_client_id: "", // TODO(SosomLab 등록): App key — 무료·즉시 가능
-    default_client_secret: "", // Dropbox는 PKCE로 시크릿 대체 가능
+    // SosomLab 등록 App key/secret(사용자 제공 08-01 — Google과 같은 동봉 방침)
+    default_client_id: "ofcq452qsemy4cb",
+    default_client_secret: "ksl2usd747tfgut",
 };
 
 /// 지원 서비스 전체(Connect Cloud 메뉴 순서).
@@ -384,8 +388,7 @@ impl AuthSession {
             percent(&self.redirect),
             percent(&self.verifier)
         );
-        // Google은 데스크톱 앱에도 client_secret을 요구한다(PKCE로 대체 불가).
-        // MS·Dropbox는 빈 값이라 전송되지 않는다.
+        // Google·Dropbox는 등록 앱 시크릿을 함께 보낸다. MS는 빈 값이라 미전송.
         if !self.client_secret.is_empty() {
             body.push_str(&format!("&client_secret={}", percent(&self.client_secret)));
         }
