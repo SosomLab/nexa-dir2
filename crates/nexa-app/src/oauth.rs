@@ -617,6 +617,15 @@ fn percent_decode(s: &str) -> String {
 
 /// JSON 최상위(또는 임의 위치)의 `"key": "값"` / `"key": 숫자` 추출 — 최소 수제 파서(DR-8).
 /// 중첩·배열은 다루지 않는다(토큰 응답·userinfo에 충분).
+/// `\uXXXX`의 16진 4자리를 읽는다(자리 부족·비16진 = `None`).
+fn hex4(it: &mut std::str::Chars) -> Option<u16> {
+    let mut v: u16 = 0;
+    for _ in 0..4 {
+        v = v.checked_mul(16)? + it.next()?.to_digit(16)? as u16;
+    }
+    Some(v)
+}
+
 pub fn json_str(json: &str, key: &str) -> Option<String> {
     let pat = format!("\"{key}\"");
     let rest = &json[json.find(&pat)? + pat.len()..];
@@ -624,21 +633,45 @@ pub fn json_str(json: &str, key: &str) -> Option<String> {
     let rest = rest.strip_prefix(':')?.trim_start();
     if let Some(body) = rest.strip_prefix('"') {
         let mut out = String::new();
-        let mut esc = false;
-        for ch in body.chars() {
-            if esc {
-                out.push(match ch {
-                    'n' => '\n',
-                    't' => '\t',
-                    other => other,
-                });
-                esc = false;
-            } else if ch == '\\' {
-                esc = true;
-            } else if ch == '"' {
-                return Some(out);
-            } else {
-                out.push(ch);
+        let mut it = body.chars();
+        while let Some(ch) = it.next() {
+            match ch {
+                '"' => return Some(out),
+                '\\' => match it.next()? {
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'r' => out.push('\r'),
+                    'b' => out.push('\u{8}'),
+                    'f' => out.push('\u{c}'),
+                    // `\uXXXX`(사용자 QA 08-01) — Dropbox 응답은 비ASCII를 이렇게
+                    // 돌려준다. 미해석이면 백슬래시만 버려 "ABC새폴더"가
+                    // "ABCuc0c8ud3f4ub354"가 됐고, **그 이름으로 경로를 다시 만들어**
+                    // 조회하니 not_found(409)까지 이어졌다. 표시만의 문제가 아니다.
+                    'u' => {
+                        let hi = hex4(&mut it)?;
+                        // BMP 밖은 서러게이트 **쌍**으로 온다 — 뒤의 \uDCxx까지 합쳐야
+                        // 원래 문자다. 짝이 없으면 깨진 입력이므로 대체 문자로 둔다.
+                        let cp = if (0xD800..0xDC00).contains(&hi) {
+                            let mut peek = it.clone();
+                            match (peek.next(), peek.next(), hex4(&mut peek)) {
+                                (Some('\\'), Some('u'), Some(lo))
+                                    if (0xDC00..0xE000).contains(&lo) =>
+                                {
+                                    it = peek;
+                                    0x10000
+                                        + (((hi as u32) - 0xD800) << 10)
+                                        + ((lo as u32) - 0xDC00)
+                                }
+                                _ => hi as u32,
+                            }
+                        } else {
+                            hi as u32
+                        };
+                        out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
+                    }
+                    other => out.push(other), // \" \\ \/ 등은 문자 그대로
+                },
+                c => out.push(c),
             }
         }
         None
@@ -1119,6 +1152,27 @@ mod tests {
         assert_eq!(json_str(j, "expires_in").as_deref(), Some("3599"));
         assert_eq!(json_str(j, "refresh_token").as_deref(), Some("r\"x"));
         assert_eq!(json_str(j, "missing"), None);
+    }
+
+    /// 08-01 QA 회귀: Dropbox 응답은 비ASCII를 `\uXXXX`로 돌려준다. 미해석이면
+    /// 백슬래시만 사라져 "ABC새폴더"가 "ABCuc0c8ud3f4ub354"가 되고, 그 이름으로
+    /// 경로를 다시 만들어 조회하므로 목록 진입까지 not_found로 실패한다.
+    #[test]
+    fn json_decodes_unicode_escapes() {
+        let j = r#"{"name":"ABC\uc0c8\ud3f4\ub354"}"#;
+        assert_eq!(json_str(j, "name").as_deref(), Some("ABC새폴더"));
+        // BMP 밖 = 서러게이트 쌍을 합쳐 한 글자로
+        assert_eq!(
+            json_str(r#"{"a":"x\ud83d\ude00y"}"#, "a").as_deref(),
+            Some("x\u{1F600}y")
+        );
+        // 짝 없는 상위 서러게이트도 파싱을 중단시키지 않는다
+        assert!(json_str(r#"{"a":"\ud83dz"}"#, "a").is_some());
+        // 나머지 표준 이스케이프
+        assert_eq!(
+            json_str(r#"{"a":"1\r2\/3\b"}"#, "a").as_deref(),
+            Some("1\r2/3\u{8}")
+        );
     }
 
     #[test]
