@@ -12,7 +12,12 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::time::{Duration, Instant};
 
-/// 서비스별 엔드포인트·scope(ADR-0006 §2-4 — client_id는 사용자 설정).
+/// 서비스별 엔드포인트·scope(ADR-0006 §2-4).
+///
+/// `client_id` 해석 순서 = **설정 `cloud_client_id_<종류>` > [`Service::default_client_id`]**
+/// (하이브리드 — rclone 등 관례). 기본값 = SosomLab이 등록한 NexaDir 앱 ID로,
+/// PKCE 공개 클라이언트라 exe에 동봉돼도 시크릿이 아니다. 다만 **쿼터가 전 사용자
+/// 공유**이므로 대량 사용자는 자기 ID로 덮어쓰는 편이 안전하다.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Service {
     pub kind: &'static str,
@@ -23,16 +28,25 @@ pub struct Service {
     pub scope: &'static str,
     /// 계정 표시명 조회 엔드포인트(연결 라벨용). 비면 조회 생략.
     pub me_url: &'static str,
+    /// NexaDir 명의 기본 client_id. **빈 문자열 = 아직 미등록**(사용자 설정 필수).
+    /// 등록 완료 시 이 상수만 채우면 전 사용자에게 즉시 적용된다(ADR-0006 §2-4).
+    pub default_client_id: &'static str,
 }
 
+/// OneDrive — Entra 앱 등록 **무료**. `Files.Read`(내 파일 읽기)는 사용자 동의만으로
+/// 충분해 조직 계정의 관리자 동의 요구를 피한다(`Files.Read.All`은 관리자 동의 필요).
 pub const ONEDRIVE: Service = Service {
     kind: "onedrive",
     display: "OneDrive",
     auth_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-    scope: "offline_access Files.Read.All User.Read",
+    scope: "offline_access Files.Read User.Read",
     me_url: "https://graph.microsoft.com/v1.0/me",
+    default_client_id: "", // TODO(SosomLab 등록): Entra 앱 ID — 무료·즉시 가능
 };
+/// Google Drive — `drive.readonly`는 **restricted scope**라 CASA 연간 유료 감사
+/// (연 $500~4,500)+매년 재검증이 필요하다. 미등록 시 사용자 자기 ID 입력이 유일 경로
+/// (ADR-0006 §2-4 — 비용 판단 전까지 기본값 비움).
 pub const GOOGLEDRIVE: Service = Service {
     kind: "googledrive",
     display: "Google Drive",
@@ -40,7 +54,10 @@ pub const GOOGLEDRIVE: Service = Service {
     token_url: "https://oauth2.googleapis.com/token",
     scope: "https://www.googleapis.com/auth/drive.readonly",
     me_url: "https://www.googleapis.com/oauth2/v3/userinfo",
+    default_client_id: "", // 보류: CASA 감사 비용 결정 후(§2-4)
 };
+/// Dropbox — 앱 등록 **무료**. 개발 상태는 최대 500명이나 **50명 연결 시 2주 내
+/// 프로덕션 승인 신청**이 필요하다(심사 무료).
 pub const DROPBOX: Service = Service {
     kind: "dropbox",
     display: "Dropbox",
@@ -48,6 +65,7 @@ pub const DROPBOX: Service = Service {
     token_url: "https://api.dropboxapi.com/oauth2/token",
     scope: "files.metadata.read files.content.read account_info.read",
     me_url: "", // Dropbox는 POST 전용이라 1차 생략(라벨 = 서비스명 + 연결 시각)
+    default_client_id: "", // TODO(SosomLab 등록): App key — 무료·즉시 가능
 };
 
 /// 지원 서비스 전체(Connect Cloud 메뉴 순서).
@@ -57,6 +75,22 @@ pub const SERVICES: [Service; 3] = [ONEDRIVE, GOOGLEDRIVE, DROPBOX];
 #[allow(dead_code)] // 사용처 = ADR-0006 §3 2차(탐색) — 인증 슬라이스에서는 미호출
 pub fn service_of(kind: &str) -> Option<Service> {
     SERVICES.into_iter().find(|s| s.kind == kind)
+}
+
+impl Service {
+    /// 실효 client_id — **설정 우선, 없으면 NexaDir 기본값**(하이브리드, ADR-0006 §2-4).
+    /// 둘 다 비면 빈 문자열 → 호출자가 등록 안내를 띄운다.
+    pub fn resolve_client_id<'a>(&self, from_settings: &'a str) -> &'a str
+    where
+        Self: 'a,
+    {
+        let s = from_settings.trim();
+        if s.is_empty() {
+            self.default_client_id
+        } else {
+            s
+        }
+    }
 }
 
 /// 인증 성공 결과 — 호출자가 DPAPI로 보관(refresh) + 연결 등록.
@@ -693,5 +727,23 @@ mod tests {
             assert!(s.token_url.starts_with("https://"), "{}", s.kind);
             assert!(!s.scope.is_empty(), "{}", s.kind);
         }
+    }
+
+    /// client_id 해석 = **설정 우선 → NexaDir 기본값**(ADR-0006 §2-4 하이브리드).
+    #[test]
+    fn client_id_resolution_prefers_settings_then_default() {
+        let svc = Service {
+            default_client_id: "nexadir-default",
+            ..ONEDRIVE
+        };
+        assert_eq!(svc.resolve_client_id("user-own"), "user-own", "설정 우선");
+        assert_eq!(svc.resolve_client_id("  "), "nexadir-default", "공백 = 미설정");
+        assert_eq!(svc.resolve_client_id(""), "nexadir-default", "빈 값 = 기본");
+        // 기본값도 비면 빈 문자열 → 호출자가 등록 안내
+        let none = Service {
+            default_client_id: "",
+            ..ONEDRIVE
+        };
+        assert_eq!(none.resolve_client_id(""), "", "둘 다 없음 = 안내 경로");
     }
 }

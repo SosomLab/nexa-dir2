@@ -53,7 +53,7 @@ cloud.auth.openBrowser = ブラウザーを開く
 cloud.auth.waiting = ブラウザーのサインインを待機中…
 cloud.account.unknown = アカウント
 cloud.err.noClientId = Client ID が設定されていません
-cloud.err.noClientIdMsg = {0} の直接接続には OAuth Client ID が必要です。\n\nプロバイダーのコンソールでデスクトップ/ネイティブ アプリ(PKCE・シークレットなし)として登録し、data\\settings.cfg に次の行を追加してください:\n\ncloud_client_id_{1}=<取得した CLIENT ID>\n\nリダイレクト URI: http://127.0.0.1 (ループバック・ポートは任意)
+cloud.err.noClientIdMsg = {0} に使用できる Client ID がまだありません。\n\nNexaDir は可能なサービスに既定 ID を同梱していますが、このサービスは未同梱または自身での取得が必要です。\n\nプロバイダーのコンソールでデスクトップ/ネイティブ アプリ(PKCE・シークレットなし)として登録し、data\settings.cfg に次の行を追加してください:\n\ncloud_client_id_{1}=<取得した CLIENT ID>\n\nリダイレクト URI: http://127.0.0.1 (ループバック・ポートは任意)\n\n参考: 自身の ID を使うと API クォータも専有できます。
 cloud.err.listener = ローカル コールバック リスナーを開けません
 cloud.err.timeout = サインインがタイムアウトまたはキャンセルされました
 cloud.err.denied = サインインが拒否されました

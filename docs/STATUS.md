@@ -1,6 +1,17 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-01 5차 (KST)** — **X-37 Connect Cloud — 브라우저
+> **갱신: 2026-08-01 6차 (KST)** — **client_id 소유 모델 정정 —
+> 하이브리드(사용자 지적 · ADR-0006 §2-4 개정)**: "NexaDir 기준으로
+> 발급받아야 하지 않나" → **타당**(초판은 Google 제약을 3사에 과적용).
+> 정정 = **OneDrive·Dropbox 벤더 등록 무료**(OneDrive scope
+> `Files.Read` 하향으로 관리자 동의 회피 · Dropbox 50명 시 프로덕션
+> 승인) · **Google만 CASA 연 $500~4,500로 보류**. 채택 =
+> **하이브리드**(`default_client_id` 상수 + 설정 우선) — 등록 시 상수만
+> 채우면 전 사용자 적용. 근거 = 동봉 ID는 쿼터 공유·악용 시 전원 차단
+> 위험. **235 green·clippy 0·3.28MB·B3 통과**. **사용자 액션 =
+> OneDrive·Dropbox 등록(무료)**. [journal/2026-08-01.md](journal/2026-08-01.md).
+>
+> **직전(08-01 5차)** — **X-37 Connect Cloud — 브라우저
 > OAuth 직접 연결(사용자 결정 — `feat/x36-cloud-connections` 6커밋째,
 > 실기 QA 중)**: "다른 계정을 브라우저로 추가" — 조사 결과 **3사 모두
 > 계정 추가 CLI 미노출**(GUI 전용)이라 앱 직접 인증이 유일 해법 →

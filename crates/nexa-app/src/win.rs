@@ -3943,7 +3943,9 @@ struct CloudAuthResult {
 /// 고르면 기본 브라우저를 띄우고, 어느 쪽이든 **워커가 리디렉션을 대기**한다
 /// (UI 스레드는 계속 펌프 — 07-21 규약).
 unsafe fn start_cloud_oauth(hwnd: HWND, st: &mut State, svc: crate::oauth::Service) {
-    let client_id = current_settings(st).client_id(svc.kind).to_string();
+    // 설정 우선 → NexaDir 기본값(하이브리드 — ADR-0006 §2-4)
+    let settings = current_settings(st);
+    let client_id = svc.resolve_client_id(settings.client_id(svc.kind)).to_string();
     if client_id.trim().is_empty() {
         // 미설정 안내(ADR-0006 §2-4 — 1차는 사용자 제공 client_id)
         let msg = trf("cloud.err.noClientIdMsg", &[svc.display, svc.kind]);

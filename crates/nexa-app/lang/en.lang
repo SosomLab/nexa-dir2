@@ -53,7 +53,7 @@ cloud.auth.openBrowser = Open Browser
 cloud.auth.waiting = Waiting for browser sign-in…
 cloud.account.unknown = account
 cloud.err.noClientId = Client ID is not set
-cloud.err.noClientIdMsg = {0} direct connection needs an OAuth Client ID.\n\nRegister a desktop/native app (PKCE, no client secret) in the provider console, then add this line to data\\settings.cfg:\n\ncloud_client_id_{1}=<YOUR CLIENT ID>\n\nRedirect URI: http://127.0.0.1 (loopback, any port)
+cloud.err.noClientIdMsg = No Client ID is available for {0} yet.\n\nNexaDir ships default IDs where possible; this service still needs your own (or none is bundled yet).\n\nRegister a desktop/native app (PKCE - no client secret) in the provider console, then add this line to data\settings.cfg:\n\ncloud_client_id_{1}=<YOUR CLIENT ID>\n\nRedirect URI: http://127.0.0.1 (loopback, any port)\n\nTip: your own ID also gives you a private API quota.
 cloud.err.listener = Could not open the local callback listener
 cloud.err.timeout = Sign-in timed out or was cancelled
 cloud.err.denied = Sign-in was denied
