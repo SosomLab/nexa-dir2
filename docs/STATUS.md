@@ -1,6 +1,19 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-01 4차 (KST)** — **X-36 클라우드 연결 구현(사용자
+> **갱신: 2026-08-01 5차 (KST)** — **X-37 Connect Cloud — 브라우저
+> OAuth 직접 연결(사용자 결정 — `feat/x36-cloud-connections` 6커밋째,
+> 실기 QA 중)**: "다른 계정을 브라우저로 추가" — 조사 결과 **3사 모두
+> 계정 추가 CLI 미노출**(GUI 전용)이라 앱 직접 인증이 유일 해법 →
+> 사용자가 **OAuth 직접 연결** 채택. **[ADR-0006](27-adr-0006-cloud-oauth.md)
+> 신설** + **DR-2 개정(B3 +4 — winhttp·crypt32·ws2_32·bcrypt.
+> 마지막은 게이트 실행으로 발견)**. `oauth.rs`(PKCE·수제 base64url/
+> JSON·루프백 state 대조·WinHTTP) · `secret.rs`(DPAPI) · **Connect
+> Cloud 메뉴**([브라우저 열기]/[URL 복사 = 프라이빗 창 다계정]/[취소]
+> → 워커 교환 → 연결 등록). **234 green·clippy 0·3.28MB(B2)·B3 통과**.
+> **QA 대기**: client_id 등록 → 프라이빗 창 로그인 → 연결 표시 → 재시작
+> 유지. **잔여 = 탐색(2차)**. [journal/2026-08-01.md](journal/2026-08-01.md).
+>
+> **직전(08-01 4차)** — **X-36 클라우드 연결 구현(사용자
 > 요청 — `feat/x36-cloud-connections` 4커밋, 실기 QA 중)**: 검토서 26
 > §2 Phase A + 메뉴 요구 + **URL 복사**(프라이빗 창 다계정 접속 —
 > 추가 요청). MenuBar **하위 메뉴**(nexa-gui 플라이아웃) · vfs 링크형

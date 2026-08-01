@@ -48,6 +48,7 @@
 | [08 ADR-0003 셸 컨텍스트 메뉴](08-adr-0003-shell-context-menu.md) | 탐색기 확장 메뉴 노출 방식 결정 |
 | [09 ADR-0004 미리보기 플러그인](09-adr-0004-preview-plugins.md) | 플러그인 시임·매핑 설계(런타임은 ADR-0005로 정정) |
 | [25 ADR-0005 WASM 플러그인](25-adr-0005-wasm-plugins.md) | 런타임 Starlark→wasmi 전환(크로스플랫폼 단일 아티팩트·격리) |
+| [27 ADR-0006 클라우드 OAuth](27-adr-0006-cloud-oauth.md) | 직접 연결 인증(PKCE·루프백·WinHTTP·DPAPI) + **DR-2 B3 화이트리스트 +4** |
 | [19 원본 패리티 갭](19-parity-gap.md) | 원본 대비 미구현·초과 항목(G-1~14) |
 | [20 세션 코얼레싱](20-session-coalescing.md) | 탭/경로 변경 디바운스 자동 저장 설계 |
 | [22 일괄 이름변경 v2](22-batch-rename-v2.md) | PF 6동작 패리티 — 코어 재작성·Date 토큰 엔진 |
