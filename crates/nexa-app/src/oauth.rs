@@ -74,9 +74,13 @@ pub const GOOGLEDRIVE: Service = Service {
     me_url: "https://www.googleapis.com/drive/v3/about?fields=user",
     // SosomLab 등록(08-01) — GCP 프로젝트 "Nexa Dir" 데스크톱 클라이언트.
     default_client_id: "976847412158-jds0ouedo18itg1fotcuoe0lc00b6oe8.apps.googleusercontent.com",
-    // TODO(SosomLab): GCP 콘솔 → 클라이언트 → Nexa Dir Desktop → 클라이언트 보안 비밀번호.
-    // 미설정 시 설정 `cloud_client_secret_googledrive`로 덮어쓸 수 있다.
-    default_client_secret: "",
+    // SosomLab 등록(08-01) — GCP "Nexa Dir Desktop" 클라이언트 보안 비밀번호.
+    // **의도적으로 공개 값**: Google 공식 문서가 네이티브 앱의 이 값을 "obviously not
+    // treated as a secret"이라고 명시하며 소스 동봉을 전제한다(RFC 8252 공개 클라이언트).
+    // 이것만으로는 어떤 사용자 데이터에도 접근할 수 없다 — 여전히 그 사용자의 브라우저
+    // 로그인 + 해당 세션의 PKCE verifier가 필요하다.
+    // 사용자 재정의: 설정 `cloud_client_secret_googledrive`.
+    default_client_secret: "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",
 };
 /// Dropbox — 앱 등록 **무료**. 개발 상태는 최대 500명이나 **50명 연결 시 2주 내
 /// 프로덕션 승인 신청**이 필요하다(심사 무료).
