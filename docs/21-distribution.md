@@ -251,19 +251,24 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   (raw 조회 200, 2026-07-24). **∴ winget Portable = 첫 승인 채널이자 유일하게 최신
   버전(`0.11.0`)까지 배포된 채널.**
 
-### 채널 상태 요약 (2026-07-31 갱신 — 원천 실측: PR 라벨·choco 페이지)
+### 채널 상태 요약 (2026-08-02 갱신 — 원천 실측: PR 라벨·choco 심사 로그)
 
 | 채널 | 패키지 | 배포된 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.12.0** | ✅ 배포 완료 — [#408280](https://github.com/microsoft/winget-pkgs/pull/408280) **MERGED**(07-27 21:42 KST, 제출 당일 — `Moderator-Approved`·`Publish-Pipeline-Succeeded`) | — |
-| winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN(#404528) — `DisplayVersion` 제거 요청은 **08-01 조치 완료**(포크 커밋 `7e49694`+회신 코멘트·로컬 사본 동기). `Policy-Test-1.2` waiver·라벨 해제는 모더레이터 몫 | 없음(재추적) |
-| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 "Ready for review"(07-19 제출 후 12일째 무변동 — 자동 3단계 완료·사람 검토 대기) | 없음 |
-| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일 | 없음 |
-| GitHub Release | 포터블 + 설치형 | **0.12.0** (07-27 — X-34·X-35) | ✅ 상시. 다음 태그부터 자산 5종(§5-1 zip 2 + SHA256SUMS) | — |
+| winget | `SosomLab.NexaDir.Portable` | **0.13.0 심사 중**(0.12.0 배포됨) | ⏳ [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) 제출(08-02) — 직전 [#408280](https://github.com/microsoft/winget-pkgs/pull/408280) 0.12.0은 제출 당일 MERGED | 없음(재추적) |
+| winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN([#404528](https://github.com/microsoft/winget-pkgs/pull/404528)) — `Needs-Author-Feedback` **해제됨**(08-01 `DisplayVersion` 제거가 수용). 남은 라벨 = `Policy-Test-1.2` + `Validation-Guide` → **repository admin 수동 검토 대기** | 없음(공이 모더레이터에게) |
+| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 "Ready for review" — **큐 대기가 아니라 바이러스 스캔 플래그**에 걸려 있다(07-20 02:22 `flagged as part of automated virus scanning`, 이후 13일 무이벤트) | 없음 / 오탐 소명 코멘트는 선택 |
+| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21 플래그) | 동일 |
+| GitHub Release | 포터블 + 설치형 | **0.13.0** (08-02 — X-36·X-37 클라우드) | ✅ 상시. **자산 5종 첫 실배포 확인**(exe 2 + zip 2 + `SHA256SUMS.txt`) | — |
 
-**해석(07-31)**: winget Portable은 0.12.0까지 **완전 최신** — 유일하게 릴리스와 동기화된
-패키지 매니저 채널. 설치형 winget은 waiver 대기에서 **author 액션 대기로 전환**됐다
-(사소한 매니페스트 수정 — 처리하면 waiver 판단만 남는다). choco 2종은 순수 큐 대기.
+**해석(08-02)**: 릴리스 0.13.0을 **Chocolatey 제외**로 배포했다(사용자 지시 — 워크플로
+`choco push` 스텝이 `skipped`로 확인됨. `CHOCO_PUSH` 미설정 게이트가 의도대로 동작).
+winget Portable은 0.13.0 PR 제출로 **다시 릴리스와 동기화 궤도**에 올랐다.
+
+**choco 정체의 성격이 바뀐 기록**: 종전에는 "모더레이션 큐 대기"로 적었으나, 심사 로그를
+읽어 보니 **07-20 자동 바이러스 스캔에서 플래그**된 뒤 멈춰 있다(스캔 결과 2/3 플래그).
+무서명 Rust 단일 exe의 전형적 오탐이며([12 §4-1](12-packaging-single-exe.md)), 자동으로
+풀리지 않고 **모더레이터가 결과를 보고 면제 처리**해야 넘어간다. 큐가 밀린 것과 다르다.
 
 ### 다음 버전 절차
 

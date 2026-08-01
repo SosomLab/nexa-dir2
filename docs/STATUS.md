@@ -1,6 +1,23 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-02 1차 (KST)** — **클라우드 매뉴얼·브랜딩 + 배포 한도 점검
+> **갱신: 2026-08-02 2차 (KST)** — **릴리스 `0.13.0`(Chocolatey 제외) +
+> winget Portable 업그레이드 + 비Windows CI 복구(사용자 지시)**:
+> ① **0.13.0 배포** — X-36/X-37 클라우드 반영. [Release](https://github.com/SosomLab/nexa-dir2/releases/tag/0.13.0)
+> **자산 5종 첫 실배포 확인**(07-31 추가한 zip 2 + `SHA256SUMS.txt`) ·
+> **Chocolatey push 스텝 `skipped` 확인**(`CHOCO_PUSH` 게이트 정상 동작)
+> ② **winget Portable 0.13.0 PR** [#410978](https://github.com/microsoft/winget-pkgs/pull/410978)
+> (SHA-256은 릴리스 `SHA256SUMS.txt`와 대조·설명에 클라우드 추가)
+> ③ **main CI가 비Windows에서 깨져 있던 것을 발견·복구 2건** — `cloudfs`가
+> `crate::win`/`dialog`를 43곳 참조하는 UI 결합 워커라 `#[cfg(windows)]` 정렬 ·
+> `cloud::detect()`의 `Vec::new()`가 cfg 블록 소거로 타입 추론 근거를 잃던 `E0282`.
+> **Windows 잡·릴리스 산출물은 무사**했다 ④ **절차 보완**([18 §2·§4](18-build-and-test.md))
+> — Windows에서 `cargo test`가 green이어도 cfg 소거 경로는 미검증이라
+> `--target x86_64-unknown-linux-gnu` 검사를 명령 목록에 추가.
+> [21 §8](21-distribution.md) 채널 표 갱신 — **choco 정체는 큐 대기가 아니라
+> 07-20 바이러스 스캔 플래그**(무서명 exe 오탐 · 모더레이터 면제 필요)로 정정.
+> [journal/2026-08-02.md](journal/2026-08-02.md).
+>
+> **직전(08-02 1차)** — **클라우드 매뉴얼·브랜딩 + 배포 한도 점검
 > (사용자 요청 — `feat/x36-cloud-connections` 병합 완료)**:
 > ① **위키에 클라우드 문서가 아예 없던 것**을 확인하고 기능 전체를 매뉴얼화
 > ([기능-클라우드](wiki/기능-클라우드.md) 신설 — **Link vs Connect 구분표**·
