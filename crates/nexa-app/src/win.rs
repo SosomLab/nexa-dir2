@@ -98,6 +98,11 @@ const TIMER_WATCH_BASE: usize = 10;
 /// (OLE DragOver는 정지 커서에서 호출이 멎을 수 있어 타이머로 보강).
 const TIMER_DND: usize = 12;
 const DND_TICK_MS: u32 = 100;
+/// 클라우드 전송 중 취소 버튼 폴링(사용자 QA 08-01) — 취소 판정이 워커의 진행 통지
+/// 안에만 있으면, 청크 없는 단일 요청(작은 파일 업로드·메타 조회) 구간에서 통지가
+/// 멎는 동안 [취소]가 먹지 않는다. 통지와 **무관하게** 주기적으로 읽는다.
+const TIMER_CLOUD_POLL: usize = 13;
+const CLOUD_POLL_MS: u32 = 200;
 const WATCH_DEBOUNCE_MS: u32 = 300;
 /// 터미널 출력/종료 통지(M4-3) — wparam=패널(|EXIT_FLAG), lparam=세대.
 const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
@@ -3269,7 +3274,7 @@ unsafe fn start_cloud_download(
             &st.dlg_font,
         );
     }
-    st.cloud_shared = Some(shared.clone());
+    begin_cloud_progress(hwnd, st, shared.clone());
     crate::cloudfs::start_download(
         hwnd.0 as isize,
         idx,
@@ -3312,9 +3317,16 @@ unsafe fn on_cloud_progress(hwnd: HWND, st: &mut State) {
     update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &[&pct.to_string()])));
 }
 
+/// 클라우드 전송 개시 — 공유 상태를 걸고 취소 폴링 타이머를 켠다.
+unsafe fn begin_cloud_progress(hwnd: HWND, st: &mut State, shared: Arc<TransferShared>) {
+    st.cloud_shared = Some(shared);
+    SetTimer(Some(hwnd), TIMER_CLOUD_POLL, CLOUD_POLL_MS, None);
+}
+
 /// 클라우드 전송 마감 — 진행 창을 완료 표기로 바꾸고 공유 상태 해제.
 unsafe fn finish_cloud_progress(hwnd: HWND, st: &mut State, note: &str) {
     st.cloud_shared = None;
+    let _ = KillTimer(Some(hwnd), TIMER_CLOUD_POLL);
     if let Some(mut p) = st.cloud_progress.take() {
         let ms = st.transfer_close_ms.max(1);
         p.set_done(note, ms);
@@ -3383,7 +3395,7 @@ unsafe fn start_cloud_write(
             &st.dlg_font,
         );
     }
-    st.cloud_shared = Some(shared.clone());
+    begin_cloud_progress(hwnd, st, shared.clone());
     crate::cloudfs::start_write(hwnd.0 as isize, idx, ops, conn, shared);
     true
 }
@@ -3456,7 +3468,7 @@ unsafe fn start_transfer(
                         &st.dlg_font,
                     );
                 }
-                st.cloud_shared = Some(shared.clone());
+                begin_cloud_progress(hwnd, st, shared.clone());
                 crate::cloudfs::start_cross_copy(
                     hwnd.0 as isize,
                     src_idx,
@@ -7193,6 +7205,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let _ = KillTimer(Some(hwnd), TIMER_PROG_CLOSE);
                 if let Some(st) = state_of(hwnd) {
                     st.transfer_close = None;
+                }
+                return LRESULT(0);
+            }
+            if wparam.0 == TIMER_CLOUD_POLL {
+                // 워커의 진행 통지와 별개로 [취소]를 읽는다 — 청크 없는 단일 요청
+                // 구간에서도 취소가 먹도록(사용자 QA 08-01).
+                if let Some(st) = state_of(hwnd) {
+                    if st.cloud_shared.is_some() {
+                        on_cloud_progress(hwnd, st);
+                    } else {
+                        let _ = KillTimer(Some(hwnd), TIMER_CLOUD_POLL);
+                    }
                 }
                 return LRESULT(0);
             }

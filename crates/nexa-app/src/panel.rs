@@ -82,10 +82,12 @@ pub struct PanelMetrics {
     pub bar_h: i32,
 }
 
-/// 패널 네비 버튼 id(원본 docs/20 §2 네비게이션 바 — 탭 하단 [←][→][↑]).
+/// 패널 네비 버튼 id(원본 docs/20 §2 네비게이션 바 — 탭 하단 [홈][←][→][↑]).
 const BTN_BACK: u32 = 1;
 const BTN_FORWARD: u32 = 2;
 const BTN_UP: u32 = 3;
+/// This PC 한 번에 가기(사용자 지시 08-01) — 상위를 여러 번 누르지 않아도 되게.
+const BTN_HOME: u32 = 4;
 
 pub struct Panel {
     pub tabbar: TabBar,
@@ -361,7 +363,7 @@ impl Panel {
             .set_bounds(Rect::new(bounds.x, bounds.y, bounds.w, tab_h), inv);
         // 네비 버튼 3개 = 간격 없이 연속, 경로 바도 바로 이어 붙임(사용자 지시 —
         // 이전 4px 틈은 미도색 영역이 검게 비치던 것이라 제거)
-        let nav_w = (nav_btn_w(&self.m) * 3).min(bounds.w);
+        let nav_w = (nav_btn_w(&self.m) * 4).min(bounds.w); // [홈][←][→][↑]
         self.navbtns
             .set_bounds(Rect::new(bounds.x, bounds.y + tab_h, nav_w, bar_h), inv);
         self.pathbar.set_bounds(
@@ -513,6 +515,7 @@ impl Panel {
         self.navbtns.set_enabled(BTN_BACK, cb, inv);
         self.navbtns.set_enabled(BTN_FORWARD, cf, inv);
         self.navbtns.set_enabled(BTN_UP, !at_mypc, inv);
+        self.navbtns.set_enabled(BTN_HOME, !at_mypc, inv);
     }
 
     // ── 탭 관리(원본 F20: 패널별 탭) ───────────────────────────
@@ -885,6 +888,21 @@ impl Panel {
         }
     }
 
+    /// [홈] — 깊이와 무관하게 **This PC로 한 번에**(사용자 지시 08-01).
+    /// 히스토리는 nav_up과 같게 쌓이고, 떠난 위치를 선택해 둔다(G-7 일관).
+    pub fn nav_home(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
+        let left = self.root_path();
+        if nexa_vfs::is_virtual_root(&left) {
+            return; // 이미 최상위
+        }
+        self.navigate_to(PathBuf::from(nexa_vfs::MY_PC), ctx, inv);
+        // 클라우드 안이었으면 This PC에 있는 **연결 루트 행**을 선택한다(X-37).
+        match nexa_vfs::cloud_parts(&left) {
+            Some((idx, _)) => self.select_path(Path::new(&nexa_vfs::cloud_root(idx)), inv),
+            None => self.select_path(&left, inv),
+        }
+    }
+
     /// Alt+↑ 자동 선택의 뷰 배치(사용자 QA 07-15 — 설정 `nav_up_align`).
     pub fn set_nav_up_align(&mut self, align: nexa_gui::widgets::ScrollAlign) {
         self.nav_up_align = align;
@@ -1240,6 +1258,7 @@ impl Panel {
                 BTN_BACK => self.nav_back(ctx, inv),
                 BTN_FORWARD => self.nav_forward(ctx, inv),
                 BTN_UP => self.nav_up(ctx, inv),
+                BTN_HOME => self.nav_home(ctx, inv),
                 _ => {}
             }
         }
@@ -1251,11 +1270,13 @@ fn nav_btn_w(m: &PanelMetrics) -> i32 {
     m.row_h + m.pad_x
 }
 
-/// 패널 네비 버튼 정의([←][→][↑] — 원본 docs/20 §2 네비게이션 바).
+/// 패널 네비 버튼 정의([홈][←][→][↑] — 원본 docs/20 §2 네비게이션 바 + 홈).
 /// 글리프 = **Segoe MDL2 Assets**(사용자 확정 07-18 — 원본 NavBtnStyle 동일:
 /// Back U+E72B·Forward U+E72A·Up U+E74A, glyph_opaque가 PUA 대역 라우팅).
+/// 홈 U+E80F는 사용자 지시 08-01 — **맨 앞**(홈/이전/이후/상위).
 fn nav_buttons() -> Vec<ToolButton> {
     [
+        (BTN_HOME, "\u{E80F}"),
         (BTN_BACK, "\u{E72B}"),
         (BTN_FORWARD, "\u{E72A}"),
         (BTN_UP, "\u{E74A}"),
@@ -1381,6 +1402,24 @@ mod tests {
         // 뒤로 = 드라이브 루트 복귀(히스토리 경유)
         p.nav_back(ctx(), &mut inv);
         assert_eq!(p.root_path(), PathBuf::from("C:\\"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nav_home_jumps_to_my_pc_from_any_depth() {
+        // 08-01: [홈]은 깊이와 무관하게 한 번에 This PC — 뒤로 가면 원위치 복귀
+        let deep = Path::new("C:\\Windows\\System32");
+        let (mut p, mut inv) = panel(deep);
+        p.nav_home(ctx(), &mut inv);
+        assert!(
+            nexa_vfs::is_virtual_root(p.root_path()),
+            "root = {:?}",
+            p.root_path()
+        );
+        p.nav_home(ctx(), &mut inv); // 이미 최상위 = 무동작(히스토리 오염 금지)
+        assert!(nexa_vfs::is_virtual_root(p.root_path()));
+        p.nav_back(ctx(), &mut inv);
+        assert_eq!(p.root_path(), deep);
     }
 
     #[test]
@@ -1632,9 +1671,9 @@ mod tests {
         let (p, _) = panel(&base);
         fs::remove_dir_all(&base).unwrap();
         assert_eq!(p.tabbar.bounds(), Rect::new(0, 0, 400, 22));
-        // 네비 바 행 = [←][→][↑] 연속 3×26=78 + 경로 바 바로 이어 붙임(사용자 지시)
-        assert_eq!(p.navbtns.bounds(), Rect::new(0, 22, 78, 24));
-        assert_eq!(p.pathbar.bounds(), Rect::new(78, 22, 322, 24));
+        // 네비 바 행 = [홈][←][→][↑] 연속 4×26=104 + 경로 바 바로 이어 붙임(사용자 지시)
+        assert_eq!(p.navbtns.bounds(), Rect::new(0, 22, 104, 24));
+        assert_eq!(p.pathbar.bounds(), Rect::new(104, 22, 296, 24));
         assert_eq!(p.rows().bounds(), Rect::new(0, 46, 400, 354));
     }
 
@@ -1644,10 +1683,10 @@ mod tests {
         let (mut p, mut inv) = panel(&base);
         p.navigate_to(base.join("sub"), ctx(), &mut inv); // 히스토리: base → sub
         p.paint(&mut PaintProbe, &Theme::dark()); // 버튼 히트 범위 캐시
-                                                  // [←] 클릭(첫 버튼 영역) → 뒤로
+                                                  // [←] 클릭(둘째 버튼 — 첫째는 [홈]) → 뒤로
         p.on_event(
             &InputEvent::MouseDown {
-                x: 10,
+                x: 36,
                 y: 30,
                 shift: false,
                 ctrl: false,

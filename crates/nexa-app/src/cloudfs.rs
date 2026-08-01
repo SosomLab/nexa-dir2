@@ -412,7 +412,8 @@ pub fn start_download(
                         if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
                             sg.status = crate::dialog::SegStatus::Active;
                         }
-                        match download_one(idx, &conn, &access, it, &shared, base, hwnd_raw) {
+                        match download_one(idx, &conn, &access, it, &shared, base, false, hwnd_raw)
+                        {
                             Ok(got) => {
                                 base += got;
                                 shared
@@ -462,16 +463,21 @@ fn download_one(
     it: &DownloadItem,
     shared: &Shared,
     base: u64,
+    // half=true: 계정 간 복사처럼 다운로드+업로드 두 단계가 한 세그먼트를 나눠 쓰는 경우
+    // — 다운로드가 세그먼트의 앞 절반만 채운다(사용자 QA 08-01: 다운로드가 끝나면
+    // 100%로 보이는데 실제로는 업로드가 남아 멈춘 것처럼 보였다).
+    half: bool,
     hwnd_raw: isize,
 ) -> Result<u64, String> {
     use std::sync::atomic::Ordering;
+    let scale = |v: u64| if half { v / 2 } else { v };
     // 청크마다 누적 바이트 갱신 + 진행 창 통지(스로틀 없이도 저빈도 — 청크가 크다)
     let mut on_prog = |got: u64, total: u64| -> bool {
         if shared.cancel.load(Ordering::Relaxed) {
             return false; // 취소 — HTTP 계층이 CANCELLED로 중단
         }
-        shared.done_bytes.store(base + got, Ordering::Relaxed);
-        if total > 0 {
+        shared.done_bytes.store(base + scale(got), Ordering::Relaxed);
+        if total > 0 && !half {
             let cur = shared.total_bytes.load(Ordering::Relaxed);
             shared.total_bytes.store(cur.max(base + total), Ordering::Relaxed);
         }
@@ -684,12 +690,30 @@ pub fn start_cross_copy(
                     is_dir: false,
                     size: *bytes,
                 };
-                download_one(src_idx, &src_conn, &src_access, &dl, &shared, base, hwnd_raw)?;
+                download_one(src_idx, &src_conn, &src_access, &dl, &shared, base, true, hwnd_raw)?;
                 let up = WriteOp::Upload {
                     src: tmp.clone(),
                     dest_inner: dest_inner.clone(),
                 };
-                let r = apply_write(dst_idx, &dst_conn, &dst_access, &up);
+                // 업로드는 세그먼트의 **뒤 절반**을 채운다 — 이 통지가 없으면 다운로드
+                // 완료 시점에 100%로 멈춘 것처럼 보이고, 취소 폴링도 함께 멎는다.
+                let seg_base = base + (*bytes).max(1) / 2;
+                let sh = shared.clone();
+                let mut on_chunk = move |sent: u64| -> bool {
+                    if sh.cancel.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    sh.done_bytes.store(seg_base + sent / 2, Ordering::Relaxed);
+                    crate::win::post_cloud_progress(hwnd_raw);
+                    true
+                };
+                let r = apply_write_prog(
+                    dst_idx,
+                    &dst_conn,
+                    &dst_access,
+                    &up,
+                    Some(&mut on_chunk),
+                );
                 let _ = std::fs::remove_file(&tmp); // 성패 무관 정리
                 r?;
                 n += 1;
