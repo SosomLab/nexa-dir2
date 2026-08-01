@@ -516,7 +516,11 @@ fn download_one(
         }
         "dropbox" => {
             // content API — 인자는 **헤더**로 전달하고 본문은 비운다(Dropbox 규약).
-            let arg = format!("Dropbox-API-Arg: {{\"path\":\"{}\"}}\r\n", json_escape(&it.inner));
+            // 헤더는 ASCII 전용 — 한글 경로는 \uXXXX로(08-01 QA)
+            let arg = format!(
+                "Dropbox-API-Arg: {{\"path\":\"{}\"}}\r\n",
+                json_escape_hdr(&it.inner)
+            );
             oauth::http_send_bytes(
                 "https://content.dropboxapi.com/2/files/download",
                 "POST",
@@ -1200,7 +1204,7 @@ fn upload_dropbox(
             Some("application/octet-stream"),
             &arg(format!(
                 "{{\"path\":\"{}\",\"mode\":\"overwrite\"}}",
-                json_escape(dest)
+                json_escape_hdr(dest)
             )),
             Some(access),
         )
@@ -1250,7 +1254,7 @@ fn upload_dropbox(
         &arg(format!(
             "{{\"cursor\":{{\"session_id\":\"{session}\",\"offset\":{total}}},\
               \"commit\":{{\"path\":\"{}\",\"mode\":\"overwrite\"}}}}",
-            json_escape(dest)
+            json_escape_hdr(dest)
         )),
         Some(access),
     )
@@ -1459,6 +1463,27 @@ fn json_escape(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `Dropbox-API-Arg` **헤더**용 JSON 이스케이프(사용자 QA 08-01 — 한글 이름 업로드 실패).
+///
+/// HTTP 헤더는 ASCII만 실을 수 있어, Dropbox는 이 헤더의 비ASCII를 `\uXXXX`로
+/// 이스케이프하도록 규정한다. 본문 JSON은 UTF-8 그대로여도 되므로 [`json_escape`]와
+/// 나눠 둔다. BMP 밖(이모지 등)은 서러게이트 쌍으로 쪼갠다.
+fn json_escape_hdr(s: &str) -> String {
+    let mut out = String::new();
+    for c in json_escape(s).chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            // encode_utf16는 BMP 밖 문자를 서러게이트 2개로 돌려준다
+            let mut u = [0u16; 2];
+            for unit in c.encode_utf16(&mut u) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
         }
     }
     out
@@ -1694,6 +1719,19 @@ mod tests {
         assert_eq!(v[1].kind, FileKind::File);
         assert_eq!(v[1].size, 7);
         assert!(v[1].modified.is_some(), "server_modified 파싱");
+    }
+
+    /// 08-01 QA 회귀: 한글 이름 업로드가 실패했다 — Dropbox-API-Arg는 **헤더**라
+    /// ASCII만 실을 수 있는데 경로를 UTF-8 그대로 넣고 있었다.
+    #[test]
+    fn dropbox_header_arg_is_ascii_only() {
+        let h = json_escape_hdr("/사진/자이오넥스.zip");
+        assert!(h.is_ascii(), "헤더에 비ASCII가 남으면 요청이 깨진다: {h}");
+        assert!(h.starts_with("/\\uc0ac\\uc9c4/"), "{h}");
+        // BMP 밖(이모지)은 서러게이트 쌍 2개로
+        assert_eq!(json_escape_hdr("\u{1F600}"), "\\ud83d\\ude00");
+        // ASCII·기존 이스케이프는 그대로 통과
+        assert_eq!(json_escape_hdr(r#"/a"b"#), r#"/a\"b"#);
     }
 
     /// JSON 이스케이프 — 경로에 따옴표·역슬래시가 있어도 본문이 깨지지 않아야 한다.
