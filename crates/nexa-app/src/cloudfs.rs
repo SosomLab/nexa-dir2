@@ -450,7 +450,7 @@ pub fn start_write(hwnd_raw: isize, idx: usize, ops: Vec<WriteOp>, conn: ConnInf
             Err(e) => err = e,
             Ok(access) => {
                 for op in &ops {
-                    match apply_write(&conn, &access, op) {
+                    match apply_write(idx, &conn, &access, op) {
                         Ok(()) => done += 1,
                         Err(e) => {
                             err = e;
@@ -477,10 +477,10 @@ fn enc_path(inner: &str) -> String {
 }
 
 /// 쓰기 1건 수행.
-fn apply_write(conn: &ConnInfo, access: &str, op: &WriteOp) -> Result<(), String> {
+fn apply_write(idx: usize, conn: &ConnInfo, access: &str, op: &WriteOp) -> Result<(), String> {
     match conn.kind.as_str() {
         "dropbox" => return apply_write_dropbox(access, op),
-        "googledrive" => return apply_write_google(access, op),
+        "googledrive" => return apply_write_google(idx, access, op),
         _ => {}
     }
     match op {
@@ -739,14 +739,19 @@ fn upload_dropbox(access: &str, src: &std::path::Path, dest: &str) -> Result<(),
 }
 
 /// Google Drive 쓰기 — ID 기반(경로 주소 지정 없음). 업로드는 multipart.
-fn apply_write_google(access: &str, op: &WriteOp) -> Result<(), String> {
-    // 부모 폴더 ID(루트는 예약어) — 캐시 의존이라 미적재면 새로 고침 유도
+fn apply_write_google(idx: usize, access: &str, op: &WriteOp) -> Result<(), String> {
+    // 부모/항목 ID — 루트는 예약어, 그 외는 목록 시점에 적재한 캐시에서 조회.
     let parent_id = |inner: &str| -> Result<String, String> {
         if inner.is_empty() {
             Ok("root".into())
         } else {
-            Err(format!("folder id unknown for {inner} — 상위 폴더를 새로 고치세요"))
+            id_get(idx, inner)
+                .ok_or_else(|| format!("folder id unknown for {inner} — 상위 폴더를 새로 고치세요"))
         }
+    };
+    let item_id = |inner: &str| -> Result<String, String> {
+        id_get(idx, inner)
+            .ok_or_else(|| format!("item id unknown for {inner} — 목록을 새로 고치세요"))
     };
     match op {
         WriteOp::Upload { src, dest_inner } => {
@@ -799,8 +804,115 @@ fn apply_write_google(access: &str, op: &WriteOp) -> Result<(), String> {
             )
             .map(|_| ())
         }
-        // 나머지는 항목 ID가 필요 — 호출부가 id를 실어 주도록 확장하기 전까지 안내.
-        _ => Err("Google Drive write for this action is not supported yet".into()),
+        WriteOp::Delete { inner } => oauth::http_send(
+            &format!("https://www.googleapis.com/drive/v3/files/{}", item_id(inner)?),
+            "DELETE",
+            None,
+            None,
+            "",
+            Some(access),
+        )
+        .map(|_| ()),
+        WriteOp::Rename { inner, new_name } => {
+            let body = format!("{{\"name\":\"{}\"}}", json_escape(new_name));
+            oauth::http_send(
+                &format!("https://www.googleapis.com/drive/v3/files/{}", item_id(inner)?),
+                "PATCH",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+        WriteOp::CopyWithin {
+            inner,
+            dest_parent_inner,
+        } => {
+            let body = format!("{{\"parents\":[\"{}\"]}}", parent_id(dest_parent_inner)?);
+            oauth::http_send(
+                &format!(
+                    "https://www.googleapis.com/drive/v3/files/{}/copy",
+                    item_id(inner)?
+                ),
+                "POST",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+        WriteOp::MoveWithin {
+            inner,
+            dest_parent_inner,
+        } => {
+            // 이동 = 부모 교체(addParents/removeParents 쿼리 — 본문 없음)
+            let old_parent = inner.rfind('/').map(|i| &inner[..i]).unwrap_or("");
+            oauth::http_send(
+                &format!(
+                    "https://www.googleapis.com/drive/v3/files/{}?addParents={}&removeParents={}",
+                    item_id(inner)?,
+                    oauth::percent(&parent_id(dest_parent_inner)?),
+                    oauth::percent(&parent_id(old_parent)?)
+                ),
+                "PATCH",
+                Some(b"{}"),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+        WriteOp::UploadTree { src, dest_inner } => {
+            // 폴더 생성 후 하위를 재귀 — 생성 응답의 id를 캐시에 심어 자식이 부모를 찾는다
+            let (parent, name) = match dest_inner.rfind('/') {
+                Some(i) => (&dest_inner[..i], &dest_inner[i + 1..]),
+                None => ("", dest_inner.as_str()),
+            };
+            let pid = parent_id(parent)?;
+            let body = format!(
+                "{{\"name\":\"{}\",\"mimeType\":\"application/vnd.google-apps.folder\",\
+                  \"parents\":[\"{pid}\"]}}",
+                json_escape(name)
+            );
+            let r = oauth::http_send(
+                "https://www.googleapis.com/drive/v3/files",
+                "POST",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )?;
+            if let Some(new_id) = oauth::json_str(&r, "id") {
+                id_put(idx, dest_inner, &new_id);
+            }
+            for ent in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+                let child = ent.path();
+                let cname = ent.file_name().to_string_lossy().into_owned();
+                let cdest = format!("{dest_inner}/{cname}");
+                match ent.file_type() {
+                    Ok(t) if t.is_dir() => apply_write_google(
+                        idx,
+                        access,
+                        &WriteOp::UploadTree {
+                            src: child,
+                            dest_inner: cdest,
+                        },
+                    )?,
+                    Ok(t) if t.is_file() => apply_write_google(
+                        idx,
+                        access,
+                        &WriteOp::Upload {
+                            src: child,
+                            dest_inner: cdest,
+                        },
+                    )?,
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
     }
 }
 

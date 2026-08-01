@@ -56,9 +56,15 @@ pub const GOOGLEDRIVE: Service = Service {
     display: "Google Drive",
     auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
     token_url: "https://oauth2.googleapis.com/token",
-    scope: "https://www.googleapis.com/auth/drive.readonly",
+    // `drive.file`은 **앱이 만들었거나 Picker로 고른 파일만** 접근 가능해 목록 열거가
+    // 불가능하다(탐색기로 성립 안 함) → 읽기·쓰기 전체인 `drive` 사용.
+    // 제한된 범위지만 **게시 상태 "테스트"면 CASA 없이** 테스트 사용자(100명)로 동작한다.
+    // 대가: 테스트 모드의 refresh 토큰은 **7일 후 만료**(재로그인 필요) — 공개 배포 시
+    // CASA 감사 필요(ADR-0006 §2-4).
+    scope: "https://www.googleapis.com/auth/drive",
     me_url: "https://www.googleapis.com/oauth2/v3/userinfo",
-    default_client_id: "", // 보류: CASA 감사 비용 결정 후(§2-4)
+    // SosomLab 등록(08-01) — GCP 프로젝트 "Nexa Dir" 데스크톱 클라이언트.
+    default_client_id: "976847412158-jds0ouedo18itg1fotcuoe0lc00b6oe8.apps.googleusercontent.com",
 };
 /// Dropbox — 앱 등록 **무료**. 개발 상태는 최대 500명이나 **50명 연결 시 2주 내
 /// 프로덕션 승인 신청**이 필요하다(심사 무료).
