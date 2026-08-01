@@ -659,6 +659,7 @@ pub fn http_post_form(url: &str, body: &str) -> Result<String, String> {
         None,
         TEXT_LIMIT,
         None,
+        None,
     )
     .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
@@ -666,7 +667,7 @@ pub fn http_post_form(url: &str, body: &str) -> Result<String, String> {
 /// Bearer GET → 응답 본문(UTF-8).
 #[cfg(windows)]
 pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
-    winhttp_request(url, "GET", None, None, "", Some(bearer), TEXT_LIMIT, None)
+    winhttp_request(url, "GET", None, None, "", Some(bearer), TEXT_LIMIT, None, None)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
@@ -676,7 +677,7 @@ pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
 #[cfg(windows)]
 #[allow(dead_code)] // 진행 통지 없는 단순 GET — Dropbox content API 등 후속 사용처 대비
 pub fn http_get_bytes(url: &str, bearer: Option<&str>, limit: usize) -> Result<Vec<u8>, String> {
-    winhttp_request(url, "GET", None, None, "", bearer, limit, None)
+    winhttp_request(url, "GET", None, None, "", bearer, limit, None, None)
 }
 
 /// 진행 통지가 붙은 GET(X-37 진행률) — 콜백이 `false`를 돌리면 [`CANCELLED`] 오류.
@@ -687,7 +688,7 @@ pub fn http_get_bytes_progress(
     limit: usize,
     on_progress: &mut dyn FnMut(u64, u64) -> bool,
 ) -> Result<Vec<u8>, String> {
-    winhttp_request(url, "GET", None, None, "", bearer, limit, Some(on_progress))
+    winhttp_request(url, "GET", None, None, "", bearer, limit, Some(on_progress), None)
 }
 
 #[cfg(not(windows))]
@@ -711,8 +712,39 @@ pub fn http_send(
     extra: &str,
     bearer: Option<&str>,
 ) -> Result<String, String> {
-    winhttp_request(url, method, body, content_type, extra, bearer, TEXT_LIMIT, None)
+    winhttp_request(url, method, body, content_type, extra, bearer, TEXT_LIMIT, None, None)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// 재개 업로드 **세션 생성** — 응답 `Location` 헤더(세션 URI)를 돌려준다.
+#[cfg(windows)]
+pub fn http_start_session(
+    url: &str,
+    body: &[u8],
+    content_type: &str,
+    bearer: &str,
+) -> Result<String, String> {
+    let mut loc = String::new();
+    winhttp_request(
+        url,
+        "POST",
+        Some(body),
+        Some(content_type),
+        "",
+        Some(bearer),
+        TEXT_LIMIT,
+        None,
+        Some(&mut loc),
+    )?;
+    if loc.is_empty() {
+        return Err("no upload session Location".into());
+    }
+    Ok(loc)
+}
+
+#[cfg(not(windows))]
+pub fn http_start_session(_u: &str, _b: &[u8], _c: &str, _r: &str) -> Result<String, String> {
+    Err("windows only".into())
 }
 
 /// 임의 메서드 → **원본 바이트**(Dropbox content API처럼 본문이 이진인 응답).
@@ -726,7 +758,7 @@ pub fn http_send_bytes(
     bearer: Option<&str>,
     limit: usize,
 ) -> Result<Vec<u8>, String> {
-    winhttp_request(url, method, body, content_type, extra, bearer, limit, None)
+    winhttp_request(url, method, body, content_type, extra, bearer, limit, None, None)
 }
 
 #[cfg(not(windows))]
@@ -788,6 +820,8 @@ fn winhttp_request(
     limit: usize,
     // 청크마다 (누적 바이트, 전체 바이트[0=미상])을 통지. `false` 반환 = 취소.
     on_progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
+    // 응답 `Location` 헤더를 받아갈 자리(재개 업로드 세션 URI).
+    out_location: Option<&mut String>,
 ) -> Result<Vec<u8>, String> {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Networking::WinHttp::{
@@ -795,7 +829,7 @@ fn winhttp_request(
         WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
         WinHttpSendRequest, URL_COMPONENTS, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
         WINHTTP_FLAG_SECURE, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER,
-        WINHTTP_QUERY_STATUS_CODE,
+        WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
     };
     unsafe {
         let wurl = HSTRING::from(url);
@@ -896,6 +930,24 @@ fn winhttp_request(
             .is_ok()
             {
                 total = clen as u64;
+            }
+        }
+        // Location 헤더(재개 업로드 세션 URI) — 요청한 경우에만 조회
+        if let Some(slot) = out_location {
+            let mut buf = [0u16; 2048];
+            let mut sz = (buf.len() * 2) as u32;
+            if WinHttpQueryHeaders(
+                req,
+                WINHTTP_QUERY_LOCATION,
+                PCWSTR::null(),
+                Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+                &mut sz,
+                std::ptr::null_mut(),
+            )
+            .is_ok()
+            {
+                let n = (sz as usize / 2).min(buf.len());
+                *slot = String::from_utf16_lossy(&buf[..n]);
             }
         }
         let mut progress = on_progress;

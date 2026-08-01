@@ -269,6 +269,16 @@ pub fn cloud_entries(path: impl AsRef<Path>) -> Option<Vec<Entry>> {
 mod tests {
     use super::*;
 
+    /// `EXTRA_ROOTS`는 **프로세스 전역**이라, 이를 세팅하는 테스트끼리 병렬로 돌면
+    /// 서로의 값을 덮어써 간헐 실패한다(08-01 실측). 해당 테스트를 직렬화한다.
+    static ROOTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn roots_guard() -> std::sync::MutexGuard<'static, ()> {
+        ROOTS_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn virtual_root_and_drive_entries() {
         assert!(is_virtual_root(MY_PC));
@@ -326,6 +336,7 @@ mod tests {
     /// X-37 5차: 표시명·leaf·부모 — **센티널이 UI에 노출되면 안 된다**.
     #[test]
     fn cloud_display_leaf_and_parent() {
+        let _g = roots_guard();
         set_extra_roots(vec![("OneDrive – a@b.com".into(), cloud_root(0))]);
         assert_eq!(cloud_label(0).as_deref(), Some("OneDrive – a@b.com"));
         assert_eq!(cloud_display("::CLOUD:0::").as_deref(), Some("OneDrive – a@b.com"));
@@ -350,6 +361,7 @@ mod tests {
     /// X-37: 표시 경로 → 센티널 역변환(경로 바 세그먼트 클릭).
     #[test]
     fn cloud_from_display_roundtrip() {
+        let _g = roots_guard();
         set_extra_roots(vec![
             // 동기화 폴더 링크(실경로)가 섞여 있어도 다른 연결이 죽지 않아야 한다
             ("OneDrive – 회사".into(), "C:\\Users\\me\\OneDrive - Corp".into()),
@@ -385,6 +397,7 @@ mod tests {
     /// X-36: 추가 루트 등록 → 표시명·target 실경로 Entry로 열거.
     #[test]
     fn extra_roots_roundtrip() {
+        let _g = roots_guard();
         set_extra_roots(vec![("OneDrive – Test".into(), "C:\\Users\\t\\OneDrive".into())]);
         let e = extra_root_entries();
         assert_eq!(e.len(), 1);

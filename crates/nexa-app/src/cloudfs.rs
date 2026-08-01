@@ -578,6 +578,8 @@ pub struct CrossItem {
     pub dest_inner: String,
     /// 폴더면 워커가 원본을 재귀 전개한다.
     pub is_dir: bool,
+    /// 목록에서 아는 바이트 크기(진행률 총량 선확정 — 폴더면 전개 후 합산).
+    pub size: u64,
 }
 
 /// **서로 다른 연결 간 복사**(X-37 — 사용자 QA 08-01).
@@ -605,7 +607,7 @@ pub fn start_cross_copy(
             let dst_access = token_for(&dst_conn)?;
             let svc = oauth::service_of(&src_conn.kind).ok_or("unknown service")?;
             // 폴더는 원본에서 재귀 전개해 파일 목록으로 평탄화
-            let mut flat: Vec<(String, String)> = Vec::new(); // (src_inner, dest_inner)
+            let mut flat: Vec<(String, String, u64)> = Vec::new(); // (src, dest, bytes)
             for it in &items {
                 if it.is_dir {
                     let base = stage.join("expand");
@@ -619,10 +621,10 @@ pub fn start_cross_copy(
                             .strip_prefix(&it.src_inner)
                             .unwrap_or("")
                             .to_string();
-                        flat.push((d.inner.clone(), format!("{}{rel}", it.dest_inner)));
+                        flat.push((d.inner.clone(), format!("{}{rel}", it.dest_inner), d.size));
                     }
                 } else {
-                    flat.push((it.src_inner.clone(), it.dest_inner.clone()));
+                    flat.push((it.src_inner.clone(), it.dest_inner.clone(), it.size));
                 }
             }
             // **대상 폴더를 먼저 만든다**(사용자 QA 08-01: 평탄화한 파일만 올리면
@@ -634,7 +636,7 @@ pub fn start_cross_copy(
                     dirs.push(it.dest_inner.clone());
                 }
             }
-            for (_, dest_inner) in &flat {
+            for (_, dest_inner, _) in &flat {
                 if let Some(cut) = dest_inner.rfind('/') {
                     let parent = dest_inner[..cut].to_string();
                     if !parent.is_empty() {
@@ -650,17 +652,23 @@ pub fn start_cross_copy(
                 }
                 ensure_folder(dst_idx, &dst_conn, &dst_access, d)?;
             }
+            // 세그먼트·총량은 **실제 바이트**(사용자 QA 08-01 — 건수를 바이트
+            // 자리에 넣으면 "0 B / 6 B"가 된다). 크기 미상은 1로 둔다.
             *crate::win::plock(&shared.items) = flat
                 .iter()
-                .map(|_| crate::dialog::SegItem {
-                    size: 1,
+                .map(|(_, _, b)| crate::dialog::SegItem {
+                    size: (*b).max(1),
                     done: 0,
                     status: crate::dialog::SegStatus::Pending,
                 })
                 .collect();
-            shared.total_bytes.store(flat.len() as u64, Ordering::Relaxed);
+            shared.total_bytes.store(
+                flat.iter().map(|(_, _, b)| (*b).max(1)).sum(),
+                Ordering::Relaxed,
+            );
             let mut n = 0usize;
-            for (i, (src_inner, dest_inner)) in flat.iter().enumerate() {
+            let mut base: u64 = 0;
+            for (i, (src_inner, dest_inner, bytes)) in flat.iter().enumerate() {
                 if shared.cancel.load(Ordering::Relaxed) {
                     return Err(oauth::CANCELLED.into());
                 }
@@ -674,9 +682,9 @@ pub fn start_cross_copy(
                     inner: src_inner.clone(),
                     dest: tmp.clone(),
                     is_dir: false,
-                    size: 0, // 계정 간 복사는 건수 기준 진행(바이트는 파일마다 상이)
+                    size: *bytes,
                 };
-                download_one(src_idx, &src_conn, &src_access, &dl, &shared, 0, hwnd_raw)?;
+                download_one(src_idx, &src_conn, &src_access, &dl, &shared, base, hwnd_raw)?;
                 let up = WriteOp::Upload {
                     src: tmp.clone(),
                     dest_inner: dest_inner.clone(),
@@ -685,11 +693,12 @@ pub fn start_cross_copy(
                 let _ = std::fs::remove_file(&tmp); // 성패 무관 정리
                 r?;
                 n += 1;
+                base += (*bytes).max(1);
                 if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
-                    sg.done = 1;
+                    sg.done = sg.size;
                     sg.status = crate::dialog::SegStatus::Done;
                 }
-                shared.done_bytes.store(n as u64, Ordering::Relaxed);
+                shared.done_bytes.store(base, Ordering::Relaxed);
                 crate::win::post_cloud_progress(hwnd_raw);
             }
             Ok(n)
@@ -799,6 +808,64 @@ fn enc_path(inner: &str) -> String {
         .join("/")
 }
 
+/// Google Drive **재개 업로드**(resumable) — 세션 URI를 받아 청크로 PUT.
+/// 청크마다 진행을 보고하고, 취소는 청크 경계에서 듣는다.
+/// 청크 크기는 Google 규약상 256KiB의 배수여야 한다([`CHUNK`] = 5MB로 충족).
+fn upload_google_resumable(
+    access: &str,
+    src: &std::path::Path,
+    name: &str,
+    parent_id: &str,
+    total: u64,
+    mut on_chunk: Option<&mut dyn FnMut(u64) -> bool>,
+) -> Result<(), String> {
+    use std::io::Read;
+    let meta = format!(
+        "{{\"name\":\"{}\",\"parents\":[\"{parent_id}\"]}}",
+        json_escape(name)
+    );
+    let session = oauth::http_start_session(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+        meta.as_bytes(),
+        "application/json; charset=UTF-8",
+        access,
+    )?;
+    let mut f = std::fs::File::open(src).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; CHUNK];
+    let mut off: u64 = 0;
+    while off < total {
+        let want = CHUNK.min((total - off) as usize);
+        f.read_exact(&mut buf[..want]).map_err(|e| e.to_string())?;
+        let range = format!(
+            "Content-Range: bytes {}-{}/{}\r\n",
+            off,
+            off + want as u64 - 1,
+            total
+        );
+        // 세션 URI는 사전 인증이라 Authorization 불요. 중간 청크는 308을 돌려주므로
+        // 2xx 검사에 걸리지만, 마지막 청크만 2xx면 성공이다 → 중간은 오류를 삼킨다.
+        let last = off + want as u64 >= total;
+        let r = oauth::http_send(
+            &session,
+            "PUT",
+            Some(&buf[..want]),
+            Some("application/octet-stream"),
+            &range,
+            None,
+        );
+        if last {
+            r?;
+        }
+        off += want as u64;
+        if let Some(cb) = on_chunk.as_deref_mut() {
+            if !cb(off) {
+                return Err(oauth::CANCELLED.into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 대상 폴더가 **있게 보장**한다(멱등) — 계정 간 복사가 파일을 올리기 전에 호출.
 ///
 /// 원본을 평탄화해 파일만 올리면 대상에 폴더가 없어 실패한다(특히 Google은 부모
@@ -893,8 +960,8 @@ fn apply_write_prog(
 ) -> Result<(), String> {
     let mut prog = prog;
     match conn.kind.as_str() {
-        "dropbox" => return apply_write_dropbox(access, op),
-        "googledrive" => return apply_write_google(idx, access, op),
+        "dropbox" => return apply_write_dropbox(access, op, prog.take()),
+        "googledrive" => return apply_write_google(idx, access, op, prog.take()),
         _ => {}
     }
     match op {
@@ -1007,7 +1074,11 @@ fn apply_write_prog(
 
 /// Dropbox 쓰기 — 전부 POST + JSON(경로 기반이라 ID 불요).
 /// 업로드는 150MB 이하 단순 `files/upload`, 초과는 세션 청크.
-fn apply_write_dropbox(access: &str, op: &WriteOp) -> Result<(), String> {
+fn apply_write_dropbox(
+    access: &str,
+    op: &WriteOp,
+    mut prog: Option<&mut dyn FnMut(u64) -> bool>,
+) -> Result<(), String> {
     let post = |url: &str, body: String| -> Result<(), String> {
         oauth::http_send(
             url,
@@ -1020,7 +1091,7 @@ fn apply_write_dropbox(access: &str, op: &WriteOp) -> Result<(), String> {
         .map(|_| ())
     };
     match op {
-        WriteOp::Upload { src, dest_inner } => upload_dropbox(access, src, dest_inner),
+        WriteOp::Upload { src, dest_inner } => upload_dropbox(access, src, dest_inner, prog.take()),
         WriteOp::UploadTree { src, dest_inner } => {
             let _ = post(
                 "https://api.dropboxapi.com/2/files/create_folder_v2",
@@ -1032,9 +1103,9 @@ fn apply_write_dropbox(access: &str, op: &WriteOp) -> Result<(), String> {
                 let cdest = format!("{dest_inner}/{cname}");
                 match ent.file_type() {
                     Ok(t) if t.is_dir() => {
-                        apply_write_dropbox(access, &WriteOp::UploadTree { src: child, dest_inner: cdest })?
+                        apply_write_dropbox(access, &WriteOp::UploadTree { src: child, dest_inner: cdest }, None)?
                     }
-                    Ok(t) if t.is_file() => upload_dropbox(access, &child, &cdest)?,
+                    Ok(t) if t.is_file() => upload_dropbox(access, &child, &cdest, None)?,
                     _ => {}
                 }
             }
@@ -1085,7 +1156,12 @@ fn apply_write_dropbox(access: &str, op: &WriteOp) -> Result<(), String> {
 }
 
 /// Dropbox 업로드 — 150MB 이하 단순, 초과는 세션(8MB 청크 append → finish).
-fn upload_dropbox(access: &str, src: &std::path::Path, dest: &str) -> Result<(), String> {
+fn upload_dropbox(
+    access: &str,
+    src: &std::path::Path,
+    dest: &str,
+    mut on_chunk: Option<&mut dyn FnMut(u64) -> bool>,
+) -> Result<(), String> {
     use std::io::Read;
     const SIMPLE_MAX: u64 = 140 * 1024 * 1024;
     const DBX_CHUNK: usize = 8 * 1024 * 1024;
@@ -1136,6 +1212,11 @@ fn upload_dropbox(access: &str, src: &std::path::Path, dest: &str) -> Result<(),
             )?;
         }
         off += want as u64;
+        if let Some(cb) = on_chunk.as_deref_mut() {
+            if !cb(off) {
+                return Err(oauth::CANCELLED.into());
+            }
+        }
     }
     oauth::http_send(
         "https://content.dropboxapi.com/2/files/upload_session/finish",
@@ -1153,7 +1234,12 @@ fn upload_dropbox(access: &str, src: &std::path::Path, dest: &str) -> Result<(),
 }
 
 /// Google Drive 쓰기 — ID 기반(경로 주소 지정 없음). 업로드는 multipart.
-fn apply_write_google(idx: usize, access: &str, op: &WriteOp) -> Result<(), String> {
+fn apply_write_google(
+    idx: usize,
+    access: &str,
+    op: &WriteOp,
+    mut prog: Option<&mut dyn FnMut(u64) -> bool>,
+) -> Result<(), String> {
     // 부모/항목 ID — 루트는 예약어, 그 외는 목록 시점에 적재한 캐시에서 조회.
     // 캐시 미스여도 루트부터 되짚어 해석한다(계정 간 복사처럼 목록을 거치지 않고
     // 바로 쓰는 경로에서 ID가 없어 실패하던 것을 해소 — 사용자 QA 08-01).
@@ -1169,6 +1255,12 @@ fn apply_write_google(idx: usize, access: &str, op: &WriteOp) -> Result<(), Stri
                 None => ("", dest_inner.as_str()),
             };
             let pid = parent_id(parent)?;
+            let total = std::fs::metadata(src).map_err(|e| e.to_string())?.len();
+            // 큰 파일은 **재개 업로드(청크)** — 단일 multipart는 전체를 메모리에 올리고
+            // 진행 보고가 불가능하다(사용자 QA 08-01: 36MB가 끝나야 상태가 바뀜).
+            if total > SIMPLE_PUT_MAX {
+                return upload_google_resumable(access, src, name, &pid, total, prog.take());
+            }
             let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
             // multipart/related — 메타데이터 파트 + 본문 파트
             let bound = "nexadirBOUNDARY7f3a";
@@ -1312,6 +1404,7 @@ fn apply_write_google(idx: usize, access: &str, op: &WriteOp) -> Result<(), Stri
                             src: child,
                             dest_inner: cdest,
                         },
+                        None,
                     )?,
                     Ok(t) if t.is_file() => apply_write_google(
                         idx,
@@ -1320,6 +1413,7 @@ fn apply_write_google(idx: usize, access: &str, op: &WriteOp) -> Result<(), Stri
                             src: child,
                             dest_inner: cdest,
                         },
+                        None,
                     )?,
                     _ => {}
                 }

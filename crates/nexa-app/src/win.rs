@@ -3347,10 +3347,6 @@ fn cloud_row_info(st: &State, path: &std::path::Path) -> Option<(bool, u64)> {
     })
 }
 
-/// 폴더 여부만 필요한 곳(계정 간 복사의 재귀 판정).
-fn cloud_row_is_dir(st: &State, path: &std::path::Path) -> bool {
-    cloud_row_info(st, path).map(|(d, _)| d).unwrap_or(false)
-}
 
 /// 클라우드 쓰기 작업 시작(X-37 4차) — 업로드·삭제·이름 변경·새 폴더 공용.
 /// 처리했으면 `true`(호출자는 로컬 경로를 타지 않는다).
@@ -3432,9 +3428,11 @@ unsafe fn start_transfer(
                             return None; // 여러 원본 연결 혼합은 첫 연결만
                         }
                         let name = inner.rsplit('/').next()?.to_string();
+                        let (is_dir, size) = cloud_row_info(st, p).unwrap_or((false, 0));
                         Some(crate::cloudfs::CrossItem {
                             dest_inner: format!("{dest_inner}/{name}"),
-                            is_dir: cloud_row_is_dir(st, p),
+                            is_dir,
+                            size,
                             src_inner: inner,
                         })
                     })
