@@ -10,7 +10,11 @@
 > ③ **main CI가 비Windows에서 깨져 있던 것을 발견·복구 2건** — `cloudfs`가
 > `crate::win`/`dialog`를 43곳 참조하는 UI 결합 워커라 `#[cfg(windows)]` 정렬 ·
 > `cloud::detect()`의 `Vec::new()`가 cfg 블록 소거로 타입 추론 근거를 잃던 `E0282`.
-> **Windows 잡·릴리스 산출물은 무사**했다 ④ **절차 보완**([18 §2·§4](18-build-and-test.md))
+> **Windows 잡·릴리스 산출물은 무사**했다. 컴파일을 뚫자 드러난 테스트 2건은
+> **07-27부터 계속 붉던 것**(클라우드 작업 소산이 아님 — Windows 잡만 보느라
+> 일주일 넘게 미발견). `open_any_root`는 Windows 전용 폴백이라 cfg 게이팅,
+> Mermaid flowchart는 3단 폴백 중 둘만 단언하던 것을 확장. **3잡 green 복귀**
+> ④ **절차 보완**([18 §2·§4](18-build-and-test.md))
 > — Windows에서 `cargo test`가 green이어도 cfg 소거 경로는 미검증이라
 > `--target x86_64-unknown-linux-gnu` 검사를 명령 목록에 추가.
 > [21 §8](21-distribution.md) 채널 표 갱신 — **choco 정체는 큐 대기가 아니라
