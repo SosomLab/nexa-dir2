@@ -35,12 +35,15 @@ menu.help.about = About Nexa Dir
 
 # ── Cloud (X-36) ──
 menu.cloud = Cloud
-cloud.add = Add Connection…
+cloud.add = Add Link…
 cloud.goto = Go to Folder
 cloud.web = Open Online
 cloud.copyUrl = Copy URL
 cloud.disconnect = Disconnect
-cloud.connectTo = Connect {0}
+cloud.unlink = Remove Link
+cloud.linked = {0} linked
+cloud.unlinked = {0} unlinked
+cloud.connectTo = Link {0}
 cloud.addNone = No cloud sync clients detected
 cloud.connected = {0} connected
 cloud.removed = {0} disconnected

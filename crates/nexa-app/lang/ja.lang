@@ -35,12 +35,15 @@ menu.help.about = Nexa Dir について
 
 # ── クラウド(X-36) ──
 menu.cloud = クラウド
-cloud.add = 接続を追加…
+cloud.add = リンクを追加…
 cloud.goto = フォルダーへ移動
 cloud.web = オンラインで表示
 cloud.copyUrl = URL をコピー
 cloud.disconnect = 接続を解除
-cloud.connectTo = {0} を接続
+cloud.unlink = リンクを解除
+cloud.linked = {0} をリンクしました
+cloud.unlinked = {0} のリンクを解除しました
+cloud.connectTo = {0} をリンク
 cloud.addNone = クラウド同期クライアントが見つかりません
 cloud.connected = {0} を接続しました
 cloud.removed = {0} の接続を解除しました

@@ -133,6 +133,8 @@ pub fn request(hwnd_raw: isize, idx: usize, inner: &str, conn: ConnInfo) {
 pub struct ConnInfo {
     pub kind: String,
     pub client_id: String,
+    /// Google 전용 — 빈 문자열이면 전송하지 않는다(MS·Dropbox).
+    pub client_secret: String,
     /// DPAPI에서 복호한 refresh 토큰.
     pub refresh: String,
 }
@@ -140,7 +142,7 @@ pub struct ConnInfo {
 /// 블로킹 적재(워커 전용) — refresh로 access 발급 → 서비스별 목록 조회 → Entry 변환.
 fn load_blocking(idx: usize, inner: &str, conn: &ConnInfo) -> Result<Vec<Entry>, String> {
     let svc = oauth::service_of(&conn.kind).ok_or("unknown service")?;
-    let tokens = oauth::refresh(&svc, &conn.client_id, &conn.refresh)
+    let tokens = oauth::refresh(&svc, &conn.client_id, &conn.client_secret, &conn.refresh)
         .map_err(|e| tr_key(e.key()))?;
     let body = fetch_list(&svc, &tokens.access, idx, inner)?;
     Ok(parse_list(&svc, &body, idx, inner))
@@ -339,7 +341,7 @@ pub fn start_download(
 /// refresh → access 토큰(워커 전용).
 fn token_for(conn: &ConnInfo) -> Result<String, String> {
     let svc = oauth::service_of(&conn.kind).ok_or("unknown service")?;
-    oauth::refresh(&svc, &conn.client_id, &conn.refresh)
+    oauth::refresh(&svc, &conn.client_id, &conn.client_secret, &conn.refresh)
         .map(|t| t.access)
         .map_err(|e| tr_key(e.key()))
 }

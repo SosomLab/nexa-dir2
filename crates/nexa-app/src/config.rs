@@ -168,12 +168,24 @@ pub struct Settings {
     /// PKCE라 공개돼도 무해한 값이며 `client_secret`은 쓰지 않는다).
     /// 키 = `cloud_client_id_onedrive` 등. 미설정 = 해당 서비스 직접 연결 비활성(안내).
     pub cloud_client_ids: Vec<(String, String)>,
+    /// 서비스별 OAuth `client_secret`(X-37 — **Google 전용**. Google은 데스크톱 앱에도
+    /// 토큰 교환 시 요구하며 공식 문서가 "비밀이 아니다"라고 명시한다).
+    pub cloud_client_secrets: Vec<(String, String)>,
 }
 
 impl Settings {
     /// 종류별 client_id(미설정 = 빈 문자열).
     pub fn client_id(&self, kind: &str) -> &str {
         self.cloud_client_ids
+            .iter()
+            .find(|(k, _)| k == kind)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
+    }
+
+    /// 종류별 client_secret(미설정 = 빈 문자열).
+    pub fn client_secret(&self, kind: &str) -> &str {
+        self.cloud_client_secrets
             .iter()
             .find(|(k, _)| k == kind)
             .map(|(_, v)| v.as_str())
@@ -235,6 +247,7 @@ impl Default for Settings {
             launcher_seed: 0,
             cloud_conns: Vec::new(),
             cloud_client_ids: Vec::new(),
+            cloud_client_secrets: Vec::new(),
         }
     }
 }
@@ -622,6 +635,13 @@ impl Settings {
                     }
                 }
                 // OAuth client_id(X-37) — `cloud_client_id_<종류>`
+                k if k.starts_with("cloud_client_secret_") => {
+                    let kind = k["cloud_client_secret_".len()..].trim();
+                    if !kind.is_empty() && !v.trim().is_empty() && v.len() <= 256 {
+                        s.cloud_client_secrets
+                            .push((kind.to_string(), v.trim().to_string()));
+                    }
+                }
                 k if k.starts_with("cloud_client_id_") => {
                     let kind = k["cloud_client_id_".len()..].trim();
                     if !kind.is_empty() && !v.trim().is_empty() && v.len() <= 256 {
@@ -1103,6 +1123,7 @@ mod tests {
                 },
             ],
             cloud_client_ids: vec![("onedrive".into(), "00000000-abcd-1234".into())],
+            cloud_client_secrets: vec![("googledrive".into(), "GOCSPX-test".into())],
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");

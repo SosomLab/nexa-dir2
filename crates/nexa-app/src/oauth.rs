@@ -31,6 +31,11 @@ pub struct Service {
     /// NexaDir 명의 기본 client_id. **빈 문자열 = 아직 미등록**(사용자 설정 필수).
     /// 등록 완료 시 이 상수만 채우면 전 사용자에게 즉시 적용된다(ADR-0006 §2-4).
     pub default_client_id: &'static str,
+    /// **Google 전용** — Google은 데스크톱 앱에도 토큰 교환 시 `client_secret`을
+    /// 요구한다(PKCE로 대체 불가. MS·Dropbox는 불요). Google 공식 문서가 네이티브
+    /// 앱의 이 값을 "비밀이 아니다"라고 명시하므로 client_id와 같은 취급으로 동봉한다.
+    /// 빈 문자열 = 전송하지 않음.
+    pub default_client_secret: &'static str,
 }
 
 /// OneDrive — Entra 앱 등록 **무료**. `Files.Read`(내 파일 읽기)는 사용자 동의만으로
@@ -47,6 +52,7 @@ pub const ONEDRIVE: Service = Service {
     // SosomLab 등록(08-01) — Entra 앱 "NexaDir". PKCE 공개 클라이언트라 시크릿 아님.
     // 포털 리디렉션 URI 등록값 = `http://localhost`(포트는 MS가 무시 — PREFERRED_PORT 참조).
     default_client_id: "6685a1af-8493-40c5-984f-63c2825d2cdd",
+    default_client_secret: "", // MS는 PKCE 공개 클라이언트 — 시크릿 불요
 };
 /// Google Drive — `drive.readonly`는 **restricted scope**라 CASA 연간 유료 감사
 /// (연 $500~4,500)+매년 재검증이 필요하다. 미등록 시 사용자 자기 ID 입력이 유일 경로
@@ -68,6 +74,9 @@ pub const GOOGLEDRIVE: Service = Service {
     me_url: "https://www.googleapis.com/drive/v3/about?fields=user",
     // SosomLab 등록(08-01) — GCP 프로젝트 "Nexa Dir" 데스크톱 클라이언트.
     default_client_id: "976847412158-jds0ouedo18itg1fotcuoe0lc00b6oe8.apps.googleusercontent.com",
+    // TODO(SosomLab): GCP 콘솔 → 클라이언트 → Nexa Dir Desktop → 클라이언트 보안 비밀번호.
+    // 미설정 시 설정 `cloud_client_secret_googledrive`로 덮어쓸 수 있다.
+    default_client_secret: "",
 };
 /// Dropbox — 앱 등록 **무료**. 개발 상태는 최대 500명이나 **50명 연결 시 2주 내
 /// 프로덕션 승인 신청**이 필요하다(심사 무료).
@@ -79,6 +88,7 @@ pub const DROPBOX: Service = Service {
     scope: "files.metadata.read files.content.read account_info.read",
     me_url: "", // Dropbox는 POST 전용이라 1차 생략(라벨 = 서비스명 + 연결 시각)
     default_client_id: "", // TODO(SosomLab 등록): App key — 무료·즉시 가능
+    default_client_secret: "", // Dropbox는 PKCE로 시크릿 대체 가능
 };
 
 /// 지원 서비스 전체(Connect Cloud 메뉴 순서).
@@ -100,6 +110,19 @@ impl Service {
         let s = from_settings.trim();
         if s.is_empty() {
             self.default_client_id
+        } else {
+            s
+        }
+    }
+
+    /// 실효 client_secret — 설정 우선, 없으면 기본값. 빈 문자열 = 전송하지 않음.
+    pub fn resolve_client_secret<'a>(&self, from_settings: &'a str) -> &'a str
+    where
+        Self: 'a,
+    {
+        let s = from_settings.trim();
+        if s.is_empty() {
+            self.default_client_secret
         } else {
             s
         }
@@ -301,6 +324,7 @@ pub struct AuthSession {
     redirect: String,
     svc: Service,
     client_id: String,
+    client_secret: String,
 }
 
 impl AuthSession {
@@ -309,7 +333,11 @@ impl AuthSession {
     /// [`PREFERRED_PORT`] 우선(Dropbox 정확 일치 대응) → 점유 시 임의 포트 폴백.
     /// 리디렉션 호스트는 **`localhost`** — Microsoft가 `localhost`에 한해 포트를
     /// 무시하고, `http`+`127.0.0.1`은 포털에서 등록조차 할 수 없기 때문(08-01 QA).
-    pub fn begin(svc: Service, client_id: &str) -> Result<AuthSession, AuthError> {
+    pub fn begin(
+        svc: Service,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<AuthSession, AuthError> {
         if client_id.trim().is_empty() {
             return Err(AuthError::NoClientId);
         }
@@ -337,6 +365,7 @@ impl AuthSession {
             redirect,
             svc,
             client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
         })
     }
 
@@ -344,13 +373,18 @@ impl AuthSession {
     /// `timeout` 경과 = [`AuthError::Timeout`](사용자가 창을 닫은 경우 포함).
     pub fn wait_and_exchange(self, timeout: Duration) -> Result<Tokens, AuthError> {
         let code = self.wait_code(timeout)?;
-        let body = format!(
+        let mut body = format!(
             "client_id={}&code={}&redirect_uri={}&grant_type=authorization_code&code_verifier={}",
             percent(&self.client_id),
             percent(&code),
             percent(&self.redirect),
             percent(&self.verifier)
         );
+        // Google은 데스크톱 앱에도 client_secret을 요구한다(PKCE로 대체 불가).
+        // MS·Dropbox는 빈 값이라 전송되지 않는다.
+        if !self.client_secret.is_empty() {
+            body.push_str(&format!("&client_secret={}", percent(&self.client_secret)));
+        }
         let resp = http_post_form(self.svc.token_url, &body)
             .map_err(AuthError::Exchange)?;
         let mut t = Tokens {
@@ -447,12 +481,20 @@ impl AuthSession {
 
 /// refresh 토큰으로 access 재발급(만료 시 무개입 갱신 — ADR-0006 §2-3).
 #[allow(dead_code)] // 사용처 = ADR-0006 §3 2차(탐색) — 목록 조회 직전 갱신
-pub fn refresh(svc: &Service, client_id: &str, refresh_token: &str) -> Result<Tokens, AuthError> {
-    let body = format!(
+pub fn refresh(
+    svc: &Service,
+    client_id: &str,
+    client_secret: &str,
+    refresh_token: &str,
+) -> Result<Tokens, AuthError> {
+    let mut body = format!(
         "client_id={}&refresh_token={}&grant_type=refresh_token",
         percent(client_id),
         percent(refresh_token)
     );
+    if !client_secret.is_empty() {
+        body.push_str(&format!("&client_secret={}", percent(client_secret)));
+    }
     let resp = http_post_form(svc.token_url, &body).map_err(AuthError::Exchange)?;
     let access = json_str(&resp, "access_token").unwrap_or_default();
     if access.is_empty() {
@@ -907,7 +949,7 @@ mod tests {
     /// `invalid_request: redirect_uri is not valid`로 거부한다.
     #[test]
     fn redirect_uri_uses_localhost_and_preferred_port() {
-        let s = AuthSession::begin(ONEDRIVE, "cid").expect("루프백 리스너");
+        let s = AuthSession::begin(ONEDRIVE, "cid", "").expect("루프백 리스너");
         assert!(
             s.redirect.starts_with("http://localhost:"),
             "redirect={}",

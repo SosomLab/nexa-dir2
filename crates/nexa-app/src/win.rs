@@ -409,7 +409,16 @@ fn build_cloud_items(
             MenuItem::new(CMD_CLOUD_WEB_BASE + i, tr("cloud.web"), ""),
             MenuItem::new(CMD_CLOUD_COPYURL_BASE + i, tr("cloud.copyUrl"), ""),
             MenuItem::separator(),
-            MenuItem::new(CMD_CLOUD_DISC_BASE + i, tr("cloud.disconnect"), ""),
+            // X-36 링크(동기화 폴더)와 X-37 연결(API)의 용어 분리(사용자 확정 08-01)
+            MenuItem::new(
+                CMD_CLOUD_DISC_BASE + i,
+                if c.is_api() {
+                    tr("cloud.disconnect")
+                } else {
+                    tr("cloud.unlink")
+                },
+                "",
+            ),
         ]));
     }
     if !items.is_empty() {
@@ -492,6 +501,9 @@ unsafe fn install_cloud_lister(hwnd: HWND) {
             Some(crate::cloudfs::ConnInfo {
                 kind: c.kind.clone(),
                 client_id: svc.resolve_client_id(settings.client_id(&c.kind)).to_string(),
+                client_secret: svc
+                    .resolve_client_secret(settings.client_secret(&c.kind))
+                    .to_string(),
                 refresh: crate::secret::load_token(idx).unwrap_or_default(),
             })
         });
@@ -685,6 +697,8 @@ struct State {
     cloud_cands: Vec<crate::cloud::CloudCandidate>,
     /// 서비스별 OAuth client_id(X-37 — ADR-0006 §2-4 사용자 제공).
     cloud_client_ids: Vec<(String, String)>,
+    /// 서비스별 client_secret(Google 전용 — 데스크톱 앱도 토큰 교환 시 요구).
+    cloud_client_secrets: Vec<(String, String)>,
     /// 폰트 슬롯(X-12): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
     base_font: String,
     base_font_size: i32,
@@ -1204,6 +1218,7 @@ pub fn run() -> Result<()> {
         cloud_conns: settings.cloud_conns.clone(),
         cloud_cands,
         cloud_client_ids: settings.cloud_client_ids.clone(),
+        cloud_client_secrets: settings.cloud_client_secrets.clone(),
         base_font: settings.base_font.clone(),
         base_font_size: settings.base_font_size,
         ctx_font: settings.ctx_font.clone(),
@@ -3126,6 +3141,9 @@ fn cloud_conn_info(st: &State, idx: usize) -> Option<crate::cloudfs::ConnInfo> {
     Some(crate::cloudfs::ConnInfo {
         kind: c.kind.clone(),
         client_id: svc.resolve_client_id(settings.client_id(&c.kind)).to_string(),
+        client_secret: svc
+            .resolve_client_secret(settings.client_secret(&c.kind))
+            .to_string(),
         refresh,
     })
 }
@@ -4114,6 +4132,11 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let i = (id - CMD_CLOUD_DISC_BASE) as usize;
             if i < st.cloud_conns.len() {
                 let removed = st.cloud_conns.remove(i);
+                let removed_key = if removed.is_api() {
+                    "cloud.removed"
+                } else {
+                    "cloud.unlinked"
+                };
                 // API 연결이면 토큰도 폐기(흔적 정리) — 인덱스가 당겨지므로 꼬리 재배치
                 if removed.is_api() {
                     crate::secret::clear_from(i);
@@ -4122,7 +4145,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 crate::cloudfs::invalidate_all();
                 apply_cloud_change(hwnd, st, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
-                update_title(hwnd, st, &format!(" · {}", trf("cloud.removed", &[&removed.label])));
+                update_title(hwnd, st, &format!(" · {}", trf(removed_key, &[&removed.label])));
                 update_status(hwnd, st);
                 return;
             }
@@ -4151,7 +4174,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     });
                     apply_cloud_change(hwnd, st, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
-                    update_title(hwnd, st, &format!(" · {}", trf("cloud.connected", &[&c.label])));
+                    update_title(hwnd, st, &format!(" · {}", trf("cloud.linked", &[&c.label])));
                     update_status(hwnd, st);
                     return;
                 }
@@ -4245,6 +4268,9 @@ unsafe fn start_cloud_oauth(hwnd: HWND, st: &mut State, svc: crate::oauth::Servi
     // 설정 우선 → NexaDir 기본값(하이브리드 — ADR-0006 §2-4)
     let settings = current_settings(st);
     let client_id = svc.resolve_client_id(settings.client_id(svc.kind)).to_string();
+    let client_secret = svc
+        .resolve_client_secret(settings.client_secret(svc.kind))
+        .to_string();
     if client_id.trim().is_empty() {
         // 미설정 안내(ADR-0006 §2-4 — 1차는 사용자 제공 client_id)
         let msg = trf("cloud.err.noClientIdMsg", &[svc.display, svc.kind]);
@@ -4256,7 +4282,7 @@ unsafe fn start_cloud_oauth(hwnd: HWND, st: &mut State, svc: crate::oauth::Servi
         crate::dialog::show_buttons(hwnd, &tr("cloud.connect"), &msg, &buttons, &dlg_font);
         return;
     }
-    let session = match crate::oauth::AuthSession::begin(svc, &client_id) {
+    let session = match crate::oauth::AuthSession::begin(svc, &client_id, &client_secret) {
         Ok(s) => s,
         Err(e) => {
             update_title(hwnd, st, &format!(" · {}", tr(e.key())));
@@ -4339,13 +4365,22 @@ unsafe fn start_cloud_oauth(hwnd: HWND, st: &mut State, svc: crate::oauth::Servi
 unsafe fn on_cloud_auth(hwnd: HWND, st: &mut State, res: CloudAuthResult) {
     let mut inv = Invalidations::default();
     let Some((account, refresh)) = res.ok else {
-        let note = if res.err_detail.is_empty() {
-            tr(res.err_key)
+        // 사용자가 명시적으로 시작한 작업의 실패 → **모달로 통지**(사용자 QA 08-01:
+        // 타이틀바 문구는 놓치기 쉬워 "연결했는데 안 보인다"로 오인된다).
+        let detail = if res.err_detail.is_empty() {
+            String::new()
         } else {
-            format!("{} — {}", tr(res.err_key), res.err_detail)
+            format!("\n\n{}", res.err_detail)
         };
-        update_title(hwnd, st, &format!(" · {note}"));
+        let msg = format!("{} — {}{detail}", res.display, tr(res.err_key));
+        update_title(hwnd, st, &format!(" · {}", tr(res.err_key)));
         update_status(hwnd, st);
+        let buttons = [crate::dialog::DlgButton {
+            id: 1,
+            label: tr("del.close"),
+        }];
+        let dlg_font = st.dlg_font.clone();
+        crate::dialog::show_buttons(hwnd, &tr("cloud.connect"), &msg, &buttons, &dlg_font);
         return;
     };
     if st.cloud_conns.len() >= CLOUD_MAX {
@@ -5285,6 +5320,7 @@ fn current_settings(st: &State) -> Settings {
         launcher_seed: crate::launcher::SEED_VERSION,
         cloud_conns: st.cloud_conns.clone(),
         cloud_client_ids: st.cloud_client_ids.clone(),
+        cloud_client_secrets: st.cloud_client_secrets.clone(),
     }
 }
 
