@@ -337,6 +337,203 @@ fn download_one(
     })
 }
 
+// ── 쓰기(X-37 4차 — Files.ReadWrite scope 필요·재로그인 전제) ─────────────────
+
+/// 업로드 세션 청크 크기 — Graph 규약상 **320 KiB의 배수**여야 한다(약 5MB).
+const CHUNK: usize = 320 * 1024 * 16;
+/// 단순 PUT 상한 — 이보다 크면 업로드 세션(청크 스트리밍)으로 전환.
+const SIMPLE_PUT_MAX: u64 = 4 * 1024 * 1024;
+
+/// 쓰기 작업 종류(한 워커가 배치로 처리).
+#[derive(Clone)]
+pub enum WriteOp {
+    /// 로컬 파일 → 클라우드 업로드(대상 폴더 내부 경로 + 로컬 원본).
+    Upload { src: std::path::PathBuf, dest_inner: String },
+    /// 클라우드 항목 삭제.
+    Delete { inner: String },
+    /// 이름 변경(대상 항목 + 새 이름).
+    Rename { inner: String, new_name: String },
+    /// 새 폴더(부모 내부 경로 + 이름).
+    NewFolder { parent_inner: String, name: String },
+}
+
+/// 쓰기 완료 통지(WM_APP_CLOUD_WRITE lparam — 수신 측이 Box 회수).
+pub struct WriteResult {
+    pub idx: usize,
+    /// 성공 건수.
+    pub done: usize,
+    /// 실패 사유(빈 문자열 = 전건 성공).
+    pub err: String,
+}
+
+/// 쓰기 시작(비동기 — 워커). 완료 시 `WM_APP_CLOUD_WRITE` 통지 + 캐시 무효화.
+pub fn start_write(hwnd_raw: isize, idx: usize, ops: Vec<WriteOp>, conn: ConnInfo) {
+    std::thread::spawn(move || {
+        let mut done = 0usize;
+        let mut err = String::new();
+        match token_for(&conn) {
+            Err(e) => err = e,
+            Ok(access) => {
+                for op in &ops {
+                    match apply_write(&conn, &access, op) {
+                        Ok(()) => done += 1,
+                        Err(e) => {
+                            err = e;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        invalidate(idx); // 목록이 바뀌었다 — 다음 열거에서 재조회
+        let boxed = Box::new(WriteResult { idx, done, err });
+        crate::win::post_cloud_write(hwnd_raw, Box::into_raw(boxed) as isize);
+    });
+}
+
+/// Graph 경로 주소 지정용 인코딩(`/a/b` → `a/b` 각 세그먼트 퍼센트 인코딩).
+fn enc_path(inner: &str) -> String {
+    inner
+        .trim_start_matches('/')
+        .split('/')
+        .map(oauth::percent)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// 쓰기 1건 수행.
+fn apply_write(conn: &ConnInfo, access: &str, op: &WriteOp) -> Result<(), String> {
+    if conn.kind != "onedrive" {
+        return Err("write is supported for OneDrive only (for now)".into());
+    }
+    match op {
+        WriteOp::Upload { src, dest_inner } => upload_onedrive(access, src, dest_inner),
+        WriteOp::Delete { inner } => oauth::http_send(
+            &format!(
+                "https://graph.microsoft.com/v1.0/me/drive/root:/{}",
+                enc_path(inner)
+            ),
+            "DELETE",
+            None,
+            None,
+            "",
+            Some(access),
+        )
+        .map(|_| ()),
+        WriteOp::Rename { inner, new_name } => {
+            let body = format!("{{\"name\":\"{}\"}}", json_escape(new_name));
+            oauth::http_send(
+                &format!(
+                    "https://graph.microsoft.com/v1.0/me/drive/root:/{}",
+                    enc_path(inner)
+                ),
+                "PATCH",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+        WriteOp::NewFolder { parent_inner, name } => {
+            let url = if parent_inner.is_empty() {
+                "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string()
+            } else {
+                format!(
+                    "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/children",
+                    enc_path(parent_inner)
+                )
+            };
+            let body = format!(
+                "{{\"name\":\"{}\",\"folder\":{{}},\
+                 \"@microsoft.graph.conflictBehavior\":\"rename\"}}",
+                json_escape(name)
+            );
+            oauth::http_send(
+                &url,
+                "POST",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+    }
+}
+
+/// JSON 문자열 값 이스케이프(최소 — crate 0).
+fn json_escape(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// OneDrive 업로드 — 작은 파일은 단순 PUT, 큰 파일은 **업로드 세션 청크 스트리밍**
+/// (파일 전체를 메모리에 올리지 않는다).
+fn upload_onedrive(access: &str, src: &std::path::Path, dest_inner: &str) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let meta = std::fs::metadata(src).map_err(|e| e.to_string())?;
+    let total = meta.len();
+    let enc = enc_path(dest_inner);
+    if total <= SIMPLE_PUT_MAX {
+        let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
+        return oauth::http_send(
+            &format!("https://graph.microsoft.com/v1.0/me/drive/root:/{enc}:/content"),
+            "PUT",
+            Some(&bytes),
+            Some("application/octet-stream"),
+            "",
+            Some(access),
+        )
+        .map(|_| ());
+    }
+    // 업로드 세션 생성 → 청크 PUT(세션 URL은 사전 인증이라 Authorization 불요)
+    let sess = oauth::http_send(
+        &format!("https://graph.microsoft.com/v1.0/me/drive/root:/{enc}:/createUploadSession"),
+        "POST",
+        Some(b"{\"item\":{\"@microsoft.graph.conflictBehavior\":\"replace\"}}"),
+        Some("application/json"),
+        "",
+        Some(access),
+    )?;
+    let url = oauth::json_str(&sess, "uploadUrl").ok_or("no uploadUrl")?;
+    let mut f = std::fs::File::open(src).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; CHUNK];
+    let mut off: u64 = 0;
+    while off < total {
+        let want = CHUNK.min((total - off) as usize);
+        f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
+        f.read_exact(&mut buf[..want]).map_err(|e| e.to_string())?;
+        let range = format!(
+            "Content-Range: bytes {}-{}/{}\r\n",
+            off,
+            off + want as u64 - 1,
+            total
+        );
+        oauth::http_send(
+            &url,
+            "PUT",
+            Some(&buf[..want]),
+            Some("application/octet-stream"),
+            &range,
+            None,
+        )?;
+        off += want as u64;
+    }
+    Ok(())
+}
+
 /// RFC3339(`2026-08-01T12:34:56Z`) → SystemTime. 시간대 오프셋은 무시(UTC 가정 —
 /// 표시층이 로컬 변환하므로 초 단위 정확도로 충분).
 fn parse_rfc3339(s: &str) -> Option<std::time::SystemTime> {

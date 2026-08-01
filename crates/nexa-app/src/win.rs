@@ -136,9 +136,17 @@ pub(crate) fn post_cloud_list(hwnd_raw: isize, payload: isize) {
     post_final_notify(hwnd_raw, WM_APP_CLOUD_LIST, 0, payload);
 }
 
+/// 클라우드 쓰기 완료(X-37 4차) — lparam = Box<cloudfs::WriteResult>.
+const WM_APP_CLOUD_WRITE: u32 = 0x8011;
+
 /// 클라우드 다운로드 워커 → UI 통지.
 pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
     post_final_notify(hwnd_raw, WM_APP_CLOUD_DOWNLOAD, 0, payload);
+}
+
+/// 클라우드 쓰기 워커 → UI 통지.
+pub(crate) fn post_cloud_write(hwnd_raw: isize, payload: isize) {
+    post_final_notify(hwnd_raw, WM_APP_CLOUD_WRITE, 0, payload);
 }
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
@@ -2697,9 +2705,15 @@ unsafe fn do_delete(hwnd: HWND, st: &mut State, permanent: bool) {
     if targets.is_empty() {
         return;
     }
-    // 클라우드는 읽기 전용(X-37 2차) — 삭제는 4차 슬라이스
-    let refs: Vec<&std::path::Path> = targets.iter().map(|p| p.as_path()).collect();
-    if cloud_readonly_block(hwnd, st, &refs) {
+    // 클라우드 항목은 API 삭제(X-37 4차 — 서비스 휴지통으로 이동. 로컬 undo 불가)
+    if let Some((idx, _)) = nexa_vfs::cloud_parts(&targets[0]) {
+        let ops: Vec<crate::cloudfs::WriteOp> = targets
+            .iter()
+            .filter_map(nexa_vfs::cloud_parts)
+            .filter(|(i, _)| *i == idx)
+            .map(|(_, inner)| crate::cloudfs::WriteOp::Delete { inner })
+            .collect();
+        start_cloud_write(hwnd, st, idx, ops, "cloud.deleting");
         return;
     }
     if permanent {
@@ -2964,8 +2978,13 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
             .map(|p| p.to_path_buf())
     };
     let Some(path) = path else { return };
-    // 클라우드는 읽기 전용(X-37 2차) — 이름 변경은 4차 슬라이스
-    if cloud_readonly_block(hwnd, st, &[path.as_path()]) {
+    // 클라우드 항목은 API 이름 변경(X-37 4차)
+    if let Some((idx, inner)) = nexa_vfs::cloud_parts(&path) {
+        let ops = vec![crate::cloudfs::WriteOp::Rename {
+            inner,
+            new_name: new_name.to_string(),
+        }];
+        start_cloud_write(hwnd, st, idx, ops, "cloud.renaming");
         return;
     }
     // 바로가기 확장자 숨김(QA 07-14 — 탐색기 NeverShowExt): 표시/편집은 이름만,
@@ -3002,8 +3021,17 @@ unsafe fn apply_rename(hwnd: HWND, st: &mut State, row: usize, new_name: &str) {
 /// 새로 만들기(M3-2, 원본 BG-N1/N2) — 생성 → 재로드 → 그 행 즉시 인라인 이름변경(RevealAndRename).
 unsafe fn create_new(hwnd: HWND, st: &mut State, folder: bool) {
     let dir = st.active_panel().root_path();
-    // 클라우드는 읽기 전용(X-37 2차) — 새로 만들기는 4차 슬라이스
-    if cloud_readonly_block(hwnd, st, &[dir.as_path()]) {
+    // 클라우드는 새 **폴더**만 지원(빈 파일 생성은 후속 — X-37 4차)
+    if let Some((idx, parent_inner)) = nexa_vfs::cloud_parts(&dir) {
+        if !folder {
+            update_title(hwnd, st, &format!(" · {}", tr("cloud.err.foldersOnly")));
+            return;
+        }
+        let ops = vec![crate::cloudfs::WriteOp::NewFolder {
+            parent_inner,
+            name: tr("new.folderBase"),
+        }];
+        start_cloud_write(hwnd, st, idx, ops, "cloud.creating");
         return;
     }
     let created = if folder {
@@ -3152,6 +3180,28 @@ unsafe fn start_cloud_download(
     true
 }
 
+/// 클라우드 쓰기 작업 시작(X-37 4차) — 업로드·삭제·이름 변경·새 폴더 공용.
+/// 처리했으면 `true`(호출자는 로컬 경로를 타지 않는다).
+unsafe fn start_cloud_write(
+    hwnd: HWND,
+    st: &mut State,
+    idx: usize,
+    ops: Vec<crate::cloudfs::WriteOp>,
+    busy_key: &str,
+) -> bool {
+    if ops.is_empty() {
+        return false;
+    }
+    let Some(conn) = cloud_conn_info(st, idx) else {
+        update_title(hwnd, st, &format!(" · {}", tr("cloud.err.noToken")));
+        return true;
+    };
+    let n = ops.len().to_string();
+    update_title(hwnd, st, &format!(" · {}", trf(busy_key, &[&n])));
+    crate::cloudfs::start_write(hwnd.0 as isize, idx, ops, conn);
+    true
+}
+
 /// 클라우드 API 경로는 **현재 읽기 전용**(X-37 2차 — 쓰기는 4차 슬라이스).
 ///
 /// 전송 엔진·삭제·리네임·새로 만들기는 전부 `std::fs` 전제라 센티널 경로에서
@@ -3186,7 +3236,30 @@ unsafe fn start_transfer(
         .any(|p| nexa_vfs::cloud_parts(p).is_some());
     let dest_cloud = nexa_vfs::cloud_parts(&dest).is_some();
     if dest_cloud {
-        cloud_readonly_block(hwnd, st, &[dest.as_path()]);
+        // 로컬 → 클라우드 = **업로드**(X-37 4차). 클라우드→클라우드는 아직 미지원.
+        if src_cloud {
+            cloud_readonly_block(hwnd, st, &[dest.as_path()]);
+            return;
+        }
+        let Some((idx, dest_inner)) = nexa_vfs::cloud_parts(&dest) else {
+            return;
+        };
+        let ops: Vec<crate::cloudfs::WriteOp> = sources
+            .iter()
+            .filter(|p| p.is_file()) // 폴더 재귀 업로드는 후속
+            .filter_map(|p| {
+                let name = p.file_name()?.to_string_lossy().into_owned();
+                Some(crate::cloudfs::WriteOp::Upload {
+                    src: p.clone(),
+                    dest_inner: format!("{dest_inner}/{name}"),
+                })
+            })
+            .collect();
+        if ops.is_empty() {
+            update_title(hwnd, st, &format!(" · {}", tr("cloud.err.filesOnly")));
+            return;
+        }
+        start_cloud_write(hwnd, st, idx, ops, "cloud.uploading");
         return;
     }
     if src_cloud {
@@ -6642,6 +6715,36 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         )
                     };
                     update_title(hwnd, st, &note);
+                    update_status(hwnd, st);
+                }
+            }
+            LRESULT(0)
+        }
+        // 클라우드 쓰기 완료(X-37 4차) — 캐시는 워커가 비웠으니 재로드하면 최신.
+        // 실패 사유에 권한 관련이 보이면 재로그인 안내(scope 상향 이전 토큰).
+        m if m == WM_APP_CLOUD_WRITE => {
+            if lparam.0 != 0 {
+                let res = *Box::from_raw(lparam.0 as *mut crate::cloudfs::WriteResult);
+                if let Some(st) = state_of(hwnd) {
+                    let mut inv = Invalidations::default();
+                    let ctx = st.nav_ctx();
+                    for p in 0..2 {
+                        if nexa_vfs::cloud_parts(st.panels[p].root_path())
+                            .map(|(i, _)| i == res.idx)
+                            .unwrap_or(false)
+                        {
+                            st.panels[p].reopen_filtered(ctx, &mut inv);
+                        }
+                    }
+                    flush_invalidations(hwnd, &mut inv);
+                    let note = if res.err.is_empty() {
+                        trf("cloud.writeDone", &[&res.done.to_string()])
+                    } else if res.err.contains("403") || res.err.contains("401") {
+                        tr("cloud.err.reauth") // scope 상향 전 토큰 = 재연결 필요
+                    } else {
+                        res.err
+                    };
+                    update_title(hwnd, st, &format!(" · {note}"));
                     update_status(hwnd, st);
                 }
             }

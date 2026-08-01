@@ -40,7 +40,9 @@ pub const ONEDRIVE: Service = Service {
     display: "OneDrive",
     auth_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-    scope: "offline_access Files.Read User.Read",
+    // X-37 4차(쓰기) — ReadWrite로 상향. 조직 계정도 사용자 동의만으로 충분한
+    // "내 파일" 범위이며(`.All`은 관리자 동의 필요), 기존 연결은 **재로그인 1회** 필요.
+    scope: "offline_access Files.ReadWrite User.Read",
     me_url: "https://graph.microsoft.com/v1.0/me",
     // SosomLab 등록(08-01) — Entra 앱 "NexaDir". PKCE 공개 클라이언트라 시크릿 아님.
     // 포털 리디렉션 URI 등록값 = `http://localhost`(포트는 MS가 무시 — PREFERRED_PORT 참조).
@@ -589,14 +591,22 @@ pub fn json_has(json: &str, key: &str) -> bool {
 /// `application/x-www-form-urlencoded` POST → 응답 본문(UTF-8).
 #[cfg(windows)]
 pub fn http_post_form(url: &str, body: &str) -> Result<String, String> {
-    winhttp_request(url, "POST", Some(body), None, TEXT_LIMIT)
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
+    winhttp_request(
+        url,
+        "POST",
+        Some(body.as_bytes()),
+        Some("application/x-www-form-urlencoded"),
+        "",
+        None,
+        TEXT_LIMIT,
+    )
+    .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
 /// Bearer GET → 응답 본문(UTF-8).
 #[cfg(windows)]
 pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
-    winhttp_request(url, "GET", None, Some(bearer), TEXT_LIMIT)
+    winhttp_request(url, "GET", None, None, "", Some(bearer), TEXT_LIMIT)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
@@ -605,7 +615,34 @@ pub fn http_get(url: &str, bearer: &str) -> Result<String, String> {
 /// **사전 인증된 URL**이라 Authorization을 함께 보내면 거부될 수 있다.
 #[cfg(windows)]
 pub fn http_get_bytes(url: &str, bearer: Option<&str>, limit: usize) -> Result<Vec<u8>, String> {
-    winhttp_request(url, "GET", None, bearer, limit)
+    winhttp_request(url, "GET", None, None, "", bearer, limit)
+}
+
+/// 임의 메서드 + 바이너리/JSON 본문(X-37 4차 쓰기 — PUT/POST/PATCH/DELETE).
+/// `extra`는 CRLF로 끝나는 추가 헤더 문자열(업로드 `Content-Range` 등).
+#[cfg(windows)]
+pub fn http_send(
+    url: &str,
+    method: &str,
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra: &str,
+    bearer: Option<&str>,
+) -> Result<String, String> {
+    winhttp_request(url, method, body, content_type, extra, bearer, TEXT_LIMIT)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+#[cfg(not(windows))]
+pub fn http_send(
+    _u: &str,
+    _m: &str,
+    _b: Option<&[u8]>,
+    _c: Option<&str>,
+    _e: &str,
+    _r: Option<&str>,
+) -> Result<String, String> {
+    Err("windows only".into())
 }
 
 #[cfg(not(windows))]
@@ -630,15 +667,18 @@ pub fn http_get(_url: &str, _bearer: &str) -> Result<String, String> {
 fn winhttp_request(
     url: &str,
     method: &str,
-    body: Option<&str>,
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra_headers: &str,
     bearer: Option<&str>,
     limit: usize,
 ) -> Result<Vec<u8>, String> {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Networking::WinHttp::{
         WinHttpConnect, WinHttpCrackUrl, WinHttpOpen, WinHttpOpenRequest,
-        WinHttpQueryDataAvailable, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
-        URL_COMPONENTS, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
+        WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
+        WinHttpSendRequest, URL_COMPONENTS, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
     };
     unsafe {
         let wurl = HSTRING::from(url);
@@ -693,14 +733,15 @@ fn winhttp_request(
         }
         let rguard = HandleGuard(req);
         let mut headers = String::new();
-        if body.is_some() {
-            headers.push_str("Content-Type: application/x-www-form-urlencoded\r\n");
+        if let Some(ct) = content_type {
+            headers.push_str(&format!("Content-Type: {ct}\r\n"));
         }
         if let Some(b) = bearer {
             headers.push_str(&format!("Authorization: Bearer {b}\r\n"));
         }
+        headers.push_str(extra_headers);
         let hw: Vec<u16> = headers.encode_utf16().collect();
-        let body_bytes = body.unwrap_or("").as_bytes();
+        let body_bytes: &[u8] = body.unwrap_or(&[]);
         WinHttpSendRequest(
             req,
             if hw.is_empty() { None } else { Some(&hw) },
@@ -711,6 +752,17 @@ fn winhttp_request(
         )
         .map_err(|e| format!("send: {e}"))?;
         WinHttpReceiveResponse(req, std::ptr::null_mut()).map_err(|e| format!("recv: {e}"))?;
+        // 상태 코드(비2xx는 본문에 실린 오류 설명과 함께 실패로 돌린다)
+        let mut status: u32 = 0;
+        let mut sz = std::mem::size_of::<u32>() as u32;
+        let _ = WinHttpQueryHeaders(
+            req,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            PCWSTR::null(),
+            Some(&mut status as *mut u32 as *mut core::ffi::c_void),
+            &mut sz,
+            std::ptr::null_mut(),
+        );
         let mut out = Vec::new();
         loop {
             let mut avail = 0u32;
@@ -736,6 +788,13 @@ fn winhttp_request(
             }
         }
         drop((rguard, cguard, guard));
+        if !(200..300).contains(&status) {
+            let body = String::from_utf8_lossy(&out);
+            let msg = json_str(&body, "message")
+                .or_else(|| json_str(&body, "error_description"))
+                .unwrap_or_else(|| body.chars().take(200).collect());
+            return Err(format!("HTTP {status}: {msg}"));
+        }
         Ok(out)
     }
 }
