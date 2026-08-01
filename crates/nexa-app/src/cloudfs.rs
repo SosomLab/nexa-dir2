@@ -564,6 +564,118 @@ pub struct WriteResult {
     pub err: String,
 }
 
+/// 계정 간 복사 1건 — 원본 클라우드 항목 → 대상 클라우드 내부 경로.
+#[derive(Clone)]
+pub struct CrossItem {
+    pub src_inner: String,
+    pub dest_inner: String,
+    /// 폴더면 워커가 원본을 재귀 전개한다.
+    pub is_dir: bool,
+}
+
+/// **서로 다른 연결 간 복사**(X-37 — 사용자 QA 08-01).
+///
+/// 서버 사이드 복사는 같은 드라이브 안에서만 되므로, 계정이 다르면
+/// **임시 폴더 경유**(다운로드 → 업로드 → 임시 파일 삭제)가 유일한 경로다.
+/// 진행률·취소는 같은 공유 상태를 쓰고, 완료는 쓰기 완료 통지로 합류한다.
+pub fn start_cross_copy(
+    hwnd_raw: isize,
+    src_idx: usize,
+    src_conn: ConnInfo,
+    dst_idx: usize,
+    dst_conn: ConnInfo,
+    items: Vec<CrossItem>,
+    shared: Shared,
+) {
+    std::thread::spawn(move || {
+        use std::sync::atomic::Ordering;
+        let mut done = 0usize;
+        let mut err = String::new();
+        let stage = std::env::temp_dir().join("NexaDir").join("xcopy");
+        let _ = std::fs::create_dir_all(&stage);
+        let run = || -> Result<usize, String> {
+            let src_access = token_for(&src_conn)?;
+            let dst_access = token_for(&dst_conn)?;
+            let svc = oauth::service_of(&src_conn.kind).ok_or("unknown service")?;
+            // 폴더는 원본에서 재귀 전개해 파일 목록으로 평탄화
+            let mut flat: Vec<(String, String)> = Vec::new(); // (src_inner, dest_inner)
+            for it in &items {
+                if it.is_dir {
+                    let base = stage.join("expand");
+                    let _ = std::fs::create_dir_all(&base);
+                    let mut got = Vec::new();
+                    expand_tree(&src_access, &svc, src_idx, &it.src_inner, &base, &mut got)?;
+                    for d in got {
+                        // 원본 기준 상대 경로를 대상 경로에 그대로 이어 붙인다
+                        let rel = d
+                            .inner
+                            .strip_prefix(&it.src_inner)
+                            .unwrap_or("")
+                            .to_string();
+                        flat.push((d.inner.clone(), format!("{}{rel}", it.dest_inner)));
+                    }
+                } else {
+                    flat.push((it.src_inner.clone(), it.dest_inner.clone()));
+                }
+            }
+            *crate::win::plock(&shared.items) = flat
+                .iter()
+                .map(|_| crate::dialog::SegItem {
+                    size: 1,
+                    done: 0,
+                    status: crate::dialog::SegStatus::Pending,
+                })
+                .collect();
+            shared.total_bytes.store(flat.len() as u64, Ordering::Relaxed);
+            let mut n = 0usize;
+            for (i, (src_inner, dest_inner)) in flat.iter().enumerate() {
+                if shared.cancel.load(Ordering::Relaxed) {
+                    return Err(oauth::CANCELLED.into());
+                }
+                if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                    sg.status = crate::dialog::SegStatus::Active;
+                }
+                crate::win::post_cloud_progress(hwnd_raw);
+                let name = src_inner.rsplit('/').next().unwrap_or("item");
+                let tmp = stage.join(format!("{i}_{name}"));
+                let dl = DownloadItem {
+                    inner: src_inner.clone(),
+                    dest: tmp.clone(),
+                    is_dir: false,
+                };
+                download_one(src_idx, &src_conn, &src_access, &dl, &shared, 0, hwnd_raw)?;
+                let up = WriteOp::Upload {
+                    src: tmp.clone(),
+                    dest_inner: dest_inner.clone(),
+                };
+                let r = apply_write(dst_idx, &dst_conn, &dst_access, &up);
+                let _ = std::fs::remove_file(&tmp); // 성패 무관 정리
+                r?;
+                n += 1;
+                if let Some(sg) = crate::win::plock(&shared.items).get_mut(i) {
+                    sg.done = 1;
+                    sg.status = crate::dialog::SegStatus::Done;
+                }
+                shared.done_bytes.store(n as u64, Ordering::Relaxed);
+                crate::win::post_cloud_progress(hwnd_raw);
+            }
+            Ok(n)
+        };
+        match run() {
+            Ok(n) => done = n,
+            Err(e) => err = e,
+        }
+        let _ = std::fs::remove_dir_all(&stage);
+        invalidate(dst_idx); // 대상 목록이 바뀌었다
+        let boxed = Box::new(WriteResult {
+            idx: dst_idx,
+            done,
+            err,
+        });
+        crate::win::post_cloud_write(hwnd_raw, Box::into_raw(boxed) as isize);
+    });
+}
+
 /// 쓰기 시작(비동기 — 워커). 완료 시 `WM_APP_CLOUD_WRITE` 통지 + 캐시 무효화.
 pub fn start_write(
     hwnd_raw: isize,

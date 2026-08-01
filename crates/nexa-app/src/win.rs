@@ -3268,14 +3268,7 @@ unsafe fn start_cloud_download(
     update_title(hwnd, st, &format!(" · {}", trf("cloud.downloading", &[&n])));
     // 로컬 복사와 **같은 진행 창**(세그먼트 바·취소) 재사용 — 사용자 확정 08-01.
     // 임시 폴더 다운로드(더블클릭 열기)는 보통 순식간이라 창을 띄우지 않는다.
-    let shared = Arc::new(TransferShared {
-        cancel: AtomicBool::new(false),
-        done_bytes: AtomicU64::new(0),
-        total_bytes: AtomicU64::new(0),
-        outcome: Mutex::new(None),
-        items: Mutex::new(Vec::new()),
-        in_flight: Mutex::new(None),
-    });
+    let shared = new_cloud_shared();
     if dest_dir.is_some() && st.transfer_close_ms > 0 {
         st.cloud_progress = crate::dialog::Progress::open(
             hwnd,
@@ -3338,6 +3331,30 @@ unsafe fn finish_cloud_progress(hwnd: HWND, st: &mut State, note: &str) {
     }
 }
 
+/// 클라우드 전송용 공유 상태 1개(진행 창과 워커가 공유).
+fn new_cloud_shared() -> Arc<TransferShared> {
+    Arc::new(TransferShared {
+        cancel: AtomicBool::new(false),
+        done_bytes: AtomicU64::new(0),
+        total_bytes: AtomicU64::new(0),
+        outcome: Mutex::new(None),
+        items: Mutex::new(Vec::new()),
+        in_flight: Mutex::new(None),
+    })
+}
+
+/// 열려 있는 트리에서 이 경로가 폴더인가(클라우드 항목의 재귀 여부 판정).
+fn cloud_row_is_dir(st: &State, path: &std::path::Path) -> bool {
+    st.panels.iter().any(|pn| {
+        let tree = pn.rows().source().tree();
+        (0..tree.visible_len()).any(|i| {
+            tree.row(i)
+                .map(|r| tree.node_path(r.id) == Some(path) && r.has_children)
+                .unwrap_or(false)
+        })
+    })
+}
+
 /// 클라우드 쓰기 작업 시작(X-37 4차) — 업로드·삭제·이름 변경·새 폴더 공용.
 /// 처리했으면 `true`(호출자는 로컬 경로를 타지 않는다).
 unsafe fn start_cloud_write(
@@ -3357,14 +3374,7 @@ unsafe fn start_cloud_write(
     let n = ops.len().to_string();
     update_title(hwnd, st, &format!(" · {}", trf(busy_key, &[&n])));
     // 업로드·복사도 같은 진행 창(세그먼트 = 작업 건수 — 바이트는 업로드 청크가 보고)
-    let shared = Arc::new(TransferShared {
-        cancel: AtomicBool::new(false),
-        done_bytes: AtomicU64::new(0),
-        total_bytes: AtomicU64::new(0),
-        outcome: Mutex::new(None),
-        items: Mutex::new(Vec::new()),
-        in_flight: Mutex::new(None),
-    });
+    let shared = new_cloud_shared();
     if st.transfer_close_ms > 0 {
         st.cloud_progress = crate::dialog::Progress::open(
             hwnd,
@@ -3398,14 +3408,62 @@ unsafe fn start_transfer(
             return;
         };
         let ops: Vec<crate::cloudfs::WriteOp> = if src_cloud {
-            // 클라우드 → 클라우드(X-37 5차): 같은 연결이면 **서버 사이드** 복사/이동
-            // (다운로드·재업로드 없음). 다른 연결 간은 아직 미지원.
+            // 클라우드 → 클라우드(X-37 5차): 같은 연결이면 **서버 사이드** 복사/이동.
             let same = sources
                 .iter()
                 .filter_map(nexa_vfs::cloud_parts)
                 .all(|(i, _)| i == idx);
             if !same {
-                update_title(hwnd, st, &format!(" · {}", tr("cloud.err.crossAccount")));
+                // **계정 간 복사**(X-37 6차) — 서버 사이드가 불가하므로 임시 폴더
+                // 경유(다운로드 → 업로드). 원본은 첫 연결 기준으로 모은다.
+                let Some(src_idx) = sources.iter().find_map(nexa_vfs::cloud_parts).map(|(i, _)| i)
+                else {
+                    return;
+                };
+                let items: Vec<crate::cloudfs::CrossItem> = sources
+                    .iter()
+                    .filter_map(|p| {
+                        let (i, inner) = nexa_vfs::cloud_parts(p)?;
+                        if i != src_idx {
+                            return None; // 여러 원본 연결 혼합은 첫 연결만
+                        }
+                        let name = inner.rsplit('/').next()?.to_string();
+                        Some(crate::cloudfs::CrossItem {
+                            dest_inner: format!("{dest_inner}/{name}"),
+                            is_dir: cloud_row_is_dir(st, p),
+                            src_inner: inner,
+                        })
+                    })
+                    .collect();
+                let (Some(sc), Some(dc)) = (cloud_conn_info(st, src_idx), cloud_conn_info(st, idx))
+                else {
+                    update_title(hwnd, st, &format!(" · {}", tr("cloud.err.noToken")));
+                    return;
+                };
+                if items.is_empty() {
+                    return;
+                }
+                let n = items.len().to_string();
+                update_title(hwnd, st, &format!(" · {}", trf("cloud.copying", &[&n])));
+                let shared = new_cloud_shared();
+                if st.transfer_close_ms > 0 {
+                    st.cloud_progress = crate::dialog::Progress::open(
+                        hwnd,
+                        &tr("ops.progressTitle"),
+                        &tr("cloud.progressLabel"),
+                        &st.dlg_font,
+                    );
+                }
+                st.cloud_shared = Some(shared.clone());
+                crate::cloudfs::start_cross_copy(
+                    hwnd.0 as isize,
+                    src_idx,
+                    sc,
+                    idx,
+                    dc,
+                    items,
+                    shared,
+                );
                 return;
             }
             sources
