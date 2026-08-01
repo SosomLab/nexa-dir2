@@ -46,6 +46,20 @@ cloud.connected = {0} connected
 cloud.removed = {0} disconnected
 cloud.urlCopied = URL copied — paste into a private window to sign in with another account
 cloud.gone = Folder not found — {0}
+# Connect Cloud — OAuth direct connection (X-37, ADR-0006)
+cloud.connect = Connect Cloud
+cloud.auth.prompt = Sign in to {0} in your browser.\n\nTo use a DIFFERENT account than the one already signed in, copy the URL below and open it in a private/incognito window.\n\n{1}
+cloud.auth.openBrowser = Open Browser
+cloud.auth.waiting = Waiting for browser sign-in…
+cloud.account.unknown = account
+cloud.err.noClientId = Client ID is not set
+cloud.err.noClientIdMsg = {0} direct connection needs an OAuth Client ID.\n\nRegister a desktop/native app (PKCE, no client secret) in the provider console, then add this line to data\\settings.cfg:\n\ncloud_client_id_{1}=<YOUR CLIENT ID>\n\nRedirect URI: http://127.0.0.1 (loopback, any port)
+cloud.err.listener = Could not open the local callback listener
+cloud.err.timeout = Sign-in timed out or was cancelled
+cloud.err.denied = Sign-in was denied
+cloud.err.exchange = Token exchange failed
+cloud.err.tokenSave = Connected, but the token could not be saved — sign-in will be required again
+cloud.err.full = Too many cloud connections
 
 # ── About (X-26 (3)) ──
 about.title = About Nexa Dir

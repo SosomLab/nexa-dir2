@@ -21,6 +21,12 @@ mod conpty;
 /// 클라우드 동기화 클라이언트 탐지(X-36 — 순수 파서는 전 플랫폼 테스트).
 #[cfg_attr(not(windows), allow(dead_code))]
 mod cloud;
+/// 클라우드 OAuth2 PKCE 인증(X-37 — ADR-0006. 순수 로직은 전 플랫폼 테스트).
+#[cfg_attr(not(windows), allow(dead_code))]
+mod oauth;
+/// 토큰 DPAPI 보관(X-37 — ADR-0006).
+#[cfg_attr(not(windows), allow(dead_code))]
+mod secret;
 /// Win32 커스텀 컨트롤 라이브러리(사용자 요청 07-16 — searchbox 등).
 #[cfg(windows)]
 mod ctl;

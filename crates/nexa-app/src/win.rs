@@ -122,6 +122,9 @@ const WM_APP_ABOUT: u32 = 0x800C;
 /// 휴지통 삭제 워커 완료 통지(07-21 QA — SHFileOperationW가 UI 스레드를 3~4초
 /// 블로킹하던 것을 워커로 이관). wparam=성공 여부(1/0) — 대상은 `pending_delete`.
 const WM_APP_DELETE: u32 = 0x800D;
+/// 클라우드 OAuth 워커 완료 통지(X-37 — ADR-0006). lparam = Box<CloudAuthResult> 원시
+/// 포인터(수신 측이 회수). 네트워크·브라우저 대기가 있어 UI 스레드 수행 금지.
+const WM_APP_CLOUD_AUTH: u32 = 0x800E;
 /// 패널 최소 폭(논리 px)·스플리터 히트 존 반폭.
 const MIN_PANEL: i32 = 200;
 const SPLIT_HALF: i32 = 3;
@@ -184,6 +187,8 @@ const CMD_CLOUD_WEB_BASE: u32 = 340;
 const CMD_CLOUD_COPYURL_BASE: u32 = 380;
 const CMD_CLOUD_DISC_BASE: u32 = 420;
 const CMD_CLOUD_ADD_BASE: u32 = 460;
+/// Connect Cloud(X-37 — ADR-0006): 서비스별 OAuth 직접 연결 시작. 492 + 서비스 인덱스.
+const CMD_CLOUD_OAUTH_BASE: u32 = 492;
 const CLOUD_MAX: usize = 32;
 
 /// 테마 모드(원본 docs/39 §3 — System/Light/Dark). 영속은 M2-5.
@@ -399,6 +404,15 @@ fn build_cloud_items(
     } else {
         MenuItem::new(0, tr("cloud.add"), "").with_submenu(add)
     });
+    // Connect Cloud(X-37 — ADR-0006): 브라우저 OAuth로 **다른 계정** 직접 연결.
+    // 동기화 클라이언트에 붙은 계정과 무관하며 계정 수 제한도 없다.
+    let oauth: Vec<MenuItem> = crate::oauth::SERVICES
+        .iter()
+        .enumerate()
+        .map(|(i, s)| MenuItem::new(CMD_CLOUD_OAUTH_BASE + i as u32, s.display, ""))
+        .collect();
+    items.push(MenuItem::separator());
+    items.push(MenuItem::new(0, tr("cloud.connect"), "").with_submenu(oauth));
     items
 }
 
@@ -599,6 +613,8 @@ struct State {
     /// 마지막 메뉴 구성 시점의 감지 후보 스냅숏(X-36) — 추가 명령 인덱스 해석의 원천
     /// (메뉴 표시와 실행 사이의 환경 변화로 인덱스가 어긋나지 않게 스냅숏 고정).
     cloud_cands: Vec<crate::cloud::CloudCandidate>,
+    /// 서비스별 OAuth client_id(X-37 — ADR-0006 §2-4 사용자 제공).
+    cloud_client_ids: Vec<(String, String)>,
     /// 폰트 슬롯(X-12): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
     base_font: String,
     base_font_size: i32,
@@ -1115,6 +1131,7 @@ pub fn run() -> Result<()> {
         info_mode: settings.info_mode.clone(),
         cloud_conns: settings.cloud_conns.clone(),
         cloud_cands,
+        cloud_client_ids: settings.cloud_client_ids.clone(),
         base_font: settings.base_font.clone(),
         base_font_size: settings.base_font_size,
         ctx_font: settings.ctx_font.clone(),
@@ -3795,12 +3812,32 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let i = (id - CMD_CLOUD_DISC_BASE) as usize;
             if i < st.cloud_conns.len() {
                 let removed = st.cloud_conns.remove(i);
+                // API 연결이면 토큰도 폐기(흔적 정리) — 인덱스가 당겨지므로 꼬리 재배치
+                if removed.is_api() {
+                    crate::secret::clear_from(i);
+                    for (j, c) in st.cloud_conns.iter().enumerate().skip(i) {
+                        if c.is_api() {
+                            let _ = j; // 토큰 재저장은 재인증 시 수행(1차 — 재로그인 요구)
+                        }
+                    }
+                }
                 apply_cloud_change(hwnd, st, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
                 update_title(hwnd, st, &format!(" · {}", trf("cloud.removed", &[&removed.label])));
                 update_status(hwnd, st);
                 return;
             }
+        }
+        id if (CMD_CLOUD_OAUTH_BASE
+            ..CMD_CLOUD_OAUTH_BASE + crate::oauth::SERVICES.len() as u32)
+            .contains(&id) =>
+        {
+            // Connect Cloud — 브라우저 OAuth로 다른 계정 직접 연결(X-37)
+            let svc = crate::oauth::SERVICES[(id - CMD_CLOUD_OAUTH_BASE) as usize];
+            flush_invalidations(hwnd, &mut inv);
+            start_cloud_oauth(hwnd, st, svc);
+            update_status(hwnd, st);
+            return;
         }
         id if (CMD_CLOUD_ADD_BASE..CMD_CLOUD_ADD_BASE + CLOUD_MAX as u32).contains(&id) => {
             // 연결 추가 — 메뉴 구성 시점 후보 스냅숏(cloud_cands) 기준 인덱스
@@ -3811,6 +3848,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                         kind: c.kind.into(),
                         label: c.label.replace('|', "/"),
                         path: c.path.to_string_lossy().into_owned(),
+                        account: String::new(), // 동기화 폴더 연결(X-36)
                     });
                     apply_cloud_change(hwnd, st, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
@@ -3886,6 +3924,166 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     st.panels[0].set_metrics(m, cols.clone(), inv);
     st.panels[1].set_metrics(m, cols, inv);
     let _ = InvalidateRect(Some(hwnd), None, false);
+}
+
+/// OAuth 워커 결과(X-37 — WM_APP_CLOUD_AUTH lparam으로 전달·수신 측이 Box 회수).
+struct CloudAuthResult {
+    kind: &'static str,
+    display: &'static str,
+    /// 성공 = (계정 표시명, refresh 토큰) · 실패 = None + `err_key`/`err_detail`.
+    ok: Option<(String, String)>,
+    err_key: &'static str,
+    err_detail: String,
+}
+
+/// Connect Cloud — 서비스 OAuth 직접 연결 시작(X-37 — ADR-0006).
+///
+/// 리스너 생성·URL 조립은 즉시(네트워크 없음) → **인증 URL을 먼저 사용자에게 보여준다**
+/// (사용자 요청 08-01: 프라이빗 창에 붙여넣어 다른 계정으로 접속). [브라우저 열기]를
+/// 고르면 기본 브라우저를 띄우고, 어느 쪽이든 **워커가 리디렉션을 대기**한다
+/// (UI 스레드는 계속 펌프 — 07-21 규약).
+unsafe fn start_cloud_oauth(hwnd: HWND, st: &mut State, svc: crate::oauth::Service) {
+    let client_id = current_settings(st).client_id(svc.kind).to_string();
+    if client_id.trim().is_empty() {
+        // 미설정 안내(ADR-0006 §2-4 — 1차는 사용자 제공 client_id)
+        let msg = trf("cloud.err.noClientIdMsg", &[svc.display, svc.kind]);
+        let buttons = [crate::dialog::DlgButton {
+            id: 1,
+            label: tr("del.close"),
+        }];
+        let dlg_font = st.dlg_font.clone();
+        crate::dialog::show_buttons(hwnd, &tr("cloud.connect"), &msg, &buttons, &dlg_font);
+        return;
+    }
+    let session = match crate::oauth::AuthSession::begin(svc, &client_id) {
+        Ok(s) => s,
+        Err(e) => {
+            update_title(hwnd, st, &format!(" · {}", tr(e.key())));
+            return;
+        }
+    };
+    // 인증 URL 안내 — [브라우저 열기] / [URL 복사](프라이빗 창) / [취소]
+    let msg = trf("cloud.auth.prompt", &[svc.display, &session.url]);
+    let buttons = [
+        crate::dialog::DlgButton {
+            id: 1,
+            label: tr("cloud.auth.openBrowser"),
+        },
+        crate::dialog::DlgButton {
+            id: 2,
+            label: tr("cloud.copyUrl"),
+        },
+        crate::dialog::DlgButton {
+            id: 3,
+            label: tr("ops.cancel"),
+        },
+    ];
+    let dlg_font = st.dlg_font.clone();
+    let choice = crate::dialog::show_buttons(hwnd, &tr("cloud.connect"), &msg, &buttons, &dlg_font);
+    if choice == 3 || choice == 0 {
+        return; // 취소 — 리스너는 session drop으로 닫힘
+    }
+    if choice == 2 {
+        crate::clipboard::write_text(hwnd, &session.url);
+    } else {
+        let wide = HSTRING::from(session.url.as_str());
+        allow_foreground_handoff();
+        let _ = windows::Win32::UI::Shell::ShellExecuteW(
+            Some(hwnd),
+            w!("open"),
+            PCWSTR(wide.as_ptr()),
+            None,
+            None,
+            windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        );
+    }
+    update_title(hwnd, st, &format!(" · {}", tr("cloud.auth.waiting")));
+    // 워커: 리디렉션 대기 → 토큰 교환 → 결과 통지(종결 통지라 재시도 게시)
+    let hwnd_raw = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let res = session.wait_and_exchange(std::time::Duration::from_secs(300));
+        let boxed = Box::new(match res {
+            Ok(t) => CloudAuthResult {
+                kind: svc.kind,
+                display: svc.display,
+                ok: Some((t.account, t.refresh)),
+                err_key: "",
+                err_detail: String::new(),
+            },
+            Err(e) => {
+                let detail = match &e {
+                    crate::oauth::AuthError::Denied(d)
+                    | crate::oauth::AuthError::Exchange(d) => d.clone(),
+                    _ => String::new(),
+                };
+                CloudAuthResult {
+                    kind: svc.kind,
+                    display: svc.display,
+                    ok: None,
+                    err_key: e.key(),
+                    err_detail: detail,
+                }
+            }
+        });
+        post_final_notify(
+            hwnd_raw,
+            WM_APP_CLOUD_AUTH,
+            0,
+            Box::into_raw(boxed) as isize,
+        );
+    });
+}
+
+/// OAuth 워커 완료 처리(X-37) — 성공 시 연결 등록 + 토큰 DPAPI 저장.
+unsafe fn on_cloud_auth(hwnd: HWND, st: &mut State, res: CloudAuthResult) {
+    let mut inv = Invalidations::default();
+    let Some((account, refresh)) = res.ok else {
+        let note = if res.err_detail.is_empty() {
+            tr(res.err_key)
+        } else {
+            format!("{} — {}", tr(res.err_key), res.err_detail)
+        };
+        update_title(hwnd, st, &format!(" · {note}"));
+        update_status(hwnd, st);
+        return;
+    };
+    if st.cloud_conns.len() >= CLOUD_MAX {
+        update_title(hwnd, st, &format!(" · {}", tr("cloud.err.full")));
+        return;
+    }
+    let who = if account.is_empty() {
+        tr("cloud.account.unknown")
+    } else {
+        account.clone()
+    };
+    let label = format!("{} – {}", res.display, who).replace('|', "/");
+    // 같은 종류+계정이 이미 있으면 갱신(재인증 — 중복 행 방지)
+    let idx = st
+        .cloud_conns
+        .iter()
+        .position(|c| c.kind == res.kind && c.account == account && c.is_api())
+        .unwrap_or_else(|| {
+            st.cloud_conns.push(config::CloudConn {
+                kind: res.kind.into(),
+                label: label.clone(),
+                path: String::new(), // API 직접 연결 — 로컬 경로 없음
+                account: account.clone(),
+            });
+            st.cloud_conns.len() - 1
+        });
+    st.cloud_conns[idx].label = label;
+    if !crate::secret::save_token(idx, &refresh) {
+        // 토큰 보관 실패 = 재시작 시 재로그인 필요(연결 자체는 유지·안내만)
+        update_title(hwnd, st, &format!(" · {}", tr("cloud.err.tokenSave")));
+    }
+    apply_cloud_change(hwnd, st, &mut inv);
+    flush_invalidations(hwnd, &mut inv);
+    update_title(
+        hwnd,
+        st,
+        &format!(" · {}", trf("cloud.connected", &[&st.cloud_conns[idx].label])),
+    );
+    update_status(hwnd, st);
 }
 
 /// 클라우드 연결 변경 반영(X-36) — 영속·vfs 루트·메뉴 재구성·열린 내 PC 뷰 재로드.
@@ -4785,6 +4983,7 @@ fn current_settings(st: &State) -> Settings {
         launcher_items: Some(st.launcher_items.clone()),
         launcher_seed: crate::launcher::SEED_VERSION,
         cloud_conns: st.cloud_conns.clone(),
+        cloud_client_ids: st.cloud_client_ids.clone(),
     }
 }
 
@@ -6173,6 +6372,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         m if m == WM_APP_DELETE => {
             if let Some(st) = state_of(hwnd) {
                 on_delete_message(hwnd, st, wparam.0 == 1);
+            }
+            LRESULT(0)
+        }
+        // 클라우드 OAuth 워커 완료(X-37) — lparam = Box<CloudAuthResult>(여기서 회수)
+        m if m == WM_APP_CLOUD_AUTH => {
+            if lparam.0 != 0 {
+                let res = *Box::from_raw(lparam.0 as *mut CloudAuthResult);
+                if let Some(st) = state_of(hwnd) {
+                    on_cloud_auth(hwnd, st, res);
+                }
             }
             LRESULT(0)
         }

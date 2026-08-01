@@ -45,6 +45,20 @@ cloud.connected = {0} 연결됨
 cloud.removed = {0} 연결 해제됨
 cloud.urlCopied = URL 복사됨 — 프라이빗 창에 붙여넣으면 다른 계정으로 접속할 수 있습니다
 cloud.gone = 폴더를 찾을 수 없음 — {0}
+# Connect Cloud — OAuth 직접 연결(X-37, ADR-0006)
+cloud.connect = 클라우드 직접 연결
+cloud.auth.prompt = 브라우저에서 {0}에 로그인하세요.\n\n이미 로그인된 계정이 아닌 **다른 계정**으로 연결하려면 아래 URL을 복사해 프라이빗(시크릿) 창에서 여세요.\n\n{1}
+cloud.auth.openBrowser = 브라우저 열기
+cloud.auth.waiting = 브라우저 로그인 대기 중…
+cloud.account.unknown = 계정
+cloud.err.noClientId = Client ID가 설정되지 않았습니다
+cloud.err.noClientIdMsg = {0} 직접 연결에는 OAuth Client ID가 필요합니다.\n\n제공자 콘솔에서 데스크톱/네이티브 앱(PKCE·시크릿 없음)으로 등록한 뒤, data\\settings.cfg에 다음 줄을 추가하세요:\n\ncloud_client_id_{1}=<발급받은 CLIENT ID>\n\n리디렉션 URI: http://127.0.0.1 (루프백·포트 임의)
+cloud.err.listener = 로컬 콜백 리스너를 열 수 없습니다
+cloud.err.timeout = 로그인 시간이 초과되었거나 취소되었습니다
+cloud.err.denied = 로그인이 거부되었습니다
+cloud.err.exchange = 토큰 교환에 실패했습니다
+cloud.err.tokenSave = 연결됨 — 다만 토큰을 저장하지 못해 다시 로그인이 필요합니다
+cloud.err.full = 클라우드 연결이 너무 많습니다
 
 # ── About(X-26 ③) ──
 about.title = Nexa Dir 정보

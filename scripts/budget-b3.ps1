@@ -16,7 +16,12 @@ $whitelist = @(
   "imm32.dll",                     # M2-7 IME 조합 창 위치(ImmSetCompositionWindow)
   "uiautomationcore.dll",          # M2-7 UIA 프로바이더(UiaReturnRawElementProvider)
   "gdiplus.dll",                   # 07-17 Nx 컨트롤 AA 백엔드·07-18 SVG 래스터(gdipctx — GDI+ 유일 접점)
-  "shlwapi.dll"                    # 07-17 SHCreateMemStream(gdipctx 이미지 바이트 스트림)
+  "shlwapi.dll",                   # 07-17 SHCreateMemStream(gdipctx 이미지 바이트 스트림)
+  "winhttp.dll",                   # ADR-0006 X-37 클라우드 OAuth2 토큰 교환/API(TLS=schannel 위임)
+  "crypt32.dll",                   # ADR-0006 토큰 DPAPI 보관(CryptProtectData)
+  "ws2_32.dll",                    # ADR-0006 OAuth 루프백 리디렉션 1회 수신(127.0.0.1 한정)
+  "bcrypt.dll"                     # ADR-0006 PKCE code_challenge SHA-256(CNG BCryptHashData —
+                                   # 기존 bcryptprimitives.dll[std RNG]과 별개 인박스 DLL)
 )
 
 if (-not (Test-Path $Exe)) { throw "exe 없음: $Exe — cargo build --release 먼저" }

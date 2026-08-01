@@ -32,14 +32,28 @@ impl LauncherItem {
     }
 }
 
-/// 클라우드 연결(X-36 — 검토서 26 §2. `cloudN=kind|라벨|경로`).
-/// kind = `"onedrive"` | `"googledrive"` | `"dropbox"`(해석은 cloud.rs —
-/// 여기서는 형태만). 라벨의 `|`는 저장 시 `/`로 치환(구분자 보호).
-#[derive(Clone, PartialEq, Eq, Debug)]
+/// 클라우드 연결(X-36/X-37 — `cloudN=kind|라벨|경로[|account]`).
+/// kind = `"onedrive"` | `"googledrive"` | `"dropbox"`(해석은 cloud.rs — 여기서는 형태만).
+/// 라벨의 `|`는 저장 시 `/`로 치환(구분자 보호).
+///
+/// **두 연결 방식이 공존**(ADR-0006 §3):
+/// - `path` 비어 있지 않음 = **동기화 폴더 연결**(X-36) — 로컬 경로 탐색.
+/// - `path` 빔 + `account` 있음 = **API 직접 연결**(X-37) — 토큰은 `data\secrets\`
+///   (인덱스 대응 — [`crate::secret`]), 탐색은 후속 슬라이스.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct CloudConn {
     pub kind: String,
     pub label: String,
     pub path: String,
+    /// OAuth 계정 식별(이메일 등) — 빈 문자열 = 동기화 폴더 연결.
+    pub account: String,
+}
+
+impl CloudConn {
+    /// API 직접 연결인가(X-37 — 토큰 보유·로컬 경로 없음).
+    pub fn is_api(&self) -> bool {
+        self.path.is_empty() && !self.account.is_empty()
+    }
 }
 
 /// 설정(원본 ViewOptions·ThemeOptions 대응) — `data\settings.cfg`.
@@ -147,9 +161,24 @@ pub struct Settings {
     pub launcher_items: Option<Vec<LauncherItem>>,
     /// 적용된 시드 버전(launcher.rs `SEED_VERSION`) — 낮으면 기동 시 신규 시드 1회 추가.
     pub launcher_seed: u32,
-    /// 클라우드 연결 목록(X-36 — `cloudN=kind|라벨|경로`, 상한 32).
+    /// 클라우드 연결 목록(X-36/X-37 — `cloudN=kind|라벨|경로[|account]`, 상한 32).
     /// 내 PC "클라우드" 섹션 + Cloud 메뉴의 원천. 빈 목록 = 연결 없음.
     pub cloud_conns: Vec<CloudConn>,
+    /// 서비스별 OAuth `client_id`(X-37 — ADR-0006 §2-4: 1차는 **사용자 제공**.
+    /// PKCE라 공개돼도 무해한 값이며 `client_secret`은 쓰지 않는다).
+    /// 키 = `cloud_client_id_onedrive` 등. 미설정 = 해당 서비스 직접 연결 비활성(안내).
+    pub cloud_client_ids: Vec<(String, String)>,
+}
+
+impl Settings {
+    /// 종류별 client_id(미설정 = 빈 문자열).
+    pub fn client_id(&self, kind: &str) -> &str {
+        self.cloud_client_ids
+            .iter()
+            .find(|(k, _)| k == kind)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
+    }
 }
 
 impl Default for Settings {
@@ -205,6 +234,7 @@ impl Default for Settings {
             launcher_items: None,
             launcher_seed: 0,
             cloud_conns: Vec::new(),
+            cloud_client_ids: Vec::new(),
         }
     }
 }
@@ -384,14 +414,21 @@ impl Settings {
             u8::from(self.header_italic)
         ));
         out.push_str(&format!("launcher_seed={}\n", self.launcher_seed));
-        // 클라우드 연결(X-36) — 라벨의 구분자 `|`는 `/`로 치환 저장(경로에는 비출현)
+        // 클라우드 연결(X-36/X-37) — 라벨의 구분자 `|`는 `/`로 치환 저장(경로엔 비출현)
         for (i, c) in self.cloud_conns.iter().enumerate() {
             out.push_str(&format!(
-                "cloud{i}={}|{}|{}\n",
+                "cloud{i}={}|{}|{}|{}\n",
                 c.kind,
                 c.label.replace('|', "/"),
-                c.path
+                c.path,
+                c.account
             ));
+        }
+        // OAuth client_id(X-37 — 사용자 제공. PKCE라 시크릿 아님)
+        for (k, v) in &self.cloud_client_ids {
+            if !v.trim().is_empty() {
+                out.push_str(&format!("cloud_client_id_{k}={v}\n"));
+            }
         }
         if let Some(items) = &self.launcher_items {
             out.push_str(&format!("launcher_count={}\n", items.len()));
@@ -584,22 +621,34 @@ impl Settings {
                         });
                     }
                 }
-                // 클라우드 연결(X-36 — `cloudN=kind|라벨|경로`, 상한 32·불량 행 무시)
+                // OAuth client_id(X-37) — `cloud_client_id_<종류>`
+                k if k.starts_with("cloud_client_id_") => {
+                    let kind = k["cloud_client_id_".len()..].trim();
+                    if !kind.is_empty() && !v.trim().is_empty() && v.len() <= 256 {
+                        s.cloud_client_ids
+                            .push((kind.to_string(), v.trim().to_string()));
+                    }
+                }
+                // 클라우드 연결(X-36/X-37 — `cloudN=kind|라벨|경로[|account]`, 상한 32).
+                // 경로 또는 account 중 하나만 있어도 유효(동기화 폴더 / API 직접 연결).
                 k if k.starts_with("cloud") && k["cloud".len()..].parse::<usize>().is_ok() => {
                     if s.cloud_conns.len() >= 32 {
                         continue;
                     }
-                    let mut parts = v.splitn(3, '|');
-                    let (kind, label, path) = (
+                    let mut parts = v.splitn(4, '|');
+                    let (kind, label, path, account) = (
+                        parts.next().unwrap_or("").trim(),
                         parts.next().unwrap_or("").trim(),
                         parts.next().unwrap_or("").trim(),
                         parts.next().unwrap_or("").trim(),
                     );
-                    if !kind.is_empty() && !label.is_empty() && !path.is_empty() {
+                    let has_target = !path.is_empty() || !account.is_empty();
+                    if !kind.is_empty() && !label.is_empty() && has_target {
                         s.cloud_conns.push(CloudConn {
                             kind: kind.into(),
                             label: label.into(),
                             path: path.into(),
+                            account: account.into(),
                         });
                     }
                 }
@@ -1038,13 +1087,22 @@ mod tests {
                     kind: "onedrive".into(),
                     label: "OneDrive – SosomLab".into(),
                     path: "C:\\Users\\me\\OneDrive - SosomLab".into(),
+                    account: String::new(), // 동기화 폴더 연결(X-36)
                 },
                 CloudConn {
                     kind: "dropbox".into(),
                     label: "Dropbox – Personal".into(),
                     path: "D:\\Dropbox".into(),
+                    account: String::new(),
+                },
+                CloudConn {
+                    kind: "googledrive".into(),
+                    label: "Google Drive – work@ex.com".into(),
+                    path: String::new(), // API 직접 연결(X-37)
+                    account: "work@ex.com".into(),
                 },
             ],
+            cloud_client_ids: vec![("onedrive".into(), "00000000-abcd-1234".into())],
         };
         let parsed = Settings::parse(&s.serialize());
         assert_eq!(parsed.theme, "light");
@@ -1085,7 +1143,15 @@ mod tests {
             3000,
             "DnD 호버 기본 3초(X-32)"
         );
-        assert_eq!(parsed.cloud_conns, s.cloud_conns, "클라우드 연결 왕복(X-36)");
+        assert_eq!(parsed.cloud_conns, s.cloud_conns, "클라우드 연결 왕복(X-36/37)");
+        assert!(parsed.cloud_conns[2].is_api(), "경로 없음+account = API 연결");
+        assert!(!parsed.cloud_conns[0].is_api(), "경로 있음 = 동기화 폴더 연결");
+        assert_eq!(
+            parsed.client_id("onedrive"),
+            "00000000-abcd-1234",
+            "client_id 왕복(X-37)"
+        );
+        assert_eq!(parsed.client_id("dropbox"), "", "미설정 = 빈 문자열");
         assert!(
             Settings::parse("").cloud_conns.is_empty(),
             "키 부재 = 연결 없음"
@@ -1094,7 +1160,7 @@ mod tests {
             Settings::parse("cloud0=onedrive|말줄임")
                 .cloud_conns
                 .is_empty(),
-            "필드 부족 행 무시(관용)"
+            "경로·account 둘 다 없는 행 무시(관용)"
         );
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(

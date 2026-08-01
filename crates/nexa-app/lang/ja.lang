@@ -46,6 +46,20 @@ cloud.connected = {0} を接続しました
 cloud.removed = {0} の接続を解除しました
 cloud.urlCopied = URL をコピーしました — プライベート ウィンドウに貼り付けると別のアカウントでサインインできます
 cloud.gone = フォルダーが見つかりません — {0}
+# Connect Cloud — OAuth 直接接続(X-37, ADR-0006)
+cloud.connect = クラウドに直接接続
+cloud.auth.prompt = ブラウザーで {0} にサインインしてください。\n\nすでにサインイン済みのアカウントとは**別のアカウント**で接続するには、下の URL をコピーしてプライベート ウィンドウで開いてください。\n\n{1}
+cloud.auth.openBrowser = ブラウザーを開く
+cloud.auth.waiting = ブラウザーのサインインを待機中…
+cloud.account.unknown = アカウント
+cloud.err.noClientId = Client ID が設定されていません
+cloud.err.noClientIdMsg = {0} の直接接続には OAuth Client ID が必要です。\n\nプロバイダーのコンソールでデスクトップ/ネイティブ アプリ(PKCE・シークレットなし)として登録し、data\\settings.cfg に次の行を追加してください:\n\ncloud_client_id_{1}=<取得した CLIENT ID>\n\nリダイレクト URI: http://127.0.0.1 (ループバック・ポートは任意)
+cloud.err.listener = ローカル コールバック リスナーを開けません
+cloud.err.timeout = サインインがタイムアウトまたはキャンセルされました
+cloud.err.denied = サインインが拒否されました
+cloud.err.exchange = トークン交換に失敗しました
+cloud.err.tokenSave = 接続しましたが、トークンを保存できず再サインインが必要です
+cloud.err.full = クラウド接続が多すぎます
 
 # ── About (X-26 (3)) ──
 about.title = Nexa Dir について

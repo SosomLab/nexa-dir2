@@ -8,7 +8,7 @@
 | # | 영역 | 결정 | 근거 |
 | --- | --- | --- | --- |
 | **DR-1** | 기술 스택 | **올 러스트 단일 바이너리** — Win32(windows-rs) + 커스텀 드로잉(GDI→DirectWrite interop). 관리 런타임·UI 프레임워크·WebView 금지 | → [ADR-0001](06-adr-0001-stack.md) Accepted |
-| **DR-2** | 예산(NFR) | **B1 유휴 RSS ≤30MB · B2 exe ≤10MB · B3 임포트=OS 인박스만** — 마일스톤 병합 게이트 | → [05 §2](05-requirements.md). 원본의 사후 최적화 실패 교훈 |
+| **DR-2** | 예산(NFR) | **B1 유휴 RSS ≤30MB · B2 exe ≤10MB · B3 임포트=OS 인박스만** — 마일스톤 병합 게이트. **개정(08-01 [ADR-0006](27-adr-0006-cloud-oauth.md))**: B3 화이트리스트에 `winhttp.dll`·`crypt32.dll`·`ws2_32.dll` 추가(클라우드 OAuth — 전부 OS 인박스라 "인박스만" 원칙 자체는 불변). B1·B2 불변 | → [05 §2](05-requirements.md). 원본의 사후 최적화 실패 교훈 |
 | **DR-3** | 배포 | **개정(2026-07-16, 사용자 요청)**: 포터블 단일 exe **기본 채널** + **설치형 exe(Inno Setup) 보조 채널** 병행 — 태그 push 시 Release에 둘 다 첨부. 포터블 = exe 1개가 배포 전부(최소파일), 영속물=exe 옆 `data\`. 설치형 = 사용자별 설치 기본(관리자 불요)·**쓰기 불가 위치면 `%LOCALAPPDATA%\NexaDir\data` 폴백**(data_dir 프로브). 설계 = [21-distribution.md](21-distribution.md). **서명 결정(2026-07-15, M5-3)**: **무서명 유지 확정** — 원본 PKG-4 조사(07-11) 결과 Azure Trusted Signing=한국 개인 불가, 잔여 2안(Store 위임 $19/OV 클라우드 연 $100~400)은 비용 결정이라 원본과 공동 보류. SmartScreen 경고는 알려진 한계로 감수. **재검토 조건**: 원본 PKG-4에서 인증서 확보 시 release.yml에 서명 단계 추가 | ~~포터블 단독~~ → 2채널. MSIX는 원본 담당 |
 | **DR-4** | 코어 재사용 | 원본 `nexa-core`/`nexa-vfs`/`nexa-tree`를 **rlib 직접 링크로 이식**(cdylib/C ABI/ABI 버전 폐지). 의미 변경은 새 ADR | 원본 ADR-0004 계승 |
 | **DR-5** | UX/디자인 | 원본 **M1 기능 패리티** 목표. 디자인 규약(프로툴 고밀도·다크 기본·키보드 우선·원본 docs/39 테마 토큰) 계승 | 원본 DR-2 계승 |
