@@ -142,7 +142,7 @@ fn load_blocking(idx: usize, inner: &str, conn: &ConnInfo) -> Result<Vec<Entry>,
     let svc = oauth::service_of(&conn.kind).ok_or("unknown service")?;
     let tokens = oauth::refresh(&svc, &conn.client_id, &conn.refresh)
         .map_err(|e| tr_key(e.key()))?;
-    let body = fetch_list(&svc, &tokens.access, inner)?;
+    let body = fetch_list(&svc, &tokens.access, idx, inner)?;
     Ok(parse_list(&svc, &body, idx, inner))
 }
 
@@ -152,7 +152,7 @@ fn tr_key(key: &str) -> String {
 }
 
 /// 서비스별 목록 엔드포인트 호출.
-fn fetch_list(svc: &Service, access: &str, inner: &str) -> Result<String, String> {
+fn fetch_list(svc: &Service, access: &str, idx: usize, inner: &str) -> Result<String, String> {
     match svc.kind {
         "onedrive" => {
             // 경로 주소 지정: 루트 = /me/drive/root/children,
@@ -176,39 +176,71 @@ fn fetch_list(svc: &Service, access: &str, inner: &str) -> Result<String, String
             oauth::http_get(&url, access)
         }
         "googledrive" => {
-            // 1차 = 루트만(폴더 재귀는 부모 ID 필요 — 후속). q로 루트 자식 조회.
-            let url = "https://www.googleapis.com/drive/v3/files\
-                 ?q=%27root%27+in+parents+and+trashed%3Dfalse\
-                 &fields=files(id,name,size,mimeType,modifiedTime)&pageSize=500";
-            oauth::http_get(url, access)
+            // 부모 ID 기준 조회 — 루트는 예약어 `root`, 하위는 목록 시점에 캐시한 ID.
+            let parent = if inner.is_empty() {
+                "root".to_string()
+            } else {
+                id_get(idx, inner).ok_or("folder id unknown — 상위 폴더를 새로 고치세요")?
+            };
+            let url = format!(
+                "https://www.googleapis.com/drive/v3/files\
+                 ?q={}+in+parents+and+trashed%3Dfalse\
+                 &fields=files(id,name,size,mimeType,modifiedTime)&pageSize=500",
+                oauth::percent(&format!("'{parent}'"))
+            );
+            oauth::http_get(&url, access)
         }
-        "dropbox" => Err("dropbox listing is not implemented yet".into()),
+        "dropbox" => {
+            // Dropbox는 전부 POST + JSON. 루트는 빈 문자열, 하위는 `/경로`.
+            let body = format!(
+                "{{\"path\":\"{}\",\"limit\":500}}",
+                json_escape(inner) // 루트 = "" (Dropbox 규약)
+            );
+            oauth::http_send(
+                "https://api.dropboxapi.com/2/files/list_folder",
+                "POST",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+        }
         _ => Err("unsupported service".into()),
     }
 }
 
 /// 응답 → [`Entry`] 변환(표시명은 이름, 진입 경로는 `target` 센티널).
 fn parse_list(svc: &Service, body: &str, idx: usize, inner: &str) -> Vec<Entry> {
-    let (array_key, is_google) = match svc.kind {
-        "googledrive" => ("files", true),
-        _ => ("value", false),
+    let array_key = match svc.kind {
+        "googledrive" => "files",
+        "dropbox" => "entries",
+        _ => "value",
     };
     oauth::json_objects(body, array_key)
         .iter()
         .filter_map(|o| {
             let name = oauth::json_str(o, "name")?;
-            let is_dir = if is_google {
-                oauth::json_str(o, "mimeType").as_deref()
-                    == Some("application/vnd.google-apps.folder")
-            } else {
-                oauth::json_has(o, "folder")
+            let is_dir = match svc.kind {
+                "googledrive" => {
+                    oauth::json_str(o, "mimeType").as_deref()
+                        == Some("application/vnd.google-apps.folder")
+                }
+                // Dropbox는 `.tag`가 "folder"/"file"
+                "dropbox" => oauth::json_str(o, ".tag").as_deref() == Some("folder"),
+                _ => oauth::json_has(o, "folder"),
             };
             let size = oauth::json_str(o, "size")
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
-            let modified = oauth::json_str(o, if is_google { "modifiedTime" } else { "lastModifiedDateTime" })
-                .and_then(|s| parse_rfc3339(&s));
-            // 항목 ID 적재(다운로드용 — Google은 필수·OneDrive는 경로로도 가능)
+            // 수정 시각 키가 서비스마다 다르다
+            let mod_key = match svc.kind {
+                "googledrive" => "modifiedTime",
+                "dropbox" => "server_modified",
+                _ => "lastModifiedDateTime",
+            };
+            let modified = oauth::json_str(o, mod_key).and_then(|s| parse_rfc3339(&s));
+            // 항목 ID 적재 — Google은 목록/다운로드에 필수, Dropbox는 `id`(file/folder id).
+            // OneDrive는 경로 주소 지정이 되지만 함께 담아 둔다.
             if let Some(id) = oauth::json_str(o, "id") {
                 id_put(idx, &format!("{inner}/{name}"), &id);
             }
@@ -348,6 +380,19 @@ fn download_one(
                 DOWNLOAD_LIMIT,
             )?
         }
+        "dropbox" => {
+            // content API — 인자는 **헤더**로 전달하고 본문은 비운다(Dropbox 규약).
+            let arg = format!("Dropbox-API-Arg: {{\"path\":\"{}\"}}\r\n", json_escape(&it.inner));
+            oauth::http_send_bytes(
+                "https://content.dropboxapi.com/2/files/download",
+                "POST",
+                None,
+                None,
+                &arg,
+                Some(access),
+                DOWNLOAD_LIMIT,
+            )?
+        }
         _ => return Err("download not supported for this service".into()),
     };
     if let Some(dir) = it.dest.parent() {
@@ -433,8 +478,10 @@ fn enc_path(inner: &str) -> String {
 
 /// 쓰기 1건 수행.
 fn apply_write(conn: &ConnInfo, access: &str, op: &WriteOp) -> Result<(), String> {
-    if conn.kind != "onedrive" {
-        return Err("write is supported for OneDrive only (for now)".into());
+    match conn.kind.as_str() {
+        "dropbox" => return apply_write_dropbox(access, op),
+        "googledrive" => return apply_write_google(access, op),
+        _ => {}
     }
     match op {
         WriteOp::Upload { src, dest_inner } => upload_onedrive(access, src, dest_inner),
@@ -544,6 +591,219 @@ fn apply_write(conn: &ConnInfo, access: &str, op: &WriteOp) -> Result<(), String
     }
 }
 
+/// Dropbox 쓰기 — 전부 POST + JSON(경로 기반이라 ID 불요).
+/// 업로드는 150MB 이하 단순 `files/upload`, 초과는 세션 청크.
+fn apply_write_dropbox(access: &str, op: &WriteOp) -> Result<(), String> {
+    let post = |url: &str, body: String| -> Result<(), String> {
+        oauth::http_send(
+            url,
+            "POST",
+            Some(body.as_bytes()),
+            Some("application/json"),
+            "",
+            Some(access),
+        )
+        .map(|_| ())
+    };
+    match op {
+        WriteOp::Upload { src, dest_inner } => upload_dropbox(access, src, dest_inner),
+        WriteOp::UploadTree { src, dest_inner } => {
+            let _ = post(
+                "https://api.dropboxapi.com/2/files/create_folder_v2",
+                format!("{{\"path\":\"{}\"}}", json_escape(dest_inner)),
+            ); // 이미 존재 = 무시(멱등)
+            for ent in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+                let child = ent.path();
+                let cname = ent.file_name().to_string_lossy().into_owned();
+                let cdest = format!("{dest_inner}/{cname}");
+                match ent.file_type() {
+                    Ok(t) if t.is_dir() => {
+                        apply_write_dropbox(access, &WriteOp::UploadTree { src: child, dest_inner: cdest })?
+                    }
+                    Ok(t) if t.is_file() => upload_dropbox(access, &child, &cdest)?,
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        WriteOp::Delete { inner } => post(
+            "https://api.dropboxapi.com/2/files/delete_v2",
+            format!("{{\"path\":\"{}\"}}", json_escape(inner)),
+        ),
+        WriteOp::Rename { inner, new_name } => {
+            let parent = inner.rfind('/').map(|i| &inner[..i]).unwrap_or("");
+            post(
+                "https://api.dropboxapi.com/2/files/move_v2",
+                format!(
+                    "{{\"from_path\":\"{}\",\"to_path\":\"{}/{}\"}}",
+                    json_escape(inner),
+                    json_escape(parent),
+                    json_escape(new_name)
+                ),
+            )
+        }
+        WriteOp::NewFolder { parent_inner, name } => post(
+            "https://api.dropboxapi.com/2/files/create_folder_v2",
+            format!(
+                "{{\"path\":\"{}/{}\",\"autorename\":true}}",
+                json_escape(parent_inner),
+                json_escape(name)
+            ),
+        ),
+        WriteOp::CopyWithin { inner, dest_parent_inner } | WriteOp::MoveWithin { inner, dest_parent_inner } => {
+            let name = inner.rsplit('/').next().unwrap_or("item");
+            let url = if matches!(op, WriteOp::CopyWithin { .. }) {
+                "https://api.dropboxapi.com/2/files/copy_v2"
+            } else {
+                "https://api.dropboxapi.com/2/files/move_v2"
+            };
+            post(
+                url,
+                format!(
+                    "{{\"from_path\":\"{}\",\"to_path\":\"{}/{}\",\"autorename\":true}}",
+                    json_escape(inner),
+                    json_escape(dest_parent_inner),
+                    json_escape(name)
+                ),
+            )
+        }
+    }
+}
+
+/// Dropbox 업로드 — 150MB 이하 단순, 초과는 세션(8MB 청크 append → finish).
+fn upload_dropbox(access: &str, src: &std::path::Path, dest: &str) -> Result<(), String> {
+    use std::io::Read;
+    const SIMPLE_MAX: u64 = 140 * 1024 * 1024;
+    const DBX_CHUNK: usize = 8 * 1024 * 1024;
+    let total = std::fs::metadata(src).map_err(|e| e.to_string())?.len();
+    let arg = |json: String| format!("Dropbox-API-Arg: {json}\r\n");
+    if total <= SIMPLE_MAX {
+        let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
+        return oauth::http_send(
+            "https://content.dropboxapi.com/2/files/upload",
+            "POST",
+            Some(&bytes),
+            Some("application/octet-stream"),
+            &arg(format!(
+                "{{\"path\":\"{}\",\"mode\":\"overwrite\"}}",
+                json_escape(dest)
+            )),
+            Some(access),
+        )
+        .map(|_| ());
+    }
+    let mut f = std::fs::File::open(src).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; DBX_CHUNK];
+    let mut off: u64 = 0;
+    let mut session = String::new();
+    while off < total {
+        let want = DBX_CHUNK.min((total - off) as usize);
+        f.read_exact(&mut buf[..want]).map_err(|e| e.to_string())?;
+        if session.is_empty() {
+            let r = oauth::http_send(
+                "https://content.dropboxapi.com/2/files/upload_session/start",
+                "POST",
+                Some(&buf[..want]),
+                Some("application/octet-stream"),
+                &arg("{\"close\":false}".into()),
+                Some(access),
+            )?;
+            session = oauth::json_str(&r, "session_id").ok_or("no session_id")?;
+        } else {
+            oauth::http_send(
+                "https://content.dropboxapi.com/2/files/upload_session/append_v2",
+                "POST",
+                Some(&buf[..want]),
+                Some("application/octet-stream"),
+                &arg(format!(
+                    "{{\"cursor\":{{\"session_id\":\"{session}\",\"offset\":{off}}}}}"
+                )),
+                Some(access),
+            )?;
+        }
+        off += want as u64;
+    }
+    oauth::http_send(
+        "https://content.dropboxapi.com/2/files/upload_session/finish",
+        "POST",
+        Some(&[]),
+        Some("application/octet-stream"),
+        &arg(format!(
+            "{{\"cursor\":{{\"session_id\":\"{session}\",\"offset\":{total}}},\
+              \"commit\":{{\"path\":\"{}\",\"mode\":\"overwrite\"}}}}",
+            json_escape(dest)
+        )),
+        Some(access),
+    )
+    .map(|_| ())
+}
+
+/// Google Drive 쓰기 — ID 기반(경로 주소 지정 없음). 업로드는 multipart.
+fn apply_write_google(access: &str, op: &WriteOp) -> Result<(), String> {
+    // 부모 폴더 ID(루트는 예약어) — 캐시 의존이라 미적재면 새로 고침 유도
+    let parent_id = |inner: &str| -> Result<String, String> {
+        if inner.is_empty() {
+            Ok("root".into())
+        } else {
+            Err(format!("folder id unknown for {inner} — 상위 폴더를 새로 고치세요"))
+        }
+    };
+    match op {
+        WriteOp::Upload { src, dest_inner } => {
+            let (parent, name) = match dest_inner.rfind('/') {
+                Some(i) => (&dest_inner[..i], &dest_inner[i + 1..]),
+                None => ("", dest_inner.as_str()),
+            };
+            let pid = parent_id(parent)?;
+            let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
+            // multipart/related — 메타데이터 파트 + 본문 파트
+            let bound = "nexadirBOUNDARY7f3a";
+            let meta = format!(
+                "{{\"name\":\"{}\",\"parents\":[\"{pid}\"]}}",
+                json_escape(name)
+            );
+            let mut body = Vec::new();
+            body.extend_from_slice(
+                format!(
+                    "--{bound}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n\
+                     --{bound}\r\nContent-Type: application/octet-stream\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(&bytes);
+            body.extend_from_slice(format!("\r\n--{bound}--\r\n").as_bytes());
+            oauth::http_send(
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+                "POST",
+                Some(&body),
+                Some(&format!("multipart/related; boundary={bound}")),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+        WriteOp::NewFolder { parent_inner, name } => {
+            let pid = parent_id(parent_inner)?;
+            let body = format!(
+                "{{\"name\":\"{}\",\"mimeType\":\"application/vnd.google-apps.folder\",\
+                  \"parents\":[\"{pid}\"]}}",
+                json_escape(name)
+            );
+            oauth::http_send(
+                "https://www.googleapis.com/drive/v3/files",
+                "POST",
+                Some(body.as_bytes()),
+                Some("application/json"),
+                "",
+                Some(access),
+            )
+            .map(|_| ())
+        }
+        // 나머지는 항목 ID가 필요 — 호출부가 id를 실어 주도록 확장하기 전까지 안내.
+        _ => Err("Google Drive write for this action is not supported yet".into()),
+    }
+}
+
 /// JSON 문자열 값 이스케이프(최소 — crate 0).
 fn json_escape(s: &str) -> String {
     let mut out = String::new();
@@ -614,7 +874,7 @@ fn expand_tree(
     dest_dir: &std::path::Path,
     out: &mut Vec<DownloadItem>,
 ) -> Result<(), String> {
-    let body = fetch_list(svc, access, inner)?;
+    let body = fetch_list(svc, access, idx, inner)?;
     for e in parse_list(svc, &body, idx, inner) {
         let child_inner = format!("{inner}/{}", e.name);
         let child_dest = dest_dir.join(&e.name);
@@ -761,6 +1021,31 @@ mod tests {
         assert_eq!(v[0].kind, FileKind::Dir);
         assert_eq!(v[1].kind, FileKind::File);
         assert_eq!(v[1].size, 99, "Google size는 문자열이지만 파싱");
+    }
+
+    /// Dropbox는 배열 키 `entries`·`.tag`로 폴더 판별·수정일 `server_modified`.
+    #[test]
+    fn parses_dropbox_entries() {
+        let body = r#"{"entries":[
+          {".tag":"folder","name":"Docs","id":"id:aaa","path_lower":"/docs"},
+          {".tag":"file","name":"b.txt","id":"id:bbb","size":7,
+           "server_modified":"2026-05-01T08:00:00Z","path_lower":"/b.txt"}
+        ],"has_more":false}"#;
+        let v = parse_list(&oauth::DROPBOX, body, 3, "");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].kind, FileKind::Dir);
+        assert_eq!(v[0].target.as_deref(), Some("::CLOUD:3::/Docs"));
+        assert_eq!(v[1].kind, FileKind::File);
+        assert_eq!(v[1].size, 7);
+        assert!(v[1].modified.is_some(), "server_modified 파싱");
+    }
+
+    /// JSON 이스케이프 — 경로에 따옴표·역슬래시가 있어도 본문이 깨지지 않아야 한다.
+    #[test]
+    fn json_escape_protects_body() {
+        assert_eq!(json_escape(r#"a"b\c"#), r#"a\"b\\c"#);
+        assert_eq!(json_escape("tab\there"), "tab\\there");
+        assert!(!json_escape("새\u{1}폴더").contains('\u{1}'), "제어문자 이스케이프");
     }
 
     #[test]

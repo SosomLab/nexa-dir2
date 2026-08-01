@@ -633,6 +633,20 @@ pub fn http_send(
         .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
+/// 임의 메서드 → **원본 바이트**(Dropbox content API처럼 본문이 이진인 응답).
+#[cfg(windows)]
+pub fn http_send_bytes(
+    url: &str,
+    method: &str,
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra: &str,
+    bearer: Option<&str>,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    winhttp_request(url, method, body, content_type, extra, bearer, limit)
+}
+
 #[cfg(not(windows))]
 pub fn http_send(
     _u: &str,
@@ -642,6 +656,20 @@ pub fn http_send(
     _e: &str,
     _r: Option<&str>,
 ) -> Result<String, String> {
+    Err("windows only".into())
+}
+
+#[cfg(not(windows))]
+#[allow(clippy::too_many_arguments)]
+pub fn http_send_bytes(
+    _u: &str,
+    _m: &str,
+    _b: Option<&[u8]>,
+    _c: Option<&str>,
+    _e: &str,
+    _r: Option<&str>,
+    _l: usize,
+) -> Result<Vec<u8>, String> {
     Err("windows only".into())
 }
 
