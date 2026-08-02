@@ -49,8 +49,26 @@ pub struct DropHooks {
 pub struct DropTarget {
     hwnd: HWND,
     hooks: DropHooks,
-    /// DragEnter에서 추출한 페이로드(CF_HDROP 경로들) — Drop까지 유지.
+    /// DragEnter에서 추출한 페이로드(CF_HDROP 경로들) — Drop에서 재조회로 갱신.
     paths: RefCell<Vec<PathBuf>>,
+}
+
+/// 데이터 객체에서 CF_HDROP 경로 목록 추출(GetData 1회 — 실패/미지원 = 빈 Vec).
+/// DragEnter(수신 판정)·Drop(최종 경로 재조회) 공용.
+unsafe fn hdrop_paths(data: &IDataObject) -> Vec<PathBuf> {
+    let fmt = FORMATETC {
+        cfFormat: CF_HDROP.0,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+    let Ok(mut medium) = data.GetData(&fmt) else {
+        return Vec::new();
+    };
+    let paths = paths_from_hdrop(HDROP(medium.u.hGlobal.0));
+    ReleaseStgMedium(&mut medium);
+    paths
 }
 
 impl DropTarget {
@@ -266,21 +284,11 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        // CF_HDROP 페이로드 추출(1회) — 없으면 수신 거부(effect NONE)
-        let mut paths = Vec::new();
-        if let Some(data) = pdataobj.as_ref() {
-            let fmt = FORMATETC {
-                cfFormat: CF_HDROP.0,
-                ptd: std::ptr::null_mut(),
-                dwAspect: DVASPECT_CONTENT.0,
-                lindex: -1,
-                tymed: TYMED_HGLOBAL.0 as u32,
-            };
-            if let Ok(mut medium) = unsafe { data.GetData(&fmt) } {
-                paths = unsafe { paths_from_hdrop(HDROP(medium.u.hGlobal.0)) };
-                unsafe { ReleaseStgMedium(&mut medium) };
-            }
-        }
+        // CF_HDROP 페이로드 추출 — 없으면 수신 거부(effect NONE)
+        let paths = pdataobj
+            .as_ref()
+            .map(|d| unsafe { hdrop_paths(d) })
+            .unwrap_or_default();
         *self.paths.borrow_mut() = paths;
         unsafe {
             *effect = self.resolve(keys, pt).2;
@@ -310,12 +318,23 @@ impl IDropTarget_Impl for DropTarget_Impl {
 
     fn Drop(
         &self,
-        _pdataobj: windows::core::Ref<IDataObject>,
+        pdataobj: windows::core::Ref<IDataObject>,
         keys: MODIFIERKEYS_FLAGS,
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         unsafe { (self.hooks.leave)(self.hwnd) }; // 드롭 = 드래그 종료 — 추적 해제(X-32)
+        // **지연 렌더링 소스 대응**(7-Zip 등 압축 관리자 — 사용자 QA 08-02): 드래그 중에는
+        // 추출 전이라 임시 폴더(`%TEMP%\7zE…`)만 광고하고, 드롭 확정 후 타깃이
+        // GetData(CF_HDROP)를 **다시** 호출해야 실제 추출이 일어나 최종 경로가 온다
+        // (탐색기 동일 규약 — 추출 진행 UI는 소스 몫이라 이 호출은 동기 블록 허용).
+        // 재조회 실패 시엔 DragEnter 캐시 유지(즉시 렌더링 소스는 결과 동일).
+        if let Some(data) = pdataobj.as_ref() {
+            let fresh = unsafe { hdrop_paths(data) };
+            if !fresh.is_empty() {
+                *self.paths.borrow_mut() = fresh;
+            }
+        }
         let (dest, op, fx) = unsafe { self.resolve(keys, pt) };
         // **최적화 이동(optimized move) 규약**: 이동은 우리(타깃)가 전송 엔진으로 직접 수행하므로
         // 소스에 DROPEFFECT_NONE을 반환 — MOVE를 돌려주면 소스(탐색기)가 원본을 삭제해
@@ -334,5 +353,26 @@ impl IDropTarget_Impl for DropTarget_Impl {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 발신 데이터 객체 → 수신 추출 왕복(비ASCII 포함) — DragEnter/Drop 재조회가 쓰는
+    /// `hdrop_paths` 경로를 실제 GetData/STGMEDIUM 해제까지 통과시킨다.
+    #[test]
+    fn data_object_hdrop_round_trip() {
+        let paths = vec![
+            PathBuf::from("C:\\Windows\\notepad.exe"),
+            PathBuf::from("C:\\Windows\\한글 경로.txt"),
+        ];
+        let data: IDataObject = FileListDataObject {
+            paths: paths.clone(),
+        }
+        .into();
+        let read = unsafe { hdrop_paths(&data) };
+        assert_eq!(read, paths, "CF_HDROP 경로 왕복");
     }
 }
