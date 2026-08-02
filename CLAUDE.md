@@ -8,7 +8,7 @@
 **Nexa Dir** = 원본 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어+WinUI 3/C#)의 기능을
 **포터블 단일 exe · 초저메모리(RSS ≤30MB) · unmanaged 올 러스트**로 재구축하는 Windows 파일 탐색기.
 원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`.
-현 단계: **포스트 M5 — UX 고도화 + 배포 채널 정착**. M0(`0.1.0`)~M5(`0.6.0`) 완료, 최신 릴리스 **`0.13.0`**(08-02 — X-36/X-37 클라우드. GitHub Release 배포 완료 · winget Portable 0.13.0 심사 중 · winget 설치형·Chocolatey 2종은 심사 대기 — [21 §7·§8](docs/21-distribution.md)).
+현 단계: **포스트 M5 — UX 고도화 + 배포 채널 정착**. M0(`0.1.0`)~M5(`0.6.0`) 완료, 최신 릴리스 **`0.14.0`**(08-02 — X-38 7-Zip 드롭 픽스·X-39 보기 옵션 적용 범위+탭 DnD. winget Portable 0.13.0·설치형·Chocolatey 2종은 심사 대기 — [21 §7·§8](docs/21-distribution.md)).
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com (원본과 동일)
 

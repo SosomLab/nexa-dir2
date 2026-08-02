@@ -251,15 +251,15 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   (raw 조회 200, 2026-07-24). **∴ winget Portable = 첫 승인 채널이자 유일하게 최신
   버전(`0.11.0`)까지 배포된 채널.**
 
-### 채널 상태 요약 (2026-08-02 갱신 — 원천 실측: PR 라벨·choco 심사 로그)
+### 채널 상태 요약 (2026-08-02 저녁 재점검 — 원천 실측: PR 라벨 JSON·choco 패키지 페이지)
 
 | 채널 | 패키지 | 배포된 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.13.0 심사 중**(0.12.0 배포됨) | ⏳ [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) 제출(08-02) — 직전 [#408280](https://github.com/microsoft/winget-pkgs/pull/408280) 0.12.0은 제출 당일 MERGED | 없음(재추적) |
-| winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN([#404528](https://github.com/microsoft/winget-pkgs/pull/404528)) — `Needs-Author-Feedback` **해제됨**(08-01 `DisplayVersion` 제거가 수용). 남은 라벨 = `Policy-Test-1.2` + `Validation-Guide` → **repository admin 수동 검토 대기** | 없음(공이 모더레이터에게) |
-| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 "Ready for review" — **큐 대기가 아니라 바이러스 스캔 플래그**에 걸려 있다(07-20 02:22 `flagged as part of automated virus scanning`, 이후 13일 무이벤트) | 없음 / 오탐 소명 코멘트는 선택 |
-| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21 플래그) | 동일 |
-| GitHub Release | 포터블 + 설치형 | **0.13.0** (08-02 — X-36·X-37 클라우드) | ✅ 상시. **자산 5종 첫 실배포 확인**(exe 2 + zip 2 + `SHA256SUMS.txt`) | — |
+| winget | `SosomLab.NexaDir.Portable` | **0.13.0 심사 중**(0.12.0 배포됨) | ⏳ [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) OPEN — 라벨 `Azure-Pipeline-Passed` + **`Policy-Test-1.2`**(0.11/0.12와 같은 패턴 — waiver 후 승인이 관례) | 없음(재추적) |
+| winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN([#404528](https://github.com/microsoft/winget-pkgs/pull/404528)) — `Needs-Author-Feedback` 해제 유지. 남은 라벨 = `Policy-Test-1.2` + `Validation-Guide` → **모더레이터 waiver 대기** | 없음(공이 모더레이터에게) |
+| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**("in moderation and has not yet been approved" — 07-20 바이러스 스캔 플래그 이후 무이벤트) | 없음 / 오탐 소명 코멘트는 선택 |
+| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일 | 동일 |
+| GitHub Release | 포터블 + 설치형 | **0.14.0** (08-02 — X-38 7-Zip 드롭·X-39 보기 옵션 범위+탭 DnD) | ✅ 상시(자산 5종 규약 — 0.13.0에서 실배포 검증됨) | — |
 
 **해석(08-02)**: 릴리스 0.13.0을 **Chocolatey 제외**로 배포했다(사용자 지시 — 워크플로
 `choco push` 스텝이 `skipped`로 확인됨. `CHOCO_PUSH` 미설정 게이트가 의도대로 동작).
