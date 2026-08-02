@@ -1076,6 +1076,26 @@ impl Panel {
         tab.rows.source_mut().set_folders_first(folders);
     }
 
+    /// `i`번 탭이 **다른 탭의 값**(패널 대표값)을 채택 — 미리 보기로 이미 들어온 탭의
+    /// 드롭 커밋 경로(08-02: 미리 보기 중에는 값을 건드리지 않아 ESC 복귀가 무손실).
+    pub fn adopt_panel_view(&mut self, i: usize, inv: &mut Invalidations) {
+        let donor = usize::from(i == 0);
+        if donor >= self.tabs.len() || i >= self.tabs.len() {
+            return; // 단독 탭 = 대표값 없음(채택 불요)
+        }
+        let (sh, sd, ff) = {
+            let d = &self.tabs[donor];
+            (d.show_hidden, d.show_dotfiles, d.folders_first)
+        };
+        self.session_dirty = true;
+        let t = &mut self.tabs[i];
+        t.show_hidden = sh;
+        t.show_dotfiles = sd;
+        t.folders_first = ff;
+        t.rows.source_mut().set_folders_first(ff);
+        inv.push(t.rows.bounds());
+    }
+
     /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 전 탭 소스에 전파·즉시 재정렬(+보관).
     pub fn set_sort_case(&mut self, on: bool, inv: &mut Invalidations) {
         self.sort_case = on;

@@ -827,6 +827,10 @@ struct State {
     sort_folders_first: bool,
     /// 보기 옵션 토글 적용 범위("global"|"panel"|"tab" — 08-02 사용자·기본 panel).
     view_scope: String,
+    /// 탭 드래그 원위치 스냅샷(패널, 인덱스) — ESC 취소 복귀(08-02 QA).
+    /// 프레스에서 무장·해제/ESC에서 소거. 드래그 내내 이동하는 탭은 잡은 1개뿐이므로
+    /// 이 좌표만으로 어느 패널에 가 있든 원위치 복원이 가능하다.
+    tab_drag_undo: Option<(usize, usize)>,
     /// 대소문자 구분 정렬·Alt+↑ 자동 선택 배치(사용자 요청 07-15 — 설정 영속).
     sort_case_sensitive: bool,
     nav_up_align: String,
@@ -1350,6 +1354,7 @@ pub fn run() -> Result<()> {
         show_dotfiles: settings.show_dotfiles,
         sort_folders_first: settings.sort_folders_first,
         view_scope: settings.view_scope.clone(),
+        tab_drag_undo: None,
         sort_case_sensitive: settings.sort_case_sensitive,
         nav_up_align: settings.nav_up_align.clone(),
         tab_dblclick: settings.tab_dblclick.clone(),
@@ -4849,6 +4854,8 @@ unsafe fn tip_tick(hwnd: HWND, st: &mut State) {
 /// 패널 간 탭 이동(08-02 사용자): `src` 패널의 `from` 탭을 `dst` 패널 `at` 위치
 /// (없음 = 끝)로. 마지막 탭은 이동 불가(detach가 거부 — 패널 공백 방지). 이동 후
 /// 그 탭이 대상 패널에서 활성화되고 포커스도 대상 패널로 넘어간다.
+/// `adopt` = 대상 패널 값 채택 수행 여부 — **커밋(해제)에만 true**. 미리 보기 이동은
+/// 값을 건드리지 않아 ESC 복귀가 무손실(QA 08-02). 반환: 실제로 이동했는가.
 unsafe fn cross_move_tab(
     hwnd: HWND,
     st: &mut State,
@@ -4856,12 +4863,13 @@ unsafe fn cross_move_tab(
     from: usize,
     dst: usize,
     at: Option<usize>,
+    adopt: bool,
     inv: &mut Invalidations,
-) {
+) -> bool {
     let Some(mut tab) = st.panels[src].detach_tab(from, inv) else {
-        return;
+        return false;
     };
-    if st.view_scope != "tab" {
+    if adopt && st.view_scope != "tab" {
         // 범위 "전체"/"좌-우 패널" = 패널 내 값 균일 유지 — 대상 패널 값 채택.
         // 숨김/Dot 불일치는 stale로 남아 update_status가 재열람으로 수렴.
         let (sh, sd, ff) = st.panels[dst].active_view_values();
@@ -4871,6 +4879,41 @@ unsafe fn cross_move_tab(
     layout(hwnd, st, inv); // 탭 줄 수 변동 가능(멀티라인) — 양 패널 재배치
     set_active(hwnd, st, dst);
     update_status(hwnd, st);
+    true
+}
+
+/// 탭 드래그 ESC 취소(08-02 QA): 잡은 탭을 드래그 시작 위치(스냅샷)로 되돌리고
+/// 드래그를 끝낸다. 반환: 취소할 드래그가 있었는가(있었으면 ESC 소비).
+unsafe fn cancel_tab_drag(hwnd: HWND, st: &mut State) -> bool {
+    let Some((op, oi)) = st.tab_drag_undo.take() else {
+        return false;
+    };
+    let mut handled = false;
+    let mut inv = Invalidations::default();
+    for p in 0..2usize {
+        let Some(cur) = st.panels[p].tabbar.pressed_tab() else {
+            continue;
+        };
+        let started = st.panels[p].tabbar.dragging().is_some();
+        st.panels[p].tabbar.cancel_drag();
+        handled = true;
+        if !started {
+            continue; // 임계 미달(이동 전) — 되돌릴 것 없음
+        }
+        if p == op {
+            st.panels[p].move_tab(cur, oi, &mut inv);
+        } else if let Some(tab) = st.panels[p].detach_tab(cur, &mut inv) {
+            // 미리 보기로 반대 패널에 가 있던 탭 — 원 패널 원위치로 복귀
+            st.panels[op].attach_tab(tab, Some(oi), &mut inv);
+            layout(hwnd, st, &mut inv);
+            set_active(hwnd, st, op);
+        }
+    }
+    flush_invalidations(hwnd, &mut inv);
+    if handled {
+        update_status(hwnd, st);
+    }
+    handled
 }
 
 unsafe fn set_active(hwnd: HWND, st: &mut State, idx: usize) {
@@ -6255,6 +6298,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[idx].on_event(&ev, &mut inv);
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
+                    // 탭 드래그 원위치 스냅샷(08-02 QA — ESC 취소 복귀·해제/ESC에서 소거)
+                    st.tab_drag_undo = st.panels[idx].tabbar.pressed_tab().map(|i| (idx, i));
                     // 터미널 [→] = 현재 폴더로 이동(QA 07-14 — 원본 '터미널에서 열기')
                     if st.panels[idx].dock.take_goto() {
                         let dir = st.panels[idx].root_path();
@@ -6543,6 +6588,32 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let ctx = st.nav_ctx();
                         st.panels[0].drain_actions(ctx, &mut inv);
                         st.panels[1].drain_actions(ctx, &mut inv);
+                        // 패널 간 탭 드래그 **미리 보기**(08-02 QA): 반대 패널 **탭 바**
+                        // 위로 끌면 즉시 교차 이동 + 드래그 이양 — 동일 패널 재정렬과
+                        // 같은 "미리 보기 = 실이동" 규약. 값 채택은 해제(커밋)로 미룸 →
+                        // ESC 복귀(cancel_tab_drag)가 무손실. 본문 위는 종전대로 해제
+                        // 시 끝 삽입(미리 보기 없음).
+                        if !single_panel(st) {
+                            for holder in 0..2usize {
+                                let Some(from) = st.panels[holder].tabbar.dragging() else {
+                                    continue;
+                                };
+                                let other = 1 - holder;
+                                let over_bar = st.panels[other].tabbar.tab_index_at(x, y).is_some()
+                                    || st.panels[other].tabbar.empty_area_at(x, y);
+                                if over_bar {
+                                    let at = st.panels[other].tabbar.tab_index_at(x, y);
+                                    if cross_move_tab(
+                                        hwnd, st, holder, from, other, at, false, &mut inv,
+                                    ) {
+                                        let landed = st.panels[other].active_index();
+                                        st.panels[other].tabbar.begin_drag(landed, x, y);
+                                        st.panels[holder].tabbar.cancel_drag();
+                                    }
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
                 flush_invalidations(hwnd, &mut inv);
@@ -6595,21 +6666,31 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 let ev = InputEvent::MouseUp { x, y };
                 let mut inv = Invalidations::default();
-                // 패널 간 탭 DnD(08-02 사용자 — tabbar 모듈 doc "후속" 이행): 탭 드래그
-                // 중 **반대 패널 위에서 해제** = 이동. 위젯이 MouseUp에 드래그를 지우므로
-                // 라우팅 **전에** 판정한다. 대상 탭 바 위면 그 위치에, 그 외는 끝에 삽입.
-                for src in 0..2usize {
-                    let Some(from) = st.panels[src].tabbar.dragging() else {
-                        continue;
-                    };
-                    let dst = 1 - src;
-                    if single_panel(st) || st.panel_at_pt(x, y) != Some(dst) {
-                        continue;
+                // 패널 간 탭 DnD 커밋(08-02 사용자 — tabbar 모듈 doc "후속" 이행).
+                // 위젯이 MouseUp에 드래그를 지우므로 라우팅 **전에** 판정.
+                // ① 미리 보기로 이미 반대 패널에 들어가 있으면 = 값 채택만 커밋.
+                // ② 아직 원 패널 드래그 + 해제 지점이 반대 패널(탭 바 밖 본문 포함)이면
+                //    이동 커밋(대상 탭 바 위면 그 위치에, 그 외는 끝에 삽입).
+                if let Some((op, _)) = st.tab_drag_undo.take() {
+                    for p in 0..2usize {
+                        let Some(cur) = st.panels[p].tabbar.dragging() else {
+                            continue;
+                        };
+                        if p != op {
+                            // ① 미리 보기 상태 해제 = 커밋 — 미뤄 둔 값 채택 수행
+                            if st.view_scope != "tab" {
+                                st.panels[p].adopt_panel_view(cur, &mut inv);
+                            }
+                        } else {
+                            let dst = 1 - p;
+                            if !single_panel(st) && st.panel_at_pt(x, y) == Some(dst) {
+                                let at = st.panels[dst].tabbar.tab_index_at(x, y);
+                                cross_move_tab(hwnd, st, p, cur, dst, at, true, &mut inv);
+                                st.panels[p].tabbar.cancel_drag();
+                            }
+                        }
+                        break;
                     }
-                    let at = st.panels[dst].tabbar.tab_index_at(x, y);
-                    cross_move_tab(hwnd, st, src, from, dst, at, &mut inv);
-                    st.panels[src].tabbar.cancel_drag();
-                    break;
                 }
                 st.panels[0].on_event(&ev, &mut inv);
                 st.panels[1].on_event(&ev, &mut inv);
@@ -6803,6 +6884,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.active_panel().rows_mut().rename_key(k, shift, &mut inv);
                     }
                     flush_invalidations(hwnd, &mut inv);
+                    return LRESULT(0);
+                }
+                if vk == VK_ESCAPE.0 && cancel_tab_drag(hwnd, st) {
+                    // 탭 드래그 취소(08-02 QA) — 잡은 탭 원위치 복귀·ESC 소비
                     return LRESULT(0);
                 }
                 if vk == VK_ESCAPE.0

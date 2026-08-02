@@ -161,6 +161,17 @@ impl TabBar {
         self.drag = None;
     }
 
+    /// 프레스된 탭(드래그 시작 전 후보 포함) — 호스트의 ESC 취소 스냅샷용(08-02).
+    pub fn pressed_tab(&self) -> Option<usize> {
+        self.drag.map(|(i, _, _)| i)
+    }
+
+    /// 호스트 주도 드래그 시작(08-02 — 패널 간 미리 보기 이양): 탭 `index`를 잡은
+    /// 상태로 만든다(임계 통과 취급 — 이후 MouseMove가 이 바 안에서 재정렬 계속).
+    pub fn begin_drag(&mut self, index: usize, x: i32, y: i32) {
+        self.drag = Some((index, Point { x, y }, true));
+    }
+
     fn tab_at(&self, x: i32, y: i32) -> Option<(usize, bool)> {
         if !self.bounds.contains(Point { x, y }) {
             return None;
@@ -473,6 +484,21 @@ mod tests {
         // 줄별 히트: 탭2는 2번째 줄 [0,70)×[22,44)
         assert_eq!(t.tab_index_at(10, 30), Some(2));
         assert_eq!(t.tab_index_at(10, 5), Some(0));
+    }
+
+    /// 호스트 이양 API(08-02 — 패널 간 미리 보기): 프레스 후보/시작 판정·취소·주입 시작.
+    #[test]
+    fn host_drag_handoff_api() {
+        let (mut t, mut inv) = bar(&["alpha", "beta"], 0);
+        down(&mut t, &mut inv, 10);
+        assert_eq!(t.pressed_tab(), Some(0), "프레스 = 후보");
+        assert_eq!(t.dragging(), None, "임계 전 = 미시작");
+        t.on_event(&InputEvent::MouseMove { x: 30, y: 5 }, &mut inv);
+        assert_eq!(t.dragging(), Some(0), "임계 통과 = 시작");
+        t.cancel_drag();
+        assert_eq!(t.pressed_tab(), None, "취소 = 소거");
+        t.begin_drag(1, 100, 5);
+        assert_eq!(t.dragging(), Some(1), "호스트 주도 시작(이양)");
     }
 
     #[test]
