@@ -113,6 +113,10 @@ pub struct Settings {
     pub header_italic: bool,
     /// 폴더 우선 정렬(G-13 — 기본 true=탐색기 규약. false=파일·폴더 혼합 정렬).
     pub sort_folders_first: bool,
+    /// 보기 옵션(숨김/Dot/폴더 우선) 토글 적용 범위(08-02 사용자):
+    /// "global"(전체) | "panel"(좌-우 패널 — 기본) | "tab"(활성 탭).
+    /// 값 자체는 탭별 보관·세션 영속([`PanelSession::views`]) — 이 키는 전파 폭만.
+    pub view_scope: String,
     /// 대소문자 구분 정렬(사용자 확정 07-15 — 기본 false. 코드포인트 순 = **대문자 그룹 상단**).
     pub sort_case_sensitive: bool,
     /// Alt+↑ 떠난 폴더 자동 선택의 뷰 배치(사용자 QA 07-15): "top"|"center"|"bottom".
@@ -228,6 +232,7 @@ impl Default for Settings {
             header_bold: false,
             header_italic: false,
             sort_folders_first: true,
+            view_scope: "panel".into(),
             sort_case_sensitive: false,
             nav_up_align: "center".into(),
             tab_dblclick: "close".into(),
@@ -269,6 +274,9 @@ pub struct PanelSession {
     pub pinned: Vec<bool>,
     /// 탭별 보기 모드("tree"|"flat"|"tiles" — 사용자 요청 07-16: 탭별 설정).
     pub modes: Vec<String>,
+    /// 탭별 보기 옵션 플래그(08-02 — bit0 숨김·bit1 Dot·bit2 폴더 우선.
+    /// 부족분 = 설정 기본. `modes`와 같은 직렬화 레벨).
+    pub views: Vec<u8>,
     /// 패널 컬럼 폭(px — 탭은 패널 폭 상속, 사용자 확정 07-18).
     /// 확장성: 향후 탭별 폭은 `panel{i}.colw{j}` 키로 같은 레벨에 추가한다
     /// (탭별 modes와 동일 직렬화 레벨 — 사용자 지침).
@@ -400,6 +408,7 @@ impl Settings {
             self.panel_mode,
             self.info_mode
         ));
+        out.push_str(&format!("view_scope={}\n", self.view_scope));
         out.push_str(&format!(
             "col_width_sync={}\n",
             u8::from(self.col_width_sync)
@@ -559,6 +568,9 @@ impl Settings {
                     }
                 }
                 "sort_folders_first" => s.sort_folders_first = v != "0",
+                "view_scope" if matches!(v, "global" | "panel" | "tab") => {
+                    s.view_scope = v.into() // 미지 값 = 기본(panel) 유지
+                }
                 "sort_case_sensitive" => s.sort_case_sensitive = v != "0",
                 "nav_up_align" if matches!(v, "top" | "center" | "bottom") => {
                     s.nav_up_align = v.into()
@@ -728,6 +740,11 @@ impl Session {
             if p.modes.iter().any(|m| m != "tree") {
                 out.push_str(&format!("panel{i}.modes={}\n", p.modes.join("|")));
             }
+            // 탭별 보기 옵션 플래그(08-02 — bit0 숨김·bit1 Dot·bit2 폴더 우선)
+            if !p.views.is_empty() {
+                let vs: Vec<String> = p.views.iter().map(|f| f.to_string()).collect();
+                out.push_str(&format!("panel{i}.views={}\n", vs.join("|")));
+            }
             // 패널 컬럼 폭(07-18 — 탭 상속. 탭별 확장 = panel{i}.colw{j} 예약)
             if !p.col_layout.is_empty() {
                 out.push_str(&format!("panel{i}.cols={}\n", p.col_layout));
@@ -764,6 +781,15 @@ impl Session {
                 "panel0.pinned" | "panel1.pinned" => {
                     let idx = usize::from(k.starts_with("panel1"));
                     s.panels[idx].pinned = v.split('|').map(|f| f == "1").collect();
+                }
+                "panel0.views" | "panel1.views" => {
+                    // 탭별 보기 옵션(08-02) — 파싱 실패 항목은 0(설정 기본과 다르면
+                    // seed가 기입한 값 기준 stale 수렴이 재열람)
+                    let idx = usize::from(k.starts_with("panel1"));
+                    s.panels[idx].views = v
+                        .split('|')
+                        .map(|f| f.trim().parse::<u8>().unwrap_or(0) & 0x7)
+                        .collect();
                 }
                 "panel0.cols" | "panel1.cols" => {
                     // 컬럼 레이아웃(07-19) — 재직렬화 정규화(미지 토큰 제거·보충)
@@ -1077,6 +1103,7 @@ mod tests {
             header_bold: true,
             header_italic: false,
             sort_folders_first: false,
+            view_scope: "tab".into(), // 기본(panel) 아님 — 왕복 검증
             sort_case_sensitive: true,
             nav_up_align: "top".into(),
             tab_dblclick: "lock".into(),
@@ -1292,6 +1319,7 @@ mod tests {
                     locked: vec![false, true], // 탭1 잠금 — 편의 UX ② 왕복
                     pinned: vec![true, false], // 탭0 고정 — 07-15 왕복
                     modes: vec!["tiles".into(), "tree".into()], // 탭별 보기 모드 — 07-16 왕복
+                    views: vec![5, 2], // 탭별 보기 옵션 — 08-02 왕복(숨김+폴더우선 / Dot만)
                     col_widths: vec![320, 64, 96], // 패널 컬럼 폭 — 07-18 왕복
                     col_layout: "cols:1[ext:1,name:1,size:0,modified:1,kind:1]".into(),
                 },
@@ -1302,6 +1330,7 @@ mod tests {
                     locked: vec![],
                     pinned: vec![],
                     modes: vec![],
+                    views: vec![],
                     col_widths: vec![], // 빈 목록 = 생략 직렬화
                     col_layout: String::new(),
                 },
@@ -1326,6 +1355,7 @@ mod tests {
             vec!["tiles".to_string(), "tree".to_string()],
             "탭별 보기 모드 왕복(07-16)"
         );
+        assert_eq!(parsed.panels[0].views, vec![5, 2], "탭별 보기 옵션 왕복(08-02)");
         // 빈/손상 → 기본
         let empty = Session::parse("");
         assert_eq!(empty.active_panel, 0);

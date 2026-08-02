@@ -314,6 +314,11 @@ pref.ctxm.grpBg = Background Menu
 pref.dock.desc = Show the bottom dock (info, preview, terminal).
 pref.sortFoldersFirst = Sort folders first
 pref.sortFoldersFirst.desc = Group folders before files regardless of sort order.
+pref.viewScope = View options scope
+pref.viewScope.desc = Where the hidden/dot/folders-first toggles apply. The checkboxes in this window always apply to all panels regardless of scope.
+pref.viewScope.global = All panels
+pref.viewScope.panel = Left/right panel
+pref.viewScope.tab = Active tab
 pref.termWrap = Terminal word wrap
 pref.termWrap.desc = Wrap lines to the view width. Off = fixed columns with horizontal scroll.
 pref.termCols = Terminal columns (80~1000)

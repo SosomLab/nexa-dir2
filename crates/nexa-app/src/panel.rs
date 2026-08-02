@@ -42,6 +42,14 @@ pub struct Tab {
     locked: bool,
     /// 탭 고정(📌 핀 그룹 앞 정렬 — 사용자 요청 07-15). 세션 영속.
     pinned: bool,
+    /// 탭별 보기 옵션(08-02 사용자 — 값의 SSOT는 항상 탭. 적용 범위 설정
+    /// `view_scope`는 토글의 **전파 폭**만 결정). 세션 영속(`panel{i}.views`).
+    show_hidden: bool,
+    show_dotfiles: bool,
+    folders_first: bool,
+    /// 마지막 열거에 쓴 (숨김, Dot) — 현재 값과 다르면 재열람 필요(stale).
+    /// 비활성 탭에 범위 토글이 닿았을 때 전환 시점 수렴의 근거.
+    enum_filters: (bool, bool),
 }
 
 /// F18 펼침 키 — 대소문자 무시·후행 구분자 제거(원본 OrdinalIgnoreCase HashSet 대응).
@@ -163,6 +171,10 @@ impl Panel {
                 expanded: Default::default(),
                 locked: false,
                 pinned: false,
+                show_hidden: ctx.show_hidden,
+                show_dotfiles: ctx.show_dotfiles,
+                folders_first: true,
+                enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
             }],
             active: 0,
             bounds: Rect::default(),
@@ -218,6 +230,10 @@ impl Panel {
                 expanded: Default::default(),
                 locked: false,
                 pinned: false,
+                show_hidden: ctx.show_hidden,
+                show_dotfiles: ctx.show_dotfiles,
+                folders_first: true,
+                enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
             };
             Self::seed_expanded(&mut tab, &exp);
             p.tabs.push(tab);
@@ -524,6 +540,8 @@ impl Panel {
 
     /// 현재 경로를 복제한 새 탭(Ctrl+T·[+]).
     pub fn new_tab(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
+        let ctx = self.active_ctx(ctx); // 보기 옵션 계승(08-02 — 탭별)
+        let ff = self.tabs[self.active].folders_first;
         let path = self.root_path();
         let Some(src) = open_source(&path, ctx) else {
             return;
@@ -539,6 +557,10 @@ impl Panel {
             expanded: Default::default(),
             locked: false,
             pinned: false,
+            show_hidden: ctx.show_hidden,
+            show_dotfiles: ctx.show_dotfiles,
+            folders_first: ff,
+            enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
         });
         self.active = self.tabs.len() - 1;
         self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 새 탭 유지)
@@ -574,6 +596,7 @@ impl Panel {
         if i >= self.tabs.len() {
             return;
         }
+        let ctx = self.tab_ctx(i, ctx); // 원본 탭 보기 옵션 계승(08-02)
         let path = self.tabs[i].rows.source().tree().root_path().to_path_buf();
         let Some(src) = open_source(&path, ctx) else {
             return;
@@ -587,6 +610,10 @@ impl Panel {
             expanded: self.tabs[i].expanded.clone(),
             locked: false,
             pinned: false, // 복제본은 잠금 해제 상태(원본 동일)
+            show_hidden: ctx.show_hidden,
+            show_dotfiles: ctx.show_dotfiles,
+            folders_first: self.tabs[i].folders_first,
+            enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
         };
         let entries: Vec<PathBuf> = tab.expanded.values().cloned().collect();
         let tree = tab.rows.source_mut().tree_mut();
@@ -735,6 +762,11 @@ impl Panel {
     }
 
     fn apply_source(&mut self, src: TreeSource, inv: &mut Invalidations) {
+        // 열거 필터 스탬프(08-02 — 모든 소스 교체는 활성 탭 값으로 열렸다: active_ctx 규약)
+        {
+            let t = &mut self.tabs[self.active];
+            t.enum_filters = (t.show_hidden, t.show_dotfiles);
+        }
         // 펼침 상태 유지(원본 F18 — X-4): 경계에서 집합 동기 후 새 루트 아래 엔트리 재적용.
         // **방문 ≠ 확장**(사용자 지시 07-14): 더블클릭 진입은 확장 버튼과 동일 취급하지
         // 않는다 — 직전 루트 자동 등재 없음. 마커로 명시 펼침한 폴더만 집합에 남는다.
@@ -828,8 +860,24 @@ impl Panel {
         }
     }
 
+    /// 호스트 ctx를 탭 보기 옵션으로 보정(08-02 — 값의 SSOT는 탭. 호스트 ctx는 tz만 기여).
+    fn tab_ctx(&self, i: usize, base: NavCtx) -> NavCtx {
+        let t = &self.tabs[i];
+        NavCtx {
+            show_hidden: t.show_hidden,
+            show_dotfiles: t.show_dotfiles,
+            tz: base.tz,
+        }
+    }
+
+    /// 활성 탭 보기 옵션으로 보정한 ctx — 패널 내 모든 열거(open_source)의 관문.
+    fn active_ctx(&self, base: NavCtx) -> NavCtx {
+        self.tab_ctx(self.active, base)
+    }
+
     /// 새 경로 진입(히스토리 push — 앞으로 절단). 열기 실패 시 현 위치 유지.
     pub fn navigate_to(&mut self, path: PathBuf, ctx: NavCtx, inv: &mut Invalidations) {
+        let ctx = self.active_ctx(ctx);
         let Some(src) = open_source(&path, ctx) else {
             self.sync_chrome(inv); // 편집 제출 실패 시 브레드크럼 복귀
             return;
@@ -839,6 +887,7 @@ impl Panel {
     }
 
     pub fn nav_back(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
+        let ctx = self.active_ctx(ctx);
         let Some(p) = self.tabs[self.active].nav.back().map(Path::to_path_buf) else {
             return;
         };
@@ -851,6 +900,7 @@ impl Panel {
     }
 
     pub fn nav_forward(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
+        let ctx = self.active_ctx(ctx);
         let Some(p) = self.tabs[self.active].nav.forward().map(Path::to_path_buf) else {
             return;
         };
@@ -910,13 +960,120 @@ impl Panel {
         self.nav_up_align = align;
     }
 
-    /// 폴더 우선 정렬 토글(G-13) — 전 탭 소스에 전파·즉시 재정렬(+새 소스용 보관).
+    /// 폴더 우선 정렬 — **패널 전 탭** 적용·즉시 재정렬(+새 소스용 보관).
+    /// 범위 "전체"/"좌-우 패널" 토글·설정 창 일괄 적용 경로.
     pub fn set_folders_first(&mut self, on: bool, inv: &mut Invalidations) {
         self.sort_folders_first = on;
+        self.session_dirty = true;
         for t in &mut self.tabs {
+            t.folders_first = on;
             t.rows.source_mut().set_folders_first(on);
             inv.push(t.rows.bounds());
         }
+    }
+
+    /// 폴더 우선 정렬 — **활성 탭만**(범위 "활성 탭" 토글 경로, 08-02).
+    pub fn set_active_folders_first(&mut self, on: bool, inv: &mut Invalidations) {
+        self.session_dirty = true;
+        let t = &mut self.tabs[self.active];
+        t.folders_first = on;
+        t.rows.source_mut().set_folders_first(on);
+        inv.push(t.rows.bounds());
+    }
+
+    /// 숨김/Dot 값 기입(08-02 — 재열람은 호스트 몫: 활성 탭 즉시·비활성은 stale 수렴).
+    /// `all_tabs` = 패널 전 탭(범위 "전체"/"좌-우 패널") / false = 활성 탭만.
+    pub fn set_view_filters(&mut self, all_tabs: bool, hidden: bool, dot: bool) {
+        self.session_dirty = true;
+        if all_tabs {
+            for t in &mut self.tabs {
+                t.show_hidden = hidden;
+                t.show_dotfiles = dot;
+            }
+        } else {
+            let t = &mut self.tabs[self.active];
+            t.show_hidden = hidden;
+            t.show_dotfiles = dot;
+        }
+    }
+
+    /// 활성 탭의 (숨김, Dot, 폴더 우선) — 툴바/메뉴/상태 바 미러 동기용(08-02).
+    pub fn active_view_values(&self) -> (bool, bool, bool) {
+        let t = &self.tabs[self.active];
+        (t.show_hidden, t.show_dotfiles, t.folders_first)
+    }
+
+    /// 활성 탭이 자기 값과 다른 필터로 열거돼 있는가 — 탭/패널 전환 수렴 판정(08-02).
+    pub fn active_tab_stale(&self) -> bool {
+        let t = &self.tabs[self.active];
+        t.enum_filters != (t.show_hidden, t.show_dotfiles)
+    }
+
+    /// 세션 복원 — 탭별 보기 옵션 플래그(bit0 숨김·bit1 Dot·bit2 폴더 우선. 부족분 =
+    /// 현재 값 유지 = 설정 기본). 활성 탭 불일치는 기동 후 첫 update_status가 재열람.
+    pub fn seed_view_flags(&mut self, flags: &[u8], inv: &mut Invalidations) {
+        for (i, t) in self.tabs.iter_mut().enumerate() {
+            let Some(&f) = flags.get(i) else { continue };
+            t.show_hidden = f & 1 != 0;
+            t.show_dotfiles = f & 2 != 0;
+            t.folders_first = f & 4 != 0;
+            t.rows.source_mut().set_folders_first(t.folders_first);
+            inv.push(t.rows.bounds());
+        }
+        // 새 탭 기본은 활성 탭 규약(new_tab 계승)이므로 패널 보관값도 맞춰 둔다
+        self.sort_folders_first = self.tabs[self.active].folders_first;
+    }
+
+    /// 세션 저장 — 탭별 보기 옵션 플래그(seed_view_flags 역방향).
+    pub fn session_view_flags(&self) -> Vec<u8> {
+        self.tabs
+            .iter()
+            .map(|t| {
+                u8::from(t.show_hidden)
+                    | u8::from(t.show_dotfiles) << 1
+                    | u8::from(t.folders_first) << 2
+            })
+            .collect()
+    }
+
+    /// 패널 간 탭 이동 — 분리(08-02 사용자). 마지막 탭은 이동 불가(패널 공백 방지).
+    pub fn detach_tab(&mut self, i: usize, inv: &mut Invalidations) -> Option<Tab> {
+        if self.tabs.len() <= 1 || i >= self.tabs.len() {
+            return None;
+        }
+        self.session_dirty = true;
+        let tab = self.tabs.remove(i);
+        if self.active >= self.tabs.len() || (self.active > i) {
+            self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
+        }
+        self.set_bounds(self.bounds, inv);
+        self.sync_chrome(inv);
+        inv.push(self.bounds);
+        Some(tab)
+    }
+
+    /// 패널 간 탭 이동 — 결합(08-02 사용자): `at` 위치(없음 = 끝)에 삽입·활성화.
+    /// 컬럼 구성은 대상 패널 상속(07-18 패널 단위 규약), 나머지 상태는 탭이 소유·지참.
+    pub fn attach_tab(&mut self, mut tab: Tab, at: Option<usize>, inv: &mut Invalidations) {
+        self.session_dirty = true;
+        let at = at.unwrap_or(self.tabs.len()).min(self.tabs.len());
+        tab.rows.set_focused(self.focused, inv);
+        tab.rows
+            .set_columns(self.rows().columns().to_vec(), inv);
+        self.tabs.insert(at, tab);
+        self.active = at;
+        self.set_bounds(self.bounds, inv);
+        self.sync_chrome(inv);
+        inv.push(self.bounds);
+    }
+
+    /// 이동 탭에 대상 패널 규약 적용(범위 ≠ "활성 탭"일 때 — 패널 내 값 균일 유지).
+    /// 숨김/Dot 불일치는 stale로 남아 update_status 수렴이 재열람한다.
+    pub fn adopt_view_values(tab: &mut Tab, hidden: bool, dot: bool, folders: bool) {
+        tab.show_hidden = hidden;
+        tab.show_dotfiles = dot;
+        tab.folders_first = folders;
+        tab.rows.source_mut().set_folders_first(folders);
     }
 
     /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 전 탭 소스에 전파·즉시 재정렬(+보관).
@@ -935,7 +1092,8 @@ impl Panel {
 
     /// 새로 만든 소스에 보관된 정렬·타입어헤드 옵션 적용(탐색·재로드·새 탭 공통 — 07-15).
     fn apply_sort_opts(&mut self, tab: usize) {
-        let (sf, sc) = (self.sort_folders_first, self.sort_case);
+        // 폴더 우선은 탭 소유 값(08-02) — 대소문자·타입어헤드는 패널 공통 유지
+        let (sf, sc) = (self.tabs[tab].folders_first, self.sort_case);
         let (scope, reset, special, space, bs, hud) = self.ta_opts;
         let mut inv = Invalidations::default();
         {
@@ -1139,6 +1297,13 @@ impl Panel {
     }
 
     pub fn reopen_filtered(&mut self, ctx: NavCtx, inv: &mut Invalidations) {
+        let ctx = self.active_ctx(ctx);
+        // 시도 자체를 스탬프(열기 실패 시에도 stale 재시도 폭주 방지 — 다음 명시적
+        // 재열람 때 다시 시도)
+        {
+            let t = &mut self.tabs[self.active];
+            t.enum_filters = (t.show_hidden, t.show_dotfiles);
+        }
         let path = self.root_path();
         let Some(src) = open_source(&path, ctx) else {
             return;
@@ -1385,6 +1550,53 @@ mod tests {
         let mut p = Panel::new(Tree::open(base).unwrap(), ctx(), metrics(), Vec::new());
         p.set_bounds(Rect::new(0, 0, 400, 400), &mut inv);
         (p, inv)
+    }
+
+    /// 탭별 보기 옵션(08-02): 값 SSOT=탭 — 새 탭 계승·활성 탭만 기입·stale 판정·
+    /// 세션 플래그 왕복.
+    #[test]
+    fn per_tab_view_values_inherit_and_stale() {
+        let base = fixture("view");
+        let (mut p, mut inv) = panel(&base);
+        assert_eq!(p.active_view_values(), (true, true, true), "생성 ctx 계승");
+        // 새 탭 = 활성 탭 계승
+        p.new_tab(ctx(), &mut inv);
+        assert_eq!(p.active_view_values(), (true, true, true));
+        // 활성 탭만 기입(범위 "활성 탭") → 탭0은 불변·탭1은 stale
+        p.set_view_filters(false, false, true);
+        assert_eq!(p.active_view_values(), (false, true, true));
+        assert!(p.active_tab_stale(), "값 변경 후 재열람 전 = stale");
+        p.reopen_filtered(ctx(), &mut inv);
+        assert!(!p.active_tab_stale(), "재열람 = 수렴");
+        p.switch_tab(0, &mut inv);
+        assert_eq!(p.active_view_values(), (true, true, true), "탭0 불변");
+        assert!(!p.active_tab_stale());
+        // 세션 플래그 왕복: 탭0=(t,t,t)=3+4=7 · 탭1=(f,t,t)=2+4=6
+        assert_eq!(p.session_view_flags(), vec![7, 6]);
+        let mut flags = p.session_view_flags();
+        flags[0] = 0; // 탭0 전부 끔 — 시드 후 stale로 수렴 대상
+        p.seed_view_flags(&flags, &mut inv);
+        assert_eq!(p.active_view_values(), (false, false, false));
+        assert!(p.active_tab_stale(), "시드 값 ≠ 초기 열거 = stale");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// 패널 간 탭 이동(08-02): detach가 마지막 탭을 거부하고, attach가 경로·활성을
+    /// 보존하며 대상 패널로 옮긴다.
+    #[test]
+    fn detach_attach_moves_tab_between_panels() {
+        let base = fixture("tabdnd");
+        let (mut a, mut inv) = panel(&base);
+        let (mut b, _) = panel(&base);
+        assert!(a.detach_tab(0, &mut inv).is_none(), "마지막 탭 이동 불가");
+        a.new_tab(ctx(), &mut inv);
+        let moved = a.detach_tab(1, &mut inv).expect("2탭부터 분리 가능");
+        assert_eq!(a.tab_count(), 1);
+        b.attach_tab(moved, Some(0), &mut inv);
+        assert_eq!(b.tab_count(), 2);
+        assert_eq!(b.active_index(), 0, "이동 탭이 대상에서 활성");
+        assert_eq!(b.root_path(), base, "경로 지참");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[cfg(windows)]

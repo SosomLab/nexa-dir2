@@ -77,6 +77,8 @@ pub struct PrefValues {
     pub dock: bool,
     /// 폴더 우선 정렬(G-13).
     pub sort_folders_first: bool,
+    /// 보기 옵션 토글 적용 범위("global"|"panel"|"tab" — 08-02).
+    pub view_scope: String,
     /// 대소문자 구분 정렬(07-15).
     pub sort_case_sensitive: bool,
     /// Alt+↑ 자동 선택 배치("top"|"center"|"bottom" — 07-15).
@@ -170,6 +172,8 @@ const F_COL_LAYOUT: u32 = 36;
 const F_CTX_MENU: u32 = 37;
 const F_TRANSFER_CLOSE: u32 = 38;
 const F_DND_HOVER: u32 = 39;
+/// 보기 옵션(숨김/Dot/폴더 우선) 토글 적용 범위(08-02).
+const F_VIEW_SCOPE: u32 = 40;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -316,6 +320,13 @@ const NAV_UP_OPTS: &[(&str, &str)] = &[
     ("top", "pref.align.top"),
     ("center", "pref.align.center"),
     ("bottom", "pref.align.bottom"),
+];
+
+/// 보기 옵션 토글 적용 범위(08-02 — 기본 panel). 키는 툴바 툴팁과 공유.
+const VIEW_SCOPE_OPTS: &[(&str, &str)] = &[
+    ("global", "pref.viewScope.global"),
+    ("panel", "pref.viewScope.panel"),
+    ("tab", "pref.viewScope.tab"),
 ];
 
 const THEME_OPTS: &[(&str, &str)] = &[
@@ -465,6 +476,13 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.sortCaseSensitive.desc",
             kind: Kind::CheckBox,
             field: F_CASE_SORT,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.viewScope",
+            desc_key: "pref.viewScope.desc",
+            kind: Kind::Radio(VIEW_SCOPE_OPTS),
+            field: F_VIEW_SCOPE,
         },
         Entry {
             cat: "list",
@@ -1063,6 +1081,7 @@ impl PrefState {
                             F_TAB_DBL => self.values.tab_dblclick.clone(),
                             F_TA_SCOPE => self.values.typeahead_scope.clone(),
                             F_TA_POS => self.values.typeahead_pos.to_string(),
+                            F_VIEW_SCOPE => self.values.view_scope.clone(),
                             _ => String::new(),
                         };
                         for (gi, (val, olabel)) in opts.into_iter().enumerate() {
@@ -1352,6 +1371,7 @@ impl PrefState {
             F_CTX_MENU => v.ctx_menu_order != d.ctx_menu_order,
             F_CASE_SORT => v.sort_case_sensitive != d.sort_case_sensitive,
             F_NAV_UP => v.nav_up_align != d.nav_up_align,
+            F_VIEW_SCOPE => v.view_scope != d.view_scope,
             F_TAB_DBL => v.tab_dblclick != d.tab_dblclick,
             F_TA_SCOPE => v.typeahead_scope != d.typeahead_scope,
             F_TA_RESET => v.typeahead_reset_ms != d.typeahead_reset_ms,
@@ -1741,6 +1761,7 @@ unsafe extern "system" fn prefs_proc(
                             F_THEME => (*st).values.theme = val,
                             F_LANG => (*st).values.lang = val,
                             F_NAV_UP => (*st).values.nav_up_align = val,
+                            F_VIEW_SCOPE => (*st).values.view_scope = val,
                             F_TAB_DBL => (*st).values.tab_dblclick = val,
                             F_TA_SCOPE => (*st).values.typeahead_scope = val,
                             F_TA_POS => (*st).values.typeahead_pos = val.parse().unwrap_or(6),

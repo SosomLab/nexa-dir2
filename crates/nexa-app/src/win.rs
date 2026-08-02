@@ -578,6 +578,20 @@ unsafe fn install_cloud_lister(hwnd: HWND) {
     }));
 }
 
+/// 적용 범위 문구 키("global"|"panel"|"tab" → prefs 옵션 키 재사용 — 신규 키 0).
+fn scope_label_key(scope: &str) -> &'static str {
+    match scope {
+        "global" => "pref.viewScope.global",
+        "tab" => "pref.viewScope.tab",
+        _ => "pref.viewScope.panel",
+    }
+}
+
+/// show 토글 툴팁: "라벨 — 적용 범위"(08-02 사용자).
+fn scope_tip(label_key: &str, scope: &str) -> String {
+    format!("{} — {}", tr(label_key), tr(scope_label_key(scope)))
+}
+
 /// 도구 모음 버튼 — 새로고침만(사용자 지시 07-13: 네비 ←→↑는 패널별 네비 바가 전담,
 /// 전역 도구 모음의 이전/다음 오동작 보고에 따라 중복 제거).
 #[allow(clippy::too_many_arguments)]
@@ -586,6 +600,7 @@ fn build_toolbar(
     show_hidden: bool,
     show_dotfiles: bool,
     sort_folders_first: bool,
+    view_scope: &str,
     view_mode: &str,
     panel_mode: &str,
     col_width_sync: bool,
@@ -642,18 +657,20 @@ fn build_toolbar(
             ("settings", _) => ToolButton::new(CMD_PREFS, "\u{E713}")
                 .with_icon("emb:settings", "")
                 .with_tip(tr("menu.file.prefs").trim_end_matches(['.', '…'])),
+            // show 3종 툴팁 = "라벨 — 적용 범위"(08-02 사용자 — 범위 설명 표기.
+            // 범위 변경 시 apply_prefs가 툴바를 재구성해 문구가 따라온다)
             ("show", "hidden") => ToolButton::new(CMD_TOGGLE_HIDDEN, "👁")
                 .with_icon("emb:hidden", "")
-                .with_tip(tr("menu.view.hidden"))
+                .with_tip(scope_tip("menu.view.hidden", view_scope))
                 .toggled(show_hidden),
             ("show", "dot") => ToolButton::new(CMD_TOGGLE_DOTFILES, "…")
                 .with_icon("emb:dotfiles", "")
-                .with_tip(tr("menu.view.dot"))
+                .with_tip(scope_tip("menu.view.dot", view_scope))
                 .toggled(show_dotfiles),
             // 폴더 우선 정렬(08-02 사용자 — 숨김→Dot→폴더우선 순. 라벨은 설정 키 재사용)
             ("show", "foldersfirst") => ToolButton::new(CMD_TOGGLE_FOLDERS_FIRST, "▲")
                 .with_icon("emb:folders-first", "")
-                .with_tip(tr("pref.sortFoldersFirst"))
+                .with_tip(scope_tip("pref.sortFoldersFirst", view_scope))
                 .toggled(sort_folders_first),
             _ => return None,
         })
@@ -802,11 +819,14 @@ struct State {
     icons: std::cell::RefCell<ShellIcons>,
     stats: PaintStats,
     tz: i32,
-    /// 가시성 필터(전역 ViewOptions — 영속은 M2-5).
+    /// 가시성 필터 **미러**(08-02 재정의 — 값의 SSOT는 탭[panel.rs Tab]. 여기는
+    /// 활성 탭 값의 사본으로 update_status가 동기 — 메뉴/툴바/상태 바/영속 읽기용).
     show_hidden: bool,
     show_dotfiles: bool,
-    /// 폴더 우선 정렬(G-13 — 설정 영속·전 탭 전파).
+    /// 폴더 우선 정렬 미러(위와 동일 규약 — G-13).
     sort_folders_first: bool,
+    /// 보기 옵션 토글 적용 범위("global"|"panel"|"tab" — 08-02 사용자·기본 panel).
+    view_scope: String,
     /// 대소문자 구분 정렬·Alt+↑ 자동 선택 배치(사용자 요청 07-15 — 설정 영속).
     sort_case_sensitive: bool,
     nav_up_align: String,
@@ -1219,6 +1239,10 @@ pub fn run() -> Result<()> {
         let fallback = mode_of(&settings.view_mode);
         left.seed_modes(&session.panels[0].modes, fallback, &mut inv);
         right.seed_modes(&session.panels[1].modes, fallback, &mut inv);
+        // 보기 옵션 복원(08-02 — 탭별): 세션 플래그 우선·없으면 설정 기본(생성 ctx 값).
+        // 활성 탭이 초기 열거와 다르면 첫 update_status가 재열람으로 수렴.
+        left.seed_view_flags(&session.panels[0].views, &mut inv);
+        right.seed_view_flags(&session.panels[1].views, &mut inv);
         // 타입어헤드 옵션(07-15) — 항상 적용(리셋 ms 등 기본값 아님 가능)
         let scope = scope_of(&settings.typeahead_scope);
         for p in [&mut left, &mut right] {
@@ -1272,6 +1296,7 @@ pub fn run() -> Result<()> {
                 settings.show_hidden,
                 settings.show_dotfiles,
                 settings.sort_folders_first,
+                &settings.view_scope,
                 &settings.view_mode,
                 &settings.panel_mode,
                 settings.col_width_sync,
@@ -1324,6 +1349,7 @@ pub fn run() -> Result<()> {
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
         sort_folders_first: settings.sort_folders_first,
+        view_scope: settings.view_scope.clone(),
         sort_case_sensitive: settings.sort_case_sensitive,
         nav_up_align: settings.nav_up_align.clone(),
         tab_dblclick: settings.tab_dblclick.clone(),
@@ -3966,6 +3992,24 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
 
 /// 상태바 갱신 — 좌: 활성 패널 항목/선택/탭, 우: 필터·페인트 관측(docs/20 §2).
 unsafe fn update_status(hwnd: HWND, st: &mut State) {
+    // 보기 옵션 미러 동기(08-02 — 값의 SSOT는 탭): 탭/패널 전환·모든 상호작용이
+    // 이 길목을 지나므로 메뉴·툴바·상태 바가 항상 활성 탭 값을 표시한다.
+    {
+        let (sh, sd, ff) = st.panels[st.active].active_view_values();
+        st.show_hidden = sh;
+        st.show_dotfiles = sd;
+        st.sort_folders_first = ff;
+    }
+    // 전환 수렴(08-02): 범위 토글이 비활성 탭에 닿았거나 세션 복원 값이 초기 열거와
+    // 다르면 — 가시화된(각 패널 활성) 탭을 저장된 자기 값으로 재열람.
+    for pi in 0..2 {
+        if st.panels[pi].active_tab_stale() {
+            let ctx = st.nav_ctx();
+            let mut rinv = Invalidations::default();
+            st.panels[pi].reopen_filtered(ctx, &mut rinv);
+            flush_invalidations(hwnd, &mut rinv);
+        }
+    }
     let p = &st.panels[st.active];
     let sel = p.rows().source().tree().selection_count();
     let side = tr(if st.active == 0 {
@@ -4029,6 +4073,17 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
             st.menubar.set_checked(c, m2 == cur, &mut vinv);
             st.toolbar.set_checked(c, m2 == cur, &mut vinv);
         }
+        // 보기 옵션 토글 3종도 같은 길목에서 활성 탭 추종(08-02 — set_checked 무변 무시)
+        st.menubar
+            .set_checked(CMD_TOGGLE_HIDDEN, st.show_hidden, &mut vinv);
+        st.menubar
+            .set_checked(CMD_TOGGLE_DOTFILES, st.show_dotfiles, &mut vinv);
+        st.toolbar
+            .set_checked(CMD_TOGGLE_HIDDEN, st.show_hidden, &mut vinv);
+        st.toolbar
+            .set_checked(CMD_TOGGLE_DOTFILES, st.show_dotfiles, &mut vinv);
+        st.toolbar
+            .set_checked(CMD_TOGGLE_FOLDERS_FIRST, st.sort_folders_first, &mut vinv);
         flush_invalidations(hwnd, &mut vinv);
     }
     if st.panels[0].take_session_dirty() | st.panels[1].take_session_dirty() {
@@ -4053,31 +4108,45 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.active_panel().close_tab(i, &mut inv);
         }
         CMD_EXIT => PostQuitMessage(0),
-        CMD_TOGGLE_HIDDEN => {
-            st.show_hidden = !st.show_hidden;
-            let on = st.show_hidden;
-            st.menubar.set_checked(CMD_TOGGLE_HIDDEN, on, &mut inv);
-            st.toolbar.set_checked(CMD_TOGGLE_HIDDEN, on, &mut inv); // 토글 그룹 동기
-            let ctx = st.nav_ctx();
-            st.active_panel().reopen_filtered(ctx, &mut inv);
-            persist_settings(st);
-        }
-        CMD_TOGGLE_DOTFILES => {
-            st.show_dotfiles = !st.show_dotfiles;
-            let on = st.show_dotfiles;
-            st.menubar.set_checked(CMD_TOGGLE_DOTFILES, on, &mut inv);
-            st.toolbar.set_checked(CMD_TOGGLE_DOTFILES, on, &mut inv);
-            let ctx = st.nav_ctx();
-            st.active_panel().reopen_filtered(ctx, &mut inv);
-            persist_settings(st);
-        }
-        CMD_TOGGLE_FOLDERS_FIRST => {
-            // 폴더 우선 정렬(08-02 — 설정 G-13과 같은 값·전역이라 양 패널 전 탭 즉시 재정렬)
-            st.sort_folders_first = !st.sort_folders_first;
-            let on = st.sort_folders_first;
-            st.toolbar.set_checked(CMD_TOGGLE_FOLDERS_FIRST, on, &mut inv);
-            st.panels[0].set_folders_first(on, &mut inv);
-            st.panels[1].set_folders_first(on, &mut inv);
+        // 보기 옵션 토글 3종(08-02 재정의 — 값의 SSOT는 탭·`view_scope`가 전파 폭 결정):
+        // "tab"=활성 탭 · "panel"=활성 패널 전 탭 · "global"=양 패널 전 탭.
+        // 숨김/Dot은 대상 패널의 **활성 탭 즉시 재열람**(비활성 탭은 stale → 전환 수렴),
+        // 폴더 우선은 메모리 재정렬이라 대상 전부 즉시. 미러·체크 동기는 아래 공통부.
+        CMD_TOGGLE_HIDDEN | CMD_TOGGLE_DOTFILES | CMD_TOGGLE_FOLDERS_FIRST => {
+            let (mut sh, mut sd, mut ff) = st.panels[st.active].active_view_values();
+            match id {
+                CMD_TOGGLE_HIDDEN => sh = !sh,
+                CMD_TOGGLE_DOTFILES => sd = !sd,
+                _ => ff = !ff,
+            }
+            let targets: &[usize] = if st.view_scope == "global" {
+                &[0, 1]
+            } else {
+                &[st.active]
+            };
+            let per_tab = st.view_scope == "tab";
+            for &pi in targets {
+                if id == CMD_TOGGLE_FOLDERS_FIRST {
+                    if per_tab {
+                        st.panels[pi].set_active_folders_first(ff, &mut inv);
+                    } else {
+                        st.panels[pi].set_folders_first(ff, &mut inv);
+                    }
+                } else {
+                    st.panels[pi].set_view_filters(!per_tab, sh, sd);
+                    let ctx = st.nav_ctx();
+                    st.panels[pi].reopen_filtered(ctx, &mut inv);
+                }
+            }
+            // 미러·메뉴/툴바 체크 즉시 동기(update_status도 같은 값으로 재확인)
+            st.show_hidden = sh;
+            st.show_dotfiles = sd;
+            st.sort_folders_first = ff;
+            st.menubar.set_checked(CMD_TOGGLE_HIDDEN, sh, &mut inv);
+            st.menubar.set_checked(CMD_TOGGLE_DOTFILES, sd, &mut inv);
+            st.toolbar.set_checked(CMD_TOGGLE_HIDDEN, sh, &mut inv);
+            st.toolbar.set_checked(CMD_TOGGLE_DOTFILES, sd, &mut inv);
+            st.toolbar.set_checked(CMD_TOGGLE_FOLDERS_FIRST, ff, &mut inv);
             persist_settings(st);
         }
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
@@ -4142,6 +4211,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                         st.show_hidden,
                         st.show_dotfiles,
                         st.sort_folders_first,
+                        &st.view_scope,
                         &st.view_mode,
                         &st.panel_mode,
                         st.col_width_sync,
@@ -4188,6 +4258,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                             st.show_hidden,
                             st.show_dotfiles,
                             st.sort_folders_first,
+                            &st.view_scope,
                             &st.view_mode,
                             &st.panel_mode,
                             st.col_width_sync,
@@ -4218,6 +4289,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     st.show_hidden,
                     st.show_dotfiles,
                     st.sort_folders_first,
+                    &st.view_scope,
                     &st.view_mode,
                     &st.panel_mode,
                     st.col_width_sync,
@@ -4478,6 +4550,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             st.show_hidden,
             st.show_dotfiles,
             st.sort_folders_first,
+            &st.view_scope,
             &st.view_mode,
             &st.panel_mode,
             st.col_width_sync,
@@ -4773,6 +4846,33 @@ unsafe fn tip_tick(hwnd: HWND, st: &mut State) {
 }
 
 /// 활성 패널 전환(클릭·Tab) — 탭 바 accent로 시각화.
+/// 패널 간 탭 이동(08-02 사용자): `src` 패널의 `from` 탭을 `dst` 패널 `at` 위치
+/// (없음 = 끝)로. 마지막 탭은 이동 불가(detach가 거부 — 패널 공백 방지). 이동 후
+/// 그 탭이 대상 패널에서 활성화되고 포커스도 대상 패널로 넘어간다.
+unsafe fn cross_move_tab(
+    hwnd: HWND,
+    st: &mut State,
+    src: usize,
+    from: usize,
+    dst: usize,
+    at: Option<usize>,
+    inv: &mut Invalidations,
+) {
+    let Some(mut tab) = st.panels[src].detach_tab(from, inv) else {
+        return;
+    };
+    if st.view_scope != "tab" {
+        // 범위 "전체"/"좌-우 패널" = 패널 내 값 균일 유지 — 대상 패널 값 채택.
+        // 숨김/Dot 불일치는 stale로 남아 update_status가 재열람으로 수렴.
+        let (sh, sd, ff) = st.panels[dst].active_view_values();
+        crate::panel::Panel::adopt_view_values(&mut tab, sh, sd, ff);
+    }
+    st.panels[dst].attach_tab(tab, at, inv);
+    layout(hwnd, st, inv); // 탭 줄 수 변동 가능(멀티라인) — 양 패널 재배치
+    set_active(hwnd, st, dst);
+    update_status(hwnd, st);
+}
+
 unsafe fn set_active(hwnd: HWND, st: &mut State, idx: usize) {
     let idx = if single_panel(st) { 0 } else { idx }; // 싱글 패널 = 좌 고정(07-16)
     if st.active != idx {
@@ -5038,6 +5138,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 show_dotfiles: st.show_dotfiles,
                 dock: st.panels[0].dock_visible(),
                 sort_folders_first: st.sort_folders_first,
+                view_scope: st.view_scope.clone(),
                 sort_case_sensitive: st.sort_case_sensitive,
                 nav_up_align: st.nav_up_align.clone(),
                 tab_dblclick: st.tab_dblclick.clone(),
@@ -5182,7 +5283,9 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         family: v.dlg_font.clone(),
         size_pt: v.dlg_font_size,
     };
-    // 파일 목록 필터(숨김·닷파일) — 변경 시 양쪽 재열기(X-7 설정 창 경유)
+    // 파일 목록 필터(숨김·닷파일) — 설정 창 체크박스는 **범위와 무관하게 전체 일괄**
+    // (08-02 재정의: 값의 SSOT는 탭 → 양 패널 전 탭에 기입 후 활성 탭 즉시 재열람,
+    // 비활성 탭은 stale → 전환 수렴. pref.viewScope.desc에 명문화)
     if v.show_hidden != st.show_hidden || v.show_dotfiles != st.show_dotfiles {
         st.show_hidden = v.show_hidden;
         st.show_dotfiles = v.show_dotfiles;
@@ -5197,6 +5300,8 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
             .set_checked(CMD_TOGGLE_HIDDEN, st.show_hidden, &mut inv);
         st.toolbar
             .set_checked(CMD_TOGGLE_DOTFILES, st.show_dotfiles, &mut inv);
+        st.panels[0].set_view_filters(true, v.show_hidden, v.show_dotfiles);
+        st.panels[1].set_view_filters(true, v.show_hidden, v.show_dotfiles);
         let ctx = st.nav_ctx();
         st.panels[0].reopen_filtered(ctx, &mut inv);
         st.panels[1].reopen_filtered(ctx, &mut inv);
@@ -5242,6 +5347,7 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
                 st.show_hidden,
                 st.show_dotfiles,
                 st.sort_folders_first,
+                &st.view_scope,
                 &st.view_mode,
                 &st.panel_mode,
                 st.col_width_sync,
@@ -5257,7 +5363,7 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         st.term_cols = v.term_cols.clamp(80, 1000);
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
-    // 폴더 우선 정렬 토글(G-13) — 전 탭 즉시 재정렬 + 툴바 토글 동기(08-02)
+    // 폴더 우선 정렬(G-13) — 설정 창 = 전체 일괄(범위 무관·위 필터와 동일 규약)
     if v.sort_folders_first != st.sort_folders_first {
         st.sort_folders_first = v.sort_folders_first;
         let mut inv = Invalidations::default();
@@ -5265,6 +5371,27 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
             .set_checked(CMD_TOGGLE_FOLDERS_FIRST, v.sort_folders_first, &mut inv);
         st.panels[0].set_folders_first(v.sort_folders_first, &mut inv);
         st.panels[1].set_folders_first(v.sort_folders_first, &mut inv);
+        flush_invalidations(hwnd, &mut inv);
+    }
+    // 보기 옵션 적용 범위(08-02) — 툴팁에 범위가 실려 있어 툴바 재구성 필요
+    if v.view_scope != st.view_scope {
+        st.view_scope = v.view_scope.clone();
+        let mut inv = Invalidations::default();
+        st.toolbar.set_buttons(
+            build_toolbar(
+                &st.toolbar_order,
+                st.show_hidden,
+                st.show_dotfiles,
+                st.sort_folders_first,
+                &st.view_scope,
+                &st.view_mode,
+                &st.panel_mode,
+                st.col_width_sync,
+                !single_info(st),
+                st.panels[0].dock_visible(),
+            ),
+            &mut inv,
+        );
         flush_invalidations(hwnd, &mut inv);
     }
     // 대소문자 구분 정렬 토글(07-15) — 전 탭 즉시 재정렬
@@ -5391,6 +5518,7 @@ fn current_session(st: &mut State) -> Session {
                 locked: st.panels[0].session_locked(),
                 pinned: st.panels[0].session_pinned(),
                 modes: st.panels[0].session_modes(),
+                views: st.panels[0].session_view_flags(),
                 col_widths: st.panels[0].col_widths(),
                 col_layout: panel_col_layout(&st.panels[0]),
             },
@@ -5401,6 +5529,7 @@ fn current_session(st: &mut State) -> Session {
                 locked: st.panels[1].session_locked(),
                 pinned: st.panels[1].session_pinned(),
                 modes: st.panels[1].session_modes(),
+                views: st.panels[1].session_view_flags(),
                 col_widths: st.panels[1].col_widths(),
                 col_layout: panel_col_layout(&st.panels[1]),
             },
@@ -5542,6 +5671,7 @@ fn current_settings(st: &State) -> Settings {
         split: st.split,
         dock: st.panels[0].dock_visible(),
         sort_folders_first: st.sort_folders_first,
+        view_scope: st.view_scope.clone(),
         sort_case_sensitive: st.sort_case_sensitive,
         nav_up_align: st.nav_up_align.clone(),
         tab_dblclick: st.tab_dblclick.clone(),
@@ -6465,6 +6595,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 let ev = InputEvent::MouseUp { x, y };
                 let mut inv = Invalidations::default();
+                // 패널 간 탭 DnD(08-02 사용자 — tabbar 모듈 doc "후속" 이행): 탭 드래그
+                // 중 **반대 패널 위에서 해제** = 이동. 위젯이 MouseUp에 드래그를 지우므로
+                // 라우팅 **전에** 판정한다. 대상 탭 바 위면 그 위치에, 그 외는 끝에 삽입.
+                for src in 0..2usize {
+                    let Some(from) = st.panels[src].tabbar.dragging() else {
+                        continue;
+                    };
+                    let dst = 1 - src;
+                    if single_panel(st) || st.panel_at_pt(x, y) != Some(dst) {
+                        continue;
+                    }
+                    let at = st.panels[dst].tabbar.tab_index_at(x, y);
+                    cross_move_tab(hwnd, st, src, from, dst, at, &mut inv);
+                    st.panels[src].tabbar.cancel_drag();
+                    break;
+                }
                 st.panels[0].on_event(&ev, &mut inv);
                 st.panels[1].on_event(&ev, &mut inv);
                 sync_col_widths(st, &mut inv); // 컬럼 폭 동기(07-18)
@@ -6899,6 +7045,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                     st.show_hidden,
                                     st.show_dotfiles,
                                     st.sort_folders_first,
+                                    &st.view_scope,
                                     &st.view_mode,
                                     &st.panel_mode,
                                     st.col_width_sync,

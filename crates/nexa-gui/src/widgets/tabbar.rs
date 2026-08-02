@@ -150,6 +150,17 @@ impl TabBar {
         self.pending.take()
     }
 
+    /// 진행 중 탭 드래그(임계 통과분만) — 호스트의 **패널 간 이동** 판정용(08-02).
+    /// 버튼 해제 시점에 반대 패널 위면 호스트가 이동을 수행한다(모듈 doc "후속" 이행).
+    pub fn dragging(&self) -> Option<usize> {
+        self.drag.and_then(|(i, _, started)| started.then_some(i))
+    }
+
+    /// 드래그 상태 강제 해제(패널 간 이동 수행 후 — 인덱스 무효화 방어).
+    pub fn cancel_drag(&mut self) {
+        self.drag = None;
+    }
+
     fn tab_at(&self, x: i32, y: i32) -> Option<(usize, bool)> {
         if !self.bounds.contains(Point { x, y }) {
             return None;
