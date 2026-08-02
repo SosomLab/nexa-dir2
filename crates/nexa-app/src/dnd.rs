@@ -53,6 +53,56 @@ pub struct DropTarget {
     paths: RefCell<Vec<PathBuf>>,
 }
 
+/// 두 경로 목록이 같은 집합인가(순서 무시) — Drop 재조회가 DragEnter 광고와 다르면
+/// 지연 렌더링 소스(드롭 시점에 목록을 다시 쓰는 소스)로 판정한다.
+fn same_path_set(a: &[PathBuf], b: &[PathBuf]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut x: Vec<_> = a.iter().collect();
+    let mut y: Vec<_> = b.iter().collect();
+    x.sort();
+    y.sort();
+    x == y
+}
+
+/// 지연 렌더링 소스의 휘발 스테이징 확보(2차 QA 08-02): 7-Zip은 `DoDragDrop` 반환
+/// 직후 임시 폴더를 삭제해 비동기 전송과 경쟁한다(4개 중 2~3개만 생존 실측). 소스는
+/// 우리 `Drop`이 반환해야 삭제를 시작할 수 있으므로, **반환 전에 같은 볼륨 rename**으로
+/// 항목을 우리 스테이징(`%TEMP%\NexaDir\dnd-…`)에 옮겨 두면 크기 무관 즉시·무경쟁이다.
+/// rename 실패 항목(잠금·소스가 다른 볼륨의 작업 폴더를 쓰는 구성)은 원경로 유지
+/// (그 항목만 기존 경쟁으로 강등). 반환: (확보 후 경로들, 1개 이상 확보했는가 —
+/// 확보분은 우리 소유 사본이라 호출자가 전송을 Move로 강제해 스테이징을 자연 소거).
+fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, bool) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let base = std::env::temp_dir().join("NexaDir").join(format!(
+        "dnd-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut stolen = false;
+    let mut out = Vec::with_capacity(paths.len());
+    for (i, p) in paths.into_iter().enumerate() {
+        let Some(name) = p.file_name() else {
+            out.push(p); // 루트 등 이름 없는 경로 — 확보 불가, 원경로 유지
+            continue;
+        };
+        let slot = base.join(i.to_string()); // 항목별 소분류 — 서로 다른 부모의 동명 충돌 방지
+        if std::fs::create_dir_all(&slot).is_ok() {
+            let staged = slot.join(name);
+            if std::fs::rename(&p, &staged).is_ok() {
+                stolen = true;
+                out.push(staged);
+                continue;
+            }
+            let _ = std::fs::remove_dir(&slot);
+        }
+        out.push(p);
+    }
+    (out, stolen)
+}
+
 /// 데이터 객체에서 CF_HDROP 경로 목록 추출(GetData 1회 — 실패/미지원 = 빈 Vec).
 /// DragEnter(수신 판정)·Drop(최종 경로 재조회) 공용.
 unsafe fn hdrop_paths(data: &IDataObject) -> Vec<PathBuf> {
@@ -324,14 +374,17 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         unsafe { (self.hooks.leave)(self.hwnd) }; // 드롭 = 드래그 종료 — 추적 해제(X-32)
-        // **지연 렌더링 소스 대응**(7-Zip 등 압축 관리자 — 사용자 QA 08-02): 드래그 중에는
-        // 추출 전이라 임시 폴더(`%TEMP%\7zE…`)만 광고하고, 드롭 확정 후 타깃이
-        // GetData(CF_HDROP)를 **다시** 호출해야 실제 추출이 일어나 최종 경로가 온다
-        // (탐색기 동일 규약 — 추출 진행 UI는 소스 몫이라 이 호출은 동기 블록 허용).
-        // 재조회 실패 시엔 DragEnter 캐시 유지(즉시 렌더링 소스는 결과 동일).
+        // **지연 렌더링 소스 대응**(7-Zip 등 압축 관리자 — 사용자 QA 08-02) 2단:
+        // ① 드롭 확정 후 GetData(CF_HDROP) **재조회** — 이때 비로소 실제 추출이 일어나
+        //    최종 경로가 온다(탐색기 동일 규약 — 추출 진행 UI는 소스 몫, 동기 블록 허용).
+        //    재조회 실패 시엔 DragEnter 캐시 유지(즉시 렌더링 소스는 결과 동일).
+        // ② 재조회가 DragEnter 광고와 **다르면** = 드롭 시점에 목록을 다시 쓰는 소스 →
+        //    소스 임시 폴더가 DoDragDrop 반환 직후 삭제되므로 아래에서 스테이징 확보.
+        let mut delayed = false;
         if let Some(data) = pdataobj.as_ref() {
             let fresh = unsafe { hdrop_paths(data) };
             if !fresh.is_empty() {
+                delayed = !same_path_set(self.paths.borrow().as_slice(), &fresh);
                 *self.paths.borrow_mut() = fresh;
             }
         }
@@ -346,9 +399,18 @@ impl IDropTarget_Impl for DropTarget_Impl {
                 fx
             };
         }
-        let paths = std::mem::take(&mut *self.paths.borrow_mut());
+        let mut paths = std::mem::take(&mut *self.paths.borrow_mut());
+        let mut op = op;
         if let Some(dest) = dest {
             if !paths.is_empty() {
+                if delayed {
+                    // Drop 반환 전 확보 — 소스 삭제와의 경쟁 원천 차단(위 ② 참조)
+                    let (secured, any) = steal_volatile(paths);
+                    paths = secured;
+                    if any {
+                        op = nexa_ops::Op::Move; // 확보분은 우리 사본 — 이동으로 스테이징 자연 소거
+                    }
+                }
                 unsafe { (self.hooks.drop)(self.hwnd, paths, dest, op) };
             }
         }
@@ -374,5 +436,44 @@ mod tests {
         .into();
         let read = unsafe { hdrop_paths(&data) };
         assert_eq!(read, paths, "CF_HDROP 경로 왕복");
+    }
+
+    /// 지연 렌더링 판정 — 순서만 다르면 같은 집합, 항목이 다르면 다른 집합.
+    #[test]
+    fn same_path_set_ignores_order_but_not_items() {
+        let a = vec![PathBuf::from("C:\\a"), PathBuf::from("C:\\b")];
+        let b = vec![PathBuf::from("C:\\b"), PathBuf::from("C:\\a")];
+        let c = vec![PathBuf::from("C:\\a"), PathBuf::from("C:\\c")];
+        assert!(same_path_set(&a, &b), "순서 무시");
+        assert!(!same_path_set(&a, &c), "항목 상이");
+        assert!(!same_path_set(&a, &a[..1]), "개수 상이");
+    }
+
+    /// 휘발 스테이징 확보 — 파일·폴더가 우리 스테이징으로 rename되고 원위치에서 사라진다.
+    /// (7-Zip 임시 폴더 삭제와의 경쟁 차단 경로 그대로 — 같은 볼륨 %TEMP% 안 왕복)
+    #[test]
+    fn steal_volatile_renames_files_and_dirs_into_staging() {
+        let src = std::env::temp_dir().join(format!("nexa-dnd-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&src);
+        std::fs::create_dir_all(src.join("folder")).unwrap();
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+        std::fs::write(src.join("folder").join("in.txt"), b"in").unwrap();
+
+        let (out, stolen) = steal_volatile(vec![src.join("a.txt"), src.join("folder")]);
+        assert!(stolen, "1개 이상 확보");
+        assert_eq!(out.len(), 2);
+        assert!(out[0].ends_with("a.txt") && out[0] != src.join("a.txt"), "스테이징 경로로 교체");
+        assert!(out[0].is_file() && !src.join("a.txt").exists(), "원위치에서 이동됨");
+        assert!(
+            out[1].join("in.txt").is_file(),
+            "폴더는 내용째 rename(하위 파일 보존)"
+        );
+
+        // 정리 — 스테이징·원본 흔적 제거
+        for p in &out {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+        }
+        let _ = std::fs::remove_dir_all(&src);
     }
 }
