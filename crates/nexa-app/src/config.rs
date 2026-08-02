@@ -863,7 +863,7 @@ pub const TOOLBAR_BLOCKS: &[(&str, &[&str])] = &[
     ("refresh", &[]),
     ("panel", &["toggle", "dock", "info", "colsync"]),
     ("view", &["tree", "flat", "tiles"]),
-    ("show", &["hidden", "dot"]),
+    ("show", &["hidden", "dot", "foldersfirst"]),
     ("settings", &[]),
 ];
 
@@ -1021,7 +1021,7 @@ mod toolbar_order_tests {
             "기본 왕복"
         );
         // 재배열 + 표시 여부 왕복(07-19 — 블록/자식 vis 공통)
-        let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,dock:1,info:1]|show:1[dot:1,hidden:1]|settings:1";
+        let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,dock:1,info:1]|show:1[dot:1,hidden:1,foldersfirst:1]|settings:1";
         assert_eq!(
             serialize_toolbar_order(&parse_toolbar_order(s)),
             s,
@@ -1033,7 +1033,7 @@ mod toolbar_order_tests {
         let norm = serialize_toolbar_order(&parse_toolbar_order(s));
         assert_eq!(
             norm,
-            "view:1[tree:1,flat:1,tiles:1]|panel:1[toggle:0,dock:1,info:1,colsync:1]|refresh:1|show:1[hidden:1,dot:1]|settings:1"
+            "view:1[tree:1,flat:1,tiles:1]|panel:1[toggle:0,dock:1,info:1,colsync:1]|refresh:1|show:1[hidden:1,dot:1,foldersfirst:1]|settings:1"
         );
     }
 }
@@ -1053,7 +1053,7 @@ mod tests {
             dock: true,
             col_width_sync: false, // 기본 true — 왕복 검증 위해 반전
             col_autofit_max: 640,
-            toolbar_order: "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]".into(),
+            toolbar_order: "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1,foldersfirst:1]".into(),
             ctx_menu_order: "row:1[copyName:1,deletePermanent:0,pasteInto:1]|bg:0[paste:1,undo:1,redo:1]".into(),
             dock_ratio: 0.42,
             dock_split: 0.61,
@@ -1190,8 +1190,8 @@ mod tests {
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(
             parsed.toolbar_order,
-            "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1]",
-            "도구모음 순서/표시 왕복(07-19)"
+            "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1,foldersfirst:1]",
+            "도구모음 순서/표시 왕복(07-19 — 신규 foldersfirst 키는 보충 삽입 08-02)"
         );
         assert_eq!(
             parsed.ctx_menu_order,

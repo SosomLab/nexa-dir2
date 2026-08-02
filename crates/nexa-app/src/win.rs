@@ -216,6 +216,8 @@ const CMD_PANEL_TOGGLE: u32 = 64;
 const CMD_INFO_TOGGLE: u32 = 65;
 /// About 창(X-26 ③ — 도움말 메뉴, 07-20).
 const CMD_ABOUT: u32 = 66;
+/// 폴더 우선 정렬 토글(08-02 사용자 — show 블록 세 번째 버튼. 설정 G-13과 동일 값).
+const CMD_TOGGLE_FOLDERS_FIRST: u32 = 67;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 /// 클라우드 연결(X-36 — 검토서 26 §2): 연결별 하위 명령 + 연결 추가 후보.
@@ -583,6 +585,7 @@ fn build_toolbar(
     order: &str,
     show_hidden: bool,
     show_dotfiles: bool,
+    sort_folders_first: bool,
     view_mode: &str,
     panel_mode: &str,
     col_width_sync: bool,
@@ -647,6 +650,11 @@ fn build_toolbar(
                 .with_icon("emb:dotfiles", "")
                 .with_tip(tr("menu.view.dot"))
                 .toggled(show_dotfiles),
+            // 폴더 우선 정렬(08-02 사용자 — 숨김→Dot→폴더우선 순. 라벨은 설정 키 재사용)
+            ("show", "foldersfirst") => ToolButton::new(CMD_TOGGLE_FOLDERS_FIRST, "▲")
+                .with_icon("emb:folders-first", "")
+                .with_tip(tr("pref.sortFoldersFirst"))
+                .toggled(sort_folders_first),
             _ => return None,
         })
     };
@@ -1263,6 +1271,7 @@ pub fn run() -> Result<()> {
                 &settings.toolbar_order,
                 settings.show_hidden,
                 settings.show_dotfiles,
+                settings.sort_folders_first,
                 &settings.view_mode,
                 &settings.panel_mode,
                 settings.col_width_sync,
@@ -4062,6 +4071,15 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.active_panel().reopen_filtered(ctx, &mut inv);
             persist_settings(st);
         }
+        CMD_TOGGLE_FOLDERS_FIRST => {
+            // 폴더 우선 정렬(08-02 — 설정 G-13과 같은 값·전역이라 양 패널 전 탭 즉시 재정렬)
+            st.sort_folders_first = !st.sort_folders_first;
+            let on = st.sort_folders_first;
+            st.toolbar.set_checked(CMD_TOGGLE_FOLDERS_FIRST, on, &mut inv);
+            st.panels[0].set_folders_first(on, &mut inv);
+            st.panels[1].set_folders_first(on, &mut inv);
+            persist_settings(st);
+        }
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
         }
@@ -4123,6 +4141,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                         &st.toolbar_order,
                         st.show_hidden,
                         st.show_dotfiles,
+                        st.sort_folders_first,
                         &st.view_mode,
                         &st.panel_mode,
                         st.col_width_sync,
@@ -4168,6 +4187,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                             &st.toolbar_order,
                             st.show_hidden,
                             st.show_dotfiles,
+                            st.sort_folders_first,
                             &st.view_mode,
                             &st.panel_mode,
                             st.col_width_sync,
@@ -4197,6 +4217,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     &st.toolbar_order,
                     st.show_hidden,
                     st.show_dotfiles,
+                    st.sort_folders_first,
                     &st.view_mode,
                     &st.panel_mode,
                     st.col_width_sync,
@@ -4456,6 +4477,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             &st.toolbar_order,
             st.show_hidden,
             st.show_dotfiles,
+            st.sort_folders_first,
             &st.view_mode,
             &st.panel_mode,
             st.col_width_sync,
@@ -5219,6 +5241,7 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
                 &st.toolbar_order,
                 st.show_hidden,
                 st.show_dotfiles,
+                st.sort_folders_first,
                 &st.view_mode,
                 &st.panel_mode,
                 st.col_width_sync,
@@ -5234,10 +5257,12 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         st.term_cols = v.term_cols.clamp(80, 1000);
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
-    // 폴더 우선 정렬 토글(G-13) — 전 탭 즉시 재정렬
+    // 폴더 우선 정렬 토글(G-13) — 전 탭 즉시 재정렬 + 툴바 토글 동기(08-02)
     if v.sort_folders_first != st.sort_folders_first {
         st.sort_folders_first = v.sort_folders_first;
         let mut inv = Invalidations::default();
+        st.toolbar
+            .set_checked(CMD_TOGGLE_FOLDERS_FIRST, v.sort_folders_first, &mut inv);
         st.panels[0].set_folders_first(v.sort_folders_first, &mut inv);
         st.panels[1].set_folders_first(v.sort_folders_first, &mut inv);
         flush_invalidations(hwnd, &mut inv);
@@ -6873,6 +6898,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                     &st.toolbar_order,
                                     st.show_hidden,
                                     st.show_dotfiles,
+                                    st.sort_folders_first,
                                     &st.view_mode,
                                     &st.panel_mode,
                                     st.col_width_sync,

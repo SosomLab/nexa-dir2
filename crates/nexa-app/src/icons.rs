@@ -229,6 +229,12 @@ pub mod shell {
             "dotfiles-dark",
             include_str!("../assets/toolbar/dotfiles-dark.svg"),
         ),
+        // 폴더 우선 정렬 토글(08-02 사용자 시안 D 확정 — 폴더 안 ↑. 순수 스트로크라
+        // 다크 전용판 불요 = 잉크 재색만으로 충분)
+        (
+            "folders-first",
+            include_str!("../assets/toolbar/folders-first.svg"),
+        ),
     ];
 
     /// SVG 아이콘 잉크 폴백(잉크 토큰 없는 구형 키 — 검정). 실제 잉크는
