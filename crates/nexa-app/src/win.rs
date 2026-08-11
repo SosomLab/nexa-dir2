@@ -104,6 +104,17 @@ const DND_TICK_MS: u32 = 100;
 const TIMER_CLOUD_POLL: usize = 13;
 const CLOUD_POLL_MS: u32 = 200;
 const WATCH_DEBOUNCE_MS: u32 = 300;
+/// 디바운스 **연장 상한**(08-11 사용자 QA). `SetTimer`는 같은 ID를 재무장하면 만료를
+/// 미루므로, 동기화 클라이언트가 300ms보다 촘촘히 변경을 쏟는 동안 타이머가 무한히
+/// 밀려 **동기화가 끝날 때까지 목록이 멈춰** 있었다. 첫 통지로부터 이 시간을 넘기면
+/// 더 연장하지 않는다(= 폭주 중에도 최대 상한+디바운스 안에 1회는 갱신).
+const WATCH_MAX_MS: u64 = 1_000;
+/// 폴더 변경 프로브 폴링(08-11 사용자 QA — [`crate::fsprobe`]). watcher 통지가
+/// **오지 않는** 경로(클라우드 가상 드라이브·네트워크·통지 유실)의 유일한 갱신 계기다.
+/// **창이 활성일 때만** 돌린다 — 비활성화 시 `KillTimer`(유휴 백그라운드 0% 규율 유지,
+/// 안 보는 동안의 낡음은 다음 활성화의 즉시 프로브가 해소).
+const TIMER_FSPOLL: usize = 14;
+const FSPOLL_MS: u32 = 3_000;
 /// 터미널 출력/종료 통지(M4-3) — wparam=패널(|EXIT_FLAG), lparam=세대.
 const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
 /// 파일별 아이콘 워커 결과(M4 QA 07-14 — WPARAM=Box<icons::shell::LoadResult>).
@@ -901,6 +912,12 @@ struct State {
     /// [`WATCH_CAP`]). 전 항목이 같은 세대를 공유 — 목록 변경 시 통째 재구독.
     watchers: [Vec<crate::watcher::DirWatcher>; 2],
     watch_gen: u64,
+    /// 디바운스 창을 **처음 연** 시각(08-11 QA — 0 = 대기 없음). 통지가 촘촘히 오면
+    /// [`WATCH_MAX_MS`]까지만 연장하고 그 뒤로는 재무장하지 않는다(무한 연기 차단).
+    watch_since: [u64; 2],
+    /// 패널 루트의 직전 프로브 서명(08-11 QA — (경로, 서명)). watcher 통지가 오지
+    /// 않는 경로에서 [`TIMER_FSPOLL`]이 이 값과 비교해 재로드 계기를 만든다.
+    probe: [Option<(PathBuf, crate::fsprobe::DirSig)>; 2],
     /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
     dock_drag: Option<usize>,
     /// 도크 밴드 좌/우 스플리터 드래그 중(X-6 — 파일 스플리터와 독립).
@@ -1401,6 +1418,8 @@ pub fn run() -> Result<()> {
         rename_on_up: false,
         watchers: [Vec::new(), Vec::new()],
         watch_gen: 0,
+        watch_since: [0, 0],
+        probe: [None, None],
         dock_drag: None,
         dock_split_drag: false,
         dock_split: settings.dock_split,
@@ -1531,8 +1550,10 @@ unsafe fn splitter_x(hwnd: HWND, st: &State) -> i32 {
 unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     let rc = client_rect(hwnd);
     let s = |v: i32| (v * st.dpi as i32) / 96;
-    // 도구 모음 = 26px(07-19 사용자: 16px 아이콘 상하 1px 여유 추가 — 24→26)
-    let (menu_h, tool_h, status_h) = (s(22), s(26), s(22));
+    // 도구 모음·퀵 런처 바 = **24px 정사각 버튼 기준**(08-11 사용자 확정 — 버튼 셀
+    // 24×24, 아이콘은 16×16 유지 = 상하 4px 여백. 07-19에 16px 아이콘 여유용으로
+    // 24→26 올렸던 것을 되돌려 고밀도 규약에 맞춘다. 아이콘 크기 산식은 chrome.rs)
+    let (menu_h, tool_h, status_h) = (s(22), s(24), s(22));
     st.menubar
         .set_bounds(GRect::new(0, 0, rc.w, menu_h.min(rc.h)), inv);
     st.toolbar
@@ -2810,6 +2831,70 @@ unsafe fn sync_watchers(hwnd: HWND, st: &mut State) {
             // 실패(권한·가상 루트 등) = 그 폴더만 비감시 — 수동 F5 폴백(원본 규약)
         }
     }
+}
+
+/// 패널 재로드 디바운스 무장(M3-6 → 08-11 QA 상한 도입) — watcher 통지와 프로브
+/// 폴링의 **공용 길목**. 첫 무장 시각을 기록해 [`WATCH_MAX_MS`]까지만 연장한다:
+/// 상한을 넘기면 재무장하지 않으므로 이미 걸려 있는 타이머가 그대로 만료되고
+/// (즉 폭주 중에도 갱신이 일어나고), 만료 처리가 `watch_since`를 0으로 되돌린다.
+unsafe fn arm_watch_debounce(hwnd: HWND, st: &mut State, panel: usize) {
+    let now = now_ms();
+    if st.watch_since[panel] == 0 {
+        st.watch_since[panel] = now;
+        SetTimer(
+            Some(hwnd),
+            TIMER_WATCH_BASE + panel,
+            WATCH_DEBOUNCE_MS,
+            None,
+        );
+        return;
+    }
+    if crate::fsprobe::debounce_should_extend(st.watch_since[panel], now, WATCH_MAX_MS) {
+        SetTimer(
+            Some(hwnd),
+            TIMER_WATCH_BASE + panel,
+            WATCH_DEBOUNCE_MS,
+            None,
+        );
+    }
+}
+
+/// 프로브 1회(08-11 사용자 QA — [`crate::fsprobe`]): 패널 루트의 서명을 직전 값과
+/// 비교해 **달라진 패널만** 디바운스 무장. watcher 통지가 오지 않는 경로(클라우드
+/// 가상 드라이브·네트워크·통지 유실)에서 이것이 유일한 자동 갱신 계기다.
+///
+/// 서명은 **비교 즉시 갱신**한다 — 재로드가 미뤄져도(이름 바꾸기·전송 중) 같은
+/// 변경으로 매 틱 다시 무장하지 않게. 가상 루트(`::PC::`·`::CLOUD:`)는 `probe`가
+/// `None`이라 자연히 건너뛴다(네트워크 호출 없음).
+unsafe fn poll_fs_probe(hwnd: HWND, st: &mut State) {
+    for i in 0..2 {
+        if st.panels[i].bounds().w <= 0 {
+            continue; // 싱글 패널의 숨은 쪽 = 볼 수 없으니 폴링도 않는다
+        }
+        let path = st.panels[i].root_path();
+        let Some(sig) = crate::fsprobe::probe(&path) else {
+            st.probe[i] = None;
+            continue;
+        };
+        let fire = match &st.probe[i] {
+            // 경로가 바뀐 직후는 기준선만 세운다(탐색 자체가 이미 재로드했다)
+            Some((p, old)) => *p == path && crate::fsprobe::changed(old, &sig),
+            None => false,
+        };
+        st.probe[i] = Some((path, sig));
+        if fire {
+            arm_watch_debounce(hwnd, st, i);
+        }
+    }
+}
+
+/// 화면 복귀 시 갱신 계기(08-11 사용자 QA) — 앱 활성화·최소화 복원 공용.
+/// ① 죽은 watcher 재구독 ② 즉시 프로브(밖에서 생긴 변경을 그 자리에서 반영)
+/// ③ 폴링 재개. 변경이 없으면 재로드도 없다(프로브 비교가 게이트).
+unsafe fn refresh_on_return(hwnd: HWND, st: &mut State) {
+    sync_watchers(hwnd, st);
+    poll_fs_probe(hwnd, st);
+    SetTimer(Some(hwnd), TIMER_FSPOLL, FSPOLL_MS, None);
 }
 
 /// 양쪽 패널 재로드(원본 ReloadBothPanels — watcher(M3-6) 전 임시) + 타이틀/상태 갱신.
@@ -6037,6 +6122,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 update_status(hwnd, st);
                 st.last_activity_ms = now_ms();
                 SetTimer(Some(hwnd), TIMER_JANITOR, JANITOR_TICK_MS, None); // 상주 자니터(M2-8)
+                // 프로브 폴링 기준선 + 폴링 시작(08-11 QA). 기동 시 창이 활성이므로
+                // 여기서 켜고, 이후 켜고 끄기는 WM_ACTIVATEAPP이 관리한다.
+                poll_fs_probe(hwnd, st);
+                SetTimer(Some(hwnd), TIMER_FSPOLL, FSPOLL_MS, None);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -6047,6 +6136,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        // 앱 활성/비활성(08-11 사용자 QA — "밖에서 저장·동기화되면 갱신이 안 된다").
+        // 종전에는 활성화 시 갱신 계기가 **아예 없었다**: 다른 앱에서 저장하거나
+        // 클라우드가 동기화한 뒤 돌아와도, watcher 통지가 유실됐다면 F5 전까지 낡은
+        // 목록이 그대로였다(탐색기는 활성화 시 갱신한다). 비활성 시엔 폴링을 끈다.
+        m if m == windows::Win32::UI::WindowsAndMessaging::WM_ACTIVATEAPP => {
+            if let Some(st) = state_of(hwnd) {
+                if wparam.0 != 0 {
+                    refresh_on_return(hwnd, st);
+                } else {
+                    let _ = KillTimer(Some(hwnd), TIMER_FSPOLL);
+                }
+            }
+            LRESULT(0)
+        }
         WM_SIZE => {
             if let Some(st) = state_of(hwnd) {
                 if wparam.0 == windows::Win32::UI::WindowsAndMessaging::SIZE_MINIMIZED as usize {
@@ -6054,11 +6157,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     trim_resident(st);
                     st.trimmed = true;
                     let _ = KillTimer(Some(hwnd), TIMER_JANITOR);
+                    let _ = KillTimer(Some(hwnd), TIMER_FSPOLL); // 안 보이는 동안 폴링 정지
                 } else {
+                    // **최소화 복원만** 갱신 계기(08-11 QA) — WM_SIZE는 리사이즈 드래그
+                    // 내내 오므로 무조건 프로브하면 드래그마다 폴더를 재열거하게 된다.
+                    // 트림 여부가 곧 "최소화에서 돌아왔는가"이고, note_activity가 그
+                    // 플래그를 지우므로 **호출 전에** 읽는다.
+                    let from_minimized = st.trimmed;
                     note_activity(hwnd, st);
                     let mut inv = Invalidations::default();
                     layout(hwnd, st, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
+                    if from_minimized {
+                        // WM_ACTIVATEAPP이 안 오는 복원 경로(이미 활성 앱)를 덮는다
+                        refresh_on_return(hwnd, st);
+                    }
                 }
             }
             LRESULT(0)
@@ -7059,12 +7172,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let panel = wparam.0.min(1);
                 let gen = lparam.0 as u64;
                 if st.watchers[panel].iter().any(|w| w.gen == gen) {
-                    SetTimer(
-                        Some(hwnd),
-                        TIMER_WATCH_BASE + panel,
-                        WATCH_DEBOUNCE_MS,
-                        None,
-                    );
+                    arm_watch_debounce(hwnd, st, panel);
                 }
             }
             LRESULT(0)
@@ -7505,12 +7613,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     {
                         SetTimer(Some(hwnd), wparam.0, WATCH_DEBOUNCE_MS, None);
                     } else {
+                        st.watch_since[panel] = 0; // 창 닫힘 — 다음 통지가 새 창을 연다
                         let ctx = st.nav_ctx();
                         let mut inv = Invalidations::default();
                         st.panels[panel].reopen_filtered(ctx, &mut inv);
                         flush_invalidations(hwnd, &mut inv);
                         update_title(hwnd, st, "");
                         update_status(hwnd, st);
+                        // 재로드 후 기준선 재설정 — 방금 반영한 변경으로 폴링이
+                        // 다시 무장하지 않게(프로브·watcher 이중 계기의 진동 차단)
+                        if let Some(sig) = crate::fsprobe::probe(&st.panels[panel].root_path()) {
+                            st.probe[panel] = Some((st.panels[panel].root_path(), sig));
+                        }
                     }
                 }
                 return LRESULT(0);
@@ -7589,6 +7703,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
                     let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
                     dnd_track_update(hwnd, st, pt.x, pt.y);
+                }
+            } else if wparam.0 == TIMER_FSPOLL {
+                // 폴더 변경 프로브 폴링(08-11 QA) — watcher 통지가 오지 않는 경로의
+                // 갱신 계기 + 죽은 watcher 자가 치유(종전에는 사용자 상호작용이
+                // update_status를 지나야만 재구독됐다 = 유휴 중 죽으면 영구 무감시).
+                if let Some(st) = state_of(hwnd) {
+                    sync_watchers(hwnd, st);
+                    poll_fs_probe(hwnd, st);
                 }
             } else if wparam.0 == TIMER_JANITOR {
                 if let Some(st) = state_of(hwnd) {

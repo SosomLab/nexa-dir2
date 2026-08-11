@@ -43,6 +43,10 @@ mod ctldemo;
 mod dialog;
 #[cfg(windows)]
 mod dnd;
+/// 폴더 변경 저비용 프로브(08-11 QA — watcher 통지가 오지 않는 클라우드·네트워크
+/// 경로용 폴백 서명). `std::fs`만 쓰므로 전 플랫폼 컴파일·테스트 대상이다.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod fsprobe;
 #[cfg(windows)]
 mod icon;
 #[cfg_attr(not(windows), allow(dead_code))]
