@@ -865,13 +865,20 @@ impl DrawCtx for DwCtx<'_> {
     }
 
     fn draw_icon(&mut self, x: i32, y: i32, size: i32, key: &str, hint: &str) -> bool {
-        // 임베드 아이콘(`emb:<이름>`) — 그리기 크기에 맞는 원본 버킷(16/20/32)을
+        // 임베드 아이콘(`emb:<이름>`) — 그리기 크기에 맞는 원본 버킷(16/20/**24**/32)을
         // 키에 붙여 조회(DPI 100/125/200% 대응 — icons::shell::EMBEDDED).
         // `#dis` 접미(Toolbar 비활성) = `-disabled` 변형 원본으로 매핑.
+        //
+        // **24 버킷 신설**(08-11 — 툴바 32px 셀에서 아이콘이 24로 커졌다): 종전 구간은
+        // 24를 20 버킷으로 보내 20px 래스터를 24로 늘려 그렸다(= 흐림). SVG는 해상도
+        // 독립이라 버킷은 캐시 키 양자화일 뿐이므로, 실제 그리는 크기에 버킷을 맞추면
+        // 늘림 없이 선명해진다.
         let emb_key;
         let key = if key.starts_with("emb:") {
-            let bucket = if size >= 27 {
+            let bucket = if size >= 28 {
                 32
+            } else if size >= 22 {
+                24
             } else if size >= 18 {
                 20
             } else {

@@ -721,6 +721,10 @@ fn build_toolbar(
 
 /// 퀵 런처 바 버튼(M5-1) — **exe 셸 아이콘 16×16 정사각 버튼**(원본 썸네일 대응 —
 /// 미로드/실패 시 라벨 앞 2자 폴백) + 그룹 구분선(`launcherN=-` — 도구 모음 그룹화 대응).
+///
+/// 아이콘 원본은 **스몰(16px)** 그대로다 — 08-11에 바를 32로 키우며 `L|`(라지 32px)로
+/// 바꿨다가, 사용자가 **"빠른 실행 아이콘은 이전 크기가 더 좋다"** 며 원복을 요청해
+/// 되돌렸다(런처 바 높이도 24로 원복 = 그리는 크기 16이라 스몰 원본이 정확히 맞는다).
 fn build_launcherbar(items: &[crate::config::LauncherItem]) -> Vec<ToolButton> {
     items
         .iter()
@@ -1550,10 +1554,14 @@ unsafe fn splitter_x(hwnd: HWND, st: &State) -> i32 {
 unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     let rc = client_rect(hwnd);
     let s = |v: i32| (v * st.dpi as i32) / 96;
-    // 도구 모음·퀵 런처 바 = **24px 정사각 버튼 기준**(08-11 사용자 확정 — 버튼 셀
-    // 24×24, 아이콘은 16×16 유지 = 상하 4px 여백. 07-19에 16px 아이콘 여유용으로
-    // 24→26 올렸던 것을 되돌려 고밀도 규약에 맞춘다. 아이콘 크기 산식은 chrome.rs)
-    let (menu_h, tool_h, status_h) = (s(22), s(24), s(22));
+    // 도구 모음 = **28px 셀 / 아이콘 20**, 퀵 런처 바 = **24px 셀 / 아이콘 16**
+    // (08-11 사용자 확정 — 셋을 거쳐 정착했다: 24는 "충분치 않다" → 32는 도구 모음엔
+    // 과했고 **빠른 실행은 이전 크기가 낫다** → 도구 모음만 24와 32의 중간인 28로,
+    // 빠른 실행은 24로 원복). **두 바의 높이를 분리**한 이유가 이것이다(종전엔 한 값을
+    // 공유해 한쪽만 키울 수 없었다). 아이콘 크기 = chrome.rs `b.h - 8`이고 20·16 모두
+    // dw.rs 래스터 버킷과 정확히 일치해 늘림 없이 선명하다.
+    // 이력: 07-19 24→26 → 08-11 26→24 → 24→32 → **도구 모음 28 / 런처 24**.
+    let (menu_h, tool_h, launch_row_h, status_h) = (s(22), s(28), s(24), s(22));
     st.menubar
         .set_bounds(GRect::new(0, 0, rc.w, menu_h.min(rc.h)), inv);
     st.toolbar
@@ -1561,7 +1569,7 @@ unsafe fn layout(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
     // 퀵 런처 바(원본 Row 2) — 숨김·실행 항목 0(구분선뿐 포함)이면 높이 0
     let has_items = st.launcher_items.iter().any(|i| !i.is_separator());
     let launch_h = if st.launcher_visible && has_items {
-        tool_h
+        launch_row_h
     } else {
         0
     };
