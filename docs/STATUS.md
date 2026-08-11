@@ -1,6 +1,21 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-02 6차 (KST)** — **릴리스 `0.14.0` + 채널 상태 재점검(사용자 지시)**:
+> **갱신: 2026-08-11 (KST)** — **저장소 최신화 + 배포 채널 상태 확인(사용자 지시 · 코드 무변경)**:
+> ① **저장소 = 최신화할 것이 없었다** — 트리 clean · fetch 무변 · **main↔origin 0/0** ·
+> 최신 태그·릴리스 `0.14.0`(08-02). 9일간 커밋 무변동(사용자 QA 대기 구간)
+> ② **winget 심사 대기 2건이 둘 다 병합됐다(08-06)** — Portable 0.13.0
+> [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) **MERGED 00:16 UTC**
+> (`Waived-Policy-Test-1.2` — 0.11/0.12와 같은 패턴) · 설치형
+> [#404528](https://github.com/microsoft/winget-pkgs/pull/404528) **MERGED 00:46 UTC**
+> = 최초 등록 완료(07-19 제출 → 18일). `winget search SosomLab` 실측으로 **두 채널 라이브**
+> 확인(설치형 0.8.1 · Portable 0.13.0). **∴ 심사 대기 4건 → choco 2건**
+> ③ **남은 것은 심사가 아니라 버전 격차** — Portable `0.14.0` 제출 가능(08-02 보류 조건 해소) ·
+> 설치형은 `0.8.1`로 **6버전 뒤짐**. 둘 다 제출 여부는 사용자 판단 대기
+> ④ **choco 2종 무변동** — 07-20 02:2x 스캔 Flagged 이후 **22일 무이벤트**(자동 3단계는
+> 완료, 사람 검토만 미착수). `CHOCO_PUSH` **미등록 실측 확인**(`gh variable list` exit 0·빈 목록
+> — 08-02의 "토큰 권한으로 못 읽음"은 현재 해당 없음). [journal/2026-08-11.md](journal/2026-08-11.md).
+>
+> **직전(08-02 6차)** — **릴리스 `0.14.0` + 채널 상태 재점검(사용자 지시)**:
 > ① **채널 재점검(원천 실측)** — winget Portable 0.13.0
 > [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) OPEN(`Azure-Pipeline-Passed`
 > + **`Policy-Test-1.2` waiver 대기** — 0.11/0.12와 같은 패턴) · 설치형
@@ -15,7 +30,7 @@
 > (#410978 종결 후 최신 버전 제출) ④ [21 §8](21-distribution.md) 표 저녁 재점검 ·
 > CLAUDE.md `0.14.0`. [journal/2026-08-02.md](journal/2026-08-02.md).
 >
-> **직전(08-02 5차)** — **기능의 날 — 7-Zip 드롭 결함 픽스 2건 + 폴더 우선
+> **08-02 5차** — **기능의 날 — 7-Zip 드롭 결함 픽스 2건 + 폴더 우선
 > 토글 + 보기 옵션 적용 범위 3택 + 패널 간 탭 DnD(사용자 QA 연속 — 스택 5커밋 main 병합)**:
 > ① **7-Zip 드롭 수신 결함**(`fix/dnd-delayed-render`) — 1차: 7-Zip은 **지연 렌더링
 > 소스**라 드롭 확정 후 GetData(CF_HDROP) **재조회**가 실제 추출을 트리거하는데
@@ -152,10 +167,11 @@
 - 맥 = 일상 개발(코어 test + **windows 타깃 cargo check로 UI 코드까지 타입 검증**) · Windows PC/CI = 실행·QA·예산 실측.
 - **비Windows 경로 검증 필수**(08-02 교훈 — [18 §2·§4](18-build-and-test.md)): Windows `cargo test`가 green이어도 cfg 소거 경로는 미검증 → `cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu`.
 
-## 5. 다음 단계 (08-02 기준 — 상세는 [TODO](TODO.md) §7)
+## 5. 다음 단계 (08-11 기준 — 상세는 [TODO](TODO.md) §7)
 
 1. **실기 QA 잔여분 소화** — 사용자 QA가 병목. 새 기능보다 우선.
-2. **배포 채널 심사 대기 4건**(우리 측 조치 불요·상태 추적만) — winget Portable `0.13.0`([#410978](https://github.com/microsoft/winget-pkgs/pull/410978)) · winget 설치형([#404528](https://github.com/microsoft/winget-pkgs/pull/404528) — `Policy-Test-1.2` waiver = 모더레이터 몫) · Chocolatey 2종(**07-20 바이러스 스캔 플래그** — 무서명 exe 오탐·면제 필요. 승인 시 `CHOCO_PUSH` 재개). → [21 §7·§8](21-distribution.md)
-3. **클라우드 배포 선행 조건 3건**(코드 작업 없음 — 본인 사용은 무관·[ADR-0006 §2-4-1](27-adr-0006-cloud-oauth.md)) — Dropbox 프로덕션 승인(가장 쉽고 효과 큼) · Entra 게시자 확인(조직 계정 동의 차단 해소 — 도메인 필요) · Google CASA(보류 — 프로덕션 게시로 7일 만료만 제거하는 절충 가능).
-4. **백로그** — X-11 원본 패리티 갭 건별([19](19-parity-gap.md)) · X-2 잔여(공급자 콤보·핫 리로드·비동기 미리보기) · X-16 최적화 잔여 · X-13 2/2(브랜치 `feat/x13-launcher-crud` 보존 중) · X-14·X-15·X-24.
-5. **X-33 macOS·Linux 확장** — 검토 완료([23](23-cross-platform-feasibility.md)), **착수 여부 = 사용자 결정 대기**. 진행 시 다음 액션 = 맥 렌더 스파이크(결정 아님) + DR-1/2/8 개정 ADR.
+2. **winget 버전 격차 해소**(심사는 끝났다 — 08-06 2건 병합) — Portable `0.13.0`→**`0.14.0` 제출**(보류 조건 해소) · 설치형 `0.8.1`→**`0.14.0` 제출**(6버전 격차). 제출 여부 = 사용자 판단.
+3. **Chocolatey 2종 승인 대기**(심사 대기 잔여분 전부 — 우리 측 조치 불요·상태 추적만): 0.8.1 **07-20 스캔 플래그 후 22일 무이벤트**(무서명 exe 오탐 — 모더레이터 면제 필요). 승인 시 저장소 변수 `CHOCO_PUSH=true` 등록으로 후속 버전 자동 재개. → [21 §7·§8](21-distribution.md)
+4. **클라우드 배포 선행 조건 3건**(코드 작업 없음 — 본인 사용은 무관·[ADR-0006 §2-4-1](27-adr-0006-cloud-oauth.md)) — Dropbox 프로덕션 승인(가장 쉽고 효과 큼) · Entra 게시자 확인(조직 계정 동의 차단 해소 — 도메인 필요) · Google CASA(보류 — 프로덕션 게시로 7일 만료만 제거하는 절충 가능).
+5. **백로그** — X-11 원본 패리티 갭 건별([19](19-parity-gap.md)) · X-2 잔여(공급자 콤보·핫 리로드·비동기 미리보기) · X-16 최적화 잔여 · X-13 2/2(브랜치 `feat/x13-launcher-crud` 보존 중) · X-14·X-15·X-24.
+6. **X-33 macOS·Linux 확장** — 검토 완료([23](23-cross-platform-feasibility.md)), **착수 여부 = 사용자 결정 대기**. 진행 시 다음 액션 = 맥 렌더 스파이크(결정 아님) + DR-1/2/8 개정 ADR.

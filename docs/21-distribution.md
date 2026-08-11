@@ -223,6 +223,11 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   동일값이므로 **제거하라**"(installer.yaml `AppsAndFeaturesEntries.DisplayVersion: 0.8.1`,
   로컬 사본 `packaging/winget/0.8.1/` 30행 동일). winget-pkgs는 Needs-Author-Feedback
   무응답 PR을 일정 기간 후 자동 클로즈하므로 **포크 브랜치에 수정 커밋 push가 필요**하다.
+  **2026-08-06 00:46 UTC MERGED — 설치형 등록 완료**(07-19 제출 → 18일). 최종 라벨 =
+  `Moderator-Approved`·`Validation-Completed`·`Publish-Pipeline-Succeeded`이며,
+  포터블과 달리 **`Policy-Test-1.2`는 waiver 라벨 없이 그냥 제거**된 채 승인됐다
+  (`Validation-Guide`도 동반 제거). `winget install SosomLab.NexaDir`로 설치 가능
+  — 다만 등록 버전은 **0.8.1**이라 최신 `0.14.0`과 6버전 격차(08-11 점검).
 
 ### 포터블 변형 — `SosomLab.NexaDir.Portable`
 
@@ -250,16 +255,28 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   **정정**). winget-pkgs master에 `Portable/0.8.1`·`Portable/0.11.0` 매니페스트 상주 확인
   (raw 조회 200, 2026-07-24). **∴ winget Portable = 첫 승인 채널이자 유일하게 최신
   버전(`0.11.0`)까지 배포된 채널.**
+  후속 [#408280](https://github.com/microsoft/winget-pkgs/pull/408280)(0.12.0) MERGED ·
+  [#410978](https://github.com/microsoft/winget-pkgs/pull/410978)(0.13.0, 08-01 제출) —
+  **2026-08-06 00:16 UTC MERGED**(`Waived-Policy-Test-1.2` 부여 후 승인 = 0.11/0.12와
+  같은 패턴, 이번엔 waiver까지 5일 걸렸다). 카탈로그 실측(08-11) = `winget show --versions`
+  **0.8.1 / 0.11.0 / 0.12.0 / 0.13.0**. **`0.14.0`은 미제출** — 08-02에 "0.13.0 PR이
+  OPEN이라 중복 회피"로 보류한 것이고, 병합으로 그 조건은 해소됐다.
 
-### 채널 상태 요약 (2026-08-02 저녁 재점검 — 원천 실측: PR 라벨 JSON·choco 패키지 페이지)
+### 채널 상태 요약 (2026-08-11 점검 — 원천 실측: PR 라벨 JSON·`winget search/show`·choco 패키지 페이지)
 
 | 채널 | 패키지 | 배포된 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.13.0 심사 중**(0.12.0 배포됨) | ⏳ [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) OPEN — 라벨 `Azure-Pipeline-Passed` + **`Policy-Test-1.2`**(0.11/0.12와 같은 패턴 — waiver 후 승인이 관례) | 없음(재추적) |
-| winget | `SosomLab.NexaDir`(설치형) | — | ⏳ OPEN([#404528](https://github.com/microsoft/winget-pkgs/pull/404528)) — `Needs-Author-Feedback` 해제 유지. 남은 라벨 = `Policy-Test-1.2` + `Validation-Guide` → **모더레이터 waiver 대기** | 없음(공이 모더레이터에게) |
-| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**("in moderation and has not yet been approved" — 07-20 바이러스 스캔 플래그 이후 무이벤트) | 없음 / 오탐 소명 코멘트는 선택 |
-| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일 | 동일 |
+| winget | `SosomLab.NexaDir.Portable` | **0.13.0**(0.8.1/0.11.0/0.12.0/0.13.0 상주) | ✅ [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) **MERGED 2026-08-06 00:16 UTC**(`Waived-Policy-Test-1.2`+`Moderator-Approved` — 0.11/0.12와 같은 패턴, waiver까지 5일) | **0.14.0 제출**(08-02 보류 조건 해소) |
+| winget | `SosomLab.NexaDir`(설치형) | **0.8.1** | ✅ [#404528](https://github.com/microsoft/winget-pkgs/pull/404528) **MERGED 2026-08-06 00:46 UTC** = 최초 등록 완료(07-19 제출 → 18일. `Policy-Test-1.2`는 waiver 라벨 없이 제거된 채 승인) | **0.14.0 버전 업데이트 제출**(6버전 격차) |
+| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 **22일 무이벤트** — 자동 3단계는 완료, 사람 검토만 미착수) | 없음 / 오탐 소명 코멘트는 선택 |
+| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21) | 동일 |
 | GitHub Release | 포터블 + 설치형 | **0.14.0** (08-02 — X-38 7-Zip 드롭·X-39 보기 옵션 범위+탭 DnD) | ✅ 상시(자산 5종 규약 — 0.13.0에서 실배포 검증됨) | — |
+
+> **08-11 변화 = winget 2건 병합으로 "심사 대기 4건 → choco 2건".** winget은 두 채널 모두
+> 라이브(`winget search SosomLab` 실측)이며 남은 것은 심사가 아니라 **버전 격차**다.
+> **`CHOCO_PUSH` 실측 정정**: `gh variable list`가 **exit 0 · 빈 목록**(08-02 기록의 "토큰
+> 권한으로 못 읽음"은 현재 해당 없음) — 변수는 **미등록**이 맞고, choco 승인 시 여기에
+> `CHOCO_PUSH=true`를 넣으면 후속 버전부터 자동 재개된다.
 
 **해석(08-02)**: 릴리스 0.13.0을 **Chocolatey 제외**로 배포했다(사용자 지시 — 워크플로
 `choco push` 스텝이 `skipped`로 확인됨. `CHOCO_PUSH` 미설정 게이트가 의도대로 동작).
