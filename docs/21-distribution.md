@@ -227,7 +227,11 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   `Moderator-Approved`·`Validation-Completed`·`Publish-Pipeline-Succeeded`이며,
   포터블과 달리 **`Policy-Test-1.2`는 waiver 라벨 없이 그냥 제거**된 채 승인됐다
   (`Validation-Guide`도 동반 제거). `winget install SosomLab.NexaDir`로 설치 가능
-  — 다만 등록 버전은 **0.8.1**이라 최신 `0.14.0`과 6버전 격차(08-11 점검).
+  — 다만 등록 버전은 **0.8.1**이라 격차가 컸다(08-11 오전 점검).
+  **08-11 저녁 — 첫 버전 업데이트 제출**: [#415215](https://github.com/microsoft/winget-pkgs/pull/415215)
+  (`0.16.0`). 07-31 피드백대로 `AppsAndFeaturesEntries.DisplayVersion`은 **계속 뺀 채로**
+  두었고, locale 설명이 `0.8.1` 시점(**"Dual-language UI"**·클라우드 미언급)에 멈춰 있어
+  현행 기능(클라우드·3개 언어)으로 함께 갱신했다.
 
 ### 포터블 변형 — `SosomLab.NexaDir.Portable`
 
@@ -259,24 +263,32 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   [#410978](https://github.com/microsoft/winget-pkgs/pull/410978)(0.13.0, 08-01 제출) —
   **2026-08-06 00:16 UTC MERGED**(`Waived-Policy-Test-1.2` 부여 후 승인 = 0.11/0.12와
   같은 패턴, 이번엔 waiver까지 5일 걸렸다). 카탈로그 실측(08-11) = `winget show --versions`
-  **0.8.1 / 0.11.0 / 0.12.0 / 0.13.0**. **`0.14.0`은 미제출** — 08-02에 "0.13.0 PR이
-  OPEN이라 중복 회피"로 보류한 것이고, 병합으로 그 조건은 해소됐다.
+  **0.8.1 / 0.11.0 / 0.12.0 / 0.13.0**.
+  **08-11 저녁 — `0.16.0` 제출**([#415214](https://github.com/microsoft/winget-pkgs/pull/415214)).
+  `0.14.0`·`0.15.0`은 **건너뛰었다**: 0.14.0은 0.13.0 PR이 OPEN이라 보류했고(08-02),
+  0.15.0은 발행 직후 바 크기 재조정이 확정돼 **같은 패키지에 PR이 겹치는 것을 피하려고**
+  0.16.0으로 한 번만 올렸다. winget은 중간 버전을 건너뛰어도 무방하다(사용자는 최신만 받는다).
 
-### 채널 상태 요약 (2026-08-11 점검 — 원천 실측: PR 라벨 JSON·`winget search/show`·choco 패키지 페이지)
+### 채널 상태 요약 (2026-08-11 저녁 재점검 — 원천 실측: PR 라벨 JSON·`winget show --versions`·choco 패키지 페이지)
 
-| 채널 | 패키지 | 배포된 버전 | 상태 | 우리 측 조치 |
+| 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.13.0**(0.8.1/0.11.0/0.12.0/0.13.0 상주) | ✅ [#410978](https://github.com/microsoft/winget-pkgs/pull/410978) **MERGED 2026-08-06 00:16 UTC**(`Waived-Policy-Test-1.2`+`Moderator-Approved` — 0.11/0.12와 같은 패턴, waiver까지 5일) | **0.14.0 제출**(08-02 보류 조건 해소) |
-| winget | `SosomLab.NexaDir`(설치형) | **0.8.1** | ✅ [#404528](https://github.com/microsoft/winget-pkgs/pull/404528) **MERGED 2026-08-06 00:46 UTC** = 최초 등록 완료(07-19 제출 → 18일. `Policy-Test-1.2`는 waiver 라벨 없이 제거된 채 승인) | **0.14.0 버전 업데이트 제출**(6버전 격차) |
-| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 **22일 무이벤트** — 자동 3단계는 완료, 사람 검토만 미착수) | 없음 / 오탐 소명 코멘트는 선택 |
+| winget | `SosomLab.NexaDir.Portable` | **0.13.0**(0.8.1/0.11.0/0.12.0/0.13.0 상주) | ⏳ **`0.16.0` 제출**([#415214](https://github.com/microsoft/winget-pkgs/pull/415214) OPEN·`New-Manifest`). 직전 [#410978](https://github.com/microsoft/winget-pkgs/pull/410978)(0.13.0) MERGED 08-06 | 없음(상태 추적) |
+| winget | `SosomLab.NexaDir`(설치형) | **0.8.1** | ⏳ **`0.16.0` 제출**([#415215](https://github.com/microsoft/winget-pkgs/pull/415215) OPEN·`New-Manifest`) = **최초 등록 이후 첫 버전 업데이트**. 등록 [#404528](https://github.com/microsoft/winget-pkgs/pull/404528) MERGED 08-06 | 없음(상태 추적) |
+| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 무이벤트 — 자동 3단계는 완료, 사람 검토만 미착수) | **push 제외 유지**(사용자 지시) / 오탐 소명 코멘트는 선택 |
 | Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21) | 동일 |
-| GitHub Release | 포터블 + 설치형 | **0.14.0** (08-02 — X-38 7-Zip 드롭·X-39 보기 옵션 범위+탭 DnD) | ✅ 상시(자산 5종 규약 — 0.13.0에서 실배포 검증됨) | — |
+| GitHub Release | 포터블 + 설치형 | **0.16.0** (08-11 — X-40 자동 갱신·X-41 바 크기. 직전 `0.15.0`도 같은 날) | ✅ 상시(자산 5종 규약) | — |
 
-> **08-11 변화 = winget 2건 병합으로 "심사 대기 4건 → choco 2건".** winget은 두 채널 모두
-> 라이브(`winget search SosomLab` 실측)이며 남은 것은 심사가 아니라 **버전 격차**다.
-> **`CHOCO_PUSH` 실측 정정**: `gh variable list`가 **exit 0 · 빈 목록**(08-02 기록의 "토큰
-> 권한으로 못 읽음"은 현재 해당 없음) — 변수는 **미등록**이 맞고, choco 승인 시 여기에
-> `CHOCO_PUSH=true`를 넣으면 후속 버전부터 자동 재개된다.
+> **08-11 경과**: 오전 점검에서 winget 2건 병합을 확인해 **"심사 대기 4건 → choco 2건"** 으로
+> 줄었고, 저녁에 `0.15.0`·`0.16.0`을 연이어 배포하며 **winget 0.16.0 PR 2건을 새로 제출**했다
+> (0.15.0은 제출하지 않았다 — 같은 패키지에 PR이 겹치는 08-02 상황을 피하려고 **0.16.0으로
+> 한 번만** 올렸다).
+> **choco는 사용자 지시로 계속 제외** — 0.8.1이 모더레이션에 잠긴 채라 **이중 큐를 만들지
+> 않는다**. `0.15.0`·`0.16.0` 모두 **팩 success · push 미실행**을 워크플로 로그로 확인했다
+> (`CHOCO_PUSH` 미등록 — `gh variable list` exit 0·빈 목록).
+> **체크섬 절차**: 매니페스트 값은 릴리스가 발행한 `SHA256SUMS.txt`에서 가져오고, **자산을
+> 새로 내려받아 `Get-FileHash`로 재대조**한 뒤 제출한다(08-11 확립). 제출은 winget-pkgs
+> 클론이 무거워 **포크 브랜치 + Contents API로 파일만 올리는 방식**을 쓴다.
 
 **해석(08-02)**: 릴리스 0.13.0을 **Chocolatey 제외**로 배포했다(사용자 지시 — 워크플로
 `choco push` 스텝이 `skipped`로 확인됨. `CHOCO_PUSH` 미설정 게이트가 의도대로 동작).
