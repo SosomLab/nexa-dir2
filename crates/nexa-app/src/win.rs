@@ -4941,16 +4941,34 @@ unsafe fn tip_tick(hwnd: HWND, st: &mut State) {
 /// 그 탭이 대상 패널에서 활성화되고 포커스도 대상 패널로 넘어간다.
 /// `adopt` = 대상 패널 값 채택 수행 여부 — **커밋(해제)에만 true**. 미리 보기 이동은
 /// 값을 건드리지 않아 ESC 복귀가 무손실(QA 08-02). 반환: 실제로 이동했는가.
+/// [`cross_move_tab`] 인자 묶음(08-11 정리 — 인자 8개가 clippy `too_many_arguments`를
+/// 물던 것을 해소. 다섯 값이 "어느 탭을 어디로"라는 한 뜻이라 묶는 편이 읽기도 낫다).
+struct CrossMove {
+    /// 출발 패널.
+    src: usize,
+    /// 출발 패널에서의 탭 인덱스.
+    from: usize,
+    /// 도착 패널.
+    dst: usize,
+    /// 도착 위치(없음 = 끝).
+    at: Option<usize>,
+    /// 대상 패널 값 채택 수행 여부 — **커밋(해제)에만 true**.
+    adopt: bool,
+}
+
 unsafe fn cross_move_tab(
     hwnd: HWND,
     st: &mut State,
-    src: usize,
-    from: usize,
-    dst: usize,
-    at: Option<usize>,
-    adopt: bool,
+    mv: CrossMove,
     inv: &mut Invalidations,
 ) -> bool {
+    let CrossMove {
+        src,
+        from,
+        dst,
+        at,
+        adopt,
+    } = mv;
     let Some(mut tab) = st.panels[src].detach_tab(from, inv) else {
         return false;
     };
@@ -6717,7 +6735,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 if over_bar {
                                     let at = st.panels[other].tabbar.tab_index_at(x, y);
                                     if cross_move_tab(
-                                        hwnd, st, holder, from, other, at, false, &mut inv,
+                                        hwnd,
+                                        st,
+                                        CrossMove {
+                                            src: holder,
+                                            from,
+                                            dst: other,
+                                            at,
+                                            adopt: false, // 미리 보기 = 값 미채택(ESC 무손실)
+                                        },
+                                        &mut inv,
                                     ) {
                                         let landed = st.panels[other].active_index();
                                         st.panels[other].tabbar.begin_drag(landed, x, y);
@@ -6798,7 +6825,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             let dst = 1 - p;
                             if !single_panel(st) && st.panel_at_pt(x, y) == Some(dst) {
                                 let at = st.panels[dst].tabbar.tab_index_at(x, y);
-                                cross_move_tab(hwnd, st, p, cur, dst, at, true, &mut inv);
+                                cross_move_tab(
+                                    hwnd,
+                                    st,
+                                    CrossMove {
+                                        src: p,
+                                        from: cur,
+                                        dst,
+                                        at,
+                                        adopt: true, // 해제 = 커밋 — 미뤄 둔 값 채택
+                                    },
+                                    &mut inv,
+                                );
                                 st.panels[p].tabbar.cancel_drag();
                             }
                         }

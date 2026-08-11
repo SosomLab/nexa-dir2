@@ -14,8 +14,8 @@
 
 ## 현재 상태
 
-- 단계: **포스트 M5 — UX 고도화·배포 채널 정착**. M0~M5 완료(`0.1.0`~`0.6.0`), 최신 릴리스 **`0.13.0`**(2026-08-02 — 클라우드 Link/Connect). 상세 → [docs/STATUS.md](docs/STATUS.md).
-- 실측(`0.13.0`): exe **3.43MB** ≤10 · 임포트 **OS 인박스 21종만** · 유휴 RSS 16.86MB ≤30 · 100k 첫 렌더 115ms.
+- 단계: **포스트 M5 — UX 고도화·배포 채널 정착**. M0~M5 완료(`0.1.0`~`0.6.0`), 최신 릴리스 **`0.14.0`**(2026-08-02 — 7-Zip 드롭 픽스·보기 옵션 적용 범위·패널 간 탭 DnD). 상세 → [docs/STATUS.md](docs/STATUS.md).
+- 실측(`0.14.0`): exe **3.65MB** ≤10 · 임포트 **OS 인박스 21종만** · 유휴 RSS 16.86MB ≤30 · 100k 첫 렌더 115ms.
 
 ## 설치
 
@@ -23,8 +23,9 @@
 winget install SosomLab.NexaDir.Portable
 ```
 
-설치 없이 쓰려면 [Releases](https://github.com/SosomLab/nexa-dir2/releases/latest)에서 포터블 exe(또는 zip)를 받아 실행합니다.
-설치형 exe도 함께 제공합니다 — 자세한 안내는 위키 [설치와 다운로드](https://github.com/SosomLab/nexa-dir2/wiki/설치와-다운로드).
+설치형은 `winget install SosomLab.NexaDir`(2026-08-06 등록). 설치 없이 쓰려면
+[Releases](https://github.com/SosomLab/nexa-dir2/releases/latest)에서 포터블 exe(또는 zip)를 받아 실행합니다.
+자세한 안내는 위키 [설치와 다운로드](https://github.com/SosomLab/nexa-dir2/wiki/설치와-다운로드).
 
 ## 문서 — 📖 [문서 홈 (Wiki)](docs/README.md)에서 시작
 
