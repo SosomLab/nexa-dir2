@@ -1501,6 +1501,7 @@ pub fn run() -> Result<()> {
                 drop: handle_external_drop,
                 track: dnd_track,
                 leave: dnd_leave,
+                drop_virtual: handle_virtual_drop,
             },
         )
         .into();
@@ -2653,6 +2654,30 @@ unsafe fn drop_dest_at(hwnd: HWND, sx: i32, sy: i32) -> Option<PathBuf> {
 unsafe fn handle_external_drop(hwnd: HWND, paths: Vec<PathBuf>, dest: PathBuf, op: nexa_ops::Op) {
     if let Some(st) = state_of(hwnd) {
         start_transfer(hwnd, st, paths, dest, op);
+    }
+}
+
+/// 가상 파일 드롭 훅(X-42 β-ⓐ — Outlook 첨부·탐색기 zip 내부·MTP): CF_HDROP 부재
+/// 소스의 스트림 추출. Drop 반환 전 동기 실행(소스 생존 보장 — dnd.rs 규약)이라
+/// 대용량은 그동안 창이 멈춘다(클립보드 1차와 동일 한계 — 워커화는 β-ⓑ).
+/// 클라우드 대상은 무동작(로컬 FS 기록 불가 — 업로드 연계는 β-ⓓ).
+unsafe fn handle_virtual_drop(
+    hwnd: HWND,
+    data: &windows::Win32::System::Com::IDataObject,
+    dest: PathBuf,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::{SetCursor, IDC_WAIT};
+    if nexa_vfs::cloud_parts(&dest).is_some() {
+        return;
+    }
+    if let Ok(c) = LoadCursorW(None, IDC_WAIT) {
+        SetCursor(Some(c)); // 다음 WM_SETCURSOR가 원복
+    }
+    let created = crate::clipboard::extract_virtual_from(data, &dest);
+    if !created.is_empty() {
+        if let Some(st) = state_of(hwnd) {
+            reload_both(hwnd, st, "");
+        }
     }
 }
 

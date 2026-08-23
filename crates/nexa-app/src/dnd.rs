@@ -42,6 +42,10 @@ pub struct DropHooks {
     pub track: unsafe fn(HWND, i32, i32),
     /// 드래그 이탈/종료(X-32) — 추적 타이머·호버 대기 해제.
     pub leave: unsafe fn(HWND),
+    /// 가상 파일 드롭(X-42 β-ⓐ) — CF_HDROP 부재 소스의 스트림 추출. **Drop 반환 전**
+    /// 동기 호출(소스가 데이터 객체를 DoDragDrop 종료 후 무효화할 수 있다 — 7-Zip
+    /// 스테이징과 같은 "반환 전 확보" 규약).
+    pub drop_virtual: unsafe fn(HWND, &IDataObject, PathBuf),
 }
 
 /// 외부 드래그 수신 대상(창 1개 전역 — RegisterDragDrop이 수명 보유).
@@ -51,6 +55,9 @@ pub struct DropTarget {
     hooks: DropHooks,
     /// DragEnter에서 추출한 페이로드(CF_HDROP 경로들) — Drop에서 재조회로 갱신.
     paths: RefCell<Vec<PathBuf>>,
+    /// 가상 파일 소스인가(X-42 β-ⓐ — CF_HDROP 없이 FileGroupDescriptorW만 광고:
+    /// Outlook 첨부·탐색기 zip 내부·MTP). 참이면 항상 복사 수신·Drop에서 스트림 추출.
+    virtual_src: RefCell<bool>,
 }
 
 /// 두 경로 목록이 같은 집합인가(순서 무시) — Drop 재조회가 DragEnter 광고와 다르면
@@ -127,6 +134,7 @@ impl DropTarget {
             hwnd,
             hooks,
             paths: RefCell::new(Vec::new()),
+            virtual_src: RefCell::new(false),
         }
     }
 }
@@ -154,12 +162,18 @@ impl DropTarget_Impl {
         keys: MODIFIERKEYS_FLAGS,
         pt: &POINTL,
     ) -> (Option<PathBuf>, nexa_ops::Op, DROPEFFECT) {
-        if self.paths.borrow().is_empty() {
+        let is_virtual = *self.virtual_src.borrow();
+        if self.paths.borrow().is_empty() && !is_virtual {
             return (None, nexa_ops::Op::Copy, DROPEFFECT_NONE);
         }
         let Some(dest) = (self.hooks.dest_at)(self.hwnd, pt.x, pt.y) else {
             return (None, nexa_ops::Op::Copy, DROPEFFECT_NONE);
         };
+        if is_virtual {
+            // 가상 파일(X-42 β-ⓐ) = 항상 **복사**(소스 원본 삭제 불가·실경로 없어
+            // 자기/하위 검사도 무의미). 볼륨 판정·Shift 이동 강제도 비대상.
+            return (Some(dest), nexa_ops::Op::Copy, DROPEFFECT_COPY);
+        }
         // 자기 자신/하위로의 드롭 금지(원본 🚫 — 엔진도 재차 방어)
         let paths = self.paths.borrow();
         if paths.iter().any(|p| nexa_ops::is_same_or_sub(p, &dest)) {
@@ -334,11 +348,16 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        // CF_HDROP 페이로드 추출 — 없으면 수신 거부(effect NONE)
+        // CF_HDROP 페이로드 추출 — 없으면 가상 파일(FileGroupDescriptorW) 폴백 판정
+        // (X-42 β-ⓐ), 둘 다 없으면 수신 거부(effect NONE)
         let paths = pdataobj
             .as_ref()
             .map(|d| unsafe { hdrop_paths(d) })
             .unwrap_or_default();
+        *self.virtual_src.borrow_mut() = paths.is_empty()
+            && pdataobj
+                .as_ref()
+                .is_some_and(|d| unsafe { crate::clipboard::data_has_virtual_files(d) });
         *self.paths.borrow_mut() = paths;
         unsafe {
             *effect = self.resolve(keys, pt).2;
@@ -362,6 +381,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
 
     fn DragLeave(&self) -> windows::core::Result<()> {
         self.paths.borrow_mut().clear();
+        *self.virtual_src.borrow_mut() = false;
         unsafe { (self.hooks.leave)(self.hwnd) }; // 추적 해제(X-32)
         Ok(())
     }
@@ -400,6 +420,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
             };
         }
         let mut paths = std::mem::take(&mut *self.paths.borrow_mut());
+        let is_virtual = std::mem::take(&mut *self.virtual_src.borrow_mut());
         let mut op = op;
         if let Some(dest) = dest {
             if !paths.is_empty() {
@@ -412,6 +433,12 @@ impl IDropTarget_Impl for DropTarget_Impl {
                     }
                 }
                 unsafe { (self.hooks.drop)(self.hwnd, paths, dest, op) };
+            } else if is_virtual {
+                // 가상 파일(X-42 β-ⓐ — Outlook 첨부·zip 내부·MTP): **반환 전** 동기
+                // 추출(소스가 DoDragDrop 종료 후 스트림을 무효화할 수 있다).
+                if let Some(data) = pdataobj.as_ref() {
+                    unsafe { (self.hooks.drop_virtual)(self.hwnd, data, dest) };
+                }
             }
         }
         Ok(())
@@ -436,6 +463,10 @@ mod tests {
         .into();
         let read = unsafe { hdrop_paths(&data) };
         assert_eq!(read, paths, "CF_HDROP 경로 왕복");
+        assert!(
+            !unsafe { crate::clipboard::data_has_virtual_files(&data) },
+            "실경로 소스는 가상 파일로 오판하지 않는다(X-42 β-ⓐ)"
+        );
     }
 
     /// 지연 렌더링 판정 — 순서만 다르면 같은 집합, 항목이 다르면 다른 집합.

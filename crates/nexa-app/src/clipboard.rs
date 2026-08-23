@@ -308,6 +308,19 @@ fn parse_group_descriptor(bytes: &[u8]) -> Vec<VirtualItem> {
     out
 }
 
+/// 데이터 객체가 가상 파일(FileGroupDescriptorW)을 광고하는가 — DnD 수신 판정
+/// (X-42 β-ⓐ: Outlook 첨부·탐색기 zip 내부·MTP 드래그는 CF_HDROP 없이 이것만 온다).
+pub unsafe fn data_has_virtual_files(data: &IDataObject) -> bool {
+    let fmt = FORMATETC {
+        cfFormat: descriptor_format() as u16,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+    data.QueryGetData(&fmt).is_ok()
+}
+
 /// OS 클립보드의 가상 파일을 `dest_dir`에 추출(Ctrl+V 폴백 — X-42).
 /// 반환: 생성된 **최상위** 경로 목록(빈 Vec = 가상 파일 없음/전량 실패).
 ///
@@ -765,6 +778,10 @@ mod tests {
         }
         .into();
 
+        assert!(
+            unsafe { data_has_virtual_files(&data) },
+            "가상 파일 광고 판정(X-42 β-ⓐ DnD 수신 게이트)"
+        );
         let created = unsafe { extract_virtual_from(&data, &dir) };
         assert_eq!(
             created,
