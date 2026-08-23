@@ -41,12 +41,22 @@ pub const SCAN_CAP: usize = 4_096;
 pub struct DirSig {
     /// 폴더 자신의 mtime(1단계). 조회 실패 = `None`.
     pub dir_mtime: Option<SystemTime>,
-    /// 2단계 성립 여부 — false면 아래 세 값은 무의미(비교에서 제외).
+    /// 2단계 성립 여부 — false면 아래 두 값은 무의미(비교에서 제외).
     pub scanned: bool,
     pub count: u64,
-    pub bytes: u64,
-    /// 자식 중 최신 mtime.
-    pub newest: Option<SystemTime>,
+    /// 항목별 (크기, mtime) 혼합값의 순서 무관 접기(X-44 S3 — 08-23 개정).
+    /// 종전 `bytes 합 + 최신 mtime(max)`은 **같은 크기 덮어쓰기인데 그 파일이 폴더 내
+    /// 최신이 아닌 경우**(동기화 클라이언트가 서버 시각으로 mtime을 찍는 전형)를
+    /// 못 잡았다 — 항목별 접기는 같은 열거 비용으로 어느 파일의 mtime 변화든 잡는다.
+    pub fold: u64,
+}
+
+/// 항목 1개의 (크기, mtime ns) 혼합 — SplitMix64풍. 순서 무관 접기(wrapping_add)를
+/// 위해 항목별로 충분히 흩는다(단순 XOR/합은 두 항목의 맞바꿈 변경이 상쇄될 수 있다).
+fn entry_mix(size: u64, mtime_ns: u64) -> u64 {
+    let mut x = size ^ mtime_ns.rotate_left(17);
+    x = x.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^ (x >> 32)
 }
 
 /// `path`의 현재 서명. 폴더가 아니거나 접근 불가면 `None`
@@ -63,7 +73,7 @@ pub fn probe(path: &Path) -> Option<DirSig> {
     let Ok(rd) = std::fs::read_dir(path) else {
         return Some(sig); // 열거 불가(권한 등) = 1단계만
     };
-    let (mut count, mut bytes, mut newest) = (0u64, 0u64, None::<SystemTime>);
+    let (mut count, mut fold) = (0u64, 0u64);
     for ent in rd {
         let Ok(ent) = ent else { continue };
         count += 1;
@@ -72,18 +82,17 @@ pub fn probe(path: &Path) -> Option<DirSig> {
         }
         // symlink_metadata = 링크를 따라가지 않는다(원격 대상 stat로 폴링이 느려지는 것 방지)
         if let Ok(m) = ent.metadata().or_else(|_| ent.path().symlink_metadata()) {
-            bytes = bytes.wrapping_add(m.len());
-            if let Ok(t) = m.modified() {
-                if newest.is_none_or(|n| t > n) {
-                    newest = Some(t);
-                }
-            }
+            let mtime_ns = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos() as u64);
+            fold = fold.wrapping_add(entry_mix(m.len(), mtime_ns));
         }
     }
     sig.scanned = true;
     sig.count = count;
-    sig.bytes = bytes;
-    sig.newest = newest;
+    sig.fold = fold;
     Some(sig)
 }
 
@@ -96,7 +105,7 @@ pub fn changed(old: &DirSig, new: &DirSig) -> bool {
     if old.scanned != new.scanned {
         return true;
     }
-    old.scanned && (old.count != new.count || old.bytes != new.bytes || old.newest != new.newest)
+    old.scanned && (old.count != new.count || old.fold != new.fold)
 }
 
 /// 디바운스 **연장 상한** 판정(win.rs 공용) — 첫 통지로부터 `max_ms`를 넘겼으면
@@ -140,6 +149,25 @@ mod tests {
         std::fs::write(&f, b"a much longer body").unwrap();
         let b = probe(&dir).expect("폴더 서명");
         assert!(changed(&a, &b), "내용 변경(크기 증가)이 서명에 안 잡힘");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **같은 크기** 덮어쓰기도 잡힌다(X-44 S3) — 종전 서명(bytes 합·최신 mtime max)은
+    /// 그 파일이 폴더 내 최신 mtime이 아니면 무변으로 봤다. 항목별 접기는 mtime만
+    /// 바뀌어도 잡는다(동기화 클라이언트의 in-place 반영 경로).
+    #[test]
+    fn probe_detects_same_size_overwrite() {
+        let dir = tmp("samesize");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"12345").unwrap();
+        // 폴더 내 "최신" 파일을 따로 둬서 max(newest)로는 안 잡히는 형상을 만든다
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        std::fs::write(dir.join("newer.txt"), b"z").unwrap();
+        let a = probe(&dir).expect("폴더 서명");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        std::fs::write(&f, b"54321").unwrap(); // 같은 5바이트 — mtime만 변화
+        let b = probe(&dir).expect("폴더 서명");
+        assert!(changed(&a, &b), "같은 크기 덮어쓰기(mtime 변화)가 서명에 안 잡힘");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

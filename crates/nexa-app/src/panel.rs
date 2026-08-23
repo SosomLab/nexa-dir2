@@ -52,6 +52,10 @@ pub struct Tab {
     /// 마지막 열거에 쓴 (숨김, Dot) — 현재 값과 다르면 재열람 필요(stale).
     /// 비활성 탭에 범위 토글이 닿았을 때 전환 시점 수렴의 근거.
     enum_filters: (bool, bool),
+    /// 내용 낡음 표시(X-44 S1 — 08-23): 비활성 동안의 외부 변경은 watcher·프로브
+    /// 어느 계기에도 안 잡히므로(비활성 탭은 감시 대상이 아니다) **활성화되는 순간**을
+    /// 갱신 계기로 삼는다. 전환·닫기로 드러날 때 참 → update_status 길목이 재열람.
+    stale: bool,
 }
 
 /// F18 펼침 키 — 대소문자 무시·후행 구분자 제거(원본 OrdinalIgnoreCase HashSet 대응).
@@ -178,6 +182,7 @@ impl Panel {
                 show_dotfiles: ctx.show_dotfiles,
                 folders_first: true,
                 enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
+                stale: false,
             }],
             active: 0,
             bounds: Rect::default(),
@@ -238,6 +243,7 @@ impl Panel {
                 show_dotfiles: ctx.show_dotfiles,
                 folders_first: true,
                 enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
+                stale: false,
             };
             Self::seed_expanded(&mut tab, &exp);
             p.tabs.push(tab);
@@ -565,6 +571,7 @@ impl Panel {
             show_dotfiles: ctx.show_dotfiles,
             folders_first: ff,
             enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
+            stale: false,
         });
         self.active = self.tabs.len() - 1;
         self.apply_sort_opts(self.active); // 정렬 옵션 전파(07-15 — 새 탭 유지)
@@ -618,6 +625,7 @@ impl Panel {
             show_dotfiles: ctx.show_dotfiles,
             folders_first: self.tabs[i].folders_first,
             enum_filters: (ctx.show_hidden, ctx.show_dotfiles),
+            stale: false,
         };
         let entries: Vec<PathBuf> = tab.expanded.values().cloned().collect();
         let tree = tab.rows.source_mut().tree_mut();
@@ -706,9 +714,14 @@ impl Panel {
         if self.tabs.len() <= 1 || i >= self.tabs.len() || self.tabs[i].locked {
             return;
         }
+        let was_active = self.active == i;
         self.tabs.remove(i);
         if self.active >= self.tabs.len() || (self.active > i) {
             self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
+        }
+        if was_active {
+            // 이웃 탭이 새로 드러난다 — 비활성 동안의 낡음 해소(X-44 S1)
+            self.tabs[self.active].stale = true;
         }
         self.sync_chrome(inv);
         inv.push(self.bounds);
@@ -718,6 +731,9 @@ impl Panel {
         self.session_dirty = true;
         if i < self.tabs.len() && i != self.active {
             self.active = i;
+            // 활성화 = 갱신 계기(X-44 S1): 비활성 탭은 watcher·프로브 비대상이라
+            // 그동안의 외부 변경이 어디에도 안 잡혀 있다 — update_status가 재열람.
+            self.tabs[i].stale = true;
             self.sync_chrome(inv);
             inv.push(self.bounds);
         }
@@ -817,6 +833,30 @@ impl Panel {
             if out.len() >= cap {
                 break;
             }
+            if let Some(r) = tree.row(i) {
+                if r.has_children && r.expanded {
+                    if let Some(p) = tree.node_path(r.id) {
+                        out.push(p.to_path_buf());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 뷰포트에 **보이는** 펼침 폴더 경로(트리 보기 전용 — X-44 "눈에 보이는 영역은
+    /// 모두 갱신" 원칙): 프로브가 루트만 보던 사각과 watcher 상한(64) 초과분을,
+    /// 화면에 드러난 펼침 폴더의 mtime O(1) 점검으로 메꾼다(read_dir 없음 —
+    /// 호스트 폴링 틱 편승·추가 타이머 0 = 성능 원칙 유지).
+    pub fn visible_expanded_dirs(&self) -> Vec<PathBuf> {
+        let rows = self.rows();
+        if rows.view_mode() != nexa_gui::widgets::ViewMode::Tree {
+            return Vec::new(); // 일반/타일 보기 = 인라인 펼침 없음
+        }
+        let (start, end) = rows.viewport();
+        let tree = rows.source().tree();
+        let mut out = Vec::new();
+        for i in start..end {
             if let Some(r) = tree.row(i) {
                 if r.has_children && r.expanded {
                     if let Some(p) = tree.node_path(r.id) {
@@ -1008,10 +1048,11 @@ impl Panel {
         (t.show_hidden, t.show_dotfiles, t.folders_first)
     }
 
-    /// 활성 탭이 자기 값과 다른 필터로 열거돼 있는가 — 탭/패널 전환 수렴 판정(08-02).
+    /// 활성 탭이 재열람을 요하는가 — 탭/패널 전환 수렴 판정(08-02 필터 불일치 +
+    /// X-44 S1 내용 낡음). update_status 길목이 참일 때 reopen_filtered(무간섭)한다.
     pub fn active_tab_stale(&self) -> bool {
         let t = &self.tabs[self.active];
-        t.enum_filters != (t.show_hidden, t.show_dotfiles)
+        t.stale || t.enum_filters != (t.show_hidden, t.show_dotfiles)
     }
 
     /// 세션 복원 — 탭별 보기 옵션 플래그(bit0 숨김·bit1 Dot·bit2 폴더 우선. 부족분 =
@@ -1337,9 +1378,24 @@ impl Panel {
         {
             let t = &mut self.tabs[self.active];
             t.enum_filters = (t.show_hidden, t.show_dotfiles);
+            t.stale = false; // 내용 낡음 해소(X-44 S1)
         }
         let path = self.root_path();
         let Some(src) = open_source(&path, ctx) else {
+            // 현 폴더 소실(삭제·언마운트 — X-44 S8): 이대로 두면 유령 목록이 남고
+            // watcher도 죽은 채 재구독마저 계속 실패하며, F5도 같은 경로라 무효였다
+            // (탐색으로만 탈출). **최근접 존재 조상**으로 이동한다(탐색기 관례).
+            // 클라우드 센티널·가상 루트는 경로 문법이 달라 조상 순회 비대상.
+            if nexa_vfs::cloud_parts(&path).is_none() && !nexa_vfs::is_virtual_root(&path) {
+                let mut anc = path.parent().map(Path::to_path_buf);
+                while let Some(a) = anc {
+                    if a.is_dir() {
+                        self.navigate_to(a, ctx, inv);
+                        return;
+                    }
+                    anc = a.parent().map(Path::to_path_buf);
+                }
+            }
             return;
         };
         // 1) 스냅샷(경로 기준 — 재열기 후 인덱스/ID는 무효). 펼침은 탭 영속 집합(F18)이
@@ -1558,6 +1614,68 @@ mod tests {
         fs::remove_dir_all(&base).unwrap();
     }
 
+    /// X-44 S1(08-23): 탭 **활성화 = 갱신 계기** — 전환·닫기로 드러난 탭은 stale,
+    /// 재열람(update_status 길목 → reopen_filtered)이 소거한다.
+    #[test]
+    fn tab_activation_marks_stale_and_reopen_clears() {
+        let base = fixture("stale");
+        let (mut p, mut inv) = panel(&base);
+        p.new_tab(ctx(), &mut inv); // 탭 2 활성(방금 열거 = 신선)
+        assert!(!p.active_tab_stale(), "새 탭 직후는 재열람 불요");
+        p.switch_tab(0, &mut inv);
+        assert!(p.active_tab_stale(), "전환으로 드러난 탭 = 재열람 요(비활성 동안 비감시)");
+        p.reopen_filtered(ctx(), &mut inv);
+        assert!(!p.active_tab_stale(), "재열람이 낡음을 소거");
+        p.switch_tab(1, &mut inv);
+        p.reopen_filtered(ctx(), &mut inv);
+        p.close_tab(1, &mut inv); // 활성 탭 닫힘 → 이웃(0)이 드러남
+        assert_eq!(p.active_index(), 0);
+        assert!(p.active_tab_stale(), "닫기로 드러난 이웃 탭 = 재열람 요");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// X-44 S8(08-23): 보고 있던 폴더 소실 시 reopen이 **최근접 존재 조상**으로 이동 —
+    /// 종전엔 유령 목록이 남고 F5도 같은 경로라 무효(탐색으로만 탈출)였다.
+    #[test]
+    fn reopen_falls_back_to_nearest_ancestor_when_folder_vanishes() {
+        let base = fixture("vanish");
+        let sub = base.join("a").join("b");
+        fs::create_dir_all(&sub).unwrap();
+        let (mut p, mut inv) = panel(&base);
+        p.navigate_to(sub.clone(), ctx(), &mut inv);
+        assert_eq!(p.root_path(), sub);
+        fs::remove_dir_all(base.join("a")).unwrap(); // a 통째 소실 — 조상 a도 없다
+        p.reopen_filtered(ctx(), &mut inv);
+        assert_eq!(p.root_path(), base, "최근접 존재 조상으로 이동");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// X-44(08-23): 뷰포트에 보이는 펼침 폴더 목록 — 프로브 1단계(mtime) 점검 대상.
+    /// 트리 보기 전용·펼침 행만.
+    #[test]
+    fn visible_expanded_dirs_lists_viewport_tree_dirs() {
+        let base = fixture("visexp");
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("sub").join("x.txt"), b"x").unwrap();
+        let (mut p, mut inv) = panel(&base);
+        p.set_bounds(Rect::new(0, 0, 400, 400), &mut inv);
+        assert!(
+            p.visible_expanded_dirs().is_empty(),
+            "펼침 전 = 대상 없음(루트는 별도 프로브)"
+        );
+        let sub = base.join("sub");
+        p.rows_mut()
+            .source_mut()
+            .tree_mut()
+            .expand_path(&sub.to_string_lossy())
+            .unwrap();
+        assert_eq!(p.visible_expanded_dirs(), vec![sub], "펼침 폴더가 목록에");
+        // 일반(Flat) 보기 = 인라인 펼침 없음 — 대상 없음
+        p.set_view_mode(nexa_gui::widgets::ViewMode::Flat, &mut inv);
+        assert!(p.visible_expanded_dirs().is_empty(), "Flat = 비대상");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
     #[test]
     fn session_dirty_flag_on_tab_ops() {
         // 07-15 세션 자동 저장: 탭 변경 = 플래그 1회성(디바운스 flush는 호스트 몫)
@@ -1609,6 +1727,10 @@ mod tests {
         assert!(!p.active_tab_stale(), "재열람 = 수렴");
         p.switch_tab(0, &mut inv);
         assert_eq!(p.active_view_values(), (true, true, true), "탭0 불변");
+        // X-44 S1(08-23 개정): 전환 활성화 자체가 내용 재열람 계기 — 필터는 일치해도
+        // stale이며, 재열람이 소거한다(종전 "필터 일치 = 비stale" 단언을 대체).
+        assert!(p.active_tab_stale(), "전환 활성화 = 재열람 요");
+        p.reopen_filtered(ctx(), &mut inv);
         assert!(!p.active_tab_stale());
         // 세션 플래그 왕복: 탭0=(t,t,t)=3+4=7 · 탭1=(f,t,t)=2+4=6
         assert_eq!(p.session_view_flags(), vec![7, 6]);

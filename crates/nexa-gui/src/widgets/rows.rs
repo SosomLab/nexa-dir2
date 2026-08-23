@@ -585,6 +585,13 @@ impl<S: RowSource> VirtualRows<S> {
         self.scroll_row
     }
 
+    /// 뷰포트 행 구간 `[start, end)`(부분 행 포함·소스 길이로 클램프) — 호스트의
+    /// "눈에 보이는 영역" 판정(X-44 — 화면에 보이는 펼침 폴더만 저비용 프로브).
+    pub fn viewport(&self) -> (usize, usize) {
+        let start = self.scroll_row;
+        (start, (start + self.visible_rows()).min(self.src.len()))
+    }
+
     pub fn scroll_x(&self) -> i32 {
         self.scroll_x
     }

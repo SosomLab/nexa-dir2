@@ -925,6 +925,10 @@ struct State {
     /// 패널 루트의 직전 프로브 서명(08-11 QA — (경로, 서명)). watcher 통지가 오지
     /// 않는 경로에서 [`TIMER_FSPOLL`]이 이 값과 비교해 재로드 계기를 만든다.
     probe: [Option<(PathBuf, crate::fsprobe::DirSig)>; 2],
+    /// 뷰포트에 보이는 펼침 폴더의 mtime 기준선(X-44 — "눈에 보이는 영역은 모두
+    /// 갱신" 원칙): 루트만 보던 프로브의 사각을 O(1) stat 편승으로 메꾼다.
+    /// 값 None = mtime 조회 불가(그 폴더는 비교 제외 — 발화 없음).
+    sub_probe: [std::collections::HashMap<PathBuf, Option<std::time::SystemTime>>; 2],
     /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
     dock_drag: Option<usize>,
     /// 도크 밴드 좌/우 스플리터 드래그 중(X-6 — 파일 스플리터와 독립).
@@ -1430,6 +1434,7 @@ pub fn run() -> Result<()> {
         watch_gen: 0,
         watch_since: [0, 0],
         probe: [None, None],
+        sub_probe: [Default::default(), Default::default()],
         dock_drag: None,
         dock_split_drag: false,
         dock_split: settings.dock_split,
@@ -2910,37 +2915,82 @@ unsafe fn poll_fs_probe(hwnd: HWND, st: &mut State) {
             continue; // 싱글 패널의 숨은 쪽 = 볼 수 없으니 폴링도 않는다
         }
         let path = st.panels[i].root_path();
-        let Some(sig) = crate::fsprobe::probe(&path) else {
-            st.probe[i] = None;
-            continue;
-        };
-        let fire = match &st.probe[i] {
-            // 경로가 바뀐 직후는 기준선만 세운다(탐색 자체가 이미 재로드했다)
-            Some((p, old)) => *p == path && crate::fsprobe::changed(old, &sig),
-            None => false,
-        };
-        st.probe[i] = Some((path, sig));
+        let mut fire = false;
+        match crate::fsprobe::probe(&path) {
+            Some(sig) => {
+                fire = match &st.probe[i] {
+                    // 경로가 바뀐 직후는 기준선만(탐색이 이미 재로드했다 — 통상은
+                    // update_status의 즉시 기준선(X-44 S2)이 먼저라 여긴 안 온다)
+                    Some((p, old)) => *p == path && crate::fsprobe::changed(old, &sig),
+                    None => false,
+                };
+                st.probe[i] = Some((path, sig));
+            }
+            None => st.probe[i] = None,
+        }
+        // 뷰포트 펼침 폴더 1단계 점검(X-44 — "보이는 영역은 모두 갱신"): 폴더 자신의
+        // mtime만 O(1) stat. 하위 내용 변경(추가·삭제·이름 변경)은 그 폴더 mtime을
+        // 바꾸므로 잡힌다 — 내용만 바뀐 덮어쓰기는 watcher(상한 내)·활성화 재열람 몫.
+        // 처음 보는 폴더 = 기준선만(발화 없음) · 화면을 떠난 폴더는 소거(맵 유계).
+        let dirs = st.panels[i].visible_expanded_dirs();
+        let mut next: std::collections::HashMap<PathBuf, Option<std::time::SystemTime>> =
+            std::collections::HashMap::with_capacity(dirs.len());
+        for d in dirs {
+            let mtime = std::fs::metadata(&d).ok().and_then(|m| m.modified().ok());
+            if let Some(old) = st.sub_probe[i].get(&d) {
+                if old.is_some() && mtime.is_some() && *old != mtime {
+                    fire = true;
+                }
+            }
+            next.insert(d, mtime);
+        }
+        st.sub_probe[i] = next;
         if fire {
             arm_watch_debounce(hwnd, st, i);
         }
     }
 }
 
-/// 화면 복귀 시 갱신 계기(08-11 사용자 QA) — 앱 활성화·최소화 복원 공용.
-/// ① 죽은 watcher 재구독 ② 즉시 프로브(밖에서 생긴 변경을 그 자리에서 반영)
-/// ③ 폴링 재개. 변경이 없으면 재로드도 없다(프로브 비교가 게이트).
+/// 프로브 기준선 재수립 — **발화 없음**(X-44 S2): 방금 끝난 열거(탐색·재로드)가 반영한
+/// 상태를 그대로 기준선으로 삼는다. 종전에는 기준선을 다음 폴링 틱에 세워서, 열거와
+/// 틱 사이(0~3s)의 외부 변경이 "경로 변경 = 기준선만" 분기에 **영영 삼켜졌다**.
+unsafe fn refresh_probe_baseline(st: &mut State) {
+    for i in 0..2 {
+        if st.panels[i].bounds().w <= 0 {
+            continue;
+        }
+        let path = st.panels[i].root_path();
+        st.probe[i] = crate::fsprobe::probe(&path).map(|sig| (path, sig));
+        st.sub_probe[i] = st.panels[i]
+            .visible_expanded_dirs()
+            .into_iter()
+            .map(|d| {
+                let m = std::fs::metadata(&d).ok().and_then(|m| m.modified().ok());
+                (d, m)
+            })
+            .collect();
+    }
+}
+
+/// 화면 복귀 시 갱신 계기(08-11 QA → X-44 개정·사용자 확정 08-23) — 앱 활성화·
+/// 최소화 복원 공용. 종전의 "프로브 비교가 게이트"는 서명이 못 잡는 변경(펼침 하위
+/// 내용 등)을 놓쳤다 → **보이는 영역(양 패널 활성 탭·펼침 포함)을 무간섭 재열람**한다.
+/// 활성화는 저빈도 이벤트라 상시 폴링 없이 복귀 시점 최신성이 보장된다(성능 원칙).
+/// 죽은 watcher 재구독은 reload_both → update_status → sync_watchers 길목이 수행.
 unsafe fn refresh_on_return(hwnd: HWND, st: &mut State) {
-    sync_watchers(hwnd, st);
-    poll_fs_probe(hwnd, st);
+    reload_both(hwnd, st, "");
     SetTimer(Some(hwnd), TIMER_FSPOLL, FSPOLL_MS, None);
 }
 
 /// 양쪽 패널 재로드(원본 ReloadBothPanels — watcher(M3-6) 전 임시) + 타이틀/상태 갱신.
+/// 끝에서 프로브 기준선 재수립(X-44 S2) — 방금 반영한 변경으로 다음 틱이 재발화하지
+/// 않게(전송·삭제 완료 후 1회 여분 재로드가 있던 기존 잔결함도 함께 소거).
 unsafe fn reload_both(hwnd: HWND, st: &mut State, note: &str) {
     let ctx = st.nav_ctx();
     let mut inv = Invalidations::default();
     st.panels[0].reopen_filtered(ctx, &mut inv);
     st.panels[1].reopen_filtered(ctx, &mut inv);
+    refresh_probe_baseline(st);
     flush_invalidations(hwnd, &mut inv);
     update_title(hwnd, st, note);
     update_status(hwnd, st);
@@ -4175,6 +4225,25 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     update_dock_info(st, &mut inv); // 선택 변경 → 도크 정보(M4-1 — 변경 시에만 무효화)
     uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
     sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
+    // 프로브 기준선 즉시 수립(X-44 S2) — **경로가 바뀐 패널만**(탐색·탭 전환 직후
+    // 이 길목을 반드시 지난다). 종전에는 다음 폴링 틱(0~3s 뒤)에 "경로 변경 =
+    // 기준선만" 분기로 세워져, 열거~틱 사이의 외부 변경이 영영 삼켜졌다.
+    // 가상 루트·클라우드 센티널은 제외(폴링과 동일 — 네트워크·불필요 stat 없음).
+    for i in 0..2 {
+        let cur = st.panels[i].root_path();
+        let moved = match &st.probe[i] {
+            Some((p, _)) => *p != cur,
+            None => true,
+        };
+        if moved
+            && st.panels[i].bounds().w > 0
+            && nexa_vfs::cloud_parts(&cur).is_none()
+            && !nexa_vfs::is_virtual_root(&cur)
+        {
+            st.probe[i] = crate::fsprobe::probe(&cur).map(|sig| (cur, sig));
+            st.sub_probe[i].clear(); // 다음 틱이 새 뷰포트로 기준선만 세운다(발화 없음)
+        }
+    }
     {
         // 클라우드 진행 배지(X-37) — 경로 변경·재로드가 모두 이 길목을 지난다
         let mut binv = Invalidations::default();
@@ -6216,6 +6285,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
+        // 드라이브 도착/제거(X-44 S5 — USB 삽입·언마운트): 종전엔 핸들러가 아예 없어
+        // 내 PC 뷰가 F5 전까지 낡았다. 가상 루트(내 PC)를 보이는 패널만 디바운스
+        // 재로드 — 이벤트 계기라 상시 비용 0(성능 원칙).
+        m if m == windows::Win32::UI::WindowsAndMessaging::WM_DEVICECHANGE => {
+            const DBT_DEVICEARRIVAL: usize = 0x8000;
+            const DBT_DEVICEREMOVECOMPLETE: usize = 0x8004;
+            if wparam.0 == DBT_DEVICEARRIVAL || wparam.0 == DBT_DEVICEREMOVECOMPLETE {
+                if let Some(st) = state_of(hwnd) {
+                    for i in 0..2 {
+                        if st.panels[i].bounds().w > 0
+                            && nexa_vfs::is_virtual_root(st.panels[i].root_path())
+                        {
+                            arm_watch_debounce(hwnd, st, i);
+                        }
+                    }
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_SIZE => {
             if let Some(st) = state_of(hwnd) {
                 if wparam.0 == windows::Win32::UI::WindowsAndMessaging::SIZE_MINIMIZED as usize {
@@ -7711,10 +7799,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         update_title(hwnd, st, "");
                         update_status(hwnd, st);
                         // 재로드 후 기준선 재설정 — 방금 반영한 변경으로 폴링이
-                        // 다시 무장하지 않게(프로브·watcher 이중 계기의 진동 차단)
-                        if let Some(sig) = crate::fsprobe::probe(&st.panels[panel].root_path()) {
-                            st.probe[panel] = Some((st.panels[panel].root_path(), sig));
-                        }
+                        // 다시 무장하지 않게(프로브·watcher 이중 계기의 진동 차단).
+                        // X-44: 뷰포트 펼침 폴더 기준선(sub_probe)도 함께.
+                        refresh_probe_baseline(st);
                     }
                 }
                 return LRESULT(0);
