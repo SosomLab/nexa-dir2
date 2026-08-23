@@ -25,8 +25,11 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW, SetClipboardData,
 };
+use windows::core::Interface;
+use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
 use windows::Win32::System::Com::{
-    IDataObject, IStream, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL, TYMED_ISTREAM,
+    CoInitializeEx, CoUninitialize, IDataObject, IStream, COINIT_MULTITHREADED, DVASPECT_CONTENT,
+    FORMATETC, TYMED_HGLOBAL, TYMED_ISTREAM,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::{OleGetClipboard, ReleaseStgMedium, CF_HDROP, CF_UNICODETEXT};
@@ -334,10 +337,8 @@ pub unsafe fn extract_virtual_files(dest_dir: &Path) -> Vec<PathBuf> {
     extract_virtual_from(&data, dest_dir)
 }
 
-/// 데이터 객체의 가상 파일을 `dest_dir`에 추출 — 클립보드·(후속) DnD 공용 본체.
-/// 최상위 이름 충돌은 " (2)" 부여(nexa_ops::unique_dest — 전송 엔진 규약 동일)·하위 항목은
-/// 같은 매핑을 따라간다. 항목별 실패 격리(부분 성공 허용).
-pub unsafe fn extract_virtual_from(data: &IDataObject, dest_dir: &Path) -> Vec<PathBuf> {
+/// 데이터 객체에서 FILEGROUPDESCRIPTORW를 읽어 항목 목록으로(동기 추출·계획 공용).
+unsafe fn read_descriptor(data: &IDataObject) -> Vec<VirtualItem> {
     let fmt = FORMATETC {
         cfFormat: descriptor_format() as u16,
         ptd: std::ptr::null_mut(),
@@ -360,12 +361,21 @@ pub unsafe fn extract_virtual_from(data: &IDataObject, dest_dir: &Path) -> Vec<P
         }
     };
     ReleaseStgMedium(&mut medium);
+    items
+}
 
-    // 최상위 이름 → 충돌 회피 후 실제 대상(첫 등장 시 확정 — 하위 항목이 먼저 와도 성립)
+/// 항목별 대상 경로 계획 — 최상위 이름 충돌은 " (2)"(nexa_ops::unique_dest — 전송 엔진
+/// 규약 동일)·하위 항목은 같은 매핑 추종(자식이 부모보다 먼저 와도 성립).
+/// 반환: (항목별 대상, 생성될 최상위 목록).
+fn plan_dests(items: &[VirtualItem], dest_dir: &Path) -> (Vec<Option<PathBuf>>, Vec<PathBuf>) {
     let mut roots: Vec<(std::ffi::OsString, PathBuf)> = Vec::new();
-    for (i, item) in items.iter().enumerate() {
+    let mut dests = Vec::with_capacity(items.len());
+    for item in items {
         let mut comps = item.rel.iter();
-        let Some(first) = comps.next() else { continue };
+        let Some(first) = comps.next() else {
+            dests.push(None);
+            continue;
+        };
         let rest: PathBuf = comps.collect();
         let nested = !rest.as_os_str().is_empty();
         let root = match roots.iter().find(|(k, _)| k == first) {
@@ -380,19 +390,30 @@ pub unsafe fn extract_virtual_from(data: &IDataObject, dest_dir: &Path) -> Vec<P
                 uniq
             }
         };
-        let dest = if nested { root.join(&rest) } else { root };
+        dests.push(Some(if nested { root.join(&rest) } else { root }));
+    }
+    (dests, roots.into_iter().map(|(_, p)| p).collect())
+}
+
+/// 데이터 객체의 가상 파일을 `dest_dir`에 **동기** 추출 — DnD Drop(반환 전 확보 규약)·
+/// 진행 슬롯이 바쁠 때의 폴백·클라우드 스테이징(2차-ⓓ) 공용 본체.
+/// 항목별 실패 격리(부분 성공 허용).
+pub unsafe fn extract_virtual_from(data: &IDataObject, dest_dir: &Path) -> Vec<PathBuf> {
+    let items = read_descriptor(data);
+    let (dests, mut created) = plan_dests(&items, dest_dir);
+    for (i, item) in items.iter().enumerate() {
+        let Some(dest) = &dests[i] else { continue };
         if item.is_dir {
-            let _ = std::fs::create_dir_all(&dest);
+            let _ = std::fs::create_dir_all(dest);
             continue;
         }
         if let Some(parent) = dest.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if !save_contents(data, i, &dest, item.size) {
-            let _ = std::fs::remove_file(&dest); // 실패 항목의 파편 소거 후 다음 항목
+        if !save_contents(data, i, dest, item.size) {
+            let _ = std::fs::remove_file(dest); // 실패 항목의 파편 소거 후 다음 항목
         }
     }
-    let mut created: Vec<PathBuf> = roots.into_iter().map(|(_, p)| p).collect();
     created.retain(|p| p.exists()); // 전량 실패한 루트는 결과에서 제외
     created
 }
@@ -433,6 +454,303 @@ unsafe fn save_contents(data: &IDataObject, index: usize, dest: &Path, size: Opt
     };
     ReleaseStgMedium(&mut medium);
     ok
+}
+
+// ---- 워커화(X-42 2차-ⓑ) — 계획(UI 스레드) + 실행(워커) 분리 ------------------------
+//
+// OleGetClipboard의 IDataObject는 STA 구속이라 워커에서 직접 못 쓴다. 대신 UI 스레드가
+// **디스크립터 파싱·대상 계획·항목별 GetData(스트림 확보)까지** 마치고, IStream만
+// `CoMarshalInterThreadInterfaceInStream`으로 마샬링해 넘긴다 — out-of-proc 소스
+// (rdpclip 등)는 워커의 언마샬이 **원 프로세스로 직접 이어지는 프록시**가 되어
+// Read(실제 바이트 전송)가 UI 스레드 펌프에 의존하지 않는다. HGLOBAL 소스는 이미
+// 메모리에 있어 UI 스레드에서 즉시 복사한다. 진행/취소는 전송 진행 창 공용 상태
+// ([`crate::win::TransferShared`])로 — 클라우드 전송의 "같은 진행 창 재사용" 전례.
+
+/// 워커 소스 1개 — 계획 시점에 확보 완료(Send 가능).
+pub enum VSource {
+    /// 마샬 패킷(IStream)의 raw 포인터 — 워커가 `CoGetInterfaceAndReleaseStream`으로
+    /// 원 스트림 프록시를 되살린다(취소여도 정확히 1회 소비 — 패킷 누수 방지).
+    Marshaled(isize),
+    /// TYMED_HGLOBAL 소스 — 계획 시점 복사본.
+    Bytes(Vec<u8>),
+}
+
+/// 워커 잡 항목(계획 순서 = 부모 우선 보장).
+pub enum VOp {
+    Dir(PathBuf),
+    File {
+        dest: PathBuf,
+        src: VSource,
+        /// FD_FILESIZE 힌트 — 진행 총량·세그먼트 크기(미상 = 0 세그먼트).
+        size: Option<u64>,
+    },
+}
+
+/// 붙여넣기 계획 — UI 스레드가 만들고 워커가 소비.
+pub struct VPlan {
+    pub ops: Vec<VOp>,
+    /// 생성될 최상위 경로(완료 후 undo 기록·재로드 참조).
+    pub roots: Vec<PathBuf>,
+    /// 크기 힌트 합(미상 항목 제외) — 진행 총량.
+    pub total: u64,
+}
+
+/// 클립보드의 가상 파일 붙여넣기 계획(UI 스레드 전용 — STA).
+pub unsafe fn plan_clipboard_paste(dest_dir: &Path) -> Option<VPlan> {
+    let data = OleGetClipboard().ok()?;
+    plan_virtual_paste(&data, dest_dir)
+}
+
+/// 데이터 객체 기반 계획 수립(UI 스레드 전용) — 소스 확보(GetData)는 항목당 1회로
+/// 빠르고(스트림 핸들만 받는다), 실제 바이트 전송은 워커의 Read에서 일어난다.
+/// 확보 실패 항목만 격리.
+pub unsafe fn plan_virtual_paste(data: &IDataObject, dest_dir: &Path) -> Option<VPlan> {
+    let items = read_descriptor(data);
+    if items.is_empty() {
+        return None;
+    }
+    let (dests, roots) = plan_dests(&items, dest_dir);
+    let mut ops = Vec::new();
+    let mut total = 0u64;
+    for (i, item) in items.iter().enumerate() {
+        let Some(dest) = &dests[i] else { continue };
+        if item.is_dir {
+            ops.push(VOp::Dir(dest.clone()));
+            continue;
+        }
+        let Some(src) = acquire_contents(data, i, item.size) else {
+            continue; // 확보 실패 항목 격리
+        };
+        total = total.saturating_add(item.size.unwrap_or(0));
+        ops.push(VOp::File {
+            dest: dest.clone(),
+            src,
+            size: item.size,
+        });
+    }
+    (!ops.is_empty()).then_some(VPlan { ops, roots, total })
+}
+
+/// FileContents 소스 확보(UI 스레드) — IStream = 마샬 패킷화, HGLOBAL = 즉시 복사.
+unsafe fn acquire_contents(data: &IDataObject, index: usize, size: Option<u64>) -> Option<VSource> {
+    let fmt = FORMATETC {
+        cfFormat: contents_format() as u16,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: index as i32,
+        tymed: (TYMED_ISTREAM.0 | TYMED_HGLOBAL.0) as u32,
+    };
+    let Ok(mut medium) = data.GetData(&fmt) else {
+        return None;
+    };
+    let out = if medium.tymed == TYMED_ISTREAM.0 as u32 {
+        (*medium.u.pstm).as_ref().and_then(|stream| {
+            windows::Win32::System::Com::Marshal::CoMarshalInterThreadInterfaceInStream(
+                &IStream::IID,
+                stream,
+            )
+            .ok()
+            .map(|pkt| VSource::Marshaled(pkt.into_raw() as isize))
+        })
+    } else if medium.tymed == TYMED_HGLOBAL.0 as u32 {
+        let h = medium.u.hGlobal;
+        let p = GlobalLock(h) as *const u8;
+        if p.is_null() {
+            None
+        } else {
+            let cap = GlobalSize(h);
+            let len = size.map_or(cap, |s| (s as usize).min(cap));
+            let v = std::slice::from_raw_parts(p, len).to_vec();
+            let _ = GlobalUnlock(h);
+            Some(VSource::Bytes(v))
+        }
+    } else {
+        None
+    };
+    ReleaseStgMedium(&mut medium);
+    out
+}
+
+/// 계획 실행(워커 스레드 — MTA): 스트림을 읽어 파일로. 진행/취소는 `shared`, 완료는
+/// `PostMessageW(hwnd, done_msg, 전건 성공 여부, 0)`. 취소 시 쓰다 만 파일은 소거하고
+/// 잔여 세그먼트는 Skipped. 반환한 JoinHandle은 호출자가 무시해도 된다(테스트는 join).
+pub fn run_virtual_paste(
+    plan: VPlan,
+    shared: std::sync::Arc<crate::win::TransferShared>,
+    hwnd: isize,
+    done_msg: u32,
+) -> std::thread::JoinHandle<()> {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        shared.total_bytes.store(plan.total, Ordering::Relaxed);
+        {
+            let segs: Vec<crate::dialog::SegItem> = plan
+                .ops
+                .iter()
+                .filter_map(|o| match o {
+                    VOp::File { size, .. } => Some(crate::dialog::SegItem {
+                        size: size.unwrap_or(0),
+                        done: 0,
+                        status: crate::dialog::SegStatus::Pending,
+                    }),
+                    VOp::Dir(_) => None,
+                })
+                .collect();
+            *crate::win::plock(&shared.items) = segs;
+        }
+        let mut all_ok = true;
+        let mut seg = 0usize;
+        for op in plan.ops {
+            let cancelled = shared.cancel.load(Ordering::Relaxed);
+            match op {
+                VOp::Dir(d) => {
+                    if !cancelled {
+                        let _ = std::fs::create_dir_all(&d);
+                    }
+                }
+                VOp::File { dest, src, size } => {
+                    let ok = run_file_op(&shared, &dest, src, size, seg, cancelled);
+                    all_ok &= ok;
+                    seg += 1;
+                }
+            }
+        }
+        CoUninitialize();
+        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+            Some(windows::Win32::Foundation::HWND(hwnd as *mut _)),
+            done_msg,
+            windows::Win32::Foundation::WPARAM(usize::from(all_ok)),
+            windows::Win32::Foundation::LPARAM(0),
+        );
+    })
+}
+
+/// 파일 1건 처리(워커) — 취소여도 마샬 패킷은 소비한다(누수 방지). 성공이면 true.
+unsafe fn run_file_op(
+    shared: &crate::win::TransferShared,
+    dest: &Path,
+    src: VSource,
+    size: Option<u64>,
+    seg: usize,
+    cancelled: bool,
+) -> bool {
+    use crate::dialog::SegStatus;
+    use std::sync::atomic::Ordering;
+    let stream = match src {
+        VSource::Marshaled(ptr) => {
+            let pkt = IStream::from_raw(ptr as *mut _);
+            CoGetInterfaceAndReleaseStream::<_, IStream>(&pkt).ok()
+        }
+        VSource::Bytes(b) => {
+            if cancelled {
+                mark_seg(shared, seg, SegStatus::Skipped, 0);
+                return false;
+            }
+            mark_seg(shared, seg, SegStatus::Active, 0);
+            if let Some(parent) = dest.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let n = b.len() as u64;
+            let ok = std::fs::write(dest, &b).is_ok();
+            shared.done_bytes.fetch_add(n, Ordering::Relaxed);
+            mark_seg(
+                shared,
+                seg,
+                if ok { SegStatus::Done } else { SegStatus::Failed },
+                n,
+            );
+            return ok;
+        }
+    };
+    if cancelled {
+        mark_seg(shared, seg, SegStatus::Skipped, 0);
+        return false;
+    }
+    mark_seg(shared, seg, SegStatus::Active, 0);
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    *crate::win::plock(&shared.in_flight) = Some(dest.to_path_buf());
+    let ok = match &stream {
+        Some(s) => write_stream_job(s, dest, size, shared, seg),
+        None => false,
+    };
+    *crate::win::plock(&shared.in_flight) = None;
+    if ok {
+        mark_seg(shared, seg, SegStatus::Done, u64::MAX);
+    } else {
+        let _ = std::fs::remove_file(dest); // 실패/취소 파편 소거
+        let was_cancel = shared.cancel.load(Ordering::Relaxed);
+        mark_seg(
+            shared,
+            seg,
+            if was_cancel {
+                SegStatus::Skipped
+            } else {
+                SegStatus::Failed
+            },
+            0,
+        );
+    }
+    ok
+}
+
+/// 세그먼트 상태 갱신(done = u64::MAX면 size 그대로 완료 표기).
+fn mark_seg(shared: &crate::win::TransferShared, idx: usize, status: crate::dialog::SegStatus, done: u64) {
+    let mut items = crate::win::plock(&shared.items);
+    if let Some(it) = items.get_mut(idx) {
+        it.status = status;
+        it.done = if done == u64::MAX { it.size } else { done };
+    }
+}
+
+/// 스트림 → 파일(워커 — 256KiB 버퍼·청크마다 취소 확인·진행 가산). 크기 미상은 EOF까지.
+fn write_stream_job(
+    stream: &IStream,
+    dest: &Path,
+    size: Option<u64>,
+    shared: &crate::win::TransferShared,
+    seg: usize,
+) -> bool {
+    use std::io::Write;
+    use std::sync::atomic::Ordering;
+    let Ok(mut file) = std::fs::File::create(dest) else {
+        return false;
+    };
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        if shared.cancel.load(Ordering::Relaxed) {
+            return false;
+        }
+        let mut read = 0u32;
+        let hr =
+            unsafe { stream.Read(buf.as_mut_ptr().cast(), buf.len() as u32, Some(&mut read)) };
+        if read > 0 {
+            if file.write_all(&buf[..read as usize]).is_err() {
+                return false;
+            }
+            total += u64::from(read);
+            shared.done_bytes.fetch_add(u64::from(read), Ordering::Relaxed);
+            {
+                let mut items = crate::win::plock(&shared.items);
+                if let Some(it) = items.get_mut(seg) {
+                    it.done = total;
+                }
+            }
+        }
+        if hr.is_err() {
+            return false;
+        }
+        if read == 0 {
+            break; // S_FALSE 포함 = EOF
+        }
+        if size.is_some_and(|s| total >= s) {
+            break; // 크기 힌트 도달 — EOF를 안 주는 소스 방어
+        }
+    }
+    true
 }
 
 /// IStream → 파일(64KiB 버퍼) — 크기 미상은 EOF(read 0)까지. RDP는 여기서 실제 전송.
@@ -798,6 +1116,56 @@ mod tests {
             std::fs::read(dir.join("폴더").join("안쪽.bin")).unwrap(),
             vec![7u8; 100_000],
             "64KiB 버퍼 초과 스트림 왕복"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 워커 경로 종단(X-42 2차-ⓑ — 실 클립보드 비접촉): 계획(스트림 마샬링) → 워커
+    /// 실행 → 파일 내용·진행 바이트·세그먼트 상태까지. 256KiB 버퍼 초과(다중 청크)와
+    /// 하위 폴더 항목 포함. 테스트 스레드를 MTA로 초기화(앱은 UI=STA·워커=MTA —
+    /// out-of-proc 소스는 표준 마샬링이 원 프로세스로 직접 잇는다).
+    #[test]
+    fn plan_and_run_virtual_paste_worker_round_trip() {
+        use std::sync::atomic::Ordering;
+        let dir = std::env::temp_dir().join(format!("nexa_clip_vworker_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let big = vec![9u8; 300_000];
+        let fds = [
+            fd("워커.bin", FD_FILESIZE, 0, big.len() as u32),
+            fd("폴더", FD_ATTRIBUTES, FILE_ATTRIBUTE_DIRECTORY, 0),
+            fd("폴더\\작은.txt", 0, 0, 0), // 크기 미상 — EOF까지
+        ];
+        let data: IDataObject = VirtualSource {
+            descriptor: group_bytes(&fds),
+            contents: vec![Some(big.clone()), None, Some(b"ab".to_vec())],
+        }
+        .into();
+        let plan = unsafe { plan_virtual_paste(&data, &dir) }.expect("계획 수립");
+        assert_eq!(plan.roots, vec![dir.join("워커.bin"), dir.join("폴더")]);
+        assert_eq!(plan.total, big.len() as u64, "크기 미상 항목은 총량 제외");
+        let shared = crate::win::TransferShared::new_arc();
+        let h = run_virtual_paste(plan, shared.clone(), 0, 0);
+        h.join().unwrap();
+        assert_eq!(std::fs::read(dir.join("워커.bin")).unwrap(), big, "다중 청크 왕복");
+        assert_eq!(
+            std::fs::read(dir.join("폴더").join("작은.txt")).unwrap(),
+            b"ab"
+        );
+        assert_eq!(
+            shared.done_bytes.load(Ordering::Relaxed),
+            big.len() as u64 + 2
+        );
+        let items = crate::win::plock(&shared.items).clone();
+        assert_eq!(items.len(), 2, "파일 세그먼트만(폴더 제외)");
+        assert!(
+            items
+                .iter()
+                .all(|i| i.status == crate::dialog::SegStatus::Done),
+            "전 세그먼트 완료"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -156,6 +156,8 @@ pub(crate) fn post_cloud_list(hwnd_raw: isize, payload: isize) {
 const WM_APP_CLOUD_WRITE: u32 = 0x8011;
 /// 클라우드 전송 진행 틱(X-37 — 진행 창 갱신. 페이로드 없음).
 const WM_APP_CLOUD_PROGRESS: u32 = 0x8012;
+/// 가상 파일 붙여넣기 워커 완료(X-42 2차-ⓑ — wparam = 전건 성공 여부).
+const WM_APP_VPASTE: u32 = 0x8013;
 
 /// 클라우드 다운로드 워커 → UI 통지.
 pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
@@ -802,6 +804,9 @@ struct State {
     cloud_progress: Option<crate::dialog::Progress>,
     /// 그 전송의 공유 상태(워커가 바이트·세그먼트를 갱신, UI가 읽는다).
     cloud_shared: Option<Arc<TransferShared>>,
+    /// 가상 파일 붙여넣기 잡의 생성 예정 최상위(X-42 2차-ⓑ) — 완료 시 undo 기록·소거.
+    /// Some = 잡 진행 중(진행 창·취소 슬롯은 cloud_* 공용 — 동시 1개 규약).
+    vpaste_roots: Option<Vec<PathBuf>>,
     /// 폰트 슬롯(X-12): 기본/우클릭 메뉴/상태바/파일 목록 + 목록 장식 3종.
     base_font: String,
     base_font_size: i32,
@@ -1040,7 +1045,22 @@ pub(crate) struct TransferShared {
     /// 항목별 세그먼트 진행(07-21 — Plan 수신 시 고정 길이로 채워짐. 진행 창 표시용).
     pub(crate) items: Mutex<Vec<crate::dialog::SegItem>>,
     /// 현재 쓰는 중인 대상 경로(07-21) — 완료 전 더블클릭 실행/드래그 이동 차단.
-    in_flight: Mutex<Option<PathBuf>>,
+    /// (X-42 2차-ⓑ: 가상 붙여넣기 워커도 같은 규약으로 기입 — clipboard.rs)
+    pub(crate) in_flight: Mutex<Option<PathBuf>>,
+}
+
+impl TransferShared {
+    /// 빈 공유 상태(클라우드 전송·가상 붙여넣기 공용) — outcome 캡슐화 유지용 생성자.
+    pub(crate) fn new_arc() -> Arc<Self> {
+        Arc::new(TransferShared {
+            cancel: AtomicBool::new(false),
+            done_bytes: AtomicU64::new(0),
+            total_bytes: AtomicU64::new(0),
+            outcome: Mutex::new(None),
+            items: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(None),
+        })
+    }
 }
 
 struct TransferJob {
@@ -1352,6 +1372,7 @@ pub fn run() -> Result<()> {
         cloud_client_secrets: settings.cloud_client_secrets.clone(),
         cloud_progress: None,
         cloud_shared: None,
+        vpaste_roots: None,
         base_font: settings.base_font.clone(),
         base_font_size: settings.base_font_size,
         ctx_font: settings.ctx_font.clone(),
@@ -1852,20 +1873,76 @@ fn paste_dest(st: &mut State) -> PathBuf {
 
 /// 가상 파일 클립보드 붙여넣기(X-42 — RDP rdpclip·Outlook 첨부·압축 폴더):
 /// CF_HDROP(실경로) 부재 시의 폴백 — 실경로가 있으면 전송 엔진(undo 포함)이 우선.
-/// 동기 추출이라 대용량은 완료까지 창이 멈춘다(대기 커서만 — 워커·진행 창은 후속).
-/// 원본 경로가 없어 undo 미기록 · 클라우드 대상은 로컬 FS 기록 불가라 무동작(업로드 후속).
+/// 2차-ⓑ: **워커 추출** — UI 스레드는 계획·스트림 확보(마샬링)만, 실제 전송은 워커.
+/// 진행 창·취소는 클라우드 전송과 공용 슬롯("같은 진행 창 재사용" 전례 — 동시 1개).
+/// 2차-ⓓ: 클라우드 대상 = 임시 폴더 추출 후 기존 업로드 경로(start_transfer 클라우드
+/// 분기 = X-37 Upload/UploadTree — 계정 간 복사의 임시 폴더 경유 전례)로 연계.
 unsafe fn paste_virtual(hwnd: HWND, st: &mut State, dest: PathBuf) {
     use windows::Win32::UI::WindowsAndMessaging::{SetCursor, IDC_WAIT};
     if nexa_vfs::cloud_parts(&dest).is_some() {
+        // 클라우드 대상(2차-ⓓ): 스테이징 추출(동기 1차 — %TEMP%\NexaDir·OS 정리
+        // 대상 = X-38 스테이징 규약)을 거쳐 업로드 워커로. 진행 창은 업로드 구간 표시.
+        if let Ok(c) = LoadCursorW(None, IDC_WAIT) {
+            SetCursor(Some(c));
+        }
+        let staging = vpaste_staging_dir();
+        let created = crate::clipboard::extract_virtual_files(&staging);
+        if !created.is_empty() {
+            start_transfer(hwnd, st, created, dest, nexa_ops::Op::Copy);
+        }
         return;
     }
-    if let Ok(c) = LoadCursorW(None, IDC_WAIT) {
-        SetCursor(Some(c)); // 다음 WM_SETCURSOR가 원복
+    if st.cloud_shared.is_some() || st.vpaste_roots.is_some() {
+        // 진행 창·취소 슬롯 사용 중 — 동기 폴백(1차 경로·드묾, 대기 커서만)
+        if let Ok(c) = LoadCursorW(None, IDC_WAIT) {
+            SetCursor(Some(c));
+        }
+        let created = crate::clipboard::extract_virtual_files(&dest);
+        record_vpaste_undo(st, &created);
+        if !created.is_empty() {
+            reload_both(hwnd, st, "");
+        }
+        return;
     }
-    let created = crate::clipboard::extract_virtual_files(&dest);
-    if !created.is_empty() {
-        reload_both(hwnd, st, "");
+    let Some(plan) = crate::clipboard::plan_clipboard_paste(&dest) else {
+        return;
+    };
+    st.vpaste_roots = Some(plan.roots.clone());
+    let shared = new_cloud_shared();
+    if st.transfer_close_ms > 0 {
+        st.cloud_progress = crate::dialog::Progress::open(
+            hwnd,
+            &tr("ops.progressTitle"),
+            &tr("ops.progressLabel"),
+            &st.dlg_font,
+        );
     }
+    begin_cloud_progress(hwnd, st, shared.clone());
+    let _ = crate::clipboard::run_virtual_paste(plan, shared, hwnd.0 as isize, WM_APP_VPASTE);
+}
+
+/// 가상 붙여넣기 스테이징 폴더(2차-ⓓ) — 잡별 격리(dnd 스테이징과 같은 뿌리).
+fn vpaste_staging_dir() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join("NexaDir").join(format!(
+        "vpaste-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// 붙여넣기 생성물 undo 기록(X-42 2차-ⓒ) — 존재하는 최상위만(전량 실패 = 무기록).
+unsafe fn record_vpaste_undo(st: &mut State, created: &[PathBuf]) {
+    let existing: Vec<PathBuf> = created.iter().filter(|p| p.exists()).cloned().collect();
+    if existing.is_empty() {
+        return;
+    }
+    let n = existing.len().to_string();
+    st.history.push(Box::new(VPasteOp {
+        paths: existing,
+        description: trf("op.copyCount", &[&n]),
+    }));
 }
 
 /// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식) — 다중 선택=개수·단일=속성·없음=현재 폴더.
@@ -2676,6 +2753,7 @@ unsafe fn handle_virtual_drop(
     let created = crate::clipboard::extract_virtual_from(data, &dest);
     if !created.is_empty() {
         if let Some(st) = state_of(hwnd) {
+            record_vpaste_undo(st, &created); // 2차-ⓒ — 드롭 생성물도 Ctrl+Z 대상
             reload_both(hwnd, st, "");
         }
     }
@@ -2815,6 +2893,47 @@ impl nexa_ops::history::ReversibleOp for DeleteBatchOp {
         } else {
             Err(nexa_ops::history::OpError::Failed(existing.len()))
         }
+    }
+}
+
+/// 가상 파일 붙여넣기 생성물(X-42 2차-ⓒ) — 원본 경로가 없어 재복사가 불가하므로
+/// [`DeleteBatchOp`]의 **역방향**으로 기록한다: undo = 생성물 휴지통 삭제 ·
+/// redo = 셸 undelete 복원(휴지통 왕복 — M3-3 규약 재사용).
+struct VPasteOp {
+    paths: Vec<PathBuf>,
+    description: String,
+}
+
+impl nexa_ops::history::ReversibleOp for VPasteOp {
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn undo(&mut self) -> std::result::Result<(), nexa_ops::history::OpError> {
+        let existing: Vec<PathBuf> = self
+            .paths
+            .iter()
+            .filter(|p| nexa_ops::exists(p))
+            .cloned()
+            .collect();
+        if existing.is_empty() {
+            return Ok(());
+        }
+        if unsafe { delete_to_recycle_bin(&existing) } {
+            Ok(())
+        } else {
+            Err(nexa_ops::history::OpError::Failed(existing.len()))
+        }
+    }
+
+    fn redo(&mut self) -> std::result::Result<(), nexa_ops::history::OpError> {
+        let restored = crate::recycle::restore_by_original_paths(&self.paths);
+        if restored < self.paths.len() {
+            return Err(nexa_ops::history::OpError::Failed(
+                self.paths.len() - restored,
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -3576,14 +3695,7 @@ unsafe fn finish_cloud_progress(hwnd: HWND, st: &mut State, note: &str) {
 
 /// 클라우드 전송용 공유 상태 1개(진행 창과 워커가 공유).
 fn new_cloud_shared() -> Arc<TransferShared> {
-    Arc::new(TransferShared {
-        cancel: AtomicBool::new(false),
-        done_bytes: AtomicU64::new(0),
-        total_bytes: AtomicU64::new(0),
-        outcome: Mutex::new(None),
-        items: Mutex::new(Vec::new()),
-        in_flight: Mutex::new(None),
-    })
+    TransferShared::new_arc()
 }
 
 /// 열려 있는 트리에서 이 경로의 `(폴더 여부, 바이트 크기)`를 읽는다.
@@ -7563,6 +7675,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         m if m == WM_APP_CLOUD_PROGRESS => {
             if let Some(st) = state_of(hwnd) {
                 on_cloud_progress(hwnd, st);
+            }
+            LRESULT(0)
+        }
+        // 가상 파일 붙여넣기 워커 완료(X-42 2차-ⓑ) — 진행 창 마감·undo 기록(ⓒ)·재로드.
+        m if m == WM_APP_VPASTE => {
+            if let Some(st) = state_of(hwnd) {
+                let cancelled = st
+                    .cloud_shared
+                    .as_ref()
+                    .is_some_and(|s| s.cancel.load(Ordering::Relaxed));
+                let note = if wparam.0 == 0 && cancelled {
+                    tr("ops.canceled")
+                } else {
+                    tr("ops.doneClosing") // 부분 실패는 세그먼트 색(적)이 표시
+                };
+                finish_cloud_progress(hwnd, st, &note);
+                let roots = st.vpaste_roots.take().unwrap_or_default();
+                record_vpaste_undo(st, &roots);
+                reload_both(hwnd, st, "");
             }
             LRESULT(0)
         }
