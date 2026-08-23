@@ -111,10 +111,15 @@ const WATCH_DEBOUNCE_MS: u32 = 300;
 const WATCH_MAX_MS: u64 = 1_000;
 /// 폴더 변경 프로브 폴링(08-11 사용자 QA — [`crate::fsprobe`]). watcher 통지가
 /// **오지 않는** 경로(클라우드 가상 드라이브·네트워크·통지 유실)의 유일한 갱신 계기다.
-/// **창이 활성일 때만** 돌린다 — 비활성화 시 `KillTimer`(유휴 백그라운드 0% 규율 유지,
-/// 안 보는 동안의 낡음은 다음 활성화의 즉시 프로브가 해소).
+/// **개정(08-23 사용자 확정 — X-44 3차)**: 종전 "활성일 때만"에서 **창이 보이는 동안은
+/// 비활성이어도 유지**로 — 원격 생성분은 동기화가 내려오기 전까지 디스크에 없어
+/// 통지가 원리적으로 없고, 사용자는 옆 창에서 작업하며 비활성 앱의 갱신을 본다.
+/// 비활성은 감속([`FSPOLL_IDLE_MS`] — O(1) stat 스윕 + 상한 열거라 비용 무시 수준),
+/// **최소화 시에만 정지**(안 보이면 갱신 무의미 — 유휴 백그라운드 0% 규율은 유지).
 const TIMER_FSPOLL: usize = 14;
 const FSPOLL_MS: u32 = 3_000;
+/// 비활성(보이는 창) 폴링 주기 — 활성 3s 대비 감속(성능 원칙과 비활성 갱신의 절충).
+const FSPOLL_IDLE_MS: u32 = 10_000;
 /// 터미널 출력/종료 통지(M4-3) — wparam=패널(|EXIT_FLAG), lparam=세대.
 const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
 /// 파일별 아이콘 워커 결과(M4 QA 07-14 — WPARAM=Box<icons::shell::LoadResult>).
@@ -6475,7 +6480,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if wparam.0 != 0 {
                     refresh_on_return(hwnd, st);
                 } else {
-                    let _ = KillTimer(Some(hwnd), TIMER_FSPOLL);
+                    // 비활성 = 폴링 **감속 유지**(X-44 3차 — 사용자 확정 08-23):
+                    // 옆 창에서 클라우드에 만든 파일이 동기화로 내려오는 순간을
+                    // 비활성 상태에서도 잡는다(원격 생성은 내려오기 전까지 디스크에
+                    // 없어 watcher 통지가 원리적으로 없다). 정지는 최소화에서만.
+                    SetTimer(Some(hwnd), TIMER_FSPOLL, FSPOLL_IDLE_MS, None);
                 }
             }
             LRESULT(0)
