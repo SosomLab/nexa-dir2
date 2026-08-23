@@ -59,6 +59,34 @@ fn probe_has_visible_child(path: &std::path::Path, show_hidden: bool, show_dot: 
     false
 }
 
+/// 프로브를 생략할 느린 경로인가(X-43 β) — UNC·원격 드라이브·광학은 `read_dir`가
+/// 수십 ms~수 초(타임아웃)일 수 있어 **페인트 경로에서 프로브하지 않는다**.
+/// 생략 = 글리프 유지(안전 방향 — 기능 퇴행은 "빈 폴더인데 ▸가 보인다"뿐).
+/// 리무버블(USB)은 로컬 FS라 프로브 허용. 판정 자체는 문자열+GetDriveType 1회로
+/// 저렴하고, 호출자가 NodeId 캐시에 결과를 담아 폴더당 1회만 온다.
+#[cfg(windows)]
+fn probe_skip_slow(path: &std::path::Path) -> bool {
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    let s = path.to_string_lossy();
+    if s.starts_with("\\\\") {
+        return true; // UNC = 원격 공유
+    }
+    let b = s.as_bytes();
+    if b.len() >= 2 && b[1] == b':' {
+        const DRIVE_REMOTE: u32 = 4;
+        const DRIVE_CDROM: u32 = 5;
+        let root = [u16::from(b[0]), u16::from(b':'), u16::from(b'\\'), 0];
+        let t = unsafe { GetDriveTypeW(windows::core::PCWSTR(root.as_ptr())) };
+        return t == DRIVE_REMOTE || t == DRIVE_CDROM;
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn probe_skip_slow(_path: &std::path::Path) -> bool {
+    false
+}
+
 /// Windows 숨김 속성(FILE_ATTRIBUTE_HIDDEN) — 비Windows는 점 파일 규약만이라 false.
 #[cfg(windows)]
 fn entry_hidden(e: &std::fs::DirEntry) -> bool {
@@ -176,6 +204,9 @@ impl TreeSource {
         }
         let (show_hidden, show_dot) = self.tree.filter_flags();
         let v = match self.tree.node_path(id) {
+            // 느린 경로(네트워크·광학)는 프로브 생략 = 글리프 유지(X-43 β —
+            // 페인트 경로 60fps 보장이 판정 정밀보다 우선)
+            Some(p) if probe_skip_slow(p) => true,
             Some(p) => probe_has_visible_child(p, show_hidden, show_dot),
             None => true,
         };
