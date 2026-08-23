@@ -71,7 +71,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "nexa-app"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "nexa-core",
  "nexa-gui",
@@ -87,26 +87,26 @@ dependencies = [
 
 [[package]]
 name = "nexa-core"
-version = "0.16.0"
+version = "0.17.0"
 
 [[package]]
 name = "nexa-gui"
-version = "0.16.0"
+version = "0.17.0"
 
 [[package]]
 name = "nexa-ops"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "regex-lite",
 ]
 
 [[package]]
 name = "nexa-term"
-version = "0.16.0"
+version = "0.17.0"
 
 [[package]]
 name = "nexa-tree"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "nexa-core",
  "nexa-vfs",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "nexa-vfs"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "nexa-core",
 ]
