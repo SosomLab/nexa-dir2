@@ -29,6 +29,8 @@ pub struct NavCtx {
     pub show_hidden: bool,
     pub show_dotfiles: bool,
     pub tz: i32,
+    /// 빈 폴더 글리프 억제(X-43 — 전역 설정. 탭 보정과 무관하게 통과).
+    pub hide_empty_glyph: bool,
 }
 
 /// 탭 = 리스트 뷰 상태 + 독립 back/forward 히스토리 + **영속 펼침 집합**(원본 F18 — X-4).
@@ -138,8 +140,9 @@ impl Panel {
     pub fn new(tree: Tree, ctx: NavCtx, m: PanelMetrics, columns: Vec<Column>) -> Panel {
         let root = tree.root_path().to_path_buf();
         let mut inv = Invalidations::default();
-        let mut rows =
-            VirtualRows::new(TreeSource::new(tree, ctx.tz), m.row_h, m.pad_x, m.indent_w);
+        let mut src = TreeSource::new(tree, ctx.tz);
+        src.set_hide_empty_markers(ctx.hide_empty_glyph); // X-43
+        let mut rows = VirtualRows::new(src, m.row_h, m.pad_x, m.indent_w);
         rows.set_columns(columns.clone(), &mut inv);
         let mut p = Panel {
             tabbar: TabBar::new(m.row_h, m.pad_x),
@@ -221,8 +224,9 @@ impl Panel {
         Self::seed_expanded(&mut p.tabs[0], &first_exp);
         for (tree, exp) in valid {
             let root = tree.root_path().to_path_buf();
-            let mut rows =
-                VirtualRows::new(TreeSource::new(tree, ctx.tz), m.row_h, m.pad_x, m.indent_w);
+            let mut src = TreeSource::new(tree, ctx.tz);
+            src.set_hide_empty_markers(ctx.hide_empty_glyph); // X-43
+            let mut rows = VirtualRows::new(src, m.row_h, m.pad_x, m.indent_w);
             rows.set_columns(columns.clone(), &mut inv);
             let mut tab = Tab {
                 rows,
@@ -867,6 +871,7 @@ impl Panel {
             show_hidden: t.show_hidden,
             show_dotfiles: t.show_dotfiles,
             tz: base.tz,
+            hide_empty_glyph: base.hide_empty_glyph,
         }
     }
 
@@ -1108,6 +1113,15 @@ impl Panel {
     /// 세션 저장 요청 수거(1회성 — 호스트 update_status가 폴링해 디바운스 타이머 무장).
     pub fn take_session_dirty(&mut self) -> bool {
         std::mem::take(&mut self.session_dirty)
+    }
+
+    /// 빈 폴더 글리프 억제 토글(X-43 — 설정 창): 전 탭 즉시. 새 소스는 open_source
+    /// 관문이 NavCtx로 적용하므로 패널 보관 값은 없다(호스트 State가 SSOT).
+    pub fn set_hide_empty_glyph(&mut self, on: bool, inv: &mut Invalidations) {
+        for t in &mut self.tabs {
+            t.rows.source_mut().set_hide_empty_markers(on);
+            inv.push(t.rows.bounds());
+        }
     }
 
     /// 새로 만든 소스에 보관된 정렬·타입어헤드 옵션 적용(탐색·재로드·새 탭 공통 — 07-15).
@@ -1477,7 +1491,11 @@ fn nav_buttons() -> Vec<ToolButton> {
 /// 현재 필터로 경로를 연다. 실패(권한 등) 시 `None`(오류 격리 — 호출자가 위치 유지).
 fn open_source(path: &Path, ctx: NavCtx) -> Option<TreeSource> {
     match Tree::open_filtered(path, ctx.show_hidden, ctx.show_dotfiles) {
-        Ok(t) => Some(TreeSource::new(t, ctx.tz)),
+        Ok(t) => {
+            let mut s = TreeSource::new(t, ctx.tz);
+            s.set_hide_empty_markers(ctx.hide_empty_glyph); // X-43 — 모든 열거의 관문
+            Some(s)
+        }
         Err(e) => {
             eprintln!("{} 열기 실패: {e}", path.display());
             None
@@ -1506,6 +1524,7 @@ mod tests {
             show_hidden: true,
             show_dotfiles: true,
             tz: 0,
+            hide_empty_glyph: false, // 테스트는 현행 마커 기준(X-43 억제는 source 테스트)
         }
     }
 

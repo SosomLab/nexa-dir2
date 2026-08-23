@@ -635,6 +635,19 @@ impl Tree {
         self.nodes.get(id as usize).map(|n| n.expanded)
     }
 
+    /// 폴더의 **열거 완료된** 가시(필터 통과) 자식 수 — 미열거 폴더/파일이면 `None`.
+    /// 빈 폴더 글리프 억제(X-43)의 실측 경로: 열거된 폴더는 필터 반영 `children`이 곧 답.
+    pub fn loaded_child_count(&self, id: NodeId) -> Option<usize> {
+        let n = self.nodes.get(id as usize)?;
+        (n.is_dir() && n.loaded).then_some(n.children.len())
+    }
+
+    /// 현재 가시성 필터 `(show_hidden, show_dotfiles)` — 호스트의 미열거 폴더
+    /// 프로브(X-43)가 열거와 같은 규칙을 적용하기 위한 노출.
+    pub fn filter_flags(&self) -> (bool, bool) {
+        (self.filter.show_hidden, self.filter.show_dotfiles)
+    }
+
     // ── 선택 (OrderedSet, 교차 폴더 허용) ────────────────────────
 
     /// 단일/토글 선택 + anchor 갱신.

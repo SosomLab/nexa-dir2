@@ -46,6 +46,9 @@ impl Marker {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RowItem {
     pub text: String,
+    /// 폴더 행인가 — `marker`와 분리(X-43): 빈 폴더는 글리프가 억제돼도(marker=None)
+    /// 폴더 서식(굵게·리네임 전체 선택)은 유지해야 한다.
+    pub is_dir: bool,
     /// 트리 깊이(들여쓰기 단위 수).
     pub depth: u32,
     pub marker: Marker,
@@ -400,7 +403,7 @@ impl<S: RowSource> VirtualRows<S> {
         self.caret = Some(row);
         self.scroll_into_view(row);
         self.press_pending = None; // 리네임 진입 — 클릭 확정 붕괴 취소
-        let is_dir = self.src.row(row).marker != Marker::None;
+        let is_dir = self.src.row(row).is_dir; // marker 아님(X-43 — 빈 폴더도 폴더 규약)
         let sel_to = if is_dir {
             initial.chars().count()
         } else {
@@ -997,8 +1000,10 @@ impl<S: RowSource> VirtualRows<S> {
         }
         if name_x < cell.right() {
             let name_rc = Rect::new(name_x, cell.y, cell.right() - name_x, cell.h);
-            // 폴더 이름 굵게(X-12) — 마커 있는 행 = 폴더(파일은 마커 None)
-            let folder_bold = self.font_decor.0 && item.marker != Marker::None;
+            // 폴더 이름 굵게(X-12) — 폴더 행만(트리 보기 한정 = 현행 유지. X-43:
+            // 빈 폴더는 marker가 억제되므로 is_dir로 판정)
+            let folder_bold =
+                self.font_decor.0 && item.is_dir && self.mode == ViewMode::Tree;
             if folder_bold {
                 ctx.select_font(crate::FontSlot::List, true, false);
             }
@@ -1190,7 +1195,7 @@ impl<S: RowSource> VirtualRows<S> {
             ctx.fill_rect(cell, bg);
             // 아이콘(라지 32px — "L|" 키 네임스페이스, icons.rs 로더 분기)
             let item = self.src.row(idx);
-            let folder_bold = self.font_decor.0 && item.marker != Marker::None; // X-12
+            let folder_bold = self.font_decor.0 && item.is_dir; // X-12(판정은 X-43 is_dir)
             let ix = cell.x + self.pad_x;
             let iy = cell.y + (cell.h - isz) / 2;
             if let Some((key, hint)) = self.src.icon(idx) {
@@ -2091,6 +2096,7 @@ mod tests {
         fn row(&self, index: usize) -> RowItem {
             RowItem {
                 text: format!("row-{index}"),
+                is_dir: false,
                 depth: 0,
                 marker: Marker::None,
             }
@@ -2119,6 +2125,7 @@ mod tests {
         fn row(&self, index: usize) -> RowItem {
             RowItem {
                 text: format!("row-{index}"),
+                is_dir: index == 0,
                 depth: u32::from(index > 0),
                 marker: if index == 0 {
                     if self.expanded {
@@ -2364,6 +2371,7 @@ mod tests {
         fn row(&self, index: usize) -> RowItem {
             RowItem {
                 text: self.name(index),
+                is_dir: false,
                 depth: 0,
                 marker: Marker::None,
             }
@@ -2781,6 +2789,7 @@ mod tests {
             fn row(&self, index: usize) -> RowItem {
                 RowItem {
                     text: format!("g-{index}"),
+                    is_dir: false,
                     depth: 0,
                     marker: Marker::None,
                 }
@@ -2849,6 +2858,7 @@ mod tests {
                 if index == 0 {
                     RowItem {
                         text: "dir".into(),
+                        is_dir: true,
                         depth: 0,
                         marker: if self.expanded {
                             Marker::Expanded
@@ -2859,6 +2869,7 @@ mod tests {
                 } else {
                     RowItem {
                         text: "file".into(),
+                        is_dir: false,
                         depth: 0,
                         marker: Marker::None,
                     }

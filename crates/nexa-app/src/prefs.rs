@@ -77,6 +77,8 @@ pub struct PrefValues {
     pub dock: bool,
     /// 폴더 우선 정렬(G-13).
     pub sort_folders_first: bool,
+    /// 빈 폴더 글리프 억제(X-43 — 기본 켬).
+    pub hide_empty_glyph: bool,
     /// 보기 옵션 토글 적용 범위("global"|"panel"|"tab" — 08-02).
     pub view_scope: String,
     /// 대소문자 구분 정렬(07-15).
@@ -174,6 +176,8 @@ const F_TRANSFER_CLOSE: u32 = 38;
 const F_DND_HOVER: u32 = 39;
 /// 보기 옵션(숨김/Dot/폴더 우선) 토글 적용 범위(08-02).
 const F_VIEW_SCOPE: u32 = 40;
+/// 빈 폴더 글리프 억제(X-43 — 08-23).
+const F_HIDE_EMPTY_GLYPH: u32 = 41;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -469,6 +473,13 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.sortFoldersFirst.desc",
             kind: Kind::CheckBox,
             field: F_FOLDERS_FIRST,
+        },
+        Entry {
+            cat: "list",
+            label_key: "pref.hideEmptyGlyph",
+            desc_key: "pref.hideEmptyGlyph.desc",
+            kind: Kind::CheckBox,
+            field: F_HIDE_EMPTY_GLYPH,
         },
         Entry {
             cat: "list",
@@ -1031,6 +1042,7 @@ impl PrefState {
                             F_DOTFILES => self.values.show_dotfiles,
                             F_DOCK => self.values.dock,
                             F_FOLDERS_FIRST => self.values.sort_folders_first,
+                            F_HIDE_EMPTY_GLYPH => self.values.hide_empty_glyph,
                             F_TERM_WRAP => self.values.term_wrap,
                             F_CASE_SORT => self.values.sort_case_sensitive,
                             F_TA_SPECIAL => self.values.typeahead_special,
@@ -1361,6 +1373,7 @@ impl PrefState {
             F_DOTFILES => v.show_dotfiles != d.show_dotfiles,
             F_DOCK => v.dock != d.dock,
             F_FOLDERS_FIRST => v.sort_folders_first != d.sort_folders_first,
+            F_HIDE_EMPTY_GLYPH => v.hide_empty_glyph != d.hide_empty_glyph,
             F_TERM_WRAP => v.term_wrap != d.term_wrap,
             F_TERM_COLS => v.term_cols != d.term_cols,
             F_COL_AUTOFIT => v.col_autofit_max != d.col_autofit_max,
@@ -1489,15 +1502,16 @@ impl PrefState {
                 F_LIST_SIZE => {
                     self.values.list_font_size = get_text(hw).trim().parse().unwrap_or(12)
                 }
-                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_TERM_WRAP | F_CASE_SORT
-                | F_TA_SPECIAL | F_TA_SPACE | F_TA_BS | F_FOLDER_BOLD | F_HDR_BOLD
-                | F_HDR_ITALIC => {
+                F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_HIDE_EMPTY_GLYPH
+                | F_TERM_WRAP | F_CASE_SORT | F_TA_SPECIAL | F_TA_SPACE | F_TA_BS
+                | F_FOLDER_BOLD | F_HDR_BOLD | F_HDR_ITALIC => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
                         F_DOTFILES => self.values.show_dotfiles = on,
                         F_DOCK => self.values.dock = on,
                         F_FOLDERS_FIRST => self.values.sort_folders_first = on,
+                        F_HIDE_EMPTY_GLYPH => self.values.hide_empty_glyph = on,
                         F_TERM_WRAP => self.values.term_wrap = on,
                         F_CASE_SORT => self.values.sort_case_sensitive = on,
                         F_TA_SPECIAL => self.values.typeahead_special = on,

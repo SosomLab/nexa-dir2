@@ -5,7 +5,7 @@
 use crate::i18n::{tr, trf};
 use nexa_core::FileKind;
 use nexa_gui::widgets::{Marker, RowItem, RowSource, SelectOp};
-use nexa_tree::{FindScope, SelectMode, SortKey, SortSpec, Tree};
+use nexa_tree::{FindScope, NodeId, SelectMode, SortKey, SortSpec, Tree};
 
 /// 컬럼 key(Column.key ↔ 이 상수). 0 = 트리 컬럼 관례(nexa-gui).
 pub const COL_NAME: u32 = 0;
@@ -33,6 +33,42 @@ pub struct TreeSource {
     /// 드라이브 용량 (전체, 여유) — 가상 루트(내 PC)일 때만 채움(X-17 타일/컬럼).
     /// 행 이름(`C:\`) → 값. 소스 생성 시 1회 조회(재로드 = 새 소스 = 갱신).
     drive_space: std::collections::HashMap<String, (u64, u64)>,
+    /// 빈 폴더 글리프 억제(X-43 — 설정 `hide_empty_glyph`): 현재 필터로 보여줄 자식이
+    /// 없는 폴더는 펼침 마커를 그리지 않는다. 기본 false(현행) — 패널이 설정값 주입.
+    hide_empty_markers: bool,
+    /// 미열거 폴더의 "가시 자식 있음" 프로브 결과 캐시(X-43 — 페인트 핫패스 IO 1회화).
+    /// 소스 수명 = 캐시 수명(재로드·필터 변경 = 새 소스 = 자연 무효화).
+    probe_cache: std::cell::RefCell<std::collections::HashMap<NodeId, bool>>,
+}
+
+/// 폴더에 필터(숨김·점)를 통과하는 자식이 하나라도 있는가 — `read_dir` 조기 종료.
+/// 열 수 없으면(권한·클라우드 센티널 경로 등) `true`(모르면 글리프를 유지한다).
+fn probe_has_visible_child(path: &std::path::Path, show_hidden: bool, show_dot: bool) -> bool {
+    let Ok(rd) = std::fs::read_dir(path) else {
+        return true;
+    };
+    for e in rd.flatten() {
+        if !show_dot && e.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if !show_hidden && entry_hidden(&e) {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+/// Windows 숨김 속성(FILE_ATTRIBUTE_HIDDEN) — 비Windows는 점 파일 규약만이라 false.
+#[cfg(windows)]
+fn entry_hidden(e: &std::fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    e.metadata().map(|m| m.file_attributes() & 0x2 != 0).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn entry_hidden(_e: &std::fs::DirEntry) -> bool {
+    false
 }
 
 /// 드라이브 용량 조회(Windows — GetDiskFreeSpaceExW). 비Windows/실패 = None.
@@ -91,6 +127,8 @@ impl TreeSource {
             // Tree 기본(name_asc)과 일치 — 옵션 토글 시 빈 키로 열거 순서 퇴행 방지(07-15)
             sort_keys: vec![(SortKey::Name, false)],
             drive_space: std::collections::HashMap::new(),
+            hide_empty_markers: false,
+            probe_cache: Default::default(),
         };
         // 내 PC(X-17): 드라이브 용량 1회 조회(타일 용량 바·전체/여유 컬럼)
         if nexa_vfs::is_virtual_root(src.tree.root_path()) {
@@ -116,6 +154,33 @@ impl TreeSource {
     /// 타입어헤드 검색 범위(설정 — 07-15).
     pub fn set_find_scope(&mut self, scope: FindScope) {
         self.find_scope = scope;
+    }
+
+    /// 빈 폴더 글리프 억제 토글(X-43 — 설정). 켜고 끌 때 프로브 캐시를 비워
+    /// 꺼진 동안의 FS 변화가 다음 페인트에서 재실측되게 한다.
+    pub fn set_hide_empty_markers(&mut self, on: bool) {
+        if self.hide_empty_markers != on {
+            self.hide_empty_markers = on;
+            self.probe_cache.borrow_mut().clear();
+        }
+    }
+
+    /// 폴더에 현재 보기(필터)로 보여줄 자식이 있는가(X-43) — 마커 판정 전용.
+    /// 열거 완료 폴더 = 트리 실측(필터 반영 children) · 미열거 = 프로브 1회 후 캐시.
+    fn dir_has_visible_children(&self, id: NodeId) -> bool {
+        if let Some(n) = self.tree.loaded_child_count(id) {
+            return n > 0;
+        }
+        if let Some(&v) = self.probe_cache.borrow().get(&id) {
+            return v;
+        }
+        let (show_hidden, show_dot) = self.tree.filter_flags();
+        let v = match self.tree.node_path(id) {
+            Some(p) => probe_has_visible_child(p, show_hidden, show_dot),
+            None => true,
+        };
+        self.probe_cache.borrow_mut().insert(id, v);
+        v
     }
 
     /// 대소문자 구분 정렬 토글(사용자 요청 07-15) — 즉시 재정렬.
@@ -154,9 +219,14 @@ impl RowSource for TreeSource {
         match self.tree.row(index) {
             Some(r) => RowItem {
                 text: display_name(r.name),
+                is_dir: r.has_children,
                 depth: r.depth,
                 marker: if r.has_children {
-                    if r.expanded {
+                    // 빈 폴더 글리프 억제(X-43) — 현재 보기로 보여줄 자식이 없으면
+                    // 마커 없음(탐색기 트리 관례). 필터 변경 = 새 소스 = 재판정.
+                    if self.hide_empty_markers && !self.dir_has_visible_children(r.id) {
+                        Marker::None
+                    } else if r.expanded {
                         Marker::Expanded
                     } else {
                         Marker::Collapsed
@@ -168,6 +238,7 @@ impl RowSource for TreeSource {
             // 페인트 중 행 수가 바뀌는 일은 없지만(단일 스레드) 방어적 빈 행
             None => RowItem {
                 text: String::new(),
+                is_dir: false,
                 depth: 0,
                 marker: Marker::None,
             },
@@ -465,6 +536,61 @@ mod tests {
 
         assert!(s.toggle(0)); // 접기
         assert_eq!(s.len(), 3);
+    }
+
+    /// 빈 폴더 글리프 억제(X-43): 현재 필터로 보여줄 자식이 없는 폴더 = 마커 없음,
+    /// is_dir(폴더 서식)은 유지 · 필터가 내용을 드러내면 마커 복귀 · 토글 즉시 반영.
+    #[test]
+    fn hide_empty_markers_suppresses_by_current_filter() {
+        let base =
+            std::env::temp_dir().join(format!("nexa_app_src_hide_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("a_empty")).unwrap();
+        fs::create_dir_all(base.join("b_dotonly")).unwrap();
+        fs::write(base.join("b_dotonly/.dot"), b"x").unwrap();
+        fs::create_dir_all(base.join("c_full")).unwrap();
+        fs::write(base.join("c_full/a.txt"), b"x").unwrap();
+
+        // 점 파일 숨김 필터 — 기본(억제 꺼짐)은 현행: 전부 Collapsed
+        let mut s =
+            TreeSource::new(Tree::open_filtered(&base, true, false).unwrap(), 0);
+        assert_eq!(s.row(0).marker, Marker::Collapsed, "억제 꺼짐 = 현행 유지");
+        assert!(s.row(0).is_dir);
+
+        s.set_hide_empty_markers(true);
+        assert_eq!(s.row(0).marker, Marker::None, "빈 폴더 = 마커 억제");
+        assert!(s.row(0).is_dir, "마커가 억제돼도 폴더 서식은 유지(X-43)");
+        assert_eq!(s.row(1).marker, Marker::None, "점 파일뿐 = 현재 보기 기준 빔");
+        assert_eq!(s.row(2).marker, Marker::Collapsed, "가시 자식 있음 = 마커 유지");
+
+        // 필터가 내용을 드러내면(점 파일 표시) 마커 복귀 — 새 소스(재열거 규약)
+        let mut s2 = TreeSource::new(Tree::open_filtered(&base, true, true).unwrap(), 0);
+        s2.set_hide_empty_markers(true);
+        assert_eq!(s2.row(1).marker, Marker::Collapsed, "보기 변경 = 글리프 복귀");
+
+        // 설정을 다시 끄면 즉시 현행 복귀(캐시 소거 경유)
+        s.set_hide_empty_markers(false);
+        assert_eq!(s.row(0).marker, Marker::Collapsed);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// 열거 완료(펼침) 폴더는 프로브 없이 트리 실측으로 판정(X-43) —
+    /// 펼쳤는데 빈 폴더(가시 자식 0)는 억제 켜짐에서 마커 없음.
+    #[test]
+    fn hide_empty_markers_uses_loaded_children_after_expand() {
+        let base =
+            std::env::temp_dir().join(format!("nexa_app_src_hide2_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("empty")).unwrap();
+        let mut s = TreeSource::new(Tree::open(&base).unwrap(), 0);
+        assert!(s.toggle(0), "빈 폴더 펼침 = 마커 갱신");
+        s.set_hide_empty_markers(true);
+        assert_eq!(
+            s.row(0).marker,
+            Marker::None,
+            "열거 완료·가시 자식 0 = 억제(프로브 아닌 실측)"
+        );
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

@@ -846,6 +846,9 @@ struct State {
     /// 프레스에서 무장·해제/ESC에서 소거. 드래그 내내 이동하는 탭은 잡은 1개뿐이므로
     /// 이 좌표만으로 어느 패널에 가 있든 원위치 복원이 가능하다.
     tab_drag_undo: Option<(usize, usize)>,
+    /// 빈 폴더 글리프 억제(X-43 — 사용자 요청 08-23·기본 켬): 현재 보기로 보여줄
+    /// 자식이 없는 폴더는 펼침 글리프를 그리지 않는다.
+    hide_empty_glyph: bool,
     /// 대소문자 구분 정렬·Alt+↑ 자동 선택 배치(사용자 요청 07-15 — 설정 영속).
     sort_case_sensitive: bool,
     nav_up_align: String,
@@ -1054,6 +1057,7 @@ impl State {
             show_hidden: self.show_hidden,
             show_dotfiles: self.show_dotfiles,
             tz: self.tz,
+            hide_empty_glyph: self.hide_empty_glyph,
         }
     }
     fn active_panel(&mut self) -> &mut Panel {
@@ -1174,6 +1178,7 @@ pub fn run() -> Result<()> {
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
         tz,
+        hide_empty_glyph: settings.hide_empty_glyph,
     };
     let m = panel_metrics(96); // 실제 DPI는 WM_NCCREATE에서 반영
     let fallback = root_path();
@@ -1376,6 +1381,7 @@ pub fn run() -> Result<()> {
         sort_folders_first: settings.sort_folders_first,
         view_scope: settings.view_scope.clone(),
         tab_drag_undo: None,
+        hide_empty_glyph: settings.hide_empty_glyph,
         sort_case_sensitive: settings.sort_case_sensitive,
         nav_up_align: settings.nav_up_align.clone(),
         tab_dblclick: settings.tab_dblclick.clone(),
@@ -5317,6 +5323,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 dock: st.panels[0].dock_visible(),
                 sort_folders_first: st.sort_folders_first,
                 view_scope: st.view_scope.clone(),
+                hide_empty_glyph: st.hide_empty_glyph,
                 sort_case_sensitive: st.sort_case_sensitive,
                 nav_up_align: st.nav_up_align.clone(),
                 tab_dblclick: st.tab_dblclick.clone(),
@@ -5570,6 +5577,14 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
             ),
             &mut inv,
         );
+        flush_invalidations(hwnd, &mut inv);
+    }
+    // 빈 폴더 글리프 억제(X-43) — 전 탭 즉시(새 소스는 open_source 관문이 적용)
+    if v.hide_empty_glyph != st.hide_empty_glyph {
+        st.hide_empty_glyph = v.hide_empty_glyph;
+        let mut inv = Invalidations::default();
+        st.panels[0].set_hide_empty_glyph(v.hide_empty_glyph, &mut inv);
+        st.panels[1].set_hide_empty_glyph(v.hide_empty_glyph, &mut inv);
         flush_invalidations(hwnd, &mut inv);
     }
     // 대소문자 구분 정렬 토글(07-15) — 전 탭 즉시 재정렬
@@ -5850,6 +5865,7 @@ fn current_settings(st: &State) -> Settings {
         dock: st.panels[0].dock_visible(),
         sort_folders_first: st.sort_folders_first,
         view_scope: st.view_scope.clone(),
+        hide_empty_glyph: st.hide_empty_glyph,
         sort_case_sensitive: st.sort_case_sensitive,
         nav_up_align: st.nav_up_align.clone(),
         tab_dblclick: st.tab_dblclick.clone(),

@@ -117,6 +117,9 @@ pub struct Settings {
     /// "global"(전체) | "panel"(좌-우 패널 — 기본) | "tab"(활성 탭).
     /// 값 자체는 탭별 보관·세션 영속([`PanelSession::views`]) — 이 키는 전파 폭만.
     pub view_scope: String,
+    /// 빈 폴더 글리프 억제(X-43 — 사용자 요청 08-23·기본 true): 현재 보기 필터로
+    /// 보여줄 자식이 없는 폴더는 트리 펼침 글리프를 그리지 않는다.
+    pub hide_empty_glyph: bool,
     /// 대소문자 구분 정렬(사용자 확정 07-15 — 기본 false. 코드포인트 순 = **대문자 그룹 상단**).
     pub sort_case_sensitive: bool,
     /// Alt+↑ 떠난 폴더 자동 선택의 뷰 배치(사용자 QA 07-15): "top"|"center"|"bottom".
@@ -233,6 +236,7 @@ impl Default for Settings {
             header_italic: false,
             sort_folders_first: true,
             view_scope: "panel".into(),
+            hide_empty_glyph: true, // X-43 — 기본 = 빈 폴더 글리프 숨김(사용자 확정)
             sort_case_sensitive: false,
             nav_up_align: "center".into(),
             tab_dblclick: "close".into(),
@@ -410,6 +414,10 @@ impl Settings {
         ));
         out.push_str(&format!("view_scope={}\n", self.view_scope));
         out.push_str(&format!(
+            "hide_empty_glyph={}\n",
+            u8::from(self.hide_empty_glyph)
+        ));
+        out.push_str(&format!(
             "col_width_sync={}\n",
             u8::from(self.col_width_sync)
         ));
@@ -571,6 +579,7 @@ impl Settings {
                 "view_scope" if matches!(v, "global" | "panel" | "tab") => {
                     s.view_scope = v.into() // 미지 값 = 기본(panel) 유지
                 }
+                "hide_empty_glyph" => s.hide_empty_glyph = v != "0",
                 "sort_case_sensitive" => s.sort_case_sensitive = v != "0",
                 "nav_up_align" if matches!(v, "top" | "center" | "bottom") => {
                     s.nav_up_align = v.into()
@@ -1104,6 +1113,7 @@ mod tests {
             header_italic: false,
             sort_folders_first: false,
             view_scope: "tab".into(), // 기본(panel) 아님 — 왕복 검증
+            hide_empty_glyph: false,  // 기본(true) 아님 — 왕복 검증(X-43)
             sort_case_sensitive: true,
             nav_up_align: "top".into(),
             tab_dblclick: "lock".into(),
@@ -1231,6 +1241,7 @@ mod tests {
             "열 하한 클램프"
         );
         assert!(parsed.sort_case_sensitive, "대소문자 정렬 왕복");
+        assert!(!parsed.hide_empty_glyph, "빈 폴더 글리프 억제 왕복(X-43)");
         assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
         assert_eq!(parsed.tab_dblclick, "lock", "탭 더블클릭 동작 왕복(07-15)");
         assert_eq!(
