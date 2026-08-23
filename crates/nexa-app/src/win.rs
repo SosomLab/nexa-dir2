@@ -1838,6 +1838,24 @@ fn paste_dest(st: &mut State) -> PathBuf {
     panel.root_path()
 }
 
+/// 가상 파일 클립보드 붙여넣기(X-42 — RDP rdpclip·Outlook 첨부·압축 폴더):
+/// CF_HDROP(실경로) 부재 시의 폴백 — 실경로가 있으면 전송 엔진(undo 포함)이 우선.
+/// 동기 추출이라 대용량은 완료까지 창이 멈춘다(대기 커서만 — 워커·진행 창은 후속).
+/// 원본 경로가 없어 undo 미기록 · 클라우드 대상은 로컬 FS 기록 불가라 무동작(업로드 후속).
+unsafe fn paste_virtual(hwnd: HWND, st: &mut State, dest: PathBuf) {
+    use windows::Win32::UI::WindowsAndMessaging::{SetCursor, IDC_WAIT};
+    if nexa_vfs::cloud_parts(&dest).is_some() {
+        return;
+    }
+    if let Ok(c) = LoadCursorW(None, IDC_WAIT) {
+        SetCursor(Some(c)); // 다음 WM_SETCURSOR가 원복
+    }
+    let created = crate::clipboard::extract_virtual_files(&dest);
+    if !created.is_empty() {
+        reload_both(hwnd, st, "");
+    }
+}
+
 /// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식) — 다중 선택=개수·단일=속성·없음=현재 폴더.
 fn dock_info(p: &Panel) -> Vec<String> {
     use nexa_gui::widgets::RowSource;
@@ -2324,6 +2342,8 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
                     crate::clipboard::clear(hwnd);
                 }
                 start_transfer(hwnd, st, paths, dir, op);
+            } else {
+                paste_virtual(hwnd, st, dir); // 가상 파일 폴백(X-42)
             }
         }
         shellmenu::Outcome::Custom(CTX_PASTE_BG) => {
@@ -2333,6 +2353,8 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
                     crate::clipboard::clear(hwnd);
                 }
                 start_transfer(hwnd, st, paths, dir, op);
+            } else {
+                paste_virtual(hwnd, st, dir); // 가상 파일 폴백(X-42)
             }
         }
         shellmenu::Outcome::Custom(CTX_UNDO) => do_undo_redo(hwnd, st, false),
@@ -2511,13 +2533,15 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         }
         shellmenu::Outcome::Custom(CTX_DELETE_PERMANENT) => do_delete(hwnd, st, true),
         shellmenu::Outcome::Custom(CTX_PASTE_INTO) => {
-            if let (Some(dir), Some((paths, op))) =
-                (req.paste_dir, crate::clipboard::read_file_list())
-            {
-                if op == nexa_ops::Op::Move {
-                    crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
+            if let Some(dir) = req.paste_dir {
+                if let Some((paths, op)) = crate::clipboard::read_file_list() {
+                    if op == nexa_ops::Op::Move {
+                        crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
+                    }
+                    start_transfer(hwnd, st, paths, dir, op);
+                } else {
+                    paste_virtual(hwnd, st, dir); // 가상 파일 폴백(X-42)
                 }
-                start_transfer(hwnd, st, paths, dir, op);
             }
         }
         _ => {}
@@ -7125,6 +7149,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 폴더 1개 선택 = 그 폴더 안으로(X-32), 그 외 = 현재 폴더
                         let dest = paste_dest(st);
                         start_transfer(hwnd, st, paths, dest, op);
+                        return LRESULT(0);
+                    } else if crate::clipboard::has_virtual_files() {
+                        let dest = paste_dest(st);
+                        paste_virtual(hwnd, st, dest); // 가상 파일 폴백(X-42)
                         return LRESULT(0);
                     }
                 } else if vk == b'Z' as u16 && ctrl {
