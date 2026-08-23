@@ -73,6 +73,9 @@ mod previewwnd;
 mod recycle;
 #[cfg(windows)]
 mod shellmenu;
+/// 셸 변경 통지 구독(X-44 5차 — OneDrive 플레이스홀더 등 FS 침묵 변경의 즉시 계기).
+#[cfg(windows)]
+mod shellnotify;
 /// shell: 특수 폴더 스킴 해석(사용자 요청 07-17 — SHParseDisplayName 위임).
 #[cfg(windows)]
 mod shellpath;

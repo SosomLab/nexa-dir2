@@ -119,7 +119,9 @@ const WATCH_MAX_MS: u64 = 1_000;
 const TIMER_FSPOLL: usize = 14;
 const FSPOLL_MS: u32 = 3_000;
 /// 비활성(보이는 창) 폴링 주기 — 활성 3s 대비 감속(성능 원칙과 비활성 갱신의 절충).
-const FSPOLL_IDLE_MS: u32 = 10_000;
+/// **5차 개정(08-23)**: 셸 통지 구독이 즉시 계기를 맡으면서 스윕은 **보험으로 강등**
+/// (10s → 30s — 셸 통지가 안 오는 예외 경로[일부 도구·SMB 특이 구성]만 커버).
+const FSPOLL_IDLE_MS: u32 = 30_000;
 /// 터미널 출력/종료 통지(M4-3) — wparam=패널(|EXIT_FLAG), lparam=세대.
 const WM_APP_TERM: u32 = 0x8003; // WM_APP + 3
 /// 파일별 아이콘 워커 결과(M4 QA 07-14 — WPARAM=Box<icons::shell::LoadResult>).
@@ -163,6 +165,9 @@ const WM_APP_CLOUD_WRITE: u32 = 0x8011;
 const WM_APP_CLOUD_PROGRESS: u32 = 0x8012;
 /// 가상 파일 붙여넣기 워커 완료(X-42 2차-ⓑ — wparam = 전건 성공 여부).
 const WM_APP_VPASTE: u32 = 0x8013;
+/// 셸 변경 통지(X-44 5차 — [`crate::shellnotify`]): 패널 0/1 = BASE+0/+1.
+/// OneDrive 플레이스홀더 생성처럼 **파일시스템 계층이 침묵**하는 변경의 즉시 계기.
+const WM_APP_SHCHANGE_BASE: u32 = 0x8014;
 
 /// 클라우드 다운로드 워커 → UI 통지.
 pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
@@ -965,6 +970,9 @@ struct State {
     /// 패널 루트의 직전 프로브 서명(08-11 QA — (경로, 서명)). watcher 통지가 오지
     /// 않는 경로에서 [`TIMER_FSPOLL`]이 이 값과 비교해 재로드 계기를 만든다.
     probe: [Option<(PathBuf, crate::fsprobe::DirSig)>; 2],
+    /// 패널별 셸 변경 구독(X-44 5차 — 활성 탭 루트 재귀. 경로 변경 시 재등록은
+    /// sync_watchers 길목). None = 셸 네임스페이스로 해석 불가(가상 루트·클라우드).
+    shell_watch: [Option<crate::shellnotify::ShellWatch>; 2],
     /// 뷰포트에 보이는 폴더(펼침+접힘)의 프로브 서명 기준선(X-44 — "눈에 보이는
     /// 영역은 모두 갱신" 원칙). **4차(08-23 실측)**: mtime 1단계 → **서명 전체**
     /// (상한 내 열거 fold)로 승격 — OneDrive 플레이스홀더 생성은 **부모 mtime도
@@ -1494,6 +1502,7 @@ pub fn run() -> Result<()> {
         watch_gen: 0,
         watch_since: [0, 0],
         probe: [None, None],
+        shell_watch: [None, None],
         sub_probe: [Default::default(), Default::default()],
         dock_drag: None,
         dock_split_drag: false,
@@ -3060,6 +3069,23 @@ unsafe fn sync_watchers(hwnd: HWND, st: &mut State) {
                 st.watchers[i].push(w);
             }
             // 실패(권한·가상 루트 등) = 그 폴더만 비감시 — 수동 F5 폴백(원본 규약)
+        }
+        // 셸 변경 구독 동기(X-44 5차) — 활성 탭 루트가 바뀌었으면 재등록(재귀라
+        // 하위 전체 커버). OneDrive 플레이스홀더 생성처럼 RDCW·mtime이 침묵하는
+        // 변경을 제공자의 SHChangeNotify로 **즉시** 받는다(탐색기와 같은 채널).
+        // 가상 루트·클라우드 센티널은 셸 파싱 불가 = 해제 유지(watcher·프로브 보험만).
+        let root = st.panels[i].root_path();
+        if !st.shell_watch[i].as_ref().is_some_and(|w| w.path == root) {
+            let real = nexa_vfs::cloud_parts(&root).is_none() && !nexa_vfs::is_virtual_root(&root);
+            st.shell_watch[i] = if real {
+                crate::shellnotify::ShellWatch::register(
+                    hwnd,
+                    WM_APP_SHCHANGE_BASE + i as u32,
+                    &root,
+                )
+            } else {
+                None
+            };
         }
     }
 }
@@ -7743,6 +7769,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         m if m == WM_APP_CLOUD_PROGRESS => {
             if let Some(st) = state_of(hwnd) {
                 on_cloud_progress(hwnd, st);
+            }
+            LRESULT(0)
+        }
+        // 셸 변경 통지(X-44 5차) — 페이로드 해석 없이 디바운스 합류(등록 pidl이
+        // 이미 범위를 필터·앱은 전체 재열거로 수렴 = watcher 동일 규약). 폭주는
+        // 300ms 디바운스 + 1s 상한이 흡수.
+        m if m == WM_APP_SHCHANGE_BASE || m == WM_APP_SHCHANGE_BASE + 1 => {
+            crate::shellnotify::release_payload(wparam.0, lparam.0);
+            if let Some(st) = state_of(hwnd) {
+                let panel = (m - WM_APP_SHCHANGE_BASE) as usize;
+                arm_watch_debounce(hwnd, st, panel);
             }
             LRESULT(0)
         }
