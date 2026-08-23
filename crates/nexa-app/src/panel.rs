@@ -841,14 +841,27 @@ impl Panel {
                 }
             }
         }
+        // X-44 2차(사용자 QA 08-23): **뷰포트에 보이는 접힌 폴더도 감시** — 접힌 폴더
+        // 내부 변경(파일 생성 = 빈 폴더 글리프 출현)은 부모 폴더 통지로 신뢰성 있게
+        // 오지 않고, 비활성 중엔 폴링도 꺼져 있어 watcher가 유일한 계기다(펼쳐 뒀던
+        // 폴더의 삭제는 잡히는데 접힌 폴더의 생성은 안 잡히던 비대칭의 해소).
+        // 이벤트 기반이라 상시 비용 0 — 상한(cap)은 공유.
+        for p in self.viewport_dirs(false) {
+            if out.len() >= cap {
+                break;
+            }
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
         out
     }
 
-    /// 뷰포트에 **보이는** 펼침 폴더 경로(트리 보기 전용 — X-44 "눈에 보이는 영역은
-    /// 모두 갱신" 원칙): 프로브가 루트만 보던 사각과 watcher 상한(64) 초과분을,
-    /// 화면에 드러난 펼침 폴더의 mtime O(1) 점검으로 메꾼다(read_dir 없음 —
-    /// 호스트 폴링 틱 편승·추가 타이머 0 = 성능 원칙 유지).
-    pub fn visible_expanded_dirs(&self) -> Vec<PathBuf> {
+    /// 뷰포트에 **보이는** 폴더 경로(트리 보기 전용 — X-44 "눈에 보이는 영역은 모두
+    /// 갱신" 원칙): `expanded_only`=true면 펼침 폴더만, false면 접힌 폴더 포함 전체.
+    /// 프로브 스윕(mtime O(1) — read_dir 없음·폴링 틱 편승)과 watcher 대상 선정이
+    /// 공용한다.
+    pub fn viewport_dirs(&self, expanded_only: bool) -> Vec<PathBuf> {
         let rows = self.rows();
         if rows.view_mode() != nexa_gui::widgets::ViewMode::Tree {
             return Vec::new(); // 일반/타일 보기 = 인라인 펼침 없음
@@ -858,7 +871,7 @@ impl Panel {
         let mut out = Vec::new();
         for i in start..end {
             if let Some(r) = tree.row(i) {
-                if r.has_children && r.expanded {
+                if r.has_children && (r.expanded || !expanded_only) {
                     if let Some(p) = tree.node_path(r.id) {
                         out.push(p.to_path_buf());
                     }
@@ -1650,29 +1663,39 @@ mod tests {
         fs::remove_dir_all(&base).unwrap();
     }
 
-    /// X-44(08-23): 뷰포트에 보이는 펼침 폴더 목록 — 프로브 1단계(mtime) 점검 대상.
-    /// 트리 보기 전용·펼침 행만.
+    /// X-44(08-23): 뷰포트에 보이는 폴더 목록 — 프로브 스윕·watcher 대상. 트리 보기
+    /// 전용. 2차(사용자 QA): **접힌 폴더도 포함**(내부 파일 생성 = 글리프 출현 추적)
+    /// — watch_dirs가 뷰포트 접힌 폴더를 감시 목록에 합류시킨다.
     #[test]
-    fn visible_expanded_dirs_lists_viewport_tree_dirs() {
+    fn viewport_dirs_lists_visible_tree_dirs() {
         let base = fixture("visexp");
         fs::create_dir_all(base.join("sub")).unwrap();
         fs::write(base.join("sub").join("x.txt"), b"x").unwrap();
         let (mut p, mut inv) = panel(&base);
         p.set_bounds(Rect::new(0, 0, 400, 400), &mut inv);
-        assert!(
-            p.visible_expanded_dirs().is_empty(),
-            "펼침 전 = 대상 없음(루트는 별도 프로브)"
-        );
         let sub = base.join("sub");
+        assert!(
+            p.viewport_dirs(true).is_empty(),
+            "펼침 전 = 펼침 전용 목록은 빔"
+        );
+        assert_eq!(
+            p.viewport_dirs(false),
+            vec![sub.clone()],
+            "접힌 폴더도 전체 목록에(X-44 2차)"
+        );
+        assert!(
+            p.watch_dirs(64).contains(&sub),
+            "뷰포트 접힌 폴더가 감시 목록에 합류"
+        );
         p.rows_mut()
             .source_mut()
             .tree_mut()
             .expand_path(&sub.to_string_lossy())
             .unwrap();
-        assert_eq!(p.visible_expanded_dirs(), vec![sub], "펼침 폴더가 목록에");
+        assert_eq!(p.viewport_dirs(true), vec![sub], "펼침 폴더 목록");
         // 일반(Flat) 보기 = 인라인 펼침 없음 — 대상 없음
         p.set_view_mode(nexa_gui::widgets::ViewMode::Flat, &mut inv);
-        assert!(p.visible_expanded_dirs().is_empty(), "Flat = 비대상");
+        assert!(p.viewport_dirs(false).is_empty(), "Flat = 비대상");
         fs::remove_dir_all(&base).unwrap();
     }
 

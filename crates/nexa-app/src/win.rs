@@ -2953,11 +2953,12 @@ unsafe fn poll_fs_probe(hwnd: HWND, st: &mut State) {
             }
             None => st.probe[i] = None,
         }
-        // 뷰포트 펼침 폴더 1단계 점검(X-44 — "보이는 영역은 모두 갱신"): 폴더 자신의
-        // mtime만 O(1) stat. 하위 내용 변경(추가·삭제·이름 변경)은 그 폴더 mtime을
+        // 뷰포트 폴더 1단계 점검(X-44 — "보이는 영역은 모두 갱신". 2차: 접힌 폴더
+        // 포함 — 사용자 QA 08-23): 폴더 자신의 mtime만 O(1) stat. 하위 내용 변경
+        // (추가·삭제·이름 변경 = 빈 폴더 글리프 상태 변화 포함)은 그 폴더 mtime을
         // 바꾸므로 잡힌다 — 내용만 바뀐 덮어쓰기는 watcher(상한 내)·활성화 재열람 몫.
         // 처음 보는 폴더 = 기준선만(발화 없음) · 화면을 떠난 폴더는 소거(맵 유계).
-        let dirs = st.panels[i].visible_expanded_dirs();
+        let dirs = st.panels[i].viewport_dirs(false);
         let mut next: std::collections::HashMap<PathBuf, Option<std::time::SystemTime>> =
             std::collections::HashMap::with_capacity(dirs.len());
         for d in dirs {
@@ -2987,7 +2988,7 @@ unsafe fn refresh_probe_baseline(st: &mut State) {
         let path = st.panels[i].root_path();
         st.probe[i] = crate::fsprobe::probe(&path).map(|sig| (path, sig));
         st.sub_probe[i] = st.panels[i]
-            .visible_expanded_dirs()
+            .viewport_dirs(false)
             .into_iter()
             .map(|d| {
                 let m = std::fs::metadata(&d).ok().and_then(|m| m.modified().ok());
