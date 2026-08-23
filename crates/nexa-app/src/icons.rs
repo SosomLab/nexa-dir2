@@ -235,6 +235,11 @@ pub mod shell {
             "folders-first",
             include_str!("../assets/toolbar/folders-first.svg"),
         ),
+        // 항상 맨 위에 표시(08-23 사용자 — 압정. 순수 스트로크 = 다크 전용판 불요)
+        (
+            "always-on-top",
+            include_str!("../assets/toolbar/always-on-top.svg"),
+        ),
     ];
 
     /// SVG 아이콘 잉크 폴백(잉크 토큰 없는 구형 키 — 검정). 실제 잉크는

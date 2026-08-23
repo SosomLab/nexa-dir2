@@ -120,6 +120,8 @@ pub struct Settings {
     /// 빈 폴더 글리프 억제(X-43 — 사용자 요청 08-23·기본 true): 현재 보기 필터로
     /// 보여줄 자식이 없는 폴더는 트리 펼침 글리프를 그리지 않는다.
     pub hide_empty_glyph: bool,
+    /// 항상 맨 위에 표시(사용자 요청 08-23 — 기본 false·토글 영속).
+    pub always_on_top: bool,
     /// 대소문자 구분 정렬(사용자 확정 07-15 — 기본 false. 코드포인트 순 = **대문자 그룹 상단**).
     pub sort_case_sensitive: bool,
     /// Alt+↑ 떠난 폴더 자동 선택의 뷰 배치(사용자 QA 07-15): "top"|"center"|"bottom".
@@ -237,6 +239,7 @@ impl Default for Settings {
             sort_folders_first: true,
             view_scope: "panel".into(),
             hide_empty_glyph: true, // X-43 — 기본 = 빈 폴더 글리프 숨김(사용자 확정)
+            always_on_top: false,
             sort_case_sensitive: false,
             nav_up_align: "center".into(),
             tab_dblclick: "close".into(),
@@ -414,8 +417,9 @@ impl Settings {
         ));
         out.push_str(&format!("view_scope={}\n", self.view_scope));
         out.push_str(&format!(
-            "hide_empty_glyph={}\n",
-            u8::from(self.hide_empty_glyph)
+            "hide_empty_glyph={}\nalways_on_top={}\n",
+            u8::from(self.hide_empty_glyph),
+            u8::from(self.always_on_top)
         ));
         out.push_str(&format!(
             "col_width_sync={}\n",
@@ -580,6 +584,7 @@ impl Settings {
                     s.view_scope = v.into() // 미지 값 = 기본(panel) 유지
                 }
                 "hide_empty_glyph" => s.hide_empty_glyph = v != "0",
+                "always_on_top" => s.always_on_top = v != "0",
                 "sort_case_sensitive" => s.sort_case_sensitive = v != "0",
                 "nav_up_align" if matches!(v, "top" | "center" | "bottom") => {
                     s.nav_up_align = v.into()
@@ -896,7 +901,8 @@ pub fn purge_legacy(dir: &Path) {
 pub const TOOLBAR_BLOCKS: &[(&str, &[&str])] = &[
     // 기본 순서 = 사용자 확정 07-19("현재 순서를 기본값으로")
     ("refresh", &[]),
-    ("panel", &["toggle", "dock", "info", "colsync"]),
+    // ontop = 항상 맨 위에 표시(08-23 — 기존 설정은 파서가 누락 보충 자동 삽입)
+    ("panel", &["toggle", "dock", "info", "colsync", "ontop"]),
     ("view", &["tree", "flat", "tiles"]),
     ("show", &["hidden", "dot", "foldersfirst"]),
     ("settings", &[]),
@@ -1055,20 +1061,20 @@ mod toolbar_order_tests {
             d,
             "기본 왕복"
         );
-        // 재배열 + 표시 여부 왕복(07-19 — 블록/자식 vis 공통)
-        let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,dock:1,info:1]|show:1[dot:1,hidden:1,foldersfirst:1]|settings:1";
+        // 재배열 + 표시 여부 왕복(07-19 — 블록/자식 vis 공통. ontop 포함 = 08-23)
+        let s = "view:0[tiles:1,tree:0,flat:1]|refresh:1|panel:1[colsync:1,toggle:1,dock:1,info:1,ontop:1]|show:1[dot:1,hidden:1,foldersfirst:1]|settings:1";
         assert_eq!(
             serialize_toolbar_order(&parse_toolbar_order(s)),
             s,
             "재배열/표시 보존"
         );
         // 구형(vis 생략) 호환 + 미지 토큰 제거 + 누락 보충(정의 위치 삽입 —
-        // 07-19: tree/flat이 정의상 tiles 앞이므로 앞에 들어간다)
+        // 07-19: tree/flat이 정의상 tiles 앞이므로 앞에 들어간다. ontop 보충 = 08-23)
         let s = "view[tiles,junk]|bogus|panel[toggle:0]";
         let norm = serialize_toolbar_order(&parse_toolbar_order(s));
         assert_eq!(
             norm,
-            "view:1[tree:1,flat:1,tiles:1]|panel:1[toggle:0,dock:1,info:1,colsync:1]|refresh:1|show:1[hidden:1,dot:1,foldersfirst:1]|settings:1"
+            "view:1[tree:1,flat:1,tiles:1]|panel:1[toggle:0,dock:1,info:1,colsync:1,ontop:1]|refresh:1|show:1[hidden:1,dot:1,foldersfirst:1]|settings:1"
         );
     }
 }
@@ -1114,6 +1120,7 @@ mod tests {
             sort_folders_first: false,
             view_scope: "tab".into(), // 기본(panel) 아님 — 왕복 검증
             hide_empty_glyph: false,  // 기본(true) 아님 — 왕복 검증(X-43)
+            always_on_top: true,      // 기본(false) 아님 — 왕복 검증(08-23)
             sort_case_sensitive: true,
             nav_up_align: "top".into(),
             tab_dblclick: "lock".into(),
@@ -1227,8 +1234,8 @@ mod tests {
         assert_eq!(parsed.col_autofit_max, 640, "auto-fit 최대 폭 왕복(07-19)");
         assert_eq!(
             parsed.toolbar_order,
-            "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1]|refresh:1|settings:1|show:1[hidden:1,dot:1,foldersfirst:1]",
-            "도구모음 순서/표시 왕복(07-19 — 신규 foldersfirst 키는 보충 삽입 08-02)"
+            "view:1[tiles:1,tree:1,flat:1]|panel:0[toggle:1,dock:1,info:0,colsync:1,ontop:1]|refresh:1|settings:1|show:1[hidden:1,dot:1,foldersfirst:1]",
+            "도구모음 순서/표시 왕복(07-19 — 신규 키는 보충 삽입: foldersfirst 08-02·ontop 08-23)"
         );
         assert_eq!(
             parsed.ctx_menu_order,
@@ -1242,6 +1249,7 @@ mod tests {
         );
         assert!(parsed.sort_case_sensitive, "대소문자 정렬 왕복");
         assert!(!parsed.hide_empty_glyph, "빈 폴더 글리프 억제 왕복(X-43)");
+        assert!(parsed.always_on_top, "항상 맨 위에 표시 왕복(08-23)");
         assert_eq!(parsed.nav_up_align, "top", "Alt+↑ 배치 왕복");
         assert_eq!(parsed.tab_dblclick, "lock", "탭 더블클릭 동작 왕복(07-15)");
         assert_eq!(

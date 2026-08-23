@@ -24,6 +24,7 @@ menu.view.hidden = 숨김 파일 표시
 menu.view.dot = 점 파일 표시
 menu.view.dock = 하단 도크
 menu.view.launcher = 퀵 런처 바
+menu.view.alwaysOnTop = 항상 맨 위에 표시
 menu.view.refresh = 새로 고침
 menu.view.theme.system = 테마: 시스템
 menu.view.theme.light = 테마: 라이트

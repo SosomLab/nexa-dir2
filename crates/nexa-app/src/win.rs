@@ -231,6 +231,8 @@ const CMD_INFO_TOGGLE: u32 = 65;
 const CMD_ABOUT: u32 = 66;
 /// 폴더 우선 정렬 토글(08-02 사용자 — show 블록 세 번째 버튼. 설정 G-13과 동일 값).
 const CMD_TOGGLE_FOLDERS_FIRST: u32 = 67;
+/// 항상 맨 위에 표시 토글(사용자 요청 08-23 — View 메뉴 + panel 블록 툴바 버튼·영속).
+const CMD_TOGGLE_TOPMOST: u32 = 68;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 /// 클라우드 연결(X-36 — 검토서 26 §2): 연결별 하위 명령 + 연결 추가 후보.
@@ -297,6 +299,22 @@ unsafe fn system_ui_lang() -> String {
     }
 }
 
+/// 항상 맨 위에 표시(사용자 요청 08-23) — TOPMOST 밴드 전환(활성화·위치·크기 불변).
+unsafe fn apply_always_on_top(hwnd: HWND, on: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+    let _ = SetWindowPos(
+        hwnd,
+        Some(if on { HWND_TOPMOST } else { HWND_NOTOPMOST }),
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+    );
+}
+
 /// 타이틀바 다크 모드(DWMWA_USE_IMMERSIVE_DARK_MODE) — 본문 테마와 일치.
 unsafe fn apply_titlebar_theme(hwnd: HWND, dark: bool) {
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
@@ -334,6 +352,7 @@ fn build_menus(
     show_dotfiles: bool,
     dock: bool,
     launcher: bool,
+    always_on_top: bool,
     mode: ThemeMode,
     lang_setting: &str,
     langs: &[(String, String)],
@@ -364,6 +383,9 @@ fn build_menus(
         MenuItem::new(CMD_TOGGLE_DOTFILES, tr("menu.view.dot"), "Ctrl+.").checked(show_dotfiles),
         MenuItem::new(CMD_TOGGLE_DOCK, tr("menu.view.dock"), "Ctrl+`").checked(dock),
         MenuItem::new(CMD_TOGGLE_LAUNCHER, tr("menu.view.launcher"), "").checked(launcher),
+        // 항상 맨 위에 표시(사용자 요청 08-23 — 툴바 panel 블록과 동일 값·영속)
+        MenuItem::new(CMD_TOGGLE_TOPMOST, tr("menu.view.alwaysOnTop"), "")
+            .checked(always_on_top),
         MenuItem::separator(),
         MenuItem::new(CMD_REFRESH, tr("menu.view.refresh"), "F5"),
         MenuItem::separator(),
@@ -619,6 +641,7 @@ fn build_toolbar(
     col_width_sync: bool,
     info_dual: bool,
     dock: bool,
+    always_on_top: bool,
 ) -> Vec<ToolButton> {
     // 그룹화(QA 07-14) 유지 — 블록 사이 구분선. **순서 = 설정 toolbar_order**
     // (07-19 사용자 — prefs 트리 편집·config::parse_toolbar_order가 검증/보충).
@@ -637,6 +660,11 @@ fn build_toolbar(
                 .with_icon("emb:dock", "")
                 .with_tip(tr("menu.view.dock"))
                 .toggled(dock),
+            // 항상 맨 위에 표시(사용자 요청 08-23 — 압정 아이콘·View 메뉴와 동일 값)
+            ("panel", "ontop") => ToolButton::new(CMD_TOGGLE_TOPMOST, "📌")
+                .with_icon("emb:always-on-top", "")
+                .with_tip(tr("menu.view.alwaysOnTop"))
+                .toggled(always_on_top),
             ("panel", "info") => ToolButton::new(CMD_INFO_TOGGLE, "ⓘ")
                 .with_icon("emb:info-toggle", "")
                 .with_tip(if info_dual {
@@ -854,6 +882,8 @@ struct State {
     /// 빈 폴더 글리프 억제(X-43 — 사용자 요청 08-23·기본 켬): 현재 보기로 보여줄
     /// 자식이 없는 폴더는 펼침 글리프를 그리지 않는다.
     hide_empty_glyph: bool,
+    /// 항상 맨 위에 표시(사용자 요청 08-23 — 토글·영속).
+    always_on_top: bool,
     /// 대소문자 구분 정렬·Alt+↑ 자동 선택 배치(사용자 요청 07-15 — 설정 영속).
     sort_case_sensitive: bool,
     nav_up_align: String,
@@ -1331,6 +1361,7 @@ pub fn run() -> Result<()> {
                 settings.show_dotfiles,
                 settings.dock,
                 settings.launcher,
+                settings.always_on_top,
                 theme_mode,
                 &settings.lang,
                 &langs,
@@ -1356,6 +1387,7 @@ pub fn run() -> Result<()> {
                 settings.col_width_sync,
                 !(settings.panel_mode == "single" || settings.info_mode == "single"),
                 settings.dock,
+                settings.always_on_top,
             ),
             m.row_h,
             m.pad_x,
@@ -1407,6 +1439,7 @@ pub fn run() -> Result<()> {
         view_scope: settings.view_scope.clone(),
         tab_drag_undo: None,
         hide_empty_glyph: settings.hide_empty_glyph,
+        always_on_top: settings.always_on_top,
         sort_case_sensitive: settings.sort_case_sensitive,
         nav_up_align: settings.nav_up_align.clone(),
         tab_dblclick: settings.tab_dblclick.clone(),
@@ -1528,6 +1561,11 @@ pub fn run() -> Result<()> {
         .into();
         if let Err(e) = windows::Win32::System::Ole::RegisterDragDrop(hwnd, &drop_target) {
             eprintln!("DnD 수신 등록 실패(계속 진행): {e}");
+        }
+
+        // 항상 맨 위에 표시 복원(사용자 요청 08-23 — 설정 영속)
+        if settings.always_on_top {
+            apply_always_on_top(hwnd, true);
         }
 
         // 잘라내기 흐림 표시(X-32) — 클립보드 변경 구독(WM_CLIPBOARDUPDATE) + 시작 시 1회 동기
@@ -4484,6 +4522,16 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.toolbar.set_checked(CMD_TOGGLE_FOLDERS_FIRST, ff, &mut inv);
             persist_settings(st);
         }
+        // 항상 맨 위에 표시 토글(사용자 요청 08-23) — 즉시 적용·체크 동기·영속
+        CMD_TOGGLE_TOPMOST => {
+            st.always_on_top = !st.always_on_top;
+            apply_always_on_top(hwnd, st.always_on_top);
+            st.menubar
+                .set_checked(CMD_TOGGLE_TOPMOST, st.always_on_top, &mut inv);
+            st.toolbar
+                .set_checked(CMD_TOGGLE_TOPMOST, st.always_on_top, &mut inv);
+            persist_settings(st);
+        }
         CMD_NEW_FOLDER | CMD_NEW_FILE => {
             create_new(hwnd, st, id == CMD_NEW_FOLDER);
         }
@@ -4552,6 +4600,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                         st.col_width_sync,
                         !single_info(st),
                         st.panels[0].dock_visible(),
+                        st.always_on_top,
                     ),
                     &mut inv,
                 );
@@ -4599,6 +4648,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                             st.col_width_sync,
                             want == "dual",
                             st.panels[0].dock_visible(),
+                            st.always_on_top,
                         ),
                         &mut inv,
                     );
@@ -4630,6 +4680,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     st.col_width_sync,
                     !single_info(st),
                     on,
+                    st.always_on_top,
                 ),
                 &mut inv,
             );
@@ -4866,6 +4917,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             st.show_dotfiles,
             st.panels[0].dock_visible(),
             st.launcher_visible,
+            st.always_on_top,
             st.theme_mode,
             &st.lang_setting,
             &st.langs,
@@ -4891,6 +4943,7 @@ unsafe fn apply_lang(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
             st.col_width_sync,
             !single_info(st),
             st.panels[0].dock_visible(),
+            st.always_on_top,
         ),
         inv,
     );
@@ -5090,6 +5143,7 @@ unsafe fn apply_cloud_change(hwnd: HWND, st: &mut State, inv: &mut Invalidations
             st.show_dotfiles,
             st.panels[0].dock_visible(),
             st.launcher_visible,
+            st.always_on_top,
             st.theme_mode,
             &st.lang_setting,
             &st.langs,
@@ -5745,6 +5799,7 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
                 st.col_width_sync,
                 !single_info(st),
                 st.panels[0].dock_visible(),
+                st.always_on_top,
             ),
             &mut inv,
         );
@@ -5781,6 +5836,7 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
                 st.col_width_sync,
                 !single_info(st),
                 st.panels[0].dock_visible(),
+                st.always_on_top,
             ),
             &mut inv,
         );
@@ -6073,6 +6129,7 @@ fn current_settings(st: &State) -> Settings {
         sort_folders_first: st.sort_folders_first,
         view_scope: st.view_scope.clone(),
         hide_empty_glyph: st.hide_empty_glyph,
+        always_on_top: st.always_on_top,
         sort_case_sensitive: st.sort_case_sensitive,
         nav_up_align: st.nav_up_align.clone(),
         tab_dblclick: st.tab_dblclick.clone(),
@@ -7560,6 +7617,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                     st.col_width_sync,
                                     !single_info(st),
                                     st.panels[0].dock_visible(),
+                                    st.always_on_top,
                                 ),
                                 &mut inv,
                             );

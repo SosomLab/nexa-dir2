@@ -25,6 +25,7 @@ menu.view.hidden = Show Hidden Files
 menu.view.dot = Show Dot Files
 menu.view.dock = Bottom Dock
 menu.view.launcher = Quick Launcher Bar
+menu.view.alwaysOnTop = Always on Top
 menu.view.refresh = Refresh
 menu.view.theme.system = Theme: System
 menu.view.theme.light = Theme: Light
