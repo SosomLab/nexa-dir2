@@ -965,10 +965,11 @@ struct State {
     /// 패널 루트의 직전 프로브 서명(08-11 QA — (경로, 서명)). watcher 통지가 오지
     /// 않는 경로에서 [`TIMER_FSPOLL`]이 이 값과 비교해 재로드 계기를 만든다.
     probe: [Option<(PathBuf, crate::fsprobe::DirSig)>; 2],
-    /// 뷰포트에 보이는 펼침 폴더의 mtime 기준선(X-44 — "눈에 보이는 영역은 모두
-    /// 갱신" 원칙): 루트만 보던 프로브의 사각을 O(1) stat 편승으로 메꾼다.
-    /// 값 None = mtime 조회 불가(그 폴더는 비교 제외 — 발화 없음).
-    sub_probe: [std::collections::HashMap<PathBuf, Option<std::time::SystemTime>>; 2],
+    /// 뷰포트에 보이는 폴더(펼침+접힘)의 프로브 서명 기준선(X-44 — "눈에 보이는
+    /// 영역은 모두 갱신" 원칙). **4차(08-23 실측)**: mtime 1단계 → **서명 전체**
+    /// (상한 내 열거 fold)로 승격 — OneDrive 플레이스홀더 생성은 **부모 mtime도
+    /// RDCW 통지도 바꾸지 않아**(실측 확정) 열거만이 새 자식을 본다.
+    sub_probe: [std::collections::HashMap<PathBuf, crate::fsprobe::DirSig>; 2],
     /// 도크 상단 경계 드래그 중(M4-1 S2) — 패널 인덱스.
     dock_drag: Option<usize>,
     /// 도크 밴드 좌/우 스플리터 드래그 중(X-6 — 파일 스플리터와 독립).
@@ -3115,22 +3116,25 @@ unsafe fn poll_fs_probe(hwnd: HWND, st: &mut State) {
             }
             None => st.probe[i] = None,
         }
-        // 뷰포트 폴더 1단계 점검(X-44 — "보이는 영역은 모두 갱신". 2차: 접힌 폴더
-        // 포함 — 사용자 QA 08-23): 폴더 자신의 mtime만 O(1) stat. 하위 내용 변경
-        // (추가·삭제·이름 변경 = 빈 폴더 글리프 상태 변화 포함)은 그 폴더 mtime을
-        // 바꾸므로 잡힌다 — 내용만 바뀐 덮어쓰기는 watcher(상한 내)·활성화 재열람 몫.
+        // 뷰포트 폴더 서명 점검(X-44 — "보이는 영역은 모두 갱신". 2차: 접힌 폴더
+        // 포함 · **4차: mtime → 서명 전체 승격** — 08-23 실측: OneDrive 플레이스홀더
+        // 생성은 부모 mtime도 RDCW 통지도 바꾸지 않는다. 새 자식은 **열거만이 본다**
+        // → 루트 프로브와 같은 fsprobe 서명(상한 내 열거 fold)을 뷰포트 폴더 전체에.
+        // 비용 = 화면에 보이는 폴더 수(~수십)로 유계·폴더당 SCAN_CAP 상한.
         // 처음 보는 폴더 = 기준선만(발화 없음) · 화면을 떠난 폴더는 소거(맵 유계).
         let dirs = st.panels[i].viewport_dirs(false);
-        let mut next: std::collections::HashMap<PathBuf, Option<std::time::SystemTime>> =
+        let mut next: std::collections::HashMap<PathBuf, crate::fsprobe::DirSig> =
             std::collections::HashMap::with_capacity(dirs.len());
         for d in dirs {
-            let mtime = std::fs::metadata(&d).ok().and_then(|m| m.modified().ok());
+            let Some(sig) = crate::fsprobe::probe(&d) else {
+                continue; // 소실·비폴더 — 비교 제외(재출현 시 기준선부터)
+            };
             if let Some(old) = st.sub_probe[i].get(&d) {
-                if old.is_some() && mtime.is_some() && *old != mtime {
+                if crate::fsprobe::changed(old, &sig) {
                     fire = true;
                 }
             }
-            next.insert(d, mtime);
+            next.insert(d, sig);
         }
         st.sub_probe[i] = next;
         if fire {
@@ -3152,10 +3156,7 @@ unsafe fn refresh_probe_baseline(st: &mut State) {
         st.sub_probe[i] = st.panels[i]
             .viewport_dirs(false)
             .into_iter()
-            .map(|d| {
-                let m = std::fs::metadata(&d).ok().and_then(|m| m.modified().ok());
-                (d, m)
-            })
+            .filter_map(|d| crate::fsprobe::probe(&d).map(|sig| (d, sig)))
             .collect();
     }
 }

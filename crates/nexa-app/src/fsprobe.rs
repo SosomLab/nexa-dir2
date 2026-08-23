@@ -182,6 +182,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 부모 폴더 mtime이 **안 바뀌어도** 자식 추가가 잡힌다(X-44 4차 — 08-23 실측:
+    /// OneDrive 플레이스홀더 생성은 부모 mtime도 RDCW 통지도 남기지 않는다 →
+    /// 2단계 count/fold 열거가 유일한 검출 경로). mtime을 되돌려 침묵을 재현한다.
+    #[cfg(windows)]
+    #[test]
+    fn probe_detects_child_added_without_parent_mtime_change() {
+        let dir = tmp("silent");
+        std::fs::write(dir.join("a.txt"), b"a").unwrap();
+        let before = probe(&dir).expect("기준선");
+        std::fs::write(dir.join("b.txt"), b"b").unwrap();
+        set_dir_mtime(&dir, before.dir_mtime.expect("mtime"));
+        let after = probe(&dir).expect("재프로브");
+        assert_eq!(after.dir_mtime, before.dir_mtime, "침묵 전제(부모 mtime 불변) 성립");
+        assert!(changed(&before, &after), "count/fold가 자식 추가를 잡아야 한다");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 폴더 mtime 강제 설정(위 침묵 재현 전용) — BACKUP_SEMANTICS 핸들 + SetFileTime.
+    #[cfg(windows)]
+    fn set_dir_mtime(dir: &Path, t: SystemTime) {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Foundation::{CloseHandle, FILETIME};
+        use windows::Win32::Storage::FileSystem::{
+            CreateFileW, SetFileTime, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
+        };
+        let unix = t
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("epoch 이후");
+        // FILETIME = 1601-01-01 기준 100ns 틱(유닉스 epoch 오프셋 11644473600s)
+        let ticks = unix.as_nanos() as u64 / 100 + 116_444_736_000_000_000;
+        let ft = FILETIME {
+            dwLowDateTime: ticks as u32,
+            dwHighDateTime: (ticks >> 32) as u32,
+        };
+        let wide: Vec<u16> = dir
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let h = CreateFileW(
+                windows::core::PCWSTR(wide.as_ptr()),
+                FILE_WRITE_ATTRIBUTES.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                None,
+            )
+            .expect("폴더 핸들");
+            SetFileTime(h, None, None, Some(&ft)).expect("mtime 설정");
+            let _ = CloseHandle(h);
+        }
+    }
+
     /// 가상 루트·없는 경로는 `None`(네트워크·셸 호출로 새지 않는다).
     #[test]
     fn probe_none_for_non_directory() {
