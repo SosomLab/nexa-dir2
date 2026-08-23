@@ -234,6 +234,7 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   현행 기능(클라우드·3개 언어)으로 함께 갱신했다.
   → **2026-08-14 MERGED**(08-23 확인 — `Waived-Policy-Test-1.2` 경유: 버전 업데이트도
   최초 등록과 같은 waiver 경로를 탄다). 카탈로그 실측(08-23) = 0.8.1/**0.16.0**.
+  **08-23 저녁 — `0.17.0` 제출**([#422931](https://github.com/microsoft/winget-pkgs/pull/422931)).
 
 ### 포터블 변형 — `SosomLab.NexaDir.Portable`
 
@@ -272,16 +273,19 @@ SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일
   0.16.0으로 한 번만 올렸다. winget은 중간 버전을 건너뛰어도 무방하다(사용자는 최신만 받는다).
   → **제출 당일(08-11 13:10 UTC) MERGED**(08-23 확인 — waiver 없이 `Moderator-Approved`,
   역대 최단). 카탈로그 실측(08-23) = 0.8.1/0.11.0/0.12.0/0.13.0/**0.16.0**.
+  **08-23 저녁 — `0.17.0` 제출**([#422930](https://github.com/microsoft/winget-pkgs/pull/422930)
+  — **채널 제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출. `winget validate`
+  경고 2건[PortableCommandAlias 미지 필드·portable Scope]은 0.16.0 병합본과 동일 구조).
 
 ### 채널 상태 요약 (2026-08-23 재점검 — 원천 실측: PR 라벨 JSON·`winget show --versions`·choco 패키지 페이지)
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.16.0**(0.8.1/0.11.0/0.12.0/0.13.0/0.16.0 상주) | ✅ [#415214](https://github.com/microsoft/winget-pkgs/pull/415214) **MERGED 08-11**(제출 당일 — `Moderator-Approved`) | 없음 — **다음 릴리스부터 제출 규칙 적용**(대기 없음 = 제출) |
-| winget | `SosomLab.NexaDir`(설치형) | **0.16.0**(0.8.1/0.16.0) | ✅ [#415215](https://github.com/microsoft/winget-pkgs/pull/415215) **MERGED 08-14**(`Policy-Test-1.2` waiver 경유 — 0.13.0 포터블과 같은 패턴) | 동일 |
-| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 무이벤트 — 08-23 페이지 실측 무변동. 자동 3단계는 완료, 사람 검토만 미착수) | **push 제외 유지**(제출 규칙 — 대기 중) / 오탐 소명 코멘트는 선택 |
+| winget | `SosomLab.NexaDir.Portable` | **0.16.0**(0.8.1/0.11.0/0.12.0/0.13.0/0.16.0 상주) | ⏳ **`0.17.0` 제출**([#422930](https://github.com/microsoft/winget-pkgs/pull/422930) OPEN — 08-23 저녁·**제출 규칙 첫 적용**: 대기 없음 확인 후 제출). 직전 [#415214](https://github.com/microsoft/winget-pkgs/pull/415214) 0.16.0 MERGED 08-11 | 없음(상태 추적) |
+| winget | `SosomLab.NexaDir`(설치형) | **0.16.0**(0.8.1/0.16.0) | ⏳ **`0.17.0` 제출**([#422931](https://github.com/microsoft/winget-pkgs/pull/422931) OPEN). 직전 [#415215](https://github.com/microsoft/winget-pkgs/pull/415215) 0.16.0 MERGED 08-14(waiver 경유) | 없음(상태 추적) |
+| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 무이벤트 — 08-23 페이지 실측 무변동. 자동 3단계는 완료, 사람 검토만 미착수) | **push 제외 유지**(제출 규칙 — 대기 중. 0.17.0도 팩 success·push skipped 확인) |
 | Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21) | 동일 |
-| GitHub Release | 포터블 + 설치형 | **0.16.0** (08-11 — X-40 자동 갱신·X-41 바 크기. 직전 `0.15.0`도 같은 날) | ✅ 상시(자산 5종 규약) | — |
+| GitHub Release | 포터블 + 설치형 | **0.17.0** (08-23 — X-42 가상 파일·X-43 글리프·X-44 즉시 갱신·X-45 항상 맨 위) | ✅ 상시(자산 5종 규약 — 포터블 3.71MB·SHA 이중 확인) | — |
 
 > **08-23 재점검**: winget 0.16.0 PR 2건이 **둘 다 병합·카탈로그 라이브 확인**
 > (`winget show --versions` 실측). 포터블은 제출 당일(08-11) 병합 — 역대 최단.
