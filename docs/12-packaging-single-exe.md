@@ -82,7 +82,9 @@ ML 판정**이 원인이고, Inno Setup 설치형이 임시 폴더에 PE를 풀�
 1. **VERSIONINFO 보강**(즉시 — `installer/nexa.iss`): Inno는 지정하지 않으면 설치형 exe의
    **파일 버전을 비워 둔다**(실측: 포터블 `0.18.0.0` / 설치형 공백). *무서명 + 버전 정보
    없음*은 ML 가중 요소라, `VersionInfoVersion`·`ProductName`·`Company`·`Copyright`·
-   `OriginalFileName`을 채웠다. 다음 릴리스부터 적용.
+   `OriginalFileName`을 채웠다. **결과 = 유효**: `0.18.1` 설치형(FileVersion 채워짐)은
+   다운로드 시 더 이상 격리되지 않았다(사용자 실기 + 재다운로드 실측 — 즉시 격리 없음·
+   온디맨드 clean). 압축은 안 건드렸으므로 실효 요인은 **이 한 가지로 좁혀진다**.
 2. **오탐 신고**(발행자 — 재발 시 상시 절차): [WDSI 파일 제출](https://www.microsoft.com/en-us/wdsi/filesubmission)
    에 *Software developer* 자격으로 해시·URL·빌드 근거 제출 → 클라우드 판정이 정정되면
    **모든 사용자에게 반영**된다. 제출 문안 템플릿 = [packaging/av-false-positive.md](../packaging/av-false-positive.md).

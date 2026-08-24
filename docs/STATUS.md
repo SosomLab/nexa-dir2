@@ -48,14 +48,13 @@
 >   Portable · [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) 설치형) · choco는 0.8.1 잠김 유지로 제외
 > - **사용자 문서 동일 트랜잭션**: 위키 [기능-압축-미리보기](wiki/기능-압축-미리보기.md) 신설 +
 >   6쪽 갱신(사이드바·개요·하단 도크·빌드와 테스트·설치와 다운로드·Home/개발 여정 버전) + 루트 README
-> - **Defender ML 오탐(설치형)**(사용자 보고 — 배포 후): `Wacatac.C!ml` 격리는 **0.18.0의 새 결함이
->   아니다** — 0.17.0도 같은 날 오전 `Wacatac.B!ml`로 이미 격리돼 있었다(격리 목록 실측).
->   포터블 exe·wasm 2종 클린 · 세 버전 설치형 온디맨드 스캔 전부 클린 · 브라우저 다운로드
->   맥락에서만 발동 · SHA 일치 → 원인 = **무서명 + 새 해시 + 프리밸런스 0**의 클라우드 ML 판정.
->   조치 = 격리 해제(2건) · **Inno 설치형의 빈 파일 버전 발견 → VERSIONINFO 보강**(다음 릴리스 적용) ·
->   오탐 신고 절차 상설화([packaging/av-false-positive.md](../packaging/av-false-positive.md)·
->   [12 §4-2](12-packaging-single-exe.md)·[21 §6](21-distribution.md) 체크리스트) · WDSI 제출값 생성
->   (**제출 자체는 사용자 로그인 필요 — 대기**)
+> - **Defender ML 오탐(설치형) — 해소 확인**(사용자 보고 → 재배포 → 실기 확증): 0.17.0/0.18.0
+>   설치형이 다운로드 시 `Wacatac.*!ml`로 격리되던 것(포터블·wasm은 무관·온디맨드는 clean =
+>   **무서명 + 새 해시 + 프리밸런스 0**의 클라우드 ML 판정)을 규명 → **Inno 설치형의 빈 파일 버전을
+>   발견해 VERSIONINFO 보강**(`0.18.1`) → **다운로드 시 더 이상 격리되지 않음**(사용자 실기 + 재다운로드
+>   실측). 압축 완화는 실측으로 기각([12 §4-2] 표). 오탐 신고 절차도 상설화
+>   ([packaging/av-false-positive.md](../packaging/av-false-positive.md)·[12 §4-2](12-packaging-single-exe.md)·
+>   [21 §6](21-distribution.md) 체크리스트). **이번 회차 종결**(근본 평판은 서명/Store 과제로 잔존)
 >
 > ---
 >
