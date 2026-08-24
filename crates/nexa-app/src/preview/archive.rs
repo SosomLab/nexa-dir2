@@ -99,10 +99,78 @@ pub mod pw {
     }
 }
 
+/// **활성 암호 주입**(호스트 → 공급자) — [`super::set_dark`]와 같은 규약.
+///
+/// 공급자 트레이트(`preview(path)`)는 인자가 경로 하나뿐이라, 암호는 호출 직전에
+/// 이 슬롯으로 주입하고 호출 직후 비운다(Drop = 소거). 내장 리더와 WASM 플러그인이
+/// **같은 경로**로 암호를 받는다 — 저장은 어디에도 하지 않는다.
+mod active {
+    use super::Secret;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static ACTIVE: RefCell<Option<Secret>> = const { RefCell::new(None) };
+    }
+
+    /// 주입 후 `f` 실행, 종료 시 반드시 비운다(패닉 경로 포함 — 스코프 가드).
+    pub fn scoped<R>(pw: Option<Secret>, f: impl FnOnce() -> R) -> R {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                ACTIVE.with(|a| *a.borrow_mut() = None); // Secret Drop = 0 덮기
+            }
+        }
+        ACTIVE.with(|a| *a.borrow_mut() = pw);
+        let _g = Guard;
+        f()
+    }
+
+    /// 활성 암호를 빌려 쓴다(사본을 만들지 않는다).
+    pub fn with<R>(f: impl FnOnce(Option<&Secret>) -> R) -> R {
+        ACTIVE.with(|a| f(a.borrow().as_ref()))
+    }
+}
+
+/// 활성 암호 열람(런타임 호스트 API `password` 구현 — wasm.rs).
+pub(crate) fn with_active_password<R>(f: impl FnOnce(Option<&Secret>) -> R) -> R {
+    active::with(f)
+}
+
+/// 활성 암호를 건 채 `f` 실행(호출이 끝나면 슬롯은 비워지고 값은 소거된다).
+/// 공급자를 직접 부르는 경로(플러그인 런타임·테스트)가 쓴다.
+pub(crate) fn with_password_scope<R>(password: Option<Secret>, f: impl FnOnce() -> R) -> R {
+    active::scoped(password, f)
+}
+
+/// 공급자 경유 목록 읽기 — **플러그인 우선**(설정 `preview_map`·사용 여부 반영),
+/// 없으면 내장. 암호는 활성 슬롯으로 주입해 어느 공급자든 같은 방식으로 받는다.
+pub fn read_via(
+    path: &Path,
+    preview_map: &str,
+    disabled: &str,
+    password: Option<Secret>,
+) -> ArchiveDoc {
+    with_password_scope(password, || {
+        match super::preview_for(path, preview_map, disabled) {
+            PreviewDoc::Archive(doc) => *doc,
+            // 압축이 아닌 공급자로 매핑된 경우(사용자 오버라이드) — 내장으로 판단만 전달
+            _ => ArchiveDoc {
+                path: path.to_path_buf(),
+                listing: Listing::default(),
+                status: ArchiveStatus::Failed(tr("archive.notArchive")),
+                provider: String::new(),
+            },
+        }
+    })
+}
+
 /// 목록 읽기 — 세션 암호가 있으면 함께 넘긴다(호출자가 명시 암호를 줄 수도 있다).
 pub fn read(path: &Path, password: Option<&Secret>) -> ArchiveDoc {
-    let session = password.is_none().then(|| pw::get(path)).flatten();
-    let pass = password.or(session.as_ref());
+    // 우선순위: 명시 인자 > 활성 슬롯(호스트 주입) > 세션 캐시
+    let injected = password.is_none().then(|| active::with(|p| p.cloned())).flatten();
+    let session = password.is_none() && injected.is_none();
+    let session = session.then(|| pw::get(path)).flatten();
+    let pass = password.or(injected.as_ref()).or(session.as_ref());
     let opts = archive::ListOpts {
         password: pass,
         ..Default::default()

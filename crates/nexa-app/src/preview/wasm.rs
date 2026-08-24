@@ -10,6 +10,18 @@
 //!   `render_svg(sptr, slen, optr, ocap) -> len` · `is_dark() -> i32` ·
 //!   `disp_width(ptr, len) -> i32`
 //!
+//! **ABI v2 — 압축 목록(X-46, 하위 호환)**: `nx_meta`의 **4번째 줄**에 능력 선언
+//! (`archive`)을 두면 호스트가 [`run_archive`]로 `nx_archive()`를 부른다.
+//! - export: `nx_archive() -> ptr` — 첫 줄 `archive`|`password`|`error`
+//!   (`archive` = 둘째 줄 `표시명<TAB>플래그`, 이후 항목 = `경로<TAB>원본<TAB>압축<TAB>시각<TAB>속성<TAB>방식`)
+//! - import 추가: `file_size() -> i64` · `read_at(off, ptr, cap) -> n`(임의 위치 —
+//!   중앙 디렉터리처럼 꼬리부터 읽어야 하는 포맷용) · `password(ptr, cap) -> n`
+//!   (**활성 암호만** 전달 — 없으면 `-1`. 게스트는 `password`를 반환해 요청한다)
+//!
+//! 암호 취급: 호스트는 사용자가 방금 입력한 암호를 게스트 메모리에 **1회 복사**할
+//! 뿐이고, 인스턴스는 호출 종료와 함께 폐기된다(스토어 소멸 = 선형 메모리 해제).
+//! 호스트 쪽 사본은 [`crate::preview::archive`]의 Secret(Drop 소거)로만 존재한다.
+//!
 //! 격리(ADR-0004 §격리 계승): **fuel 상한**(wasmi 내장)·메모리 상한(limiter)·
 //! 오류 = 해당 플러그인만 미리보기 1줄(`preview.plugin.error`).
 
@@ -27,6 +39,10 @@ const MEM_CAP: usize = 64 * 1024 * 1024;
 const READ_CAP: usize = 256 * 1024;
 /// 반환 본문 상한(1000줄 상당 여유 — 도크/독립 창 보호).
 const OUT_CAP: usize = 1 << 20;
+/// `read_at` 1회 클램프(임의 위치 읽기 — 목록 파싱에 충분하고 폭주는 막는다).
+const READ_AT_CAP: usize = 4 * 1024 * 1024;
+/// 압축 목록 항목 상한(그리드 보호 — nexa-vfs 상한과 동일 취지).
+const ARCHIVE_CAP: usize = 50_000;
 
 /// 호스트 상태 — 미리보기 대상 파일(샌드박스: 이 파일 외 접근 불가) + 메모리 리미터.
 struct HostCtx {
@@ -39,8 +55,17 @@ pub struct WasmPlugin {
     pub id: String,
     pub name: String,
     pub exts: Vec<String>,
+    /// 능력 선언(nx_meta 4번째 줄) — `archive` = 압축 목록 공급자.
+    pub caps: Vec<String>,
     module: Module,
     engine: Engine,
+}
+
+impl WasmPlugin {
+    /// 압축 목록 능력을 선언했는가(ABI v2).
+    pub fn is_archive(&self) -> bool {
+        self.caps.iter().any(|c| c == "archive")
+    }
 }
 
 /// 게스트 메모리에서 (4바이트 LE 길이 + 본문) 버퍼를 읽는다.
@@ -107,6 +132,71 @@ fn linker(engine: &Engine) -> Result<Linker<HostCtx>, wasmi::Error> {
     l.func_wrap("env", "is_dark", |_: Caller<'_, HostCtx>| -> i32 {
         i32::from(super::is_dark_now())
     })?;
+    // ── ABI v2(X-46 압축 목록) ──
+    // file_size() -> i64 : 대상 파일 크기(꼬리 오프셋 계산용)
+    l.func_wrap("env", "file_size", |caller: Caller<'_, HostCtx>| -> i64 {
+        std::fs::metadata(&caller.data().path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(-1)
+    })?;
+    // read_at(off, ptr, cap) -> n : **대상 파일 임의 위치** 읽기(중앙 디렉터리 등)
+    l.func_wrap(
+        "env",
+        "read_at",
+        |mut caller: Caller<'_, HostCtx>, off: i64, ptr: i32, cap: i32| -> i32 {
+            use std::io::{Read, Seek, SeekFrom};
+            if off < 0 {
+                return 0;
+            }
+            let path = caller.data().path.clone();
+            let cap = (cap.max(0) as usize).min(READ_AT_CAP);
+            let Ok(mut f) = std::fs::File::open(&path) else {
+                return 0;
+            };
+            if f.seek(SeekFrom::Start(off as u64)).is_err() {
+                return 0;
+            }
+            let mut buf = vec![0u8; cap];
+            let mut got = 0;
+            while got < cap {
+                match f.read(&mut buf[got..]) {
+                    Ok(0) => break,
+                    Ok(n) => got += n,
+                    Err(_) => break,
+                }
+            }
+            let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
+                return 0;
+            };
+            if mem.write(&mut caller, ptr as usize, &buf[..got]).is_err() {
+                return 0;
+            }
+            got as i32
+        },
+    )?;
+    // password(ptr, cap) -> n : **활성 암호**(사용자가 방금 입력한 값)만 전달.
+    // 없으면 -1 — 게스트는 `password` 반환으로 요청한다. 호스트는 사본을 남기지 않는다.
+    l.func_wrap(
+        "env",
+        "password",
+        |mut caller: Caller<'_, HostCtx>, ptr: i32, cap: i32| -> i32 {
+            let bytes = super::archive::with_active_password(|pw| pw.map(|s| s.expose().to_vec()));
+            let Some(bytes) = bytes else { return -1 };
+            let n = bytes.len().min(cap.max(0) as usize);
+            let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
+                return -1;
+            };
+            let ok = mem.write(&mut caller, ptr as usize, &bytes[..n]).is_ok();
+            // 호스트 임시 사본 즉시 소거(게스트 메모리는 인스턴스 폐기와 함께 사라진다)
+            let mut bytes = bytes;
+            nexa_core::secret::zeroize_bytes(&mut bytes);
+            if ok {
+                n as i32
+            } else {
+                -1
+            }
+        },
+    )?;
     // disp_width(ptr, len) -> i32 : 표시 폭(CJK 2칸)
     l.func_wrap(
         "env",
@@ -162,6 +252,7 @@ fn load_one(path: &Path) -> Result<WasmPlugin, String> {
         id: String::new(),
         name: String::new(),
         exts: Vec::new(),
+        caps: Vec::new(),
         module,
         engine,
     };
@@ -179,10 +270,19 @@ fn load_one(path: &Path) -> Result<WasmPlugin, String> {
         .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
         .filter(|e| !e.is_empty())
         .collect();
+    // 4번째 줄 = 능력 선언(ABI v2 — 없으면 기존 미리보기 전용 플러그인)
+    let caps = it
+        .next()
+        .unwrap_or_default()
+        .split(',')
+        .map(|c| c.trim().to_ascii_lowercase())
+        .filter(|c| !c.is_empty())
+        .collect();
     Ok(WasmPlugin {
         id,
         name,
         exts,
+        caps,
         ..plugin
     })
 }
@@ -234,6 +334,83 @@ pub fn run_preview(plugin: &WasmPlugin, path: &Path) -> Result<PreviewDoc, Strin
     }
 }
 
+/// `nx_archive()` 실행 — 압축 목록 공급자(ABI v2). 반환 계약은 모듈 헤더 참조.
+///
+/// 항목 줄 = `경로<TAB>원본<TAB>압축<TAB>시각(Unix 초)<TAB>속성<TAB>방식`
+/// (속성 = `dir`·`enc`·`utc`·`unsafe` 쉼표 목록. 빈 칸/`-` = 모름)
+pub fn run_archive(
+    plugin: &WasmPlugin,
+    path: &Path,
+) -> Result<crate::preview::archive::ArchiveDoc, String> {
+    use crate::preview::archive::{ArchiveDoc, ArchiveStatus};
+    use nexa_vfs::archive::{ArchiveEntry, Listing};
+
+    let out = call_buf(plugin, path, "nx_archive")?;
+    let mut it = out.split('\n');
+    let kind = it.next().unwrap_or("").trim();
+    let doc = |status, listing| ArchiveDoc {
+        path: path.to_path_buf(),
+        listing,
+        status,
+        provider: plugin.id.clone(),
+    };
+    match kind {
+        // 암호 필요 — 호스트가 프롬프트 후 같은 경로로 재호출한다
+        "password" => return Ok(doc(ArchiveStatus::NeedPassword, Listing::default())),
+        "error" => {
+            let why = it.next().unwrap_or("").trim().to_string();
+            return Ok(doc(ArchiveStatus::Failed(why), Listing::default()));
+        }
+        "archive" => {}
+        k => return Err(format!("알 수 없는 반환 종류: {k}")),
+    }
+    let head = it.next().unwrap_or("");
+    let mut hp = head.split('\t');
+    let label = hp.next().unwrap_or(&plugin.name).trim().to_string();
+    let flags: Vec<&str> = hp.next().unwrap_or("").split(',').map(str::trim).collect();
+    let mut listing = Listing {
+        format: plugin.id.clone(),
+        label,
+        solid: flags.contains(&"solid"),
+        multivolume: flags.contains(&"multivolume"),
+        truncated: flags.contains(&"truncated"),
+        ..Default::default()
+    };
+    for line in it.take(ARCHIVE_CAP) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut f = line.split('\t');
+        let raw = f.next().unwrap_or("");
+        let num = |v: Option<&str>| v.and_then(|v| v.trim().parse::<u64>().ok());
+        let size = num(f.next());
+        let packed = num(f.next());
+        let mtime = f.next().and_then(|v| v.trim().parse::<i64>().ok());
+        let attr: Vec<&str> = f.next().unwrap_or("").split(',').map(str::trim).collect();
+        let method = f.next().unwrap_or("").trim().to_string();
+        let (p, suspicious) = nexa_vfs::archive::normalize_path(raw);
+        if p.is_empty() {
+            continue;
+        }
+        let is_dir = attr.contains(&"dir");
+        listing.entries.push(ArchiveEntry {
+            path: p,
+            is_dir,
+            size: (!is_dir).then_some(()).and(size),
+            packed: (!is_dir).then_some(()).and(packed),
+            modified: mtime.filter(|&t| t > 0),
+            // 기본은 현지 벽시계(DOS 계열이 다수) — `utc` 속성이 있으면 epoch로 본다
+            time_is_local: !attr.contains(&"utc"),
+            encrypted: attr.contains(&"enc"),
+            method,
+            crc32: None,
+            suspicious: suspicious || attr.contains(&"unsafe"),
+        });
+    }
+    listing.has_encrypted = listing.entries.iter().any(|e| e.encrypted);
+    Ok(doc(ArchiveStatus::Ok, listing))
+}
+
 /// WASM 플러그인 → 공급자 어댑터 — 실행 오류는 해당 플러그인만 1줄 격리.
 pub(super) struct WasmProvider {
     pub plugin: WasmPlugin,
@@ -247,6 +424,15 @@ impl PreviewProvider for WasmProvider {
         &self.plugin.exts
     }
     fn preview(&self, path: &Path) -> PreviewDoc {
+        // 압축 능력 선언 플러그인은 목록 ABI로 라우팅(X-46) — 실패는 미리보기로 저하
+        if self.plugin.is_archive() {
+            return match run_archive(&self.plugin, path) {
+                Ok(doc) => PreviewDoc::Archive(Box::new(doc)),
+                Err(e) => {
+                    PreviewDoc::Lines(vec![trf("preview.plugin.error", &[&self.plugin.id, &e])])
+                }
+            };
+        }
         match run_preview(&self.plugin, path) {
             Ok(doc) => doc,
             Err(e) => PreviewDoc::Lines(vec![trf("preview.plugin.error", &[&self.plugin.id, &e])]),
@@ -281,6 +467,91 @@ mod tests {
     fn build(dir: &std::path::Path) {
         let bytes = wat::parse_str(WAT).unwrap();
         std::fs::write(dir.join("up.wasm"), bytes).unwrap();
+    }
+
+    /// 압축 목록 ABI v2 테스트 모듈(WAT) — `password` import 결과에 따라
+    /// "암호 필요" 또는 항목 2건을 돌려준다(호스트 라우팅·파싱 동시 검증).
+    fn archive_wat() -> String {
+        // 데이터 = WAT 이스케이프(\n·\t)로 넣고, 길이는 버퍼 앞 4바이트에 기록
+        let meta = "arc\nArchive Sample\nfoo\narchive";
+        let body = concat!(
+            "archive\n",
+            "FOO\tsolid\n",
+            "a/b.txt\t100\t40\t1700000000\tutc\tStore\n",
+            "d\t0\t0\t0\tdir\t"
+        );
+        let esc = |s: &str| s.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t");
+        format!(
+            r#"
+(module
+  (import "env" "password" (func $pw (param i32 i32) (result i32)))
+  (import "env" "read_at" (func $readat (param i64 i32 i32) (result i32)))
+  (import "env" "file_size" (func $fsize (result i64)))
+  (memory (export "memory") 1)
+  (data (i32.const 1024) "{meta}")
+  (data (i32.const 2048) "{body}")
+  (data (i32.const 3072) "password")
+  (func (export "nx_meta") (result i32)
+    (i32.store (i32.const 1020) (i32.const {meta_len}))
+    (i32.const 1020))
+  (func (export "nx_archive") (result i32)
+    ;; 활성 암호가 없으면(-1) 호스트에 요청
+    (if (i32.lt_s (call $pw (i32.const 4096) (i32.const 64)) (i32.const 0))
+      (then
+        (i32.store (i32.const 3068) (i32.const 8))
+        (return (i32.const 3068))))
+    (drop (call $fsize))
+    (drop (call $readat (i64.const 0) (i32.const 5120) (i32.const 16)))
+    (i32.store (i32.const 2044) (i32.const {body_len}))
+    (i32.const 2044)))
+"#,
+            meta = esc(meta),
+            body = esc(body),
+            meta_len = meta.len(),
+            body_len = body.len(),
+        )
+    }
+
+    #[test]
+    fn archive_capability_routes_to_nx_archive_and_password_flow() {
+        use crate::preview::archive::ArchiveStatus;
+        let d = std::env::temp_dir().join(format!("nexa_wasm_arc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("arc.wasm"), wat::parse_str(archive_wat()).unwrap()).unwrap();
+        let (plugins, errors) = load_dir(&d);
+        assert_eq!(plugins.len(), 1, "{errors:?}");
+        let p = &plugins[0];
+        assert!(p.is_archive(), "nx_meta 4번째 줄 = 능력 선언");
+        assert_eq!(p.exts, ["foo".to_string()]);
+
+        let target = d.join("t.foo");
+        std::fs::write(&target, b"payload").unwrap();
+        // 암호 없음 = 플러그인이 요청 → 호스트는 NeedPassword로 번역
+        let doc = run_archive(p, &target).unwrap();
+        assert_eq!(doc.status, ArchiveStatus::NeedPassword);
+        assert_eq!(doc.provider, "arc");
+
+        // 암호 주입 후 = 목록 파싱(속성·시각·방식·플래그)
+        let doc = crate::preview::archive::with_password_scope(
+            Some(nexa_core::secret::Secret::new(b"pw".to_vec())),
+            || run_archive(p, &target).unwrap(),
+        );
+        assert_eq!(doc.status, ArchiveStatus::Ok);
+        assert_eq!(doc.listing.label, "FOO");
+        assert!(doc.listing.solid);
+        assert_eq!(doc.listing.entries.len(), 2);
+        let f = doc
+            .listing
+            .entries
+            .iter()
+            .find(|e| e.path == "a/b.txt")
+            .unwrap();
+        assert_eq!((f.size, f.packed, f.method.as_str()), (Some(100), Some(40), "Store"));
+        assert_eq!((f.modified, f.time_is_local), (Some(1_700_000_000), false));
+        let dir = doc.listing.entries.iter().find(|e| e.path == "d").unwrap();
+        assert!(dir.is_dir && dir.size.is_none(), "폴더 행은 크기 없음");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

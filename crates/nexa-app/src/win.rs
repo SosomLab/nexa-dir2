@@ -2128,7 +2128,14 @@ fn open_preview_window(hwnd: HWND, st: &mut State, panel: usize) {
         crate::preview::PreviewDoc::Archive(doc) => {
             unsafe {
                 let font = crate::dialog::make_font_pub(hwnd, &st.dlg_font);
-                crate::archivewnd::open(hwnd, &path, *doc, st.tz, font);
+                crate::archivewnd::open(
+                    hwnd,
+                    &path,
+                    *doc,
+                    (&st.preview_map, &st.plugins_disabled),
+                    st.tz,
+                    font,
+                );
                 let _ = windows::Win32::Graphics::Gdi::DeleteObject(font.into());
             }
             return;

@@ -158,7 +158,14 @@ fn status_text(doc: &ArchiveDoc) -> String {
 /// 이미 읽어 둔 목록으로 그리드 창을 연다(필요하면 암호를 받아 재시도).
 /// 사용자가 암호 입력을 취소하면 창을 열지 않는다.
 /// `doc` = 미리보기 시임이 만든 결과(내장 또는 플러그인 — 재조회 없이 그대로 쓴다).
-pub unsafe fn open(owner: HWND, path: &Path, mut doc: ArchiveDoc, tz: i32, font: HFONT) {
+pub unsafe fn open(
+    owner: HWND,
+    path: &Path,
+    mut doc: ArchiveDoc,
+    route: (&str, &str),
+    tz: i32,
+    font: HFONT,
+) {
     let name = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -168,7 +175,9 @@ pub unsafe fn open(owner: HWND, path: &Path, mut doc: ArchiveDoc, tz: i32, font:
         let Some(secret) = crate::pwprompt::ask(owner, &name, retry, font) else {
             return; // 취소 = 아무것도 열지 않는다
         };
-        doc = arc::read(path, Some(&secret));
+        // 재시도는 **같은 공급자 경로**로(플러그인이 읽던 포맷이면 플러그인이 다시 읽는다).
+        // 암호는 활성 슬롯으로만 전달되고 호출이 끝나면 지워진다.
+        doc = arc::read_via(path, route.0, route.1, Some(secret.clone()));
         match doc.status {
             // 성공한 암호만 세션 동안 기억(디스크 기록 없음)
             ArchiveStatus::Ok => arc::pw::remember(path, secret),
