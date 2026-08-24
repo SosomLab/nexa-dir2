@@ -307,11 +307,11 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.17.0** | ✅ [#422930](https://github.com/microsoft/winget-pkgs/pull/422930) **MERGED**(08-23 15:10Z — 제출 당일 병합) | 없음 |
-| winget | `SosomLab.NexaDir`(설치형) | **0.17.0** | ✅ [#422931](https://github.com/microsoft/winget-pkgs/pull/422931) **MERGED**(08-23 15:10Z — 이번엔 waiver 없이 당일) | 없음 |
+| winget | `SosomLab.NexaDir.Portable` | **0.17.0** | ⏳ **`0.18.0` 제출**([#423258](https://github.com/microsoft/winget-pkgs/pull/423258) — 08-24·제출 규칙 2회째). 직전 [#422930](https://github.com/microsoft/winget-pkgs/pull/422930) 0.17.0 **MERGED**(제출 ~2시간 만) | 없음(상태 추적) |
+| winget | `SosomLab.NexaDir`(설치형) | **0.17.0** | ⏳ **`0.18.0` 제출**([#423259](https://github.com/microsoft/winget-pkgs/pull/423259)). 직전 [#422931](https://github.com/microsoft/winget-pkgs/pull/422931) 0.17.0 **MERGED**(waiver 없이) | 없음(상태 추적) |
 | Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 무이벤트 — 08-23 페이지 실측 무변동. 자동 3단계는 완료, 사람 검토만 미착수) | **push 제외 유지**(제출 규칙 — 대기 중. 0.17.0도 팩 success·push skipped 확인) |
 | Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21) | 동일 |
-| GitHub Release | 포터블 + 설치형 | **0.17.0** (08-23 — X-42 가상 파일·X-43 글리프·X-44 즉시 갱신·X-45 항상 맨 위) | ✅ 상시(자산 5종 규약 — 포터블 3.71MB·SHA 이중 확인) | — |
+| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.18.0** (08-24 — X-46 압축 미리보기·플러그인 동봉) | ✅ 상시(**자산 6종** — 포터블 3.83MB·플러그인 zip 48.6KB·SHA 이중 확인) | — |
 
 > **08-24 재점검**: `gh pr list --author kiros33 --state open`에 **NexaDir PR 0건**
 > (열려 있는 것은 NexaBeep·NexaMemKeeper뿐) · [#422930](https://github.com/microsoft/winget-pkgs/pull/422930)·
