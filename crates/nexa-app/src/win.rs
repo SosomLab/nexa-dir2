@@ -2123,9 +2123,15 @@ fn open_preview_window(hwnd: HWND, st: &mut State, panel: usize) {
     let lines = match crate::preview::preview_for(&path, &st.preview_map, &st.plugins_disabled) {
         crate::preview::PreviewDoc::Lines(l) => l,
         crate::preview::PreviewDoc::Image(_) => vec![tr("preview.window.image")],
-        // 압축은 전용 그리드 창이 받는다(archivewnd) — 여기서는 요약 텍스트로 저하
+        // 압축(X-46)은 텍스트 창이 아니라 **그리드 창**이 받는다(별도 창 보기).
+        // 목록은 여기서 이미 읽었으므로 재조회 없이 그대로 넘긴다.
         crate::preview::PreviewDoc::Archive(doc) => {
-            crate::preview::archive::summary_lines(&doc, st.tz, usize::MAX)
+            unsafe {
+                let font = crate::dialog::make_font_pub(hwnd, &st.dlg_font);
+                crate::archivewnd::open(hwnd, &path, *doc, st.tz, font);
+                let _ = windows::Win32::Graphics::Gdi::DeleteObject(font.into());
+            }
+            return;
         }
     };
     unsafe {

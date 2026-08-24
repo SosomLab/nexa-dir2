@@ -12,6 +12,9 @@ mod dw;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod i18n;
 // 비-Windows에선 창이 없어 미사용이지만 순수 로직이라 테스트는 전 플랫폼 실행
+/// 압축 미리보기 그리드 창(X-46 — 별도 창 보기)
+#[cfg(windows)]
+mod archivewnd;
 #[cfg(windows)]
 mod bulkrename;
 #[cfg(windows)]
@@ -69,6 +72,9 @@ mod preview;
 /// 독립 미리보기 창(07-26 — 플러그인 기준 캔버스)
 #[cfg(windows)]
 mod previewwnd;
+/// 압축 파일 암호 입력 모달(X-46 — 평문 비노출·비기록 규약)
+#[cfg(windows)]
+mod pwprompt;
 #[cfg(windows)]
 mod recycle;
 #[cfg(windows)]

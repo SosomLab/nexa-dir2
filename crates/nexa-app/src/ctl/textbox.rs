@@ -34,6 +34,10 @@ pub const EN_CHANGE: u32 = 0x0300;
 const EN_SETFOCUS: u32 = 0x0100;
 const EN_KILLFOCUS: u32 = 0x0200;
 const EM_SETCUEBANNER: u32 = 0x1501;
+/// 마스킹 문자 지정(EDIT 표준 — 0 = 평문).
+const EM_SETPASSWORDCHAR: u32 = 0x00CC;
+/// 되돌리기 버퍼 비우기(암호 잔상 제거 — X-46).
+const EM_EMPTYUNDOBUFFER: u32 = 0x00CD;
 
 /// 라운드 반경(px — 콤보와 동일 시안).
 const RADIUS: i32 = 6;
@@ -133,6 +137,35 @@ pub unsafe fn create(
 
 unsafe fn state(hwnd: HWND) -> *mut TbState {
     super::base::state(hwnd)
+}
+
+/// **암호 입력 모드**(X-46) — 마스킹 문자 지정(`None` = 평문 표시로 전환).
+/// 마스킹·클립보드 복사 차단은 내부 EDIT(ES_PASSWORD 규약)가 담당하므로 원문이
+/// 컨트롤 밖으로 새지 않는다. 호스트는 값을 읽은 뒤 [`clear_secret`]로 잔상을 지운다.
+pub unsafe fn set_password_char(hwnd: HWND, ch: Option<char>) {
+    if let Some(st) = state(hwnd).as_ref() {
+        SendMessageW(
+            st.edit,
+            EM_SETPASSWORDCHAR,
+            Some(WPARAM(ch.map_or(0, |c| c as usize))),
+            None,
+        );
+        let _ = InvalidateRect(Some(st.edit), None, true);
+    }
+}
+
+/// 입력 내용·되돌리기 버퍼 제거 — 암호를 읽어 간 직후 호출(평문 잔상 차단).
+pub unsafe fn clear_secret(hwnd: HWND) {
+    if let Some(st) = state(hwnd).as_ref() {
+        let empty: [u16; 1] = [0];
+        SendMessageW(
+            st.edit,
+            WM_SETTEXT,
+            None,
+            Some(LPARAM(empty.as_ptr() as isize)),
+        );
+        SendMessageW(st.edit, EM_EMPTYUNDOBUFFER, None, None);
+    }
 }
 
 /// 내부 EDIT 재배치 — 글꼴 높이(+2)로 세로 중앙(상/하 균등 여백).
