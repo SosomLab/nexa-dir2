@@ -1242,6 +1242,9 @@ pub fn run() -> Result<()> {
     let langs = i18n::discover(&data);
     let code = i18n::resolve_code(&settings.lang, &unsafe { system_ui_lang() }, &langs);
     i18n::activate(i18n::load(&code, &data));
+    // 압축 항목 이름의 레거시 코드페이지 디코더 주입(X-46 — 구형 zip의 CP949 한글
+    // 이름. UTF-8 플래그가 없는 항목에서만 쓰인다)
+    crate::preview::archive::install_name_decoder();
     let ctx = NavCtx {
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
@@ -2049,6 +2052,7 @@ fn preview_content(
     preview_map: &str,
     disabled: &str,
     dark: bool,
+    tz: i32,
 ) -> (Vec<String>, Option<String>) {
     crate::preview::set_dark(dark); // 다이어그램 색 선택(호스트 주입 — 07-26)
     let tree = p.rows().source().tree();
@@ -2085,8 +2089,16 @@ fn preview_content(
             None,
         ),
         crate::preview::PreviewDoc::Image(img) => (Vec::new(), Some(img)),
+        // 압축(X-46) — 도크는 요약 + 앞부분 항목(정렬·전체 목록은 그리드 창)
+        crate::preview::PreviewDoc::Archive(doc) => (
+            crate::preview::archive::summary_lines(&doc, tz, DOCK_ARCHIVE_ROWS),
+            None,
+        ),
     }
 }
+
+/// 도크에 나열할 압축 항목 수(그 이상은 "… 외 N개" 한 줄 — 전체는 그리드 창).
+const DOCK_ARCHIVE_ROWS: usize = 60;
 
 /// F3·도크 ↗ — 독립 미리보기 창(07-26, 사용자 요청): 지정 패널의 단일 선택
 /// 파일을 콘솔 폰트 그리드 **모달** 창으로 표시(플러그인 기준 캔버스 — 도크와
@@ -2111,6 +2123,10 @@ fn open_preview_window(hwnd: HWND, st: &mut State, panel: usize) {
     let lines = match crate::preview::preview_for(&path, &st.preview_map, &st.plugins_disabled) {
         crate::preview::PreviewDoc::Lines(l) => l,
         crate::preview::PreviewDoc::Image(_) => vec![tr("preview.window.image")],
+        // 압축은 전용 그리드 창이 받는다(archivewnd) — 여기서는 요약 텍스트로 저하
+        crate::preview::PreviewDoc::Archive(doc) => {
+            crate::preview::archive::summary_lines(&doc, st.tz, usize::MAX)
+        }
     };
     unsafe {
         crate::previewwnd::show(
@@ -2145,6 +2161,7 @@ fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
                     &st.preview_map,
                     &st.plugins_disabled,
                     st.theme.is_dark,
+                    st.tz,
                 ),
                 2 => (Vec::new(), None), // 터미널은 paint에서 직접 그림(M4-3)
                 _ => (dock_info(&st.panels[src]), None),

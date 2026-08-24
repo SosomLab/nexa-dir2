@@ -104,6 +104,7 @@ impl ArchiveFormat for Cab {
                 size: Some(size),
                 packed: None, // 폴더 단위 압축 — 항목별 압축 크기 없음
                 modified: dos_to_unix(date, time),
+                time_is_local: true, // DOS 시각
                 encrypted: false,
                 method: methods.get(ifolder).copied().unwrap_or("").to_string(),
                 crc32: None,

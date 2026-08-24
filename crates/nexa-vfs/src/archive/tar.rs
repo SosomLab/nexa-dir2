@@ -183,6 +183,7 @@ impl ArchiveFormat for Tar {
                     size: (!is_dir).then_some(esize),
                     packed: (!is_dir).then_some(esize), // 비압축 컨테이너
                     modified: pending_mtime.take().or(mtime).filter(|&t| t > 0),
+                    time_is_local: false, // tar = Unix epoch(UTC)
                     encrypted: false,
                     method: if is_dir { String::new() } else { "Store".into() },
                     crc32: None,

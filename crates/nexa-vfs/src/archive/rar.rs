@@ -153,6 +153,7 @@ fn list_v5(src: &dyn ReadAt, opts: &ListOpts, out: &mut Listing) -> Result<(), A
                         size: (!is_dir).then_some(usize_),
                         packed: (!is_dir).then_some(data_size),
                         modified: mtime.filter(|&t| t > 0),
+                        time_is_local: false, // RAR5 = Unix epoch(UTC)
                         encrypted,
                         method: if is_dir {
                             String::new()
@@ -235,6 +236,7 @@ fn list_v4(src: &dyn ReadAt, opts: &ListOpts, out: &mut Listing) -> Result<(), A
                         size: (!is_dir).then_some(unpacked),
                         packed: (!is_dir).then_some(packed),
                         modified: dos_to_unix((ftime >> 16) as u16, ftime as u16),
+                        time_is_local: true, // RAR4 = DOS 시각
                         encrypted: hflags & 0x0004 != 0,
                         method: match method {
                             0x30 => "Store",

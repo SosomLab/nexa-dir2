@@ -52,8 +52,12 @@ pub struct ArchiveEntry {
     pub size: Option<u64>,
     /// 압축 후 크기.
     pub packed: Option<u64>,
-    /// 수정 시각(Unix 초, UTC). 모르면 `None`.
+    /// 수정 시각(Unix 초). 모르면 `None`.
     pub modified: Option<i64>,
+    /// `modified`가 **현지 시각을 그대로 옮긴 값**인가(DOS 시각 계열 = zip/cab/rar4 —
+    /// 시간대 정보가 없다). `false` = 진짜 UTC epoch(tar·rar5·gzip·NTFS 확장).
+    /// 표시할 때 시간대 보정을 걸지 말지의 근거 — 이중 보정을 막는다.
+    pub time_is_local: bool,
     /// 이 항목이 암호화되어 있는가(내용 — 이름은 목록에 보인다).
     pub encrypted: bool,
     /// 압축 방식 표시명(`Store`·`Deflate`·`LZMA`…). 모르면 빈 문자열.

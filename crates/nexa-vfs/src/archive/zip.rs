@@ -245,6 +245,8 @@ impl ArchiveFormat for Zip {
                     size: Some(ex.size.unwrap_or(size)),
                     packed: Some(ex.packed.unwrap_or(packed)),
                     modified: ex.mtime.or_else(|| dos_to_unix(dos_date, dos_time)),
+                    // 확장 필드 시각 = 진짜 UTC · DOS 시각 = 현지 벽시계
+                    time_is_local: ex.mtime.is_none(),
                     encrypted: flags & 1 != 0,
                     method: method_label,
                     crc32: (crc != 0).then_some(crc),

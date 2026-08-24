@@ -8,6 +8,7 @@
 //! 시임·독립 창·설정(preview_map/plugins_disabled)·격리 설계·라인 태그 계약
 //! (`\u{2}종류|`·`\u{1}img|`)은 런타임 중립 자산으로 유지.
 
+pub mod archive;
 #[cfg(test)]
 mod sample_tests;
 pub mod wasm;
@@ -22,6 +23,9 @@ pub enum PreviewDoc {
     Lines(Vec<String>),
     /// 이미지 경로 — 호스트 WIC 렌더 위임(draw_image).
     Image(String),
+    /// 압축 파일 목록(X-46) — 도크 = 요약 텍스트 · 독립 창 = **그리드**.
+    /// 압축을 풀지 않고 읽은 항목 표(모델 = nexa-vfs archive).
+    Archive(Box<archive::ArchiveDoc>),
 }
 
 /// 미리보기 공급자 계약(ADR-0004 S1) — 확장자 선언(`EXTS` 대응) + 생성.
@@ -186,6 +190,9 @@ impl PreviewProvider for BuiltinImage {
 /// 내장 공급자 목록(로드 순 = 선언 매치 우선순위. 텍스트는 마지막 폴백 전용).
 fn builtins() -> Vec<Box<dyn PreviewProvider>> {
     vec![
+        // 압축이 먼저 — 선언 확장자가 이미지/텍스트와 겹치지 않지만, 라우팅 순서를
+        // "구조를 아는 공급자 우선"으로 못 박아 둔다(포맷 추가 시에도 동일).
+        Box::new(archive::BuiltinArchive::new()),
         Box::new(BuiltinImage {
             exts: IMAGE_EXTS.iter().map(|s| s.to_string()).collect(),
         }),

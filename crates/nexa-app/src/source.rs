@@ -473,7 +473,8 @@ fn ext_of(name: &str) -> &str {
 }
 
 /// 사람이 읽는 크기 — B/KB/MB/…, 100 미만은 소수 1자리.
-fn human_size(bytes: u64) -> String {
+/// (압축 미리보기 요약도 같은 표기를 쓴다 — X-46)
+pub(crate) fn human_size(bytes: u64) -> String {
     if bytes < 1024 {
         return format!("{bytes} B");
     }
@@ -506,7 +507,8 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 /// Unix ms → "yyyy-MM-dd HH:mm"(오프셋 반영). 없음(-1 등 음수 관례값)이면 빈 값.
-fn fmt_datetime(unix_ms: i64, tz_offset_min: i32) -> String {
+/// (압축 항목 시각도 이 표기를 공유 — X-46)
+pub(crate) fn fmt_datetime(unix_ms: i64, tz_offset_min: i32) -> String {
     if unix_ms < 0 {
         return String::new();
     }
