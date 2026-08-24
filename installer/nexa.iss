@@ -45,6 +45,19 @@ SolidCompression=yes
 WizardStyle=modern
 LicenseFile=..\LICENSE.md
 UninstallDisplayIcon={app}\NexaDir.exe
+; VERSIONINFO(2026-08-24 — Defender `Wacatac.*!ml` 오탐 대응): Inno는 지정하지 않으면
+; 설치형 exe의 파일 버전을 **비워 둔다**. 무서명(DR-3) + 버전 정보 없음은 클라우드 ML
+; 휴리스틱의 대표적 가중 요소라, 포터블 exe(VERSIONINFO 보유)와 달리 설치형만 반복해서
+; 격리됐다(0.17.0 `Wacatac.B!ml` · 0.18.0 `Wacatac.C!ml` — 같은 날 연속). 서명 자체는
+; 아직 불가([12 §4-1](../docs/12-packaging-single-exe.md))지만 이 요소는 지금 없앨 수 있다.
+VersionInfoVersion={#AppVersion}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoProductName=Nexa Dir
+VersionInfoDescription=Nexa Dir Setup
+VersionInfoCompany=SosomLab
+VersionInfoCopyright=Copyright (c) 2026 SosomLab
+VersionInfoOriginalFileName=NexaDir-Setup.exe
+AppCopyright=Copyright (c) 2026 SosomLab
 
 [Languages]
 ; Korean.isl은 Inno 공식 배포에 없음(비공식 번역) — 러너 빌드 실패 방지 위해 영어만.

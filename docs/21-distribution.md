@@ -122,6 +122,9 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
 - [ ] 포터블 zip 해제 → exe 옆 `plugins\`에 `.wasm` 2개 → 앱 재시작 후 설정 > 플러그인에 2건 표시(§5-2).
 - [ ] 설치형 설치 → `{app}\plugins\` 동봉 확인 → 제거 시 함께 삭제.
 - [ ] 브라우저에서 **zip 다운로드가 차단되지 않는지** 확인(원 증상 재현 대조).
+- [ ] **설치형 자산을 브라우저로 한 번 내려받아** Defender 격리 여부 확인 — 격리되면
+      [오탐 신고 절차](../packaging/av-false-positive.md) 수행(0.17.0·0.18.0 연속 발생 —
+      [12 §4-2](12-packaging-single-exe.md)). 사용자 안내는 **포터블 우선**(설치형만 걸린다).
 - [ ] zip 해제 → `README.txt` 한글 정상 표시 → exe 실행(SmartScreen 경고는 예상 동작).
 - [ ] `Get-FileHash`가 `SHA256SUMS.txt` 값과 일치.
 - [ ] `choco install nexa-dir` → Program Files 설치·시작 메뉴 등재 → `choco uninstall nexa-dir` → 데이터 보존.

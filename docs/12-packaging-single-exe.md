@@ -58,6 +58,39 @@ Microsoft 공식 문서 [code-signing-options](https://learn.microsoft.com/en-us
 셸 통합·터미널 통합·WASM 플러그인 로딩이 동작하는지 실측이 선행되어야 하고,
 `broadFileSystemAccess` 제한 기능 심사가 관문이다. DR-3/00-vision 개정 ADR 사안.
 
+### 4-2. Defender ML 오탐 — 설치형만 격리 (2026-08-24 실측)
+
+**증상**: 사용자 PC에서 `NexaDir-Setup-0.18.0.exe`가 다운로드 직후
+`Trojan:Win32/Wacatac.C!ml`로 격리. **0.18.0의 신규 문제가 아니었다** — 격리 목록에
+`NexaDir-Setup-0.17.0.exe`가 같은 날 오전 `Wacatac.B!ml`로 이미 들어가 있었다.
+
+**실측으로 좁힌 범위**(전부 같은 PC·같은 시각대):
+
+| 검사 대상 | 결과 |
+| --- | --- |
+| 포터블 exe · `markdown.wasm` · `archive.wasm` | 탐지 없음 |
+| 0.16.0·0.17.0·0.18.0 **설치형** 온디맨드 스캔(임시 폴더) | 셋 다 탐지 없음 |
+| 브라우저로 내려받은 설치형(`webfile:` 컨텍스트) | **격리** |
+| 릴리스 자산 SHA-256 대조 | 일치(변조 없음) |
+
+∴ **파일 내용이 아니라 "무서명 + 새 해시 + 프리밸런스 0"인 다운로드 시점의 클라우드
+ML 판정**이 원인이고, Inno Setup 설치형이 임시 폴더에 PE를 풀어 실행하는 구조라
+드로퍼 패턴과 형태가 겹쳐 **포터블이 아니라 설치형만** 걸린다(`!ml` = ML 휴리스틱).
+
+**조치**
+
+1. **VERSIONINFO 보강**(즉시 — `installer/nexa.iss`): Inno는 지정하지 않으면 설치형 exe의
+   **파일 버전을 비워 둔다**(실측: 포터블 `0.18.0.0` / 설치형 공백). *무서명 + 버전 정보
+   없음*은 ML 가중 요소라, `VersionInfoVersion`·`ProductName`·`Company`·`Copyright`·
+   `OriginalFileName`을 채웠다. 다음 릴리스부터 적용.
+2. **오탐 신고**(발행자 — 재발 시 상시 절차): [WDSI 파일 제출](https://www.microsoft.com/en-us/wdsi/filesubmission)
+   에 *Software developer* 자격으로 해시·URL·빌드 근거 제출 → 클라우드 판정이 정정되면
+   **모든 사용자에게 반영**된다. 제출 문안 템플릿 = [packaging/av-false-positive.md](../packaging/av-false-positive.md).
+3. **사용자 안내**: 즉시 해법은 **포터블 채널**(탐지 없음) — [21 §5-1](21-distribution.md)의
+   "안내는 포터블 우선" 규약이 이 사례로 재확인됐다. 이미 격리됐다면
+   `MpCmdRun.exe -Restore -FilePath <경로>`(관리자) 또는 보호 기록에서 **장치에서 허용**.
+4. **근본 해결은 여전히 §4-1** — 서명(평판 승계) 또는 MS Store(MSIX 재서명).
+
 ## 5. arm64
 
 `aarch64-pc-windows-msvc` 타깃 추가로 대응 가능(코드 변경 불요 전망). 수요 확인 후 CI 매트릭스에 추가.
