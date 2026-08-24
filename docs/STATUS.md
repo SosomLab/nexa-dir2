@@ -1,7 +1,8 @@
 # STATUS — Nexa Dir 진행 현황
 
 > **갱신: 2026-08-24 (KST)** — **X-46 압축 파일 미리보기 + 플러그인 동봉 배포 →
-> 릴리스 `0.18.0`**(상세는 [journal/2026-08-24.md](journal/2026-08-24.md) — **실기 QA 대기**):
+> 릴리스 `0.18.0`·`0.18.1`**(0.18.1 = Defender ML 오탐 대응 설치형 VERSIONINFO 보강 재배포.
+> 상세 [journal/2026-08-24.md](journal/2026-08-24.md) — **실기 QA 대기**):
 >
 > - **압축을 풀지 않고 목록만 읽는 계층 신설**([nexa-vfs/archive](../crates/nexa-vfs/src/archive/)) —
 >   거의 모든 포맷이 항목 표를 평문으로 갖고 있다는 사실이 설계를 결정했다. 포맷
@@ -36,16 +37,15 @@
 >   21 §5-2 배포 형태 · 24 §4-2 두 경로/수정 절차 · README · 위키 2쪽 · 샘플 README)
 > - 게이트: 워크스페이스 **320 green**(X-46 신규 44 + 동봉 배포 1 — 앱 127) · clippy 0 ·
 >   비Windows check · **B2 3.83MB** ≤10 · **B3 21종 무변**(신규 DLL 0) · 외부 crate 0(DR-8 유지)
-> - **릴리스 `0.18.0` 배포**(사용자 지시) — [Release](https://github.com/SosomLab/nexa-dir2/releases/tag/0.18.0)
->   **자산 6종**(포터블 **3.83MB**·포터블 zip 1.77MB[플러그인 포함]·설치형 3.35MB·설치형 zip 2.79MB·
->   **NexaDir-Plugins-0.18.0.zip 48.6KB**·SHA256SUMS) = **CI가 태그 소스로 `.wasm`을 빌드해 실은 첫 릴리스**.
->   플러그인 zip이 평면 구조로 나간 것을 실측 발견 → 워크플로 수정 + 이번 자산은 재포장·`--clobber`·
->   SHA256SUMS 해당 줄만 갱신(**exe 해시 불변** — 매니페스트 참조 규율)
-> - **채널**(제출 규칙 2회째): 대기 0건 실측 후 `0.18.0` PR 2건 제출 →
->   **둘 다 MERGED**([#423258](https://github.com/microsoft/winget-pkgs/pull/423258) Portable 12:21Z ·
->   [#423259](https://github.com/microsoft/winget-pkgs/pull/423259) 설치형 12:22Z — **제출 약 40분 만**·
->   역대 최단) = **winget 두 채널 최신과 완전 동기** · choco는 0.8.1 잠김 유지로 제외
->   (팩 success·push skipped 확인) → 심사 대기는 choco 2건뿐
+> - **릴리스 `0.18.0` → `0.18.1`**: 0.18.0 = 압축 미리보기·플러그인 동봉 첫 배포(플러그인 zip 평면
+>   구조를 실측 발견해 폴더째로 재포장·워크플로 수정). **`0.18.1`**(오탐 대응 재배포) =
+>   [Release](https://github.com/SosomLab/nexa-dir2/releases/tag/0.18.1) 자산 6종 · **설치형
+>   FileVersion=0.18.1 채워짐 실측**(0.18.0 공백 해소) · 플러그인 zip **폴더 구조 정상**(재포장 불요) ·
+>   해시 6종 일치 · 설치형 온디맨드 clean · choco skipped
+> - **채널**(제출 규칙 2·3회째): `0.18.0` PR 2건 **제출 ~40분 만에 병합**
+>   ([#423258](https://github.com/microsoft/winget-pkgs/pull/423258)·[#423259](https://github.com/microsoft/winget-pkgs/pull/423259)) →
+>   `0.18.1` 대기 0건 재확인 후 PR 2건 제출([#423330](https://github.com/microsoft/winget-pkgs/pull/423330)
+>   Portable · [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) 설치형) · choco는 0.8.1 잠김 유지로 제외
 > - **사용자 문서 동일 트랜잭션**: 위키 [기능-압축-미리보기](wiki/기능-압축-미리보기.md) 신설 +
 >   6쪽 갱신(사이드바·개요·하단 도크·빌드와 테스트·설치와 다운로드·Home/개발 여정 버전) + 루트 README
 > - **Defender ML 오탐(설치형)**(사용자 보고 — 배포 후): `Wacatac.C!ml` 격리는 **0.18.0의 새 결함이
