@@ -112,7 +112,7 @@ fn ar_member(name: &str, data: &[u8]) -> Vec<u8> {
 
 /// ISO 9660 디렉터리 레코드 1건.
 fn iso_record(name: &[u8], extent: u32, size: u32, is_dir: bool) -> Vec<u8> {
-    let mut r = vec![0u8; 33 + name.len() + usize::from(name.len() % 2 == 0)];
+    let mut r = vec![0u8; 33 + name.len() + usize::from(name.len().is_multiple_of(2))];
     r[0] = r.len() as u8;
     r[2..6].copy_from_slice(&extent.to_le_bytes());
     r[6..10].copy_from_slice(&extent.to_be_bytes());
