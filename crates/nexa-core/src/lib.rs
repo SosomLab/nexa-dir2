@@ -3,6 +3,8 @@
 //! 모든 코어 크레이트(vfs/index/preview/ops/...)가 공유하는 기본 타입을 둔다.
 //! 스캐폴딩 단계 — 후속 단위에서 점진 확장.
 
+pub mod secret;
+
 /// 코어 버전 (인터롭/플러그인 호환성 점검에 사용).
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
