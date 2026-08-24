@@ -260,6 +260,27 @@ pub fn plugin_infos() -> Vec<PluginInfo> {
     with_providers(|_, infos| infos.to_vec())
 }
 
+/// 플러그인 탐색 경로(우선순위 순 — 앞이 이긴다):
+///
+/// 1. **사용자 설치분** `data\plugins\` — 쓰기 가능한 데이터 폴더(포터블 = exe 옆,
+///    설치형 = `%LOCALAPPDATA%\NexaDir\data`). 사용자가 직접 넣는 자리.
+/// 2. **동봉분** `<exe 폴더>\plugins\` — 배포에 함께 실리는 읽기 전용 기본 플러그인
+///    (설치형은 Program Files 아래일 수 있어 쓰기 불가 — 읽기만 하므로 무관).
+///
+/// 같은 `id`가 양쪽에 있으면 1번이 채택된다(동봉분을 사용자가 최신 빌드로 대체 가능).
+pub fn plugin_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![crate::config::data_dir().join("plugins")];
+    if let Some(side) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("plugins")))
+    {
+        if !dirs.contains(&side) {
+            dirs.push(side);
+        }
+    }
+    dirs
+}
+
 /// 현재 공급자 전체로 콜백 실행 — 미리보기 최초 사용 시 지연 구성(B1 영향 0).
 /// wasmi 런타임의 `.wasm` 로더가 내장 앞에 합류할 예정(ADR-0005).
 fn with_providers<R>(f: impl FnOnce(&[Box<dyn PreviewProvider>], &[PluginInfo]) -> R) -> R {
@@ -269,7 +290,18 @@ fn with_providers<R>(f: impl FnOnce(&[Box<dyn PreviewProvider>], &[PluginInfo]) 
     }
     PROVIDERS.with(|c| {
         let (providers, infos) = c.get_or_init(|| {
-            let (plugins, _errors) = wasm::load_dir(&crate::config::data_dir().join("plugins"));
+            // 경로 우선순위대로 로드하고 **같은 id는 앞선 것만** 채택
+            // (동봉분 위에 사용자 설치분이 얹히는 구조 — [`plugin_dirs`])
+            let mut plugins: Vec<wasm::WasmPlugin> = Vec::new();
+            for dir in plugin_dirs() {
+                let (found, _errors) = wasm::load_dir(&dir);
+                for p in found {
+                    if plugins.iter().any(|q| q.id == p.id) {
+                        continue;
+                    }
+                    plugins.push(p);
+                }
+            }
             let infos: Vec<PluginInfo> = plugins
                 .iter()
                 .map(|p| PluginInfo {
@@ -347,6 +379,25 @@ mod tests {
         fn preview(&self, _path: &Path) -> PreviewDoc {
             PreviewDoc::Lines(vec![self.id.to_string()])
         }
+    }
+
+    #[test]
+    fn plugin_dirs_lists_user_first_then_bundled_without_duplicates() {
+        let dirs = plugin_dirs();
+        assert!(!dirs.is_empty());
+        assert!(
+            dirs.iter().all(|d| d.ends_with("plugins")),
+            "모든 후보는 plugins 폴더: {dirs:?}"
+        );
+        assert_eq!(
+            dirs[0],
+            crate::config::data_dir().join("plugins"),
+            "1순위 = 사용자 설치분(data\\plugins)"
+        );
+        let mut uniq = dirs.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), dirs.len(), "같은 경로 중복 등재 금지");
     }
 
     #[test]

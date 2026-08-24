@@ -194,13 +194,33 @@ cargo build --release --target wasm32-unknown-unknown
 
 ### 4-2. 적용(설치)
 
-| 배포 형태 | 복사 위치 |
-| --- | --- |
-| 포터블 | `<exe 폴더>\data\plugins\my-viewer.wasm` |
-| 설치형(쓰기 불가 위치) | `%LOCALAPPDATA%\NexaDir\data\plugins\my-viewer.wasm` |
+앱은 **두 곳**을 이 순서로 읽는다(`preview::plugin_dirs`):
+
+| 순위 | 위치 | 성격 |
+| --- | --- | --- |
+| ① | `data\plugins\` — 포터블 = `<exe 폴더>\data\plugins\` · 설치형(쓰기 불가 위치) = `%LOCALAPPDATA%\NexaDir\data\plugins\` | **사용자 설치분**. 직접 만든 플러그인은 여기 |
+| ② | `<exe 폴더>\plugins\` | **동봉분**(배포에 함께 실리는 기본 플러그인 — 읽기 전용) |
+
+**같은 `id`가 양쪽에 있으면 ①이 이긴다** → 동봉된 `markdown.wasm`·`archive.wasm`을
+직접 빌드한 최신본으로 대체하려면 같은 id로 ①에 넣으면 된다(동봉분은 건드리지 않는다).
 
 폴더가 없으면 만든다. **복사 후 앱 재시작 = 반영**(로드는 미리보기 최초 사용 시
 1회, 이후 캐시). 제거 = 파일 삭제 후 재시작.
+
+### 4-2-1. 동봉 플러그인을 고칠 때(저장소 개발자)
+
+`samples/markdown-viewer-wasm`·`samples/archive-viewer-wasm`은 배포에 실리는 두
+플러그인의 소스다. 고쳤다면:
+
+```powershell
+pwsh scripts/build-plugins.ps1                 # 두 샘플 빌드 + samples/*/dist 갱신
+cargo test -p nexa-app preview::sample         # 동봉본 E2E(새 dist를 실제로 로드)
+```
+
+`dist/*.wasm`은 테스트가 로드하는 **고정 산출물**이므로 소스와 **같은 커밋**에
+포함한다. 릴리스는 태그의 소스로 다시 빌드해 배포하므로(`-SkipDist`) `dist/`와
+배포본이 어긋날 일은 없다 — 절차 SSOT = [18 §3-1](18-build-and-test.md) ·
+배포 형태 = [21 §5-2](21-distribution.md).
 
 ### 4-3. 확인·제어
 

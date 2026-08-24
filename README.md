@@ -27,6 +27,23 @@ winget install SosomLab.NexaDir.Portable
 [Releases](https://github.com/SosomLab/nexa-dir2/releases/latest)에서 포터블 exe(또는 zip)를 받아 실행합니다.
 자세한 안내는 위키 [설치와 다운로드](https://github.com/SosomLab/nexa-dir2/wiki/설치와-다운로드).
 
+### 미리보기 플러그인 (동봉)
+
+`markdown.wasm`(Markdown·Mermaid) · `archive.wasm`(ISO·ar·cpio 목록) 두 플러그인이
+**포터블 zip과 설치본에 함께 들어 있습니다**(exe 옆 `plugins\`). 단일 exe만 받았다면
+Releases의 `NexaDir-Plugins-<버전>.zip`을 exe 옆에 풀면 됩니다. 넣거나 지운 뒤
+앱을 다시 시작하면 반영되고, 설정 > 플러그인에서 개별로 끌 수 있습니다.
+
+직접 빌드·수정하려면(소스 = [samples/](samples/)):
+
+```powershell
+rustup target add wasm32-unknown-unknown   # 최초 1회
+pwsh scripts/build-plugins.ps1             # 두 플러그인 빌드 + samples/*/dist 갱신
+```
+
+만드는 방법은 [플러그인 개발 가이드](docs/24-plugin-dev-guide.md),
+빌드 절차는 [18 §3-1](docs/18-build-and-test.md), 배포 형태는 [21 §5-2](docs/21-distribution.md).
+
 ## 문서 — 📖 [문서 홈 (Wiki)](docs/README.md)에서 시작
 
 바로가기: [현황 STATUS](docs/STATUS.md) · [기능·마일스톤](docs/MILESTONES.md) · [진행 DEVLOG](docs/DEVLOG.md) · [비전 00](docs/00-vision.md) · [결정 기록 10](docs/10-decision-record.md) · [이식 메모리](CLAUDE.md)

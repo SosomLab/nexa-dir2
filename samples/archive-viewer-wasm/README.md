@@ -25,6 +25,14 @@ cargo build --release --target wasm32-unknown-unknown
 copy target\wasm32-unknown-unknown\release\archive_viewer.wasm  <NexaDir>\data\plugins\
 ```
 
+저장소에서는 **두 동봉 플러그인을 한 번에** 빌드하는 스크립트를 쓴다(dist까지 갱신):
+
+```powershell
+pwsh scripts/build-plugins.ps1                 # markdown.wasm + archive.wasm → 각 dist/
+pwsh scripts/build-plugins.ps1 -OutDir plugins # 배포 스테이징에도 복사
+cargo test -p nexa-app preview::sample         # 동봉본 E2E 검증
+```
+
 앱을 다시 빌드할 필요가 없다 — **`.wasm` 하나를 복사하고 앱을 재시작**하면 끝이며,
 같은 파일이 전 OS/아키텍처에서 동일하게 동작한다. 산출물을 갱신하면 `dist/archive.wasm`도
 함께 교체한다(저장소 E2E: `cargo test -p nexa-app preview::sample`).

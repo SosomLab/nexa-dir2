@@ -16,6 +16,11 @@
 #ifndef ExePath
   #define ExePath "..\target\release\nexa-app.exe"
 #endif
+; 동봉 미리보기 플러그인(.wasm) 폴더 — pwsh scripts/build-plugins.ps1 -OutDir <여기>
+; 산출물이 없으면 플러그인 없이 빌드된다(선택 사항 — skipifsourcedoesntexist).
+#ifndef PluginsDir
+  #define PluginsDir "..\target\release\plugins"
+#endif
 
 [Setup]
 ; AppId는 업그레이드 연속성 위해 불변(배포명이 바뀌어도 동일 제품).
@@ -50,8 +55,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-; 포터블 단일 exe 그대로 설치(추가 파일 0 — 최소파일 규율 공유)
+; 포터블 단일 exe 그대로 설치(exe는 여전히 단일 파일 — 최소파일 규율 유지)
 Source: "{#ExePath}"; DestDir: "{app}"; DestName: "NexaDir.exe"; Flags: ignoreversion
+; 미리보기 플러그인 동봉(docs/21 §5-2) — 앱은 `<exe 폴더>\plugins`(읽기 전용 동봉분)와
+; `data\plugins`(사용자 설치분) 양쪽을 읽는다. Program Files 설치에서도 읽기만 하므로
+; 권한 문제가 없고, 사용자가 같은 id의 최신 빌드를 data\plugins에 넣으면 그쪽이 이긴다.
+Source: "{#PluginsDir}\*.wasm"; DestDir: "{app}\plugins"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\Nexa Dir"; Filename: "{app}\NexaDir.exe"

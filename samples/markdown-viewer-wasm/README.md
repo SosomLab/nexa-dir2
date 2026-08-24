@@ -24,6 +24,10 @@ cargo build --release --target wasm32-unknown-unknown
 copy target\wasm32-unknown-unknown\release\markdown_viewer.wasm  <NexaDir>\data\plugins\
 ```
 
+저장소에서는 `pwsh scripts/build-plugins.ps1`로 **두 동봉 플러그인**(이 플러그인 +
+`archive-viewer-wasm`)을 한 번에 빌드하고 각 `dist/`까지 갱신한다 — 절차 SSOT =
+[18 §3-1](../../docs/18-build-and-test.md), 배포 형태 = [21 §5-2](../../docs/21-distribution.md).
+
 앱 재시작 = 재로드. **`.wasm` 1개가 전 OS/아키텍처에서 동일 동작**(크로스플랫폼
 단일 아티팩트 — 이 샘플 80KB). 산출물 갱신 시 `dist/markdown.wasm`도 함께 교체
 (저장소 E2E: `cargo test -p nexa-app preview::`).

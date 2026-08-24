@@ -24,6 +24,17 @@ jobs:
       - run: rustup show # rust-toolchain.toml 적용
       - run: cargo test --workspace
       - run: cargo build --release -p nexa-app
+      # 동봉 플러그인(docs/21 §5-2) — 소스에서 빌드해 `plugins\`에 모은다.
+      # 저장소의 samples/*/dist는 건드리지 않는다(-SkipDist): 그 파일은 E2E 테스트용
+      # 고정 산출물이고, 배포본은 이 태그의 소스로 방금 빌드한 것을 쓴다.
+      - run: rustup target add wasm32-unknown-unknown
+      - name: 동봉 플러그인 빌드 — markdown.wasm · archive.wasm
+        shell: pwsh
+        run: |
+          pwsh scripts/build-plugins.ps1 -OutDir plugins -SkipDist
+          Get-Item plugins\*.wasm | ForEach-Object {
+            Write-Output "plugin: $($_.Name) = $([math]::Round($_.Length / 1KB, 1)) KB"
+          }
       - name: 예산 B2 — 단일 exe ≤ 10MB (docs/18 §6)
         shell: pwsh
         run: |
@@ -47,7 +58,8 @@ jobs:
           $ver = "${{ github.ref_name }}".TrimStart("v")
           if ("${{ github.ref_type }}" -ne "tag") { $ver = "0.0.0" }
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          & $iscc /DAppVersion=$ver /DExePath="$PWD\target\release\nexa-app.exe" installer\nexa.iss
+          & $iscc /DAppVersion=$ver /DExePath="$PWD\target\release\nexa-app.exe" `
+            /DPluginsDir="$PWD\plugins" installer\nexa.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 실패: $LASTEXITCODE" }
           Get-Item installer\out\NexaDir-Setup-*.exe | ForEach-Object {
             Write-Output "설치형: $($_.Name) = $([math]::Round($_.Length / 1MB, 2)) MB"
@@ -86,15 +98,20 @@ jobs:
             "Verify the SHA-256 against SHA256SUMS.txt on the release page."
           )
           Set-Content -Path README.txt -Value $notice -Encoding utf8BOM
-          Compress-Archive -Path "NexaDir-$ver-win-x64.exe", README.txt `
+          # 포터블 zip = exe + 안내 + **동봉 플러그인**(압축 풀면 exe 옆 plugins\ —
+          # 앱이 <exe 폴더>\plugins와 data\plugins 양쪽을 읽는다. docs/21 §5-2)
+          Compress-Archive -Path "NexaDir-$ver-win-x64.exe", README.txt, plugins `
             -DestinationPath "NexaDir-$ver-win-x64.zip" -CompressionLevel Optimal
           Compress-Archive -Path "installer\out\NexaDir-Setup-$ver.exe", README.txt `
             -DestinationPath "NexaDir-Setup-$ver.zip" -CompressionLevel Optimal
+          # 단일 exe만 받은 사용자를 위한 플러그인 단독 자산(exe 옆에 풀면 끝)
+          Compress-Archive -Path "plugins\*.wasm" `
+            -DestinationPath "NexaDir-Plugins-$ver.zip" -CompressionLevel Optimal
           Get-Item NexaDir-*.zip | ForEach-Object {
             Write-Output "zip: $($_.Name) = $([math]::Round($_.Length / 1MB, 2)) MB"
           }
 
-      - name: SHA256SUMS.txt — 자산 4종 체크섬 (README.txt 무결성 확인 안내의 대조본)
+      - name: SHA256SUMS.txt — 자산 5종 체크섬 (README.txt 무결성 확인 안내의 대조본)
         if: github.ref_type == 'tag'
         shell: pwsh
         run: |
@@ -104,6 +121,7 @@ jobs:
             "NexaDir-$ver-win-x64.zip"
             "installer\out\NexaDir-Setup-$ver.exe"
             "NexaDir-Setup-$ver.zip"
+            "NexaDir-Plugins-$ver.zip"
           )
           $lines = foreach ($a in $assets) {
             $h = (Get-FileHash -Algorithm SHA256 $a).Hash.ToLower()
@@ -157,8 +175,11 @@ jobs:
             installer/out/NexaDir-Setup-*.exe
             NexaDir-*.zip
             SHA256SUMS.txt
+            plugins/*.wasm
             packaging/chocolatey/out/*.nupkg
-      - name: GitHub Release 생성·자산 첨부 (태그 push에서만 — exe 2 + zip 2 + 체크섬)
+      # 자산 = exe 2 + zip 3(포터블·설치형·플러그인) + 체크섬. 플러그인 zip은
+      # 단일 exe만 받은 사용자를 위한 것(포터블 zip·설치본에는 이미 들어 있다).
+      - name: GitHub Release 생성·자산 첨부 (태그 push에서만 — exe 2 + zip 3 + 체크섬)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:

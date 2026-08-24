@@ -87,6 +87,29 @@ EV의 SmartScreen 즉시 통과는 2024년 폐지, Azure Artifact Signing은 한
 SignPath Foundation은 라이선스 결격. 경고를 완전히 없애는 유일한 무료 경로는
 **Microsoft Store(MSIX 재서명)** 이며 별건 검토 대상이다.
 
+## 5-2. 동봉 플러그인 (2026-08-24 — 사용자 지시 "빌드해서 함께 배포")
+
+미리보기 플러그인 2종(`markdown.wasm` · `archive.wasm`)을 **릴리스에 함께 싣는다**.
+빌드는 태그의 소스에서 CI가 수행한다([18 §3-1](18-build-and-test.md) — `scripts/build-plugins.ps1`).
+
+| 채널 | 플러그인 위치 | 비고 |
+| --- | --- | --- |
+| 포터블 zip `NexaDir-<ver>-win-x64.zip` | 압축 해제 시 exe 옆 `plugins\` | 풀면 바로 동작 |
+| 설치형 exe·zip | `{app}\plugins\`(Inno `[Files]`) | 제거 시 함께 삭제 |
+| 포터블 **단일 exe**(`.exe` 자산) | 없음 — **최소파일 규율 유지**(§2) | 아래 zip으로 보충 |
+| **`NexaDir-Plugins-<ver>.zip`**(신규 자산) | 두 `.wasm`만 | 단일 exe 사용자용 — exe 옆 `plugins\`에 풀면 끝 |
+
+**앱의 탐색 순서**([`preview::plugin_dirs`](../crates/nexa-app/src/preview/mod.rs)):
+① `data\plugins\`(사용자 설치분 — 포터블 = exe 옆 `data\`, 설치형 =
+`%LOCALAPPDATA%\NexaDir\data`) → ② `<exe 폴더>\plugins\`(동봉분·읽기 전용).
+**같은 id면 ①이 이긴다** — 사용자가 직접 빌드한 최신본으로 덮어쓸 수 있고,
+Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 없다.
+
+**교체·제거**: `.wasm` 파일을 넣거나 지우고 앱을 다시 시작하면 된다(설치·재빌드 불요).
+설정 > 플러그인에서 개별 사용 여부를 끌 수도 있다(끄면 내장 미리보기로 대체).
+
+체크섬(SHA256SUMS.txt)은 플러그인 zip을 포함해 **자산 5종**을 담는다.
+
 ## 6. 검증 체크리스트 (실기 QA)
 
 - [ ] 포터블: 임의 폴더에서 실행 → `data\` 생성·설정 영속.

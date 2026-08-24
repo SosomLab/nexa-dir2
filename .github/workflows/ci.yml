@@ -28,6 +28,12 @@ jobs:
       - run: rustup show
       - run: cargo test --workspace
       - run: cargo build --release -p nexa-app
+      # 동봉 플러그인은 별도 크레이트(워크스페이스 밖·wasm 타깃)라 위 test/build가
+      # 건드리지 않는다 — 릴리스에서 처음 깨지는 일이 없도록 CI에서도 빌드한다.
+      - run: rustup target add wasm32-unknown-unknown
+      - name: 동봉 플러그인 빌드 검증 (samples/*-wasm — docs/18 §3-1)
+        shell: pwsh
+        run: pwsh scripts/build-plugins.ps1 -OutDir target/release/plugins -SkipDist
       - name: 예산 B2 — 단일 exe ≤ 10MB (docs/18 §6)
         shell: pwsh
         run: |

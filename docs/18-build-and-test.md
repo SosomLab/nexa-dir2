@@ -36,6 +36,37 @@ cargo build --release -p nexa-app
 - 워크스페이스 `[profile.release]`: `opt-level=3` · `lto="fat"` · `codegen-units=1` · `panic="abort"` · `strip="symbols"`.
 - `.cargo/config.toml`: `target.x86_64-pc-windows-msvc.rustflags = ["-C", "target-feature=+crt-static"]` — CRT 정적 링크(재배포 런타임 0).
 
+## 3-1. 동봉 플러그인(.wasm) 빌드 — samples/*-wasm
+
+미리보기 플러그인은 **워크스페이스 밖 독립 크레이트**(타깃이 `wasm32-unknown-unknown`)라
+`cargo test --workspace`·`cargo build`가 건드리지 않는다. 배포에 함께 싣는 두 개
+(`markdown.wasm`·`archive.wasm`)는 **단일 출처 스크립트**로 빌드한다.
+
+```powershell
+rustup target add wasm32-unknown-unknown        # 최초 1회
+
+pwsh scripts/build-plugins.ps1                  # 빌드 + samples/*/dist 갱신
+pwsh scripts/build-plugins.ps1 -OutDir plugins  # 배포 스테이징(plugins\)에도 복사
+pwsh scripts/build-plugins.ps1 -SkipDist -OutDir plugins   # dist는 그대로(릴리스 CI 방식)
+```
+
+| 대상 | 산출물 | 쓰임 |
+| --- | --- | --- |
+| `samples/markdown-viewer-wasm` | `dist/markdown.wasm` | 저장소 동봉본 — **E2E 테스트가 로드** |
+| `samples/archive-viewer-wasm` | `dist/archive.wasm` | 〃 |
+| `-OutDir`(예: `plugins\`) | 두 파일 | 배포 스테이징 — 포터블 zip·설치본·플러그인 zip |
+
+- **CI**: windows 잡이 같은 스크립트로 빌드 검증(릴리스에서 처음 깨지지 않게).
+- **릴리스**: 태그의 소스로 다시 빌드해 배포한다(`-SkipDist` — 저장소 `dist/`는
+  테스트용 고정본이라 릴리스가 덮어쓰지 않는다).
+- **플러그인을 고쳤다면**: `pwsh scripts/build-plugins.ps1` → `cargo test -p nexa-app preview::sample`
+  (E2E가 새 `dist/*.wasm`을 검증) → `dist/*.wasm`까지 **같은 커밋에 포함**.
+- 새 플러그인을 동봉 대상에 추가하려면 [scripts/build-plugins.ps1](../scripts/build-plugins.ps1)의
+  `$plugins` 배열에 한 줄 추가하면 된다(빌드·복사·CI·릴리스가 함께 따라온다).
+
+앱에서의 적용 경로·교체 방법은 [24 §4](24-plugin-dev-guide.md) · 배포 형태는
+[21 §5-2](21-distribution.md).
+
 ## 4. CI
 
 `.github/workflows/ci.yml` — push/PR마다:
