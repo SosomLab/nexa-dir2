@@ -12,7 +12,7 @@
 | **설치형(보조)** | `NexaDir-Setup-<버전>.exe` | 시작 메뉴·바탕화면·제거 목록 원하는 사용자 | exe 옆 `data\`(사용자별 설치) 또는 `%LOCALAPPDATA%\NexaDir\data`(폴백) |
 
 두 채널 모두 **버전 태그 push 1회**로 GitHub Release에 자동 첨부된다(release.yml).
-자산은 exe 2종 + **zip 2종 + `SHA256SUMS.txt`**(§5-1) = 5개.
+자산은 exe 2종 + **zip 3종**(포터블·설치형·**플러그인** §5-2) + `SHA256SUMS.txt` = 6개.
 
 ## 2. 포터블 — 최소파일 규율
 
@@ -73,8 +73,9 @@ Release에 **포터블 + 설치형 동시 첨부**. workflow_dispatch = 게이�
 
 - **기존 exe 자산은 절대 교체하지 않는다** — winget(§8)·choco(§7) 매니페스트가
   URL+SHA256으로 직접 참조하므로 교체 시 3채널이 동시에 깨진다.
-- 자산 5종: `NexaDir-<버전>-win-x64.exe` · `NexaDir-Setup-<버전>.exe` ·
-  `NexaDir-<버전>-win-x64.zip` · `NexaDir-Setup-<버전>.zip` · `SHA256SUMS.txt`.
+- 자산 6종: `NexaDir-<버전>-win-x64.exe` · `NexaDir-Setup-<버전>.exe` ·
+  `NexaDir-<버전>-win-x64.zip` · `NexaDir-Setup-<버전>.zip` ·
+  `NexaDir-Plugins-<버전>.zip`(§5-2) · `SHA256SUMS.txt`.
 - zip에는 exe + **`README.txt`**(무서명 경고 예고·[추가 정보]>[실행] 안내·
   `Get-FileHash` 대조법 · 한/영 · UTF-8 BOM) 동봉.
 - **안내는 포터블 zip 우선.** 설치형 zip은 압축을 풀어도 UAC "알 수 없는 게시자"
@@ -108,7 +109,7 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
 **교체·제거**: `.wasm` 파일을 넣거나 지우고 앱을 다시 시작하면 된다(설치·재빌드 불요).
 설정 > 플러그인에서 개별 사용 여부를 끌 수도 있다(끄면 내장 미리보기로 대체).
 
-체크섬(SHA256SUMS.txt)은 플러그인 zip을 포함해 **자산 5종**을 담는다.
+체크섬(SHA256SUMS.txt)에는 플러그인 zip을 포함한 **5개 파일**(exe 2 + zip 3)의 해시가 들어간다.
 
 ## 6. 검증 체크리스트 (실기 QA)
 
@@ -117,7 +118,9 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
 - [ ] 설치형(관리자): Program Files 설치 → `%LOCALAPPDATA%\NexaDir\data` 폴백 확인.
 - [ ] 제거 → 데이터 보존·재설치 시 설정 복원.
 - [ ] 태그 push → Release에 산출물 2종 첨부(다음 버전 태그에서 확인).
-- [ ] 태그 push → Release 자산 **5종**(exe 2 + zip 2 + SHA256SUMS.txt) 첨부(§5-1).
+- [ ] 태그 push → Release 자산 **6종**(exe 2 + zip 3 + SHA256SUMS.txt) 첨부(§5-1·§5-2).
+- [ ] 포터블 zip 해제 → exe 옆 `plugins\`에 `.wasm` 2개 → 앱 재시작 후 설정 > 플러그인에 2건 표시(§5-2).
+- [ ] 설치형 설치 → `{app}\plugins\` 동봉 확인 → 제거 시 함께 삭제.
 - [ ] 브라우저에서 **zip 다운로드가 차단되지 않는지** 확인(원 증상 재현 대조).
 - [ ] zip 해제 → `README.txt` 한글 정상 표시 → exe 실행(SmartScreen 경고는 예상 동작).
 - [ ] `Get-FileHash`가 `SHA256SUMS.txt` 값과 일치.
@@ -300,16 +303,23 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
   — **채널 제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출. `winget validate`
   경고 2건[PortableCommandAlias 미지 필드·portable Scope]은 0.16.0 병합본과 동일 구조).
 
-### 채널 상태 요약 (2026-08-23 재점검 — 원천 실측: PR 라벨 JSON·`winget show --versions`·choco 패키지 페이지)
+### 채널 상태 요약 (2026-08-24 재점검 — 원천 실측: `gh pr list/view` JSON·choco 패키지 페이지)
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.16.0**(0.8.1/0.11.0/0.12.0/0.13.0/0.16.0 상주) | ⏳ **`0.17.0` 제출**([#422930](https://github.com/microsoft/winget-pkgs/pull/422930) OPEN — 08-23 저녁·**제출 규칙 첫 적용**: 대기 없음 확인 후 제출). 직전 [#415214](https://github.com/microsoft/winget-pkgs/pull/415214) 0.16.0 MERGED 08-11 | 없음(상태 추적) |
-| winget | `SosomLab.NexaDir`(설치형) | **0.16.0**(0.8.1/0.16.0) | ⏳ **`0.17.0` 제출**([#422931](https://github.com/microsoft/winget-pkgs/pull/422931) OPEN). 직전 [#415215](https://github.com/microsoft/winget-pkgs/pull/415215) 0.16.0 MERGED 08-14(waiver 경유) | 없음(상태 추적) |
+| winget | `SosomLab.NexaDir.Portable` | **0.17.0** | ✅ [#422930](https://github.com/microsoft/winget-pkgs/pull/422930) **MERGED**(08-23 15:10Z — 제출 당일 병합) | 없음 |
+| winget | `SosomLab.NexaDir`(설치형) | **0.17.0** | ✅ [#422931](https://github.com/microsoft/winget-pkgs/pull/422931) **MERGED**(08-23 15:10Z — 이번엔 waiver 없이 당일) | 없음 |
 | Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 무이벤트 — 08-23 페이지 실측 무변동. 자동 3단계는 완료, 사람 검토만 미착수) | **push 제외 유지**(제출 규칙 — 대기 중. 0.17.0도 팩 success·push skipped 확인) |
 | Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21) | 동일 |
 | GitHub Release | 포터블 + 설치형 | **0.17.0** (08-23 — X-42 가상 파일·X-43 글리프·X-44 즉시 갱신·X-45 항상 맨 위) | ✅ 상시(자산 5종 규약 — 포터블 3.71MB·SHA 이중 확인) | — |
 
+> **08-24 재점검**: `gh pr list --author kiros33 --state open`에 **NexaDir PR 0건**
+> (열려 있는 것은 NexaBeep·NexaMemKeeper뿐) · [#422930](https://github.com/microsoft/winget-pkgs/pull/422930)·
+> [#422931](https://github.com/microsoft/winget-pkgs/pull/422931) 둘 다 **MERGED**(08-23 15:10Z,
+> 제출 ~2시간 만) = winget 두 채널이 `0.17.0`으로 최신 릴리스와 동기. 따라서 다음 릴리스는
+> [채널 제출 규칙](#릴리스-시-채널-제출-규칙-2026-08-23--사용자-지시상시-규칙)상 **winget 제출 대상**
+> (choco는 0.8.1이 잠긴 채라 계속 제외).
+>
 > **08-23 재점검**: winget 0.16.0 PR 2건이 **둘 다 병합·카탈로그 라이브 확인**
 > (`winget show --versions` 실측). 포터블은 제출 당일(08-11) 병합 — 역대 최단.
 > 설치형은 08-14 `Waived-Policy-Test-1.2`로 병합(첫 버전 업데이트도 waiver 경로를

@@ -27,8 +27,18 @@
 >   **ISO 9660(Joliet)·ar·cpio를 31KB `.wasm` 하나**로(앱 재빌드 없이 포맷 확장 =
 >   "별도 개발 후 최종 파일만 배포") · 설계 SSOT [28](28-archive-preview.md) ·
 >   가이드 [24 §3-1](24-plugin-dev-guide.md)
-> - 게이트: 워크스페이스 **319 green**(신규 44) · clippy 0 · 비Windows check ·
->   **B2 3.83MB** ≤10 · **B3 21종 무변**(신규 DLL 0) · 외부 crate 0(DR-8 유지)
+> - **동봉 플러그인 배포 신설**(사용자 지시 "빌드해서 markdown.wasm과 함께 배포") —
+>   착수 실측에서 **릴리스 파이프라인에 `wasm`이 한 번도 없었다**는 사실 확인(플러그인은
+>   저장소에만 있고 배포된 적 없음) → ① 빌드 단일 출처 [scripts/build-plugins.ps1](../scripts/build-plugins.ps1)
+>   + **CI 편입**(워크스페이스 밖 크레이트라 안 건드리면 릴리스 당일 첫 실패) ②
+>   **탐색 경로 2원화**(`data\plugins` 사용자 설치분 → `<exe>\plugins` 동봉분·같은 id는
+>   사용자분 우선) ③ 포터블 zip 동봉 · 설치형 `{app}\plugins` · **`NexaDir-Plugins-<ver>.zip`
+>   신규 자산**(단일 exe 자산은 최소파일 규율 유지) ④ 설명 문서 6곳(18 §3-1 빌드 SSOT ·
+>   21 §5-2 배포 형태 · 24 §4-2 두 경로/수정 절차 · README · 위키 2쪽 · 샘플 README)
+> - 게이트: 워크스페이스 **319 green**(신규 44 · 이후 동봉 작업으로 앱 127) · clippy 0 ·
+>   비Windows check · **B2 3.83MB** ≤10 · **B3 21종 무변**(신규 DLL 0) · 외부 crate 0(DR-8 유지)
+> - 채널(08-24 실측): winget `0.17.0` PR 2건 **둘 다 MERGED**(08-23 15:10Z — 제출 ~2시간 만) =
+>   두 채널 최신과 동기 · choco 2종은 0.8.1 잠김 유지 → 제출 규칙상 **다음 릴리스는 winget 제출·choco 제외**
 >
 > ---
 >
