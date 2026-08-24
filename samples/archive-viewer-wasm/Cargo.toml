@@ -1,0 +1,20 @@
+# ArchiveViewerPlugin(wasm) — Nexa Dir 압축 목록 플러그인 참조 구현(ABI v2 · X-46).
+# 빌드: cargo build --release --target wasm32-unknown-unknown
+# 산출: target/wasm32-unknown-unknown/release/archive_viewer.wasm → data\plugins\ 복사.
+[package]
+name = "archive-viewer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+# 앱 워크스페이스와 분리(타깃이 다름 — 독립 프로젝트)
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = "symbols"
+codegen-units = 1
