@@ -70,7 +70,8 @@
 | [18 빌드 & 테스트](18-build-and-test.md) | ★ 빌드·테스트·예산 측정 절차(SSOT) |
 | [15 개발 방법론](15-dev-methodology.md) | 수직 슬라이스·커밋 규약·단위 백로그 |
 | [16 문서·커밋/푸시 규약](16-doc-git-conventions.md) | ★ 문서 4층 체계·커밋/브랜치/푸시 규칙 — **타 프로젝트 이식용 지시문 포함** |
-| [24 플러그인 개발 가이드](24-plugin-dev-guide.md) | ★ WASM(.wasm) 플러그인 — ABI·호스트 API·빌드→배포 전 과정(markdown-viewer-wasm 샘플) |
+| [24 플러그인 개발 가이드](24-plugin-dev-guide.md) | ★ WASM(.wasm) 플러그인 — ABI·호스트 API·빌드→배포 전 과정(markdown-viewer-wasm 샘플) + **ABI v2 압축 목록**(§3-1) |
+| [28 압축 파일 미리보기](28-archive-preview.md) | ★ 압축 목록 계층(포맷 레지스트리·zip/tar/cab/rar/7z/스트림)·그리드 창·**암호 비기록 규약**·플러그인 확장 |
 
 ---
 

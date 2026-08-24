@@ -1,51 +1,47 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-08-23 (KST · 하루 주제별 통합)** — **X-42 가상 파일 1·2차 완결 +
-> X-43 빈 폴더 글리프 + X-44 간헐 무갱신 1~5차 + X-45 항상 맨 위 + 채널 완전 동기**
-> (상세는 [journal/2026-08-23.md](journal/2026-08-23.md) — 실기 QA 전부 대기):
+> **갱신: 2026-08-24 (KST)** — **X-46 압축 파일 미리보기**(사용자 요청 — 그리드·별도 창·
+> 내장+플러그인·암호 비기록·확장 용이. 상세는 [journal/2026-08-24.md](journal/2026-08-24.md) —
+> **실기 QA 대기**):
 >
-> - **X-42 가상 파일 붙여넣기 1·2차 완결** — 맥 RDP 복사분이 앱에서 안 붙던 결함:
->   원격 소스는 실경로 없이 **가상 파일 2종**(FileGroupDescriptorW + FileContents
->   IStream — Outlook 첨부·zip 내부·MTP 동일 규약)이라 CF_HDROP 전용 읽기가 못 봤다
->   → 1차 = 클립보드 폴백(경로 탈출 기각·충돌 " (2)"·가짜 IDataObject 종단 테스트) ·
->   2차 = ⓐ DnD 수신 ⓑ **워커화**(스트림 마샬링 — 대용량 중 창 반응·진행/취소 =
->   클라우드 전송 공용 슬롯) ⓒ undo(휴지통 왕복 역방향 `VPasteOp`) ⓓ 클라우드 대상
->   업로드 연계(스테이징 → X-37 경로)
-> - **X-43 빈 폴더 펼침 글리프 억제 + β** — 현재 보기로 보여줄 자식이 없는 폴더는
->   ▸ 미표시(설정 `hide_empty_glyph` 기본 켬·해제 = 현행 복귀). 열거 완료 = 트리
->   실측 · 미열거 = read_dir 조기 종료 프로브(NodeId 캐시) · `RowItem.is_dir` 분리로
->   폴더 서식 유지 · β = 느린 경로(UNC·원격·광학) 프로브 생략(페인트 60fps 우선)
-> - **X-44 간헐 무갱신 1~5차**("간혹 F5" 전수 조사 → 실측 → 사용자 원칙 확정 연쇄):
->   조사(유실 시나리오 8건) → ①차 탭 활성화 = 무간섭 재열람(`Tab.stale`)·프로브
->   기준선 즉시·서명 fold 강화·WM_DEVICECHANGE·소실 폴더 조상 폴백 → ②차 뷰포트
->   접힌 폴더 감시 합류 → ③차 비활성(보이는 창) 폴링 유지 → ④차 **실측 확정:
->   OneDrive 플레이스홀더 생성은 부모 mtime도 RDCW 통지도 안 남긴다**(삭제는 통지 —
->   FSW 로그 대조. "생성만 안 뜨던" 비대칭의 최종 원인) → 뷰포트 서명(상한 내 열거
->   fold) 점검 → ⑤차 **셸 변경 통지 구독**([shellnotify.rs](../crates/nexa-app/src/shellnotify.rs)
->   — 탐색기가 즉시 갱신되는 SHChangeNotify 채널·재귀·인박스 B3 무변) = **이벤트
->   1선(셸 통지+RDCW) + 감속 스윕 보험 2선**(비활성 30s·정지는 최소화만).
->   비활성 유지 캡처 실험으로 글리프 갱신 검증 완료
-> - **X-45 항상 맨 위에 표시** — View 메뉴 + 툴바 압정 버튼(`CMD_TOGGLE_TOPMOST`
->   공유)·즉시 적용·체크 동기·설정 영속·기존 toolbar_order 보충 삽입
-> - **릴리스 `0.17.0` 배포**(사용자 지시 — 저녁) — [Release](https://github.com/SosomLab/nexa-dir2/releases/tag/0.17.0)
->   자산 5종(포터블 **3.71MB** ≤10·설치형 3.27MB·zip 2·SHA256SUMS — 재다운로드 이중
->   확인) · choco 팩 success·**push skipped** 확인 · **winget 0.17.0 PR 2건 제출**
->   ([#422930](https://github.com/microsoft/winget-pkgs/pull/422930) Portable ·
->   [#422931](https://github.com/microsoft/winget-pkgs/pull/422931) 설치형 — **채널
->   제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출) · 사용자 문서 동일
->   트랜잭션(README·위키 7페이지 — 기능 4·버전 3) + 위키 발행
-> - **채널·규칙·정리** — **winget 0.16.0 PR 2건 병합 확인**(두 채널 카탈로그 0.16.0 =
->   당시 최신과 **완전 동기** · 심사 대기는 choco 2건만) · **릴리스 채널 제출 규칙**
->   명문화([21 §8](21-distribution.md) — 대기 없으면 제출·있으면 제외) · "심사 중"
->   표기 4곳 정정. 전 게이트 green(116 tests·clippy 0·비Windows check·B2 3.71MB·
->   B3 무변 — 신규 DLL 0)
+> - **압축을 풀지 않고 목록만 읽는 계층 신설**([nexa-vfs/archive](../crates/nexa-vfs/src/archive/)) —
+>   거의 모든 포맷이 항목 표를 평문으로 갖고 있다는 사실이 설계를 결정했다. 포맷
+>   레지스트리 = **새 포맷은 파일 1개 + 한 줄**(확장자·판정·라우팅·컬럼은 파생).
+>   내장 = ZIP(Zip64·AES/ZipCrypto 표시·SFX 델타 보정·중앙 디렉터리 암호화 = 암호 요구·
+>   26개 확장자) · TAR(ustar/GNU/PAX) · CAB · RAR 5/4 · 7z(헤더가 LZMA → **플러그인 안내**) ·
+>   단일 스트림(gz/bz2/xz/zst/lz4/lz/z). 경로 탈출(zip slip) 정규화 + 위험 표시
+> - **표시 2종** — 하단 도크 = 요약(포맷·개수·크기·절감률·암호/솔리드/분할 + 앞 60개) ·
+>   **별도 그리드 창**([archivewnd](../crates/nexa-app/src/archivewnd.rs) — **NxGrid 재사용**으로
+>   파일 그리드 규약 계승: 8열·헤더 정렬(크기·시각·압축률은 수치 기준)·다중 선택·
+>   `Ctrl+C` TSV 복사·`Esc`). F3·도크 ↗가 압축이면 이 창으로 라우팅(재조회 없음).
+>   **시각 이중 보정 차단**(DOS 시각 = 현지 벽시계 그대로·Unix epoch만 보정) ·
+>   구형 zip CP949 이름 디코더 주입
+> - **암호는 구조로 강제**([Secret](../crates/nexa-core/src/secret.rs)) — `Debug`는
+>   `Secret(***)`(길이도 비노출)·`Display`/직렬화 없음·Drop `write_volatile` 소거 ·
+>   마스킹 입력 모달([pwprompt](../crates/nexa-app/src/pwprompt.rs))이 회수 즉시 이동 +
+>   경유 UTF-16·EDIT 내용·되돌리기 버퍼 소거 · **저장 경로가 코드에 아예 없다**
+>   (세션 메모리 한정 — 토큰용 DPAPI 경로와 의도적 분리) · 틀린 암호는 폐기 후 재시도
+> - **플러그인 ABI v2**(하위 호환) — `nx_meta` 4번째 줄 = 능력 선언(`archive`) ·
+>   `nx_archive()` · 임포트 `file_size`/`read_at`/`password`(활성 암호만·없으면 -1).
+>   참조 구현 [samples/archive-viewer-wasm](../samples/archive-viewer-wasm/) =
+>   **ISO 9660(Joliet)·ar·cpio를 31KB `.wasm` 하나**로(앱 재빌드 없이 포맷 확장 =
+>   "별도 개발 후 최종 파일만 배포") · 설계 SSOT [28](28-archive-preview.md) ·
+>   가이드 [24 §3-1](24-plugin-dev-guide.md)
+> - 게이트: 워크스페이스 **319 green**(신규 44) · clippy 0 · 비Windows check ·
+>   **B2 3.83MB** ≤10 · **B3 21종 무변**(신규 DLL 0) · 외부 crate 0(DR-8 유지)
 >
 > ---
 >
-> **이전 이력 요약 (08-11 ~ 07-15)** — 상세는 [DEVLOG](DEVLOG.md)와 각 일자
+> **이전 이력 요약 (08-23 ~ 07-15)** — 상세는 [DEVLOG](DEVLOG.md)와 각 일자
 > [journal/](journal/). 아래는 하루 한 줄 색인이며, **원문은 삭제되지 않고
 > journal에 그대로 있다**(STATUS = "지금 상태 한 장" 규약 — [16 §1](16-doc-git-conventions.md)).
 >
+> - **08-23** — **X-42 가상 파일 붙여넣기 1·2차 + X-43 빈 폴더 글리프 + X-44 간헐
+>   무갱신 1~5차 + X-45 항상 맨 위 → 릴리스 `0.17.0`**: 원격(RDP)·Outlook·zip 내부 복사분이
+>   안 붙던 결함을 가상 파일 2종 폴백으로 해소(워커화·undo·DnD·클라우드) · 빈 폴더 ▸ 억제 ·
+>   "간혹 F5" 전수 조사 → **OneDrive 플레이스홀더 생성은 mtime도 통지도 안 남긴다** 실측 확정 →
+>   **셸 변경 통지 구독**(이벤트 1선 + 감속 스윕 2선) · 항상 맨 위 토글 · winget 2건 제출
+>   (채널 제출 규칙 첫 적용). [journal/2026-08-23](journal/2026-08-23.md)
 > - **08-11** — **X-40 자동 갱신 + X-41 바 크기 → 릴리스 `0.15.0`·`0.16.0` + winget 2건
 >   제출 + 위키 발행**: 갱신 계기가 RDCW 통지 하나뿐이던 것을 [fsprobe.rs](../crates/nexa-app/src/fsprobe.rs)
 >   (mtime 프로브)+활성화 갱신+3s 폴링(창 활성 시에만)으로 해소 · 바 크기 실물 QA 3라운드

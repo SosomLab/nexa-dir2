@@ -4,6 +4,7 @@
 > 독립 프로젝트로 만들고 배포하기까지의 전 과정. 참조 구현 =
 > [`samples/markdown-viewer-wasm`](../samples/markdown-viewer-wasm/)(GitHub 렌더+Mermaid, 80KB).
 >
+> - 압축 목록 플러그인(ABI v2 — X-46): **§3-1** · 설계 = [28](28-archive-preview.md)
 > - 결정 배경: [25 ADR-0005](25-adr-0005-wasm-plugins.md)(왜 wasmi인가 — 크로스플랫폼 단일
 >   아티팩트·격리·러스트 개발) · [09 ADR-0004](09-adr-0004-preview-plugins.md)(시임·매핑 설계)
 > - 이전 Starlark 판 가이드: git 이력(`git log -- docs/24-plugin-dev-guide.md`)
@@ -129,6 +130,53 @@ pub extern "C" fn nx_preview() -> *mut u8 {
 | `\u{2}hr\|` | 수평선 괘선 |
 | `\u{1}img\|<경로>` + `\u{1}pad`×n | 인라인 이미지(n+1행 예약 — render_svg 산출 BMP 등) |
 | (무접두) | 본문 — 프로포셔널 |
+
+## 3-1. ABI v2 — 압축 목록 플러그인 (X-46)
+
+압축 파일은 **줄 텍스트가 아니라 항목 표**로 보여 준다(도크 = 요약 · 별도 창 =
+그리드). 미리보기 플러그인과 같은 시임을 쓰되 export/import 몇 개가 더해진다 —
+설계 SSOT는 [28 압축 미리보기](28-archive-preview.md), 참조 구현은
+[`samples/archive-viewer-wasm`](../samples/archive-viewer-wasm/)(ISO 9660·ar·cpio, 31KB).
+
+**선언** — `nx_meta()`의 **4번째 줄**에 능력을 적으면 호스트가 `nx_archive()`를 부른다
+(4번째 줄이 없으면 종전과 동일한 미리보기 전용 플러그인 = 하위 호환).
+
+```
+archive-sample\nArchive Sample\niso,a,deb,lib,cpio\narchive
+   id             표시명            확장자                 ← 능력 선언
+```
+
+**반환**(`nx_archive()`) — 첫 줄이 종류:
+
+| 첫 줄 | 이후 |
+| --- | --- |
+| `archive` | 둘째 줄 `표시명	플래그`(플래그 = `solid,multivolume,truncated`), 셋째 줄부터 항목 1줄씩 |
+| `password` | 없음 — 호스트가 암호 입력창을 띄우고 **같은 호출을 재시도**한다 |
+| `error` | 둘째 줄 = 사용자에게 보일 사유 |
+
+항목 1줄 = `경로	원본 크기	압축 크기	시각(Unix 초)	속성	방식`
+(속성 = `dir`·`enc`[내용 암호화]·`utc`[시각이 UTC epoch]·`unsafe` 쉼표 목록.
+모르는 값은 빈 칸. 시각에 `utc`가 없으면 **현지 벽시계 값**으로 해석한다 — DOS 시각 계열).
+
+**추가 import**:
+
+| import | 시그니처 | 설명 |
+| --- | --- | --- |
+| `file_size` | `() -> i64` | 대상 파일 크기(꼬리에서 읽는 포맷의 오프셋 계산) |
+| `read_at` | `(off, ptr, cap) -> n` | **대상 파일** 임의 위치 읽기(1회 4MB 클램프) |
+| `password` | `(ptr, cap) -> n` | 사용자가 방금 입력한 암호. **없으면 -1** |
+
+```rust
+// 암호가 필요한 포맷의 표준 흐름(2줄)
+let mut pw = [0u8; 256];
+if unsafe { password(pw.as_mut_ptr(), 256) } < 0 {
+    return ret("password"); // 호스트가 입력받아 재호출
+}
+```
+
+암호 규약: 호스트는 값을 게스트 메모리에 **1회 복사**할 뿐이고 인스턴스는 호출 종료와
+함께 폐기된다. 플러그인도 값을 파일에 쓰거나 반환 버퍼에 담아서는 안 된다(계약 —
+[28 §5](28-archive-preview.md)).
 
 ## 4. 빌드 → 적용 → 확인
 
