@@ -1,0 +1,96 @@
+# resubmit-chocolatey — 이미 공개된 릴리스의 Chocolatey 패키지를 재제출한다.
+#
+# 용도: 모더레이션 중 유지보수자 수정(nuspec·tools 변경)을 **같은 버전**으로 다시
+# 올릴 때. Chocolatey 규약상 검수 중에는 동일 버전을 재업로드하면 "Updated" 상태로
+# 큐 상단에 재진입한다(버전을 올리지 않는다).
+#
+# release.yml과의 차이 — 빌드하지 않는다. 지정 버전의 GitHub Release 자산을 내려받아
+# SHA-256을 계산하고, install 스크립트의 {{VERSION}}/{{CHECKSUM64}}를 치환한 뒤
+# choco pack → push 한다. 태그를 건드리지 않으므로 기존 Release는 그대로다.
+#
+# 안전장치: 손으로만 실행(workflow_dispatch)하고, `confirm` 입력이 정확히 'yes'이며
+# 시크릿 CHOCO_API_KEY가 있을 때만 push 한다. 이 워크플로는 CHOCO_PUSH 변수와
+# 무관하다(dispatch 자체가 사람의 명시적 의사).
+name: resubmit-chocolatey
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "재제출할 버전(예: 0.8.1) — 해당 태그의 Release 자산이 있어야 함"
+        required: true
+        type: string
+      confirm:
+        description: "push 확인 — 'yes'를 입력해야 실제로 커뮤니티 저장소에 올라감(그 외 = pack까지만)"
+        required: true
+        default: "no"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resubmit:
+    runs-on: windows-latest
+    env:
+      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 릴리스 자산 내려받기 + install 스크립트 렌더 + pack
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ inputs.version }}
+        run: |
+          $ver = "$env:VER".TrimStart("v")
+          New-Item -ItemType Directory assets, packaging\chocolatey\out -Force | Out-Null
+
+          # nexa-dir = 설치형 exe · nexa-dir.portable = 포터블 단일 exe (release.yml과 동일 규약)
+          $pkgs = @(
+            @{ Id = "nexa-dir";          Asset = "NexaDir-Setup-$ver.exe" }
+            @{ Id = "nexa-dir.portable"; Asset = "NexaDir-$ver-win-x64.exe" }
+          )
+          foreach ($p in $pkgs) {
+            gh release download $ver -R "${{ github.repository }}" --dir assets --pattern $p.Asset
+            if ($LASTEXITCODE -ne 0) { throw "자산 다운로드 실패: $($p.Asset) (태그 $ver)" }
+            $sha = (Get-FileHash -Algorithm SHA256 "assets\$($p.Asset)").Hash.ToLower()
+            Write-Output "$($p.Id): $($p.Asset) SHA-256 = $sha"
+
+            $ps1 = "packaging\chocolatey\$($p.Id)\tools\chocolateyinstall.ps1"
+            $raw = Get-Content $ps1 -Raw
+            $rendered = $raw.Replace("{{VERSION}}", $ver).Replace("{{CHECKSUM64}}", $sha)
+            if ($rendered -match '\{\{|\}\}') { throw "치환 후에도 플레이스홀더가 남았다: $($p.Id)" }
+            # BOM 보존(한글 주석 모지바케 방지 — 로컬 pwsh는 BOM 없이도 UTF-8이라 CI에서만 드러난다)
+            [System.IO.File]::WriteAllText((Resolve-Path $ps1), $rendered, (New-Object System.Text.UTF8Encoding($true)))
+
+            choco pack "packaging\chocolatey\$($p.Id)\$($p.Id).nuspec" --version $ver `
+              --outputdirectory packaging\chocolatey\out
+            if ($LASTEXITCODE -ne 0) { throw "choco pack 실패: $($p.Id)" }
+          }
+          Get-ChildItem packaging\chocolatey\out\*.nupkg | ForEach-Object { Write-Output "nupkg: $($_.Name)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chocolatey-resubmit-${{ inputs.version }}
+          path: packaging/chocolatey/out/*.nupkg
+
+      - name: choco push (confirm='yes' + 시크릿 있을 때만)
+        if: inputs.confirm == 'yes' && env.CHOCO_API_KEY != ''
+        shell: pwsh
+        env:
+          VER: ${{ inputs.version }}
+        run: |
+          $ver = "$env:VER".TrimStart("v")
+          foreach ($id in @("nexa-dir", "nexa-dir.portable")) {
+            choco push "packaging\chocolatey\out\$id.$ver.nupkg" `
+              --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+            if ($LASTEXITCODE -ne 0) { throw "choco push 실패: $id" }
+            Write-Output "제출 완료: $id $ver — 검수 큐 재진입(즉시 노출 아님)."
+          }
+
+      - name: push 건너뛴 이유 안내
+        if: inputs.confirm != 'yes' || env.CHOCO_API_KEY == ''
+        shell: bash
+        run: |
+          echo "::notice::choco push하지 않았다(confirm='${{ inputs.confirm }}', 시크릿=$([ -n \"$CHOCO_API_KEY\" ] && echo 있음 || echo 없음)). 아티팩트로 nupkg만 올렸다."
