@@ -11,7 +11,7 @@
     <id>nexa-dir.portable</id>
     <version>0.0.0</version>
     <packageSourceUrl>https://github.com/SosomLab/nexa-dir2/tree/main/packaging/chocolatey</packageSourceUrl>
-    <owners>SosomLab</owners>
+    <owners>kiros33</owners>
 
     <title>Nexa Dir (Portable)</title>
     <authors>SosomLab</authors>
