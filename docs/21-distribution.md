@@ -197,8 +197,14 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
 4. **첫 패키지는 모더레이션 심사 대기**(수일~2주). 심사 통과 후에는 같은 ID의
    후속 버전이 자동 승인 경로를 탄다. 지적 사항은 패키지 페이지 코멘트로 온다.
 
-> 심사 포인트: `tools/VERIFICATION.txt`(다운로드 검증 방법)·`requireLicenseAcceptance=true`
-> (NC 라이선스)·vendor 본인이 메인테이너임을 명시 — 모두 반영 완료.
+> 심사 포인트(2026-09-01 모더레이터 flcdrg 지적 반영): **다운로드 전용 패키지(바이너리 미동봉)에는
+> `tools/VERIFICATION.txt`·`tools/LICENSE.txt`를 넣지 않는다** — 두 파일은 nupkg 안에 바이너리를
+> 동봉할 때 그 출처를 대조하라고 두는 것이라, 설치 시점에 공식 URL을 SHA-256으로 검증해 내려받는
+> 우리 구조에서는 검증할 대상 자체가 패키지에 없다. `requireLicenseAcceptance=true`(NC 라이선스)는
+> 유지. **vendor 본인이 메인테이너임은 패키지 페이지 코멘트로 확인**해 준다
+> — **`owners`=`authors`이면 CPMR0068 Note가 붙어 사람 리뷰어가 물어본다.** 2026-09-01
+> `owners`를 Chocolatey 계정 `kiros33`으로 바꿔(= 패키지 유지관리자) `authors`(`SosomLab`,
+> 소프트웨어 저자)와 분리했다 — 코멘트로 저자임을 확인해 주는 대신 필드로 해소하는 쪽.
 
 **게시 이력**: `nexa-dir` `0.8.1` 최초 push 성공(2026-07-19 — 모더레이션 큐 진입).
 `nexa-dir.portable` `0.8.1`은 수동 게시 완료(pack-and-push.ps1). `0.9.0`은
