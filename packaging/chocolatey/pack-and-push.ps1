@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Chocolatey 패키지를 수동으로 pack(+push)한다 — Windows 전용.
 

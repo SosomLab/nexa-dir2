@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 # {{VERSION}}/{{CHECKSUM64}}는 release.yml이 태그 빌드 시점에 치환한다(수동 편집 금지).
 $version  = '{{VERSION}}'
