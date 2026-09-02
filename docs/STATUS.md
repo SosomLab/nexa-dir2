@@ -1,72 +1,43 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-09-02 (KST)** — **채널 마감: Chocolatey 2종 승인(0.8.1 — 07-20 플래그 후 44일)
-> → `0.18.1` 두 패키지 제출·검수 중**(빌드 없음 = 태그 이후 코드 무변 · `resubmit-chocolatey`
-> dispatch로 main의 모더레이터 반영분 사용 · winget 2채널은 `0.18.1` 병합 완료로 제출 대상 아님 —
-> [journal/2026-09-02.md](journal/2026-09-02.md)) + **main 적색 9일 복구**
-> (`Secret` 소거 테스트가 해제 메모리를 읽던 UB — Windows만 우연히 통과. 08-24부터
-> core 잡 적색이었고 09-02 수정 후 **3잡 green**). 직전 = **X-46 압축 파일 미리보기 + 플러그인 동봉 배포 →
-> 릴리스 `0.18.0`·`0.18.1`**(0.18.1 = Defender ML 오탐 대응 설치형 VERSIONINFO 보강 재배포.
-> 상세 [journal/2026-08-24.md](journal/2026-08-24.md) — **실기 QA 대기**):
+> **갱신: 2026-09-02 (KST)** — **배포 채널 마감 + main 적색 복구 + 사용자 문서 3주 공백 보강**
+> (상세 [journal/2026-09-02.md](journal/2026-09-02.md)):
 >
-> - **압축을 풀지 않고 목록만 읽는 계층 신설**([nexa-vfs/archive](../crates/nexa-vfs/src/archive/)) —
->   거의 모든 포맷이 항목 표를 평문으로 갖고 있다는 사실이 설계를 결정했다. 포맷
->   레지스트리 = **새 포맷은 파일 1개 + 한 줄**(확장자·판정·라우팅·컬럼은 파생).
->   내장 = ZIP(Zip64·AES/ZipCrypto 표시·SFX 델타 보정·중앙 디렉터리 암호화 = 암호 요구·
->   26개 확장자) · TAR(ustar/GNU/PAX) · CAB · RAR 5/4 · 7z(헤더가 LZMA → **플러그인 안내**) ·
->   단일 스트림(gz/bz2/xz/zst/lz4/lz/z). 경로 탈출(zip slip) 정규화 + 위험 표시
-> - **표시 2종** — 하단 도크 = 요약(포맷·개수·크기·절감률·암호/솔리드/분할 + 앞 60개) ·
->   **별도 그리드 창**([archivewnd](../crates/nexa-app/src/archivewnd.rs) — **NxGrid 재사용**으로
->   파일 그리드 규약 계승: 8열·헤더 정렬(크기·시각·압축률은 수치 기준)·다중 선택·
->   `Ctrl+C` TSV 복사·`Esc`). F3·도크 ↗가 압축이면 이 창으로 라우팅(재조회 없음).
->   **시각 이중 보정 차단**(DOS 시각 = 현지 벽시계 그대로·Unix epoch만 보정) ·
->   구형 zip CP949 이름 디코더 주입
-> - **암호는 구조로 강제**([Secret](../crates/nexa-core/src/secret.rs)) — `Debug`는
->   `Secret(***)`(길이도 비노출)·`Display`/직렬화 없음·Drop `write_volatile` 소거 ·
->   마스킹 입력 모달([pwprompt](../crates/nexa-app/src/pwprompt.rs))이 회수 즉시 이동 +
->   경유 UTF-16·EDIT 내용·되돌리기 버퍼 소거 · **저장 경로가 코드에 아예 없다**
->   (세션 메모리 한정 — 토큰용 DPAPI 경로와 의도적 분리) · 틀린 암호는 폐기 후 재시도
-> - **플러그인 ABI v2**(하위 호환) — `nx_meta` 4번째 줄 = 능력 선언(`archive`) ·
->   `nx_archive()` · 임포트 `file_size`/`read_at`/`password`(활성 암호만·없으면 -1).
->   참조 구현 [samples/archive-viewer-wasm](../samples/archive-viewer-wasm/) =
->   **ISO 9660(Joliet)·ar·cpio를 31KB `.wasm` 하나**로(앱 재빌드 없이 포맷 확장 =
->   "별도 개발 후 최종 파일만 배포") · 설계 SSOT [28](28-archive-preview.md) ·
->   가이드 [24 §3-1](24-plugin-dev-guide.md)
-> - **동봉 플러그인 배포 신설**(사용자 지시 "빌드해서 markdown.wasm과 함께 배포") —
->   착수 실측에서 **릴리스 파이프라인에 `wasm`이 한 번도 없었다**는 사실 확인(플러그인은
->   저장소에만 있고 배포된 적 없음) → ① 빌드 단일 출처 [scripts/build-plugins.ps1](../scripts/build-plugins.ps1)
->   + **CI 편입**(워크스페이스 밖 크레이트라 안 건드리면 릴리스 당일 첫 실패) ②
->   **탐색 경로 2원화**(`data\plugins` 사용자 설치분 → `<exe>\plugins` 동봉분·같은 id는
->   사용자분 우선) ③ 포터블 zip 동봉 · 설치형 `{app}\plugins` · **`NexaDir-Plugins-<ver>.zip`
->   신규 자산**(단일 exe 자산은 최소파일 규율 유지) ④ 설명 문서 6곳(18 §3-1 빌드 SSOT ·
->   21 §5-2 배포 형태 · 24 §4-2 두 경로/수정 절차 · README · 위키 2쪽 · 샘플 README)
-> - 게이트: 워크스페이스 **320 green**(X-46 신규 44 + 동봉 배포 1 — 앱 127) · clippy 0 ·
->   비Windows check · **B2 3.83MB** ≤10 · **B3 21종 무변**(신규 DLL 0) · 외부 crate 0(DR-8 유지)
-> - **릴리스 `0.18.0` → `0.18.1`**: 0.18.0 = 압축 미리보기·플러그인 동봉 첫 배포(플러그인 zip 평면
->   구조를 실측 발견해 폴더째로 재포장·워크플로 수정). **`0.18.1`**(오탐 대응 재배포) =
->   [Release](https://github.com/SosomLab/nexa-dir2/releases/tag/0.18.1) 자산 6종 · **설치형
->   FileVersion=0.18.1 채워짐 실측**(0.18.0 공백 해소) · 플러그인 zip **폴더 구조 정상**(재포장 불요) ·
->   해시 6종 일치 · 설치형 온디맨드 clean · choco skipped
-> - **채널**(제출 규칙 2·3회째): `0.18.0` PR 2건 **제출 ~40분 만에 병합**
->   ([#423258](https://github.com/microsoft/winget-pkgs/pull/423258)·[#423259](https://github.com/microsoft/winget-pkgs/pull/423259)) →
->   `0.18.1` 대기 0건 재확인 후 PR 2건 제출([#423330](https://github.com/microsoft/winget-pkgs/pull/423330)
->   Portable · [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) 설치형) · choco는 0.8.1 잠김 유지로 제외
-> - **사용자 문서 동일 트랜잭션**: 위키 [기능-압축-미리보기](wiki/기능-압축-미리보기.md) 신설 +
->   6쪽 갱신(사이드바·개요·하단 도크·빌드와 테스트·설치와 다운로드·Home/개발 여정 버전) + 루트 README
-> - **Defender ML 오탐(설치형) — 해소 확인**(사용자 보고 → 재배포 → 실기 확증): 0.17.0/0.18.0
->   설치형이 다운로드 시 `Wacatac.*!ml`로 격리되던 것(포터블·wasm은 무관·온디맨드는 clean =
->   **무서명 + 새 해시 + 프리밸런스 0**의 클라우드 ML 판정)을 규명 → **Inno 설치형의 빈 파일 버전을
->   발견해 VERSIONINFO 보강**(`0.18.1`) → **다운로드 시 더 이상 격리되지 않음**(사용자 실기 + 재다운로드
->   실측). 압축 완화는 실측으로 기각([12 §4-2] 표). 오탐 신고 절차도 상설화
->   ([packaging/av-false-positive.md](../packaging/av-false-positive.md)·[12 §4-2](12-packaging-single-exe.md)·
->   [21 §6](21-distribution.md) 체크리스트). **이번 회차 종결**(근본 평판은 서명/Store 과제로 잔존)
+> - **Chocolatey 2종 승인**(`0.8.1` — 07-20 스캔 플래그 후 **44일**·모더레이터 면제) → 설계된
+>   재개 조건대로 `CHOCO_PUSH=true` 등록 → 제출 규칙대로 중간 버전을 생략하고 **`0.18.1`만 제출**
+>   ([`resubmit-chocolatey`](../.github/workflows/resubmit-chocolatey.yml) dispatch = **빌드 없음**·
+>   태그 무변·**태그에 없는 모더레이터 반영분이 main에만 있어** 이 경로여야 했다. 두 패키지
+>   `Submitted`·해시 릴리스와 일치). **winget 2채널은 `0.18.1` 병합 완료**라 제출 대상 없음
+>   = **Release·winget 최신 동기, 남은 대기는 choco 검수 하나**. → [21 §7·§8](21-distribution.md)
+> - **main 적색 9일 복구**(08-24~09-02 `core` 잡) — `Secret` 소거 테스트가 `drop` 뒤 원래 주소를
+>   다시 읽던 **해제 메모리 읽기 UB**(glibc·macOS는 free 리스트 포인터가 그 자리에 들어와 실패·
+>   Windows 힙만 우연히 통과 = **구현이 아니라 검사가 틀렸다**). `Drop` 본문을 `zeroize()`로
+>   분리해 **살아 있는 버퍼**로 계약 확인 → **3잡 green**. 교훈 = "비Windows도 검사"가
+>   `cargo check`만으로는 부족(런타임 차이는 못 잡는다) → **push 후 CI 3잡 확인이 유일한 그물**
+>   ([18 §4](18-build-and-test.md))
+> - **사용자 문서** — 위키 타임라인이 `0.13.0`(08-02)에서 멈춰 **릴리스 5개·3주가 비어 있던 것**
+>   보강(버전 숫자는 릴리스마다 고쳤지만 서사는 아무도 안 적었다) + choco "제공 중" 전환 ·
+>   **채널별 현재 버전 표**(승인 ≠ 최신을 명시) · `core` 잡 사각지대 설명. **발행 완료**
+>   (`0e66da5` 4쪽 — 재복사 diff 0으로 소스-발행 파리티 확인)
+> - **실기 QA 대기는 불변**(아래 §5) — X-46 압축 미리보기·플러그인 동봉(`0.18.x` 배포분) 외
+>   X-42~X-45·X-40 클라우드
 >
 > ---
 >
-> **이전 이력 요약 (08-23 ~ 07-15)** — 상세는 [DEVLOG](DEVLOG.md)와 각 일자
+> **이전 이력 요약 (08-24 ~ 07-15)** — 상세는 [DEVLOG](DEVLOG.md)와 각 일자
 > [journal/](journal/). 아래는 하루 한 줄 색인이며, **원문은 삭제되지 않고
 > journal에 그대로 있다**(STATUS = "지금 상태 한 장" 규약 — [16 §1](16-doc-git-conventions.md)).
 >
+> - **08-24** — **X-46 압축 파일 미리보기 + 플러그인 동봉 배포 → 릴리스 `0.18.0`·`0.18.1`**:
+>   **압축을 풀지 않고 목록만 읽는 계층**([nexa-vfs/archive](../crates/nexa-vfs/src/archive/) — 거의 모든
+>   포맷이 항목 표를 평문으로 갖고 있다는 사실이 설계를 결정. 레지스트리 = 새 포맷 파일 1개+한 줄) ·
+>   도크 요약 + **NxGrid 재사용 그리드 창**(DOS 시각 이중 보정 차단·CP949 이름) · **암호는 구조로 강제**
+>   ([Secret](../crates/nexa-core/src/secret.rs) — 저장 경로가 코드에 아예 없다) · **플러그인 ABI v2**
+>   (능력 선언·`nx_archive`) + ISO/ar/cpio **31KB `.wasm`** 샘플 · **동봉 플러그인 배포 신설**
+>   (플러그인이 한 번도 배포된 적 없었다는 실측 → 빌드 SSOT·CI 편입·탐색 경로 2원화·자산 6종) ·
+>   **Defender ML 오탐 해소**(설치형만 VERSIONINFO가 비어 있던 것을 채우자 격리 사라짐 = `0.18.1`) ·
+>   320 green·B2 **3.83MB**·B3 21종 무변 · winget 4건 병합 · 위키 압축 미리보기 매뉴얼 신설.
+>   [journal/2026-08-24](journal/2026-08-24.md)
 > - **08-23** — **X-42 가상 파일 붙여넣기 1·2차 + X-43 빈 폴더 글리프 + X-44 간헐
 >   무갱신 1~5차 + X-45 항상 맨 위 → 릴리스 `0.17.0`**: 원격(RDP)·Outlook·zip 내부 복사분이
 >   안 붙던 결함을 가상 파일 2종 폴백으로 해소(워커화·undo·DnD·클라우드) · 빈 폴더 ▸ 억제 ·
