@@ -13,7 +13,8 @@
 이 위키는 **Nexa Dir의 공식 기본 매뉴얼**입니다.
 
 > ⬇ **바로 설치하기** — 포터블은 winget 한 줄이면 됩니다:
-> `winget install SosomLab.NexaDir.Portable` · 다른 방법은 **[설치와 다운로드](설치와-다운로드)** 참고.
+> `winget install SosomLab.NexaDir.Portable` · Chocolatey를 쓴다면 `choco install nexa-dir.portable`
+> (choco는 최신 버전이 심사 중이라 조금 뒤처집니다) · 다른 방법은 **[설치와 다운로드](설치와-다운로드)** 참고.
 
 세 부분으로 구성됩니다.
 
