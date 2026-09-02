@@ -92,8 +92,10 @@ pwsh scripts/build-plugins.ps1 -SkipDist -OutDir plugins   # dist는 그대로(�
    (설계 상세 = [21-distribution.md](21-distribution.md))
 6. **Chocolatey**(3채널, **2패키지** `nexa-dir`·`nexa-dir.portable`): 각 자산의
    SHA-256 주입 → `choco pack` → **`CHOCO_API_KEY` 시크릿 + 저장소 변수
-   `CHOCO_PUSH=true`가 모두 있으면** `choco push`(스위치 07-21 — 기본 꺼짐 =
-   GitHub Release 전용. [21 §7](21-distribution.md) — 최초 등록·수동 게시·재개 절차 포함)
+   `CHOCO_PUSH=true`가 모두 있으면** `choco push`(스위치 07-21 — 승인 전까지 꺼 두었고
+   **2026-09-02 승인으로 등록·재개**. [21 §7](21-distribution.md) — 최초 등록·수동 게시·재개 절차 포함)
+   - 태그를 소진한 버전을 **빌드 없이** 다시 올릴 때는 [`resubmit-chocolatey`](../.github/workflows/resubmit-chocolatey.yml)
+     dispatch(릴리스 자산 → 해시 → pack → push. main을 체크아웃하므로 **패키징 수정분이 반영**된다)
 
 ```sh
 # 릴리스 절차(예: 0.6.0) — main green 확인 후

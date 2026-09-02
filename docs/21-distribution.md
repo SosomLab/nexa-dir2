@@ -172,7 +172,8 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
   `choco push`(스위치 도입 07-21 — 모더레이션 대기 중 이중 큐 회피, GitHub Release만
   배포 가능). 조건 미충족 시 팩까지만 수행하고 nupkg를 워크플로 아티팩트로 남긴다.
   재개 = **Settings → Secrets and variables → Actions → Variables**에
-  `CHOCO_PUSH=true` 등록(코드 무변).
+  `CHOCO_PUSH=true` 등록(코드 무변) — **2026-09-02 승인으로 등록 완료**(이후 태그 push는
+  choco도 자동 게시. 단 검수 대기 중인 버전이 있으면 §8 제출 규칙이 우선한다).
 - **수동**(`packaging/chocolatey/pack-and-push.ps1`, **Windows 전용**): 태그가 이미
   소진된 버전을 뒤늦게 올릴 때 쓴다. Release 자산을 내려받아 체크섬을 계산하는 동작이
   CI와 동일하고, 자리표시자 치환은 사본에만 적용 후 원본을 되돌린다.
