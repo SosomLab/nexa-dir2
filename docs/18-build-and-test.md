@@ -77,6 +77,13 @@ pwsh scripts/build-plugins.ps1 -SkipDist -OutDir plugins   # dist는 그대로(�
   > E0282) **임포트가 미사용**이 되어 컴파일이 깨질 수 있다. Windows 전용 모듈을
   > 추가·게이팅했다면 push 전에 위 §2의 `--target x86_64-unknown-linux-gnu`
   > 검사를 돌린다(링크 불필요 — `cargo check`로 충분).
+  >
+  > **그리고 `cargo check`만으로는 부족하다**(09-02 — 같은 잡이 08-24부터 9일·8커밋
+  > 동안 붉었다). 이번 건은 컴파일이 아니라 **런타임 동작 차이**였다: 해제된 메모리를
+  > 다시 읽는 테스트가 Windows 힙에서만 우연히 통과하고 glibc·macOS 할당자에서는
+  > free 리스트 포인터 때문에 실패했다(UB에 기댄 검사 — `nexa-core::Secret`).
+  > **∴ push 후 CI 3잡 결과를 실제로 확인하는 것이 로컬에서 못 잡는 것들의 유일한
+  > 그물이다** — 확인을 건너뛴 기간이 그대로 적색 기간이 된다.
 - **windows**(windows-latest): `cargo test` + `cargo build --release` + **예산 게이트** — B2(exe >10MB fail) · B3 = `scripts/budget-b3.ps1`(화이트리스트 **단일 출처**, CI·로컬 공용. 인박스 DLL이 늘어나는 변경은 push 전에 로컬로 `pwsh scripts/budget-b3.ps1` 실행해 확인하고 근거와 함께 갱신)
 
 ## 5. 릴리스 파이프라인 (M5-2 — GitHub Releases)

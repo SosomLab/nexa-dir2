@@ -83,6 +83,13 @@ impl Secret {
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
+
+    /// `Drop`이 실행하는 소거 그 자체. 분리해 둔 이유는 **테스트가 살아 있는 버퍼로
+    /// 계약을 확인**할 수 있게 하기 위해서다 — 폐기된 메모리를 다시 읽는 검사는 UB이고,
+    /// 할당자가 free 리스트 메타데이터를 그 자리에 쓰는 macOS·Linux에서 실제로 깨진다.
+    fn zeroize(&mut self) {
+        zeroize_bytes(&mut self.bytes);
+    }
 }
 
 impl Clone for Secret {
@@ -96,7 +103,7 @@ impl Clone for Secret {
 
 impl Drop for Secret {
     fn drop(&mut self) {
-        zeroize_bytes(&mut self.bytes);
+        self.zeroize();
     }
 }
 
@@ -143,13 +150,15 @@ mod tests {
     #[test]
     fn clone_is_independent_and_drop_zeroizes() {
         let sec = Secret::new(b"abc".to_vec());
-        let c = sec.clone();
+        let mut c = sec.clone();
         assert_eq!(c.expose(), b"abc");
-        let raw = c.expose().as_ptr();
-        let len = c.expose().len();
+        // 소거는 **살아 있는 버퍼**에서 확인한다. 종전 판본은 drop 후 원래 주소를
+        // 다시 읽었는데(UB), 해제된 블록 앞머리에 free 리스트 포인터를 써 넣는
+        // macOS·Linux 할당자에서 실제로 실패했다(Windows만 우연히 통과 —
+        // 08-24~09-02 core 잡 적색의 원인).
+        c.zeroize();
+        assert!(c.expose().iter().all(|&b| b == 0), "Drop 소거");
         drop(c);
-        let seen = unsafe { std::slice::from_raw_parts(raw, len) };
-        assert!(seen.iter().all(|&b| b == 0), "Drop 소거");
         assert_eq!(sec.expose(), b"abc", "사본 폐기가 원본에 영향 없음");
     }
 }
