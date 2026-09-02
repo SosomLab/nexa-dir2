@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-09-02
+
+- **Chocolatey 승인 확인 → `0.18.1` 두 패키지 제출(사용자 지시 — "choco 승인됨·현재 버전 재배포")**: 실측 셋으로 상황을 확정했다 — ① **choco 2종 승인 완료**(OData `FindPackagesById()`에 `nexa-dir`·`nexa-dir.portable` 둘 다 `0.8.1`/**`Approved`** — 07-20 스캔 플래그 후 **44일** 만. 미승인분은 공개 피드에 안 나오므로 조회에 잡힌 것 자체가 증거) ② **winget은 이미 최신과 동기**(`0.18.1` PR [#423330](https://github.com/microsoft/winget-pkgs/pull/423330)·[#423331](https://github.com/microsoft/winget-pkgs/pull/423331)이 08-24 제출 ~1시간 만에 MERGED·카탈로그 디렉터리 실측 = **제출할 것 없음**) ③ 저장소 `main`=`origin/main` 0/0·clean. ∴ 이번 "재배포"의 실체는 **choco 한 채널**([채널 제출 규칙](21-distribution.md#릴리스-시-채널-제출-규칙-2026-08-23--사용자-지시상시-규칙) 그대로 — 대기 해소된 채널에 **최신 버전만**, 중간 버전 생략). **빌드 없음**: 태그 `0.18.1` 이후 7커밋이 docs 4·choco 패키징 fix 2·ci 1뿐이고 `crates/`·`Cargo.*` 무변 = 배포 바이너리 동일. 오히려 재빌드는 **무서명 새 해시로 Defender ML 프리밸런스 0을 되살릴 뿐**([12 §4-2](12-packaging-single-exe.md)). 절차 = `CHOCO_PUSH=true` 등록(07-21 게이트의 설계된 재개 조건) → **`resubmit-chocolatey` dispatch**(08-31 상설화 경로의 첫 실사용 — 빌드 없이 릴리스 자산 → 해시 → pack → push). **이 경로를 고른 결정적 이유**: 모더레이터 지적 반영분(VERIFICATION.txt 제거·`owners=kiros33`·ps1 BOM·제거 스크립트 파스 오류)이 **태그에는 없고 main에만** 있어 release.yml 재실행은 낡은 패키징으로 되돌아갔을 것. 결과 = [run](https://github.com/SosomLab/nexa-dir2/actions/runs/33578690160) 23초·두 nupkg push 성공·해시가 릴리스 `SHA256SUMS.txt`와 일치 → `Packages(Id='…',Version='0.18.1')` 조회 **`Submitted`** 확인. **채널 현황**: winget 2채널 `0.18.1` 라이브 · choco `0.8.1` 라이브 + `0.18.1` 검수 중 · Release 자산 6종. 상세 [journal/2026-09-02.md](journal/2026-09-02.md).
+
 ## 2026-08-24
 
 - **Defender 오탐 해소 확인(사용자 실기 — "지금은 다운로드 시 탐지 안 됨")**: `0.18.1` 설치형은 다운로드 시 격리되지 않음(재다운로드 실측 확증 — 즉시 격리 없음·격리함 비어 있음·온디맨드 clean·FileVersion 채워짐). **VERSIONINFO 보강이 실효**(0.17.0/0.18.0의 `Wacatac.*!ml` 해소) — 압축을 안 건드렸으니 완화 요인은 빈 파일 버전 채우기 하나로 좁혀진다([12 §4-2] 실측 뒷받침). 이번 회차 오탐 종결. 상세 [journal/2026-08-24.md](journal/2026-08-24.md).

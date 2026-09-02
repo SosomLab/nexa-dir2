@@ -8,7 +8,7 @@
 **Nexa Dir** = 원본 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어+WinUI 3/C#)의 기능을
 **포터블 단일 exe · 초저메모리(RSS ≤30MB) · unmanaged 올 러스트**로 재구축하는 Windows 파일 탐색기.
 원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`.
-현 단계: **포스트 M5 — UX 고도화 + 배포 채널 정착**. M0(`0.1.0`)~M5(`0.6.0`) 완료, 최신 릴리스 **`0.18.1`**(08-24 — 설치형 VERSIONINFO 보강 = Defender ML 오탐 대응 재배포. 직전 `0.18.0` = **X-46 압축 파일 미리보기**[그리드 창·암호 입력·플러그인 ABI v2 — [28](docs/28-archive-preview.md)] + **미리보기 플러그인 2종 동봉 배포**[markdown.wasm·archive.wasm — 포터블 zip·설치본·플러그인 zip. [21 §5-2](docs/21-distribution.md)]. **winget `0.18.1` PR 2건 심사 중**[#423330·#423331 — 0.18.0 2건은 40분 만 병합]·Chocolatey 2종은 0.8.1 모더레이션에 잠긴 채라 **채널 제출 규칙으로 push 제외** — [21 §7·§8](docs/21-distribution.md)).
+현 단계: **포스트 M5 — UX 고도화 + 배포 채널 정착**. M0(`0.1.0`)~M5(`0.6.0`) 완료, 최신 릴리스 **`0.18.1`**(08-24 — 설치형 VERSIONINFO 보강 = Defender ML 오탐 대응 재배포. 직전 `0.18.0` = **X-46 압축 파일 미리보기**[그리드 창·암호 입력·플러그인 ABI v2 — [28](docs/28-archive-preview.md)] + **미리보기 플러그인 2종 동봉 배포**[markdown.wasm·archive.wasm — 포터블 zip·설치본·플러그인 zip. [21 §5-2](docs/21-distribution.md)]. **winget 2채널 `0.18.1` 라이브**[#423330·#423331 병합]·**Chocolatey 2종 승인**[0.8.1 — 07-20 플래그 후 44일] → 09-02 `CHOCO_PUSH=true` 등록·**`0.18.1` 두 패키지 제출·검수 중** — [21 §7·§8](docs/21-distribution.md)).
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com (원본과 동일)
 
@@ -58,8 +58,8 @@
 
 1. **실기 QA 잔여분 소화** — 사용자 QA가 병목. 새 기능보다 우선. 최신 대기분 = **X-46 압축 파일 미리보기 + 플러그인 동봉**(08-24 `0.18.0` 배포 — 실제 zip/7z/rar/cab/iso·암호 zip 입력창·틀린 암호 재시도·한글 이름 구형 zip·대용량 그리드 정렬/복사·**포터블 zip 해제 후 exe 옆 plugins\ 자동 인식**·설치본 `{app}\plugins`) + **X-42 가상 파일 1·2차**(RDP 붙여넣기+워커·undo·DnD·클라우드) + **X-43 빈 폴더 글리프+β** + **X-44 간헐 무갱신 1~5차**(핵심 확인 = 클라우드 생성 → 로컬 반영 순간 비활성에서 즉시 표시[5차 셸 통지] — 플레이스홀더 무통지는 실측 확정) + **X-45 항상 맨 위에**(전부 08-23 구현·미배포·재시작 반영) + X-40 클라우드 실검증.
 2. **릴리스 시 채널 제출 규칙**(08-23 사용자 지시 — [21 §8](docs/21-distribution.md)): 릴리스마다 winget·choco 배포 요청 상태를 실측해 **대기 중인 버전이 없으면 그 채널에 새 버전 제출, 대기 중이면 그 채널은 제외**(재개 시 중간 버전 생략·최신만).
-3. **winget `0.18.1` PR 2건 심사 중**(08-24 — 제출 규칙 3회째·조치 불요·상태 추적만): [#423330](https://github.com/microsoft/winget-pkgs/pull/423330) Portable · [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) 설치형. 직전 0.18.0 2건은 제출 ~40분 만 병합.
-4. **Chocolatey 2종 승인 대기**(우리 측 조치 불요·상태만 추적 — 08-11 기준): 0.8.1 두 패키지 모두 **큐 대기가 아니라 07-20 바이러스 스캔 플래그 후 무이벤트**(무서명 exe 오탐 — 모더레이터 면제 필요). **후속 버전 push는 위 규칙에 따라 계속 제외**(0.8.1이 잠겨 있어 이중 큐를 만들지 않는다) — 승인 시 저장소 변수 `CHOCO_PUSH=true` 등록으로 재개(현재 미등록). → [21 §7·§8](docs/21-distribution.md)
+3. **배포 채널 = 조치 불요·상태 추적만**(09-02 실측 마감): **winget 2채널 `0.18.1` 라이브**([#423330](https://github.com/microsoft/winget-pkgs/pull/423330)·[#423331](https://github.com/microsoft/winget-pkgs/pull/423331) 08-24 병합 — 제출 대상 없음) · **Chocolatey 2종 `0.8.1` 승인**(07-20 스캔 플래그 후 44일 — 모더레이터 면제) → 제출 규칙대로 중간 버전 생략하고 **`0.18.1`만 제출**(`resubmit-chocolatey` dispatch — 빌드 없음·태그 무변·main의 모더레이터 반영분 사용. 두 패키지 `Submitted`). → [21 §7·§8](docs/21-distribution.md)
+4. **`CHOCO_PUSH=true` 등록됨**(09-02 — 07-21 게이트의 설계된 재개 조건 이행): 이제 태그 push가 choco도 자동 게시한다. 단 다음 릴리스 시 `0.18.1`이 검수 중이면 **제출 규칙상 choco는 제외**(재실측 후 판정).
 5. **클라우드 배포 선행 조건 3건**(X-37 잔여 = 코드 아님·본인 사용은 무관 — [ADR-0006 §2-4-1](docs/27-adr-0006-cloud-oauth.md)): Dropbox 프로덕션 승인(무료·수일 — 가장 쉽고 효과 큼) · Entra 게시자 확인(조직 계정 동의 차단 해소 — 커스텀 도메인 필요) · Google CASA(보류 — 프로덕션 게시로 7일 만료만 제거하는 절충 가능).
 6. **백로그 진행** — [docs/TODO.md](docs/TODO.md) §7: X-11 원본 패리티 갭 건별([19](docs/19-parity-gap.md)) · X-2 플러그인(wasmi 전환 완료 — 잔여 콤보·핫 리로드) · X-16 최적화 잔여 · X-13 2/2.
 7. **X-33 macOS·Linux 확장** — 검토 완료([23](docs/23-cross-platform-feasibility.md)), **착수 여부는 사용자 결정 대기**. 진행 시 다음 액션 = 맥 렌더 스파이크(결정 아님) + DR-1/2/8 개정 ADR(신규 번호 = ADR-0007).

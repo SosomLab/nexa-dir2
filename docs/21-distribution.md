@@ -225,6 +225,18 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
 - **버전 격차**: 최신 릴리스는 `0.11.0`이지만 choco 양 패키지는 `0.8.1`에 머물러 있다
   (07-21 보류 방침 — `CHOCO_PUSH` 꺼짐). 첫 승인 후 후속 버전부터 재개하는 설계 그대로다.
 
+**결말 (2026-09-02 — 승인·재개)**: OData `FindPackagesById()` 조회에서 **두 패키지 모두
+`0.8.1` / `PackageStatus: Approved`** 확인 — 07-20 스캔 플래그로부터 **44일** 만의 사람
+면제다(미승인분은 공개 피드에 노출되지 않으므로 **조회에 잡힌다는 것 자체가 승인의 증거**).
+설계대로 **저장소 변수 `CHOCO_PUSH=true`를 등록해 재개**했고(코드 무변), 밀린 중간 버전은
+[채널 제출 규칙](#릴리스-시-채널-제출-규칙-2026-08-23--사용자-지시상시-규칙)대로 **건너뛰고
+최신 `0.18.1`만** 올렸다. 제출은 태그를 건드리지 않는 [`resubmit-chocolatey`](../.github/workflows/resubmit-chocolatey.yml)
+dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·push 한다. **이 경로여야 하는
+이유**: 모더레이터 지적 반영분(VERIFICATION.txt 제거·`owners=kiros33`·ps1 BOM·제거 스크립트
+파스 오류)이 **태그 `0.18.1`에는 없고 main에만** 있어, release.yml 재실행은 낡은 패키징으로
+되돌아간다. 결과 = 두 nupkg push 성공(해시가 릴리스 `SHA256SUMS.txt`와 일치) →
+`Packages(Id='…',Version='0.18.1')` 직접 조회 **`Submitted`**(검수 큐 진입).
+
 ## 8. winget — 4번째 채널 (packaging/winget, 2026-07-19)
 
 패키지 ID **`SosomLab.NexaDir`**. Chocolatey와 마찬가지로 **설치형 exe를 그대로 참조**하는
@@ -312,16 +324,22 @@ Program Files 설치에서도 동봉분은 읽기만 하므로 권한 문제가 
   — **채널 제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출. `winget validate`
   경고 2건[PortableCommandAlias 미지 필드·portable Scope]은 0.16.0 병합본과 동일 구조).
 
-### 채널 상태 요약 (2026-08-24 재점검 — 원천 실측: `gh pr list/view` JSON·choco 패키지 페이지)
+### 채널 상태 요약 (2026-09-02 재점검 — 원천 실측: `gh pr list`/카탈로그 디렉터리·choco OData)
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.18.0** | ⏳ **`0.18.1` 제출**([#423330](https://github.com/microsoft/winget-pkgs/pull/423330)). 직전 [#423258](https://github.com/microsoft/winget-pkgs/pull/423258) 0.18.0 MERGED(~40분) | 없음(상태 추적) |
-| winget | `SosomLab.NexaDir`(설치형) | **0.18.0** | ⏳ **`0.18.1` 제출**([#423331](https://github.com/microsoft/winget-pkgs/pull/423331)). 직전 [#423259](https://github.com/microsoft/winget-pkgs/pull/423259) 0.18.0 MERGED | 없음(상태 추적) |
-| Chocolatey | `nexa-dir`(설치형) | — | ⏳ 0.8.1 **모더레이션 미승인 유지**(07-20 02:22 스캔 Flagged 이후 무이벤트 — 08-23 페이지 실측 무변동. 자동 3단계는 완료, 사람 검토만 미착수) | **push 제외 유지**(제출 규칙 — 대기 중. 0.17.0도 팩 success·push skipped 확인) |
-| Chocolatey | `nexa-dir.portable` | — | ⏳ 동일(07-20 02:21) | 동일 |
-| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.18.1** (08-24 — 설치형 VERSIONINFO 보강 재배포) | ✅ 상시(**자산 6종** · 설치형 FileVersion 채워짐·플러그인 zip 폴더 구조·SHA 6종 일치) | — |
+| winget | `SosomLab.NexaDir.Portable` | **0.18.1** | ✅ [#423330](https://github.com/microsoft/winget-pkgs/pull/423330) **MERGED**(08-24 — 제출 ~1시간). 대기 PR 0건 | 없음(최신과 동기) |
+| winget | `SosomLab.NexaDir`(설치형) | **0.18.1** | ✅ [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) **MERGED**(08-24). 대기 PR 0건 | 없음(최신과 동기) |
+| Chocolatey | `nexa-dir`(설치형) | **0.8.1** | ✅ **승인**(09-02 실측 `Approved` — 07-20 플래그 후 44일) + ⏳ **`0.18.1` 검수 중**(`Submitted` — 09-02 제출) | 없음(상태 추적) |
+| Chocolatey | `nexa-dir.portable` | **0.8.1** | ✅ 동일 승인 + ⏳ `0.18.1` `Submitted` | 없음(상태 추적) |
+| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.18.1** (08-24) | ✅ 상시(**자산 6종** · 설치형 FileVersion 채워짐·SHA 6종 일치) | — |
 
+> **09-02 재점검(choco 승인·재개)**: choco 2종이 `Approved`로 풀려 **`CHOCO_PUSH=true` 등록**
+> → 밀린 중간 버전 생략, **`0.18.1`만 제출**(§7 "결말" 참조 — `resubmit-chocolatey` dispatch,
+> 빌드 없음·태그 무변). winget은 `0.18.1`이 이미 병합·라이브라 **제출 대상 없음**
+> (열려 있는 우리 PR은 NexaBeep 것뿐 — 다른 제품이므로 이 채널 판정과 무관하다).
+> 다음 릴리스 판정: winget = 대기 0건 → 제출 · choco = `0.18.1`이 검수 중이면 **제외**.
+>
 > **08-24 저녁 재점검**: `0.18.0` PR 2건이 **제출 약 40분 만에 둘 다 병합**
 > (`Azure-Pipeline-Passed` → `Validation-Completed` → `Moderator-Approved` — 역대 최단).
 > **winget 두 채널이 최신 릴리스와 다시 완전 동기**이며, 남은 심사 대기는 choco 2건(0.8.1)뿐이다.
@@ -376,8 +394,9 @@ winget Portable은 0.13.0 PR 제출로 **다시 릴리스와 동기화 궤도**�
 - **판정 원천(채널별)** — winget: 우리가 제출한 PR이 OPEN인가(`gh pr view <번호>` 또는
   `gh search prs --repo microsoft/winget-pkgs --author <제출 계정>` — 패키지 2종 각각) ·
   Chocolatey: **모더레이션 미승인 버전이 있는가**(패키지 페이지 실측 — OData는 미승인분
-  미반환. 현재 0.8.1 두 패키지가 07-20 스캔 플래그로 잠김 = **계속 제외**. 기존
-  `CHOCO_PUSH` 미등록 게이트·사용자 지시와 합치 — 승인 시 `CHOCO_PUSH=true` 등록으로 재개).
+  미반환 — **미승인 버전은 `Packages(Id='…',Version='…')` 직접 조회로 확인**한다:
+  `Submitted` = 대기, `Approved` = 해소. 09-02 0.8.1 승인으로 `CHOCO_PUSH=true`를 등록해
+  게이트를 열었고 `0.18.1`을 제출했다 = **다음 릴리스는 그 검수 결과에 따라 판정**).
 - 점검·제출/제외 결과는 릴리스 기록(journal·§8 채널 표)에 남긴다.
 
 ### 다음 버전 절차
