@@ -8,6 +8,7 @@
 
 ## 2026-09-04
 
+- **하루 마감 — 내용 정리·진행사항 최신화·main push(사용자 지시)**: 오늘 요청 10건 반영 확인 · 코드 6·문서 5 커밋 · 테스트 321 green·clippy 0·비Windows green · STATUS §5·CLAUDE.md §7·MILESTONES에 **09-04 미배포 4건 = 최우선 실기 QA** 등재 · 릴리스는 QA 뒤. 상세 [journal/2026-09-04.md](journal/2026-09-04.md).
 - **메인 파일 목록 오버레이 스크롤바 — 세로+가로(사용자 요청 — `feat(rows)`, X-47 1/2)**: 설정 창 규약을 nexa-gui 위젯에 이식 — **`Invalidations::request_tick`**(위젯→호스트 틱 요청 일반 경로·`TIMER_WIDGET_TICK` 40ms) + **`DrawCtx::fill_round_rect_alpha`**(DwCtx = 메모리 DC GDI+ — 그동안 라운드 도형 no-op) · rows.rs 세로/가로 썸·드래그·트랙 클릭·호버·키보드 스크롤 flash. 사용자 실기로 세로 확인 → 가로 추가 → **축별 독립 표시**(스크롤한 축만, 겹치면 둘 다). 잔여 = NxGrid·카드 호스트 확산.
 - **글꼴 폴백 체인 실적용 — "두부 방지"(사용자 요청 — `feat(font)`)**: 쉼표 목록 = 폴백 체인 규약이 **터미널(X-3)에서만** 살아 있었고 UI 슬롯·대화상자·미리보기는 체인 문자열 전체를 패밀리 이름으로 넘겨 **1순위조차 미적용**이던 실측 → [fontchain.rs](../crates/nexa-app/src/fontchain.rs) 신설(설치된 첫 패밀리·폴백 목록) · DW 슬롯 3종에 `IDWriteFontFallback`(터미널 빌더 공용화) · 미리보기 창 GDI는 **글리프 단위 런 폴백**(`GetGlyphIndicesW` 판정·측정=그리기 런 규칙) · GDI 대화상자/제목은 1순위 정정. 네이티브 컨트롤은 OS 글꼴 연결 위임(한계 명시). 글리프 실기 확인 대기 = **X-48**. 상세 [journal/2026-09-04.md](journal/2026-09-04.md).
 - **트리 하이라이트 잔존 픽스(사용자 QA — `eedd92f`)**: 오너드로 선택 판정이 `st.category`인데 LISTBOX는 LBN_SELCHANGE 전에 옛/새 행을 그려 옛 행이 남던 **잠복 결함** — 예전엔 창 전체 무효화가 가렸고 컨테이너 분리로 드러남 → rebuild 끝 트리 무효화.
