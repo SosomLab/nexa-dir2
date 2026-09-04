@@ -1,6 +1,17 @@
 # CRT 정적 링크 — 재배포 런타임 0 (예산 B3, docs/18 §3)
+# 완화 기술(점검 1차 #4 — docs/29 §4 B2~B4): CFG · CET(x64) · DLL 검색 = System32 한정
+# (/DEPENDENTLOADFLAG:0x800 = LOAD_LIBRARY_SEARCH_SYSTEM32 — 인박스 DLL 사이드로딩 차단).
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = [
+  "-C", "target-feature=+crt-static",
+  "-C", "control-flow-guard=yes",
+  "-C", "link-arg=/CETCOMPAT",
+  "-C", "link-arg=/DEPENDENTLOADFLAG:0x800",
+]
 
 [target.aarch64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = [
+  "-C", "target-feature=+crt-static",
+  "-C", "control-flow-guard=yes",
+  "-C", "link-arg=/DEPENDENTLOADFLAG:0x800",
+]

@@ -78,6 +78,39 @@ END
         v1 = v1,
         v2 = v2,
     );
+    // 애플리케이션 매니페스트(점검 1차 #4 — docs/29 §4 A1/A4/A5): asInvoker 명시(승격 요구 없음) ·
+    // longPathAware · PerMonitorV2 DPI(코드의 SetProcessDpiAwarenessContext보다 선행·경쟁 없음) ·
+    // supportedOS(Win10/11). RT_MANIFEST = 리소스 타입 24, id 1.
+    let manifest = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="SosomLab.NexaDir" version="VERSION" processorArchitecture="*"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>
+"#
+    .replace("VERSION", &format!("{v0}.{v1}.{v2}.0"));
+    let manifest_path = out_dir.join("nexa-app.manifest");
+    fs::write(&manifest_path, manifest).expect("write manifest");
+    let manifest_esc = manifest_path.to_string_lossy().replace('\\', "\\\\");
+    let rc_src = format!("{rc_src}1 24 \"{manifest_esc}\"\n");
+
     let rc_path = out_dir.join("nexa-app.rc");
     let res_path = out_dir.join("nexa-app.res");
     fs::write(&rc_path, rc_src).expect("write .rc");
