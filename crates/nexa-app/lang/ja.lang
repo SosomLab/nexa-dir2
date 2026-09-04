@@ -167,6 +167,7 @@ preview.empty = (空のファイル)
 preview.binary = バイナリファイル — テキストプレビューはありません
 preview.fail = 読み取りに失敗しました
 preview.plugin.error = プラグインエラー({0}): {1}
+preview.plugin.disabled = プラグインを隔離({0}): {1}回連続で失敗 — このセッションでは実行しません
 preview.window.image = 画像ファイル — 下部ドックのプレビューに表示されます
 pref.cat.plugins = プラグイン
 pref.plugins.desc = プレビュープラグイン(data\plugins\ または exe 隣の plugins\ の *.wasm)の使用可否 — チェックを外すと内蔵プレビューに置き換わります。

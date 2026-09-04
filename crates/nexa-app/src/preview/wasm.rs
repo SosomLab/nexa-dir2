@@ -43,11 +43,33 @@ const OUT_CAP: usize = 1 << 20;
 const READ_AT_CAP: usize = 4 * 1024 * 1024;
 /// 압축 목록 항목 상한(그리드 보호 — nexa-vfs 상한과 동일 취지).
 const ARCHIVE_CAP: usize = 50_000;
+/// 호출당 **벽시계 상한**(점검 1차 #5 — ADR-0005가 약속한 시간 상한. 호스트 임포트 진입 시 검사 →
+/// 초과면 트랩. 순수 게스트 루프는 연료가 막는다). UI 스레드 실행이라 짧게.
+const CALL_TIMEOUT_MS: u64 = 1_500;
+/// 연속 실패 격리(서킷 브레이커 — 점검 1차 #5): 이 횟수 연속 실패한 플러그인은 세션 동안 실행하지 않는다.
+const BREAKER_LIMIT: u32 = 3;
 
-/// 호스트 상태 — 미리보기 대상 파일(샌드박스: 이 파일 외 접근 불가) + 메모리 리미터.
+/// 호스트 상태 — 미리보기 대상 파일(샌드박스: 이 파일 외 접근 불가) + 메모리 리미터 + 호출 마감 시각.
 struct HostCtx {
     path: PathBuf,
     limits: StoreLimits,
+    deadline: std::time::Instant,
+}
+
+/// 호스트 임포트 공통 게이트(점검 1차 #5): ① 벽시계 상한 초과 → 트랩 ② 호스트 작업 비용을 **연료에 과금**
+/// — 종전은 임포트가 연료 0이라 게스트가 임포트 루프(4MB read_at·2000² SVG 래스터)로 호스트를 무한정
+/// 태울 수 있었다.
+fn host_guard(caller: &mut Caller<'_, HostCtx>, cost: u64) -> Result<(), wasmi::Error> {
+    if std::time::Instant::now() >= caller.data().deadline {
+        return Err(wasmi::Error::new(format!(
+            "호출 시간 상한 {CALL_TIMEOUT_MS}ms 초과"
+        )));
+    }
+    let fuel = caller.get_fuel()?;
+    if fuel < cost {
+        return Err(wasmi::Error::new("연료 소진(호스트 작업 과금)"));
+    }
+    caller.set_fuel(fuel - cost)
 }
 
 /// 로드된 플러그인 — 모듈은 검증·컴파일 완료 캐시(호출마다 인스턴스만 생성).
@@ -85,76 +107,89 @@ fn linker(engine: &Engine) -> Result<Linker<HostCtx>, wasmi::Error> {
     l.func_wrap(
         "env",
         "read_text",
-        |mut caller: Caller<'_, HostCtx>, ptr: i32, cap: i32| -> i32 {
+        |mut caller: Caller<'_, HostCtx>, ptr: i32, cap: i32| -> Result<i32, wasmi::Error> {
+            host_guard(&mut caller, 200_000)?;
             let path = caller.data().path.clone();
             let cap = (cap.max(0) as usize).min(READ_CAP);
             let Ok((text, _)) = super::read_text(&path, cap.max(1)) else {
-                return 0;
+                return Ok(0);
             };
             let bytes = text.as_bytes();
             let n = bytes.len().min(cap);
             let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
-                return 0;
+                return Ok(0);
             };
             if mem.write(&mut caller, ptr as usize, &bytes[..n]).is_err() {
-                return 0;
+                return Ok(0);
             }
-            n as i32
+            Ok(n as i32)
         },
     )?;
     // render_svg(sptr, slen, optr, ocap) -> len : SVG → BMP 경로(실패 = 0)
     l.func_wrap(
         "env",
         "render_svg",
-        |mut caller: Caller<'_, HostCtx>, sptr: i32, slen: i32, optr: i32, ocap: i32| -> i32 {
+        |mut caller: Caller<'_, HostCtx>, sptr: i32, slen: i32, optr: i32, ocap: i32| -> Result<i32, wasmi::Error> {
+            host_guard(&mut caller, 5_000_000)?; // GDI+ 래스터 + 임시 BMP — 가장 비싼 임포트
             let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
-                return 0;
+                return Ok(0);
             };
             let mut svg = vec![0u8; (slen.max(0) as usize).min(READ_CAP)];
             if mem.read(&caller, sptr as usize, &mut svg).is_err() {
-                return 0;
+                return Ok(0);
             }
             let Ok(svg) = String::from_utf8(svg) else {
-                return 0;
+                return Ok(0);
             };
             let Some(out) = super::render_svg_impl(&svg) else {
-                return 0;
+                return Ok(0);
             };
             let b = out.as_bytes();
             let n = b.len().min(ocap.max(0) as usize);
             if mem.write(&mut caller, optr as usize, &b[..n]).is_err() {
-                return 0;
+                return Ok(0);
             }
-            n as i32
+            Ok(n as i32)
         },
     )?;
     // is_dark() -> i32 : 테마 신호
-    l.func_wrap("env", "is_dark", |_: Caller<'_, HostCtx>| -> i32 {
-        i32::from(super::is_dark_now())
-    })?;
+    l.func_wrap(
+        "env",
+        "is_dark",
+        |mut caller: Caller<'_, HostCtx>| -> Result<i32, wasmi::Error> {
+            host_guard(&mut caller, 1_000)?;
+            Ok(i32::from(super::is_dark_now()))
+        },
+    )?;
     // ── ABI v2(X-46 압축 목록) ──
     // file_size() -> i64 : 대상 파일 크기(꼬리 오프셋 계산용)
-    l.func_wrap("env", "file_size", |caller: Caller<'_, HostCtx>| -> i64 {
-        std::fs::metadata(&caller.data().path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(-1)
-    })?;
+    l.func_wrap(
+        "env",
+        "file_size",
+        |mut caller: Caller<'_, HostCtx>| -> Result<i64, wasmi::Error> {
+            host_guard(&mut caller, 10_000)?;
+            Ok(std::fs::metadata(&caller.data().path)
+                .map(|m| m.len() as i64)
+                .unwrap_or(-1))
+        },
+    )?;
     // read_at(off, ptr, cap) -> n : **대상 파일 임의 위치** 읽기(중앙 디렉터리 등)
     l.func_wrap(
         "env",
         "read_at",
-        |mut caller: Caller<'_, HostCtx>, off: i64, ptr: i32, cap: i32| -> i32 {
+        |mut caller: Caller<'_, HostCtx>, off: i64, ptr: i32, cap: i32| -> Result<i32, wasmi::Error> {
             use std::io::{Read, Seek, SeekFrom};
+            host_guard(&mut caller, 100_000 + (cap.max(0) as u64) / 4)?; // 고정 + 바이트 비례
             if off < 0 {
-                return 0;
+                return Ok(0);
             }
             let path = caller.data().path.clone();
             let cap = (cap.max(0) as usize).min(READ_AT_CAP);
             let Ok(mut f) = std::fs::File::open(&path) else {
-                return 0;
+                return Ok(0);
             };
             if f.seek(SeekFrom::Start(off as u64)).is_err() {
-                return 0;
+                return Ok(0);
             }
             let mut buf = vec![0u8; cap];
             let mut got = 0;
@@ -166,12 +201,12 @@ fn linker(engine: &Engine) -> Result<Linker<HostCtx>, wasmi::Error> {
                 }
             }
             let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
-                return 0;
+                return Ok(0);
             };
             if mem.write(&mut caller, ptr as usize, &buf[..got]).is_err() {
-                return 0;
+                return Ok(0);
             }
-            got as i32
+            Ok(got as i32)
         },
     )?;
     // password(ptr, cap) -> n : **활성 암호**(사용자가 방금 입력한 값)만 전달.
@@ -179,37 +214,35 @@ fn linker(engine: &Engine) -> Result<Linker<HostCtx>, wasmi::Error> {
     l.func_wrap(
         "env",
         "password",
-        |mut caller: Caller<'_, HostCtx>, ptr: i32, cap: i32| -> i32 {
+        |mut caller: Caller<'_, HostCtx>, ptr: i32, cap: i32| -> Result<i32, wasmi::Error> {
+            host_guard(&mut caller, 10_000)?;
             let bytes = super::archive::with_active_password(|pw| pw.map(|s| s.expose().to_vec()));
-            let Some(bytes) = bytes else { return -1 };
+            let Some(bytes) = bytes else { return Ok(-1) };
             let n = bytes.len().min(cap.max(0) as usize);
             let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
-                return -1;
+                return Ok(-1);
             };
             let ok = mem.write(&mut caller, ptr as usize, &bytes[..n]).is_ok();
             // 호스트 임시 사본 즉시 소거(게스트 메모리는 인스턴스 폐기와 함께 사라진다)
             let mut bytes = bytes;
             nexa_core::secret::zeroize_bytes(&mut bytes);
-            if ok {
-                n as i32
-            } else {
-                -1
-            }
+            Ok(if ok { n as i32 } else { -1 })
         },
     )?;
     // disp_width(ptr, len) -> i32 : 표시 폭(CJK 2칸)
     l.func_wrap(
         "env",
         "disp_width",
-        |caller: Caller<'_, HostCtx>, ptr: i32, len: i32| -> i32 {
+        |mut caller: Caller<'_, HostCtx>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
+            host_guard(&mut caller, 10_000)?;
             let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
-                return 0;
+                return Ok(0);
             };
             let mut b = vec![0u8; (len.max(0) as usize).min(4096)];
             if mem.read(&caller, ptr as usize, &mut b).is_err() {
-                return 0;
+                return Ok(0);
             }
-            super::disp_width_impl(&String::from_utf8_lossy(&b)) as i32
+            Ok(super::disp_width_impl(&String::from_utf8_lossy(&b)) as i32)
         },
     )?;
     Ok(l)
@@ -220,6 +253,7 @@ fn call_buf(plugin: &WasmPlugin, path: &Path, fn_name: &str) -> Result<String, S
     let ctx = HostCtx {
         path: path.to_path_buf(),
         limits: StoreLimitsBuilder::new().memory_size(MEM_CAP).build(),
+        deadline: std::time::Instant::now() + std::time::Duration::from_millis(CALL_TIMEOUT_MS),
     };
     let mut store = Store::new(&plugin.engine, ctx);
     store.limiter(|c| &mut c.limits);
@@ -412,8 +446,29 @@ pub fn run_archive(
 }
 
 /// WASM 플러그인 → 공급자 어댑터 — 실행 오류는 해당 플러그인만 1줄 격리.
+/// 연속 실패 [`BREAKER_LIMIT`]회면 세션 동안 실행하지 않는다(점검 1차 #5 — 종전은 실패마다 재인스턴스 =
+/// 화살표 키마다 연료 200M 소진).
 pub(super) struct WasmProvider {
     pub plugin: WasmPlugin,
+    /// 연속 실패 수(성공 시 0). 프로바이더는 스레드 로컬 캐시라 Cell로 충분.
+    failures: std::cell::Cell<u32>,
+}
+
+impl WasmProvider {
+    pub(super) fn new(plugin: WasmPlugin) -> Self {
+        WasmProvider {
+            plugin,
+            failures: std::cell::Cell::new(0),
+        }
+    }
+
+    fn tripped(&self) -> bool {
+        self.failures.get() >= BREAKER_LIMIT
+    }
+
+    fn record(&self, ok: bool) {
+        self.failures.set(if ok { 0 } else { self.failures.get() + 1 });
+    }
 }
 
 impl PreviewProvider for WasmProvider {
@@ -424,16 +479,20 @@ impl PreviewProvider for WasmProvider {
         &self.plugin.exts
     }
     fn preview(&self, path: &Path) -> PreviewDoc {
-        // 압축 능력 선언 플러그인은 목록 ABI로 라우팅(X-46) — 실패는 미리보기로 저하
-        if self.plugin.is_archive() {
-            return match run_archive(&self.plugin, path) {
-                Ok(doc) => PreviewDoc::Archive(Box::new(doc)),
-                Err(e) => {
-                    PreviewDoc::Lines(vec![trf("preview.plugin.error", &[&self.plugin.id, &e])])
-                }
-            };
+        if self.tripped() {
+            return PreviewDoc::Lines(vec![trf(
+                "preview.plugin.disabled",
+                &[&self.plugin.id, &BREAKER_LIMIT.to_string()],
+            )]);
         }
-        match run_preview(&self.plugin, path) {
+        // 압축 능력 선언 플러그인은 목록 ABI로 라우팅(X-46) — 실패는 미리보기로 저하
+        let result = if self.plugin.is_archive() {
+            run_archive(&self.plugin, path).map(|doc| PreviewDoc::Archive(Box::new(doc)))
+        } else {
+            run_preview(&self.plugin, path)
+        };
+        self.record(result.is_ok());
+        match result {
             Ok(doc) => doc,
             Err(e) => PreviewDoc::Lines(vec![trf("preview.plugin.error", &[&self.plugin.id, &e])]),
         }
@@ -461,7 +520,19 @@ mod tests {
     (i32.store (i32.const 2048) (i32.const 0x656e696c)) ;; "line"
     (i32.store (i32.const 2052) (i32.const 0x6b6f0a73)) ;; "s\nok"
     (i32.const 2044))
-  (func (export "nx_loop") (result i32) (loop br 0) (i32.const 0)))
+  (func (export "nx_loop") (result i32) (loop br 0) (i32.const 0))
+  ;; 호스트 임포트 루프(점검 1차 #5) — 종전은 임포트가 연료 0이라 무한
+  (func (export "nx_hostloop") (result i32) (loop (drop (call $dark)) (br 0)) (i32.const 0)))
+"#;
+
+    /// nx_preview export가 없는 모듈 — 매 호출 실패(브레이커 검증용).
+    const WAT_BROKEN_PREVIEW: &str = r#"
+(module
+  (memory (export "memory") 1)
+  (data (i32.const 1024) "bad\nBad\nabc")
+  (func (export "nx_meta") (result i32)
+    (i32.store (i32.const 1020) (i32.const 11))
+    (i32.const 1020)))
 "#;
 
     fn build(dir: &std::path::Path) {
@@ -578,6 +649,39 @@ mod tests {
         // 연료 상한 — 무한 루프가 트랩으로 격리되는지(전체 프로세스 무영향)
         let err = call_buf(p, &t, "nx_loop").unwrap_err();
         assert!(!err.is_empty(), "연료 소진 트랩: {err}");
+        // 점검 1차 #5: 호스트 임포트 루프도 유계(연료 과금 또는 벽시계) — 시간 상한 안에 오류
+        let t0 = std::time::Instant::now();
+        let err = call_buf(p, &t, "nx_hostloop").unwrap_err();
+        let dt = t0.elapsed();
+        assert!(!err.is_empty(), "호스트 루프 트랩: {err}");
+        assert!(
+            dt.as_millis() < (CALL_TIMEOUT_MS as u128) * 4,
+            "호스트 루프가 상한 안에 끝나야 한다: {dt:?}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn breaker_disables_plugin_after_consecutive_failures() {
+        let d = std::env::temp_dir().join(format!("nexa_wasm_brk_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("bad.wasm"), wat::parse_str(WAT_BROKEN_PREVIEW).unwrap()).unwrap();
+        let (mut plugins, _) = load_dir(&d);
+        let prov = WasmProvider::new(plugins.remove(0));
+        let t = d.join("x.abc");
+        std::fs::write(&t, "hi").unwrap();
+        for i in 0..BREAKER_LIMIT {
+            match prov.preview(&t) {
+                PreviewDoc::Lines(l) => assert!(l[0].contains("nx_preview"), "{i}: 실행 오류 1줄: {l:?}"),
+                _ => panic!("lines"),
+            }
+        }
+        assert!(prov.tripped(), "연속 {BREAKER_LIMIT}회 실패 → 격리");
+        match prov.preview(&t) {
+            PreviewDoc::Lines(l) => assert!(!l[0].contains("nx_preview"), "격리 안내로 대체: {l:?}"),
+            _ => panic!("lines"),
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 }

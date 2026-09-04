@@ -312,7 +312,7 @@ fn with_providers<R>(f: impl FnOnce(&[Box<dyn PreviewProvider>], &[PluginInfo]) 
                 .collect();
             let mut v: Vec<Box<dyn PreviewProvider>> = plugins
                 .into_iter()
-                .map(|p| Box::new(wasm::WasmProvider { plugin: p }) as Box<dyn PreviewProvider>)
+                .map(|p| Box::new(wasm::WasmProvider::new(p)) as Box<dyn PreviewProvider>)
                 .collect();
             v.extend(builtins());
             (v, infos)

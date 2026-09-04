@@ -167,6 +167,7 @@ preview.empty = (empty file)
 preview.binary = binary file — no text preview
 preview.fail = read failed
 preview.plugin.error = plugin error ({0}): {1}
+preview.plugin.disabled = plugin isolated ({0}): {1} consecutive failures — not run again this session
 preview.window.image = image file — shown in the bottom dock preview
 pref.cat.plugins = Plugins
 pref.plugins.desc = Preview plugins (*.wasm in data\plugins\ or plugins\ next to the exe) — unchecked plugins fall back to the built-in preview.

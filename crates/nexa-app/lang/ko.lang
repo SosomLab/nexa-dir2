@@ -166,6 +166,7 @@ preview.empty = (빈 파일)
 preview.binary = 이진 파일 — 텍스트 미리보기 없음
 preview.fail = 읽기 실패
 preview.plugin.error = 플러그인 오류({0}): {1}
+preview.plugin.disabled = 플러그인 격리({0}): 연속 {1}회 실패 — 이 세션에서는 실행하지 않습니다
 preview.window.image = 이미지 파일 — 하단 도크 미리보기에서 표시됩니다
 pref.cat.plugins = 플러그인
 pref.plugins.desc = 미리보기 플러그인(data\plugins\ 또는 exe 옆 plugins\의 *.wasm) 사용 여부 — 체크 해제 시 내장 미리보기로 대체됩니다.
