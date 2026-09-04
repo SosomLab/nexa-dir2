@@ -79,12 +79,16 @@
 ### 7-1. 즉시(이번 주 — 데이터 손실·코드 실행 경로. HIGH)
 | 순위 | 대상 | 조치 방법 | 검증 | 규모 |
 | --- | --- | --- | --- | --- |
-| 1 | 덮어쓰기 대상 선삭제(01 #1) | `copy/move_onto_with_progress`: 대상 폴더에 `.<name>.nexa-tmp-<pid>`로 쓰고 성공 시 `ReplaceFileW`/rename 스왑, 실패·취소 시 임시만 삭제 | nexa-ops 테스트: 중간 취소 후 옛 대상 무결·임시 잔존 0 | 중 |
-| 2 | 전송 중 드롭 조용히 폐기(01 #2) | `start_transfer`가 busy면 스테이징 파일을 **원위치 복귀**(rename back) 후 상태바 "전송 중 — 잠시 후 다시" 표시. 이후 큐잉(X-52) | 실기: 대용량 전송 중 7-Zip 드롭 → 파일 생존 확인 | 소 |
-| 3 | ConPTY `pwsh.exe` 이름 실행(06 #1) | `default_shell()`이 찾은 전체 경로를 반환하고 `CreateProcessW(lpApplicationName=경로)` · `SetSearchPathMode(SAFE)` 1회 | exe 옆에 가짜 pwsh.exe 두고 터미널 열기 → 실행 안 됨 | 소(5줄) |
-| 4 | DLL 사이드로딩·매니페스트(06 #2) | `.cargo/config.toml`에 `-C link-arg=/DEPENDENTLOADFLAG:0x800`·`-C control-flow-guard=yes`·`-C link-arg=/CETCOMPAT` · `[profile.release] overflow-checks=true` · `build.rs`에 매니페스트(asInvoker·uiAccess=false·longPathAware·PerMonitorV2·supportedOS) | audit.ps1 S-1 GUARD_CF 통과·S-2 asInvoker 검출 · B-3 무변 · B-2 크기 · 릴리스 스모크 | 소 |
+| 1 ✔ `c23ba62` | 덮어쓰기 대상 선삭제(01 #1) | `copy/move_onto_with_progress`: 대상 폴더에 `.<name>.nexa-tmp-<pid>`로 쓰고 성공 시 `ReplaceFileW`/rename 스왑, 실패·취소 시 임시만 삭제 | nexa-ops 테스트: 중간 취소 후 옛 대상 무결·임시 잔존 0 | 중 |
+| 2 ✔ `07b28db` | 전송 중 드롭 조용히 폐기(01 #2) | `start_transfer`가 busy면 스테이징 파일을 **원위치 복귀**(rename back) 후 상태바 "전송 중 — 잠시 후 다시" 표시. 이후 큐잉(X-52) | 실기: 대용량 전송 중 7-Zip 드롭 → 파일 생존 확인 | 소 |
+| 3 ✔ `b16e96b` | ConPTY `pwsh.exe` 이름 실행(06 #1) | `default_shell()`이 찾은 전체 경로를 반환하고 `CreateProcessW(lpApplicationName=경로)` · `SetSearchPathMode(SAFE)` 1회 | exe 옆에 가짜 pwsh.exe 두고 터미널 열기 → 실행 안 됨 | 소(5줄) |
+| 4 ✔ `3e829f7`(overflow-checks 보류) | DLL 사이드로딩·매니페스트(06 #2) | `.cargo/config.toml`에 `-C link-arg=/DEPENDENTLOADFLAG:0x800`·`-C control-flow-guard=yes`·`-C link-arg=/CETCOMPAT` · `[profile.release] overflow-checks=true` · `build.rs`에 매니페스트(asInvoker·uiAccess=false·longPathAware·PerMonitorV2·supportedOS) | audit.ps1 S-1 GUARD_CF 통과·S-2 asInvoker 검출 · B-3 무변 · B-2 크기 · 릴리스 스모크 | 소 |
 | 5 | 플러그인 무타임아웃(05 #1) | 호스트 임포트마다 `Instant` 경과 검사(예: 500ms) + `caller.consume_fuel` 과금 · 반복 실패 3회면 세션 비활성 | `nx_loop` 테스트에 시간 상한 단언 · 1초 내 오류 | 중 |
 | 6 | 설정 저장 비원자(02 #2) | `save()`: 옛 파일 선삭제 제거 · `File`+`sync_all` · `{name}.{pid}.tmp` · `cloud_client_secret_*` 직렬화 추가 | config 왕복 테스트 단언 추가 · 저장 중 프로세스 kill 실험 | 소 |
+
+**7-1 조치 결과(같은 날)**: 1~4 수정 커밋 · 5·6 대기. 재판정 회차 [`docs/audit/20260904-174325/`](../20260904-174325/summary.md) = PASS=8 FAIL=0 WARN=0 SKIP=2
+(S-1 GUARD_CF 통과·S-2 asInvoker 검출 — WARN 2건 소멸). 실측: DllCharacteristics 0xC160 · DependentLoadFlags 0x0800 ·
+CET compat · exe 3,926,528B(+37KB) · B3 통과 · 창 447ms. 테스트: ops 36(덮어쓰기 취소 보존 신규)·app 130(steal→restore·default_shell 절대 경로).
 
 ### 7-2. 단기(다음 릴리스 전 — 성능 정지·UX 결함. HIGH/MED)
 | 대상 | 조치 방법 | 검증 |

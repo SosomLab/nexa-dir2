@@ -229,11 +229,11 @@ ID 접두: **T** 테스트 · **B** 예산(DR-2) · **P** 성능 · **S** 보안
 
 | # | 영역 | 발견 | 심각도 | 조치 |
 | --- | --- | --- | --- | --- |
-| 1 | F | **덮어쓰기가 새 파일을 쓰기 전에 대상을 삭제**(`nexa-ops lib.rs` copy/move `remove_dir_all(dest)` 선행) — 취소·실패 시 옛 대상 소실·부분 트리 잔존 | HIGH | ☐ |
-| 2 | F | 전송 중 **DnD 드롭이 조용히 폐기**(`start_transfer` 초입 `st.transfer.is_some()` return) — `steal_volatile`로 원본을 이미 스테이징으로 옮긴 뒤라 파일이 사용자 시야에서 사라짐 | HIGH | ☐ |
+| 1 | F | **덮어쓰기가 새 파일을 쓰기 전에 대상을 삭제**(`nexa-ops lib.rs` copy/move `remove_dir_all(dest)` 선행) — 취소·실패 시 옛 대상 소실·부분 트리 잔존 | HIGH | ✔ `c23ba62` 스테이징 후 커밋 교체 |
+| 2 | F | 전송 중 **DnD 드롭이 조용히 폐기**(`start_transfer` 초입 `st.transfer.is_some()` return) — `steal_volatile`로 원본을 이미 스테이징으로 옮긴 뒤라 파일이 사용자 시야에서 사라짐 | HIGH | ✔ `07b28db` 거부+원위치 복귀+안내 |
 | 3 | G | 플러그인 **벽시계 타임아웃 없음 + 호스트 임포트(read_at 4MB·render_svg) 연료 미과금 + UI 스레드 실행** = 정지 벡터(ADR-0005 약속 회귀) | HIGH | ☐ |
-| 4 | S | ConPTY `CreateProcessW`가 **`pwsh.exe` 이름만**으로 실행(`default_shell`이 전체 경로를 찾고도 버림) — exe 폴더/CWD 바이너리 플랜팅 | HIGH | ☐ |
-| 5 | S | **매니페스트 부재·DependentLoadFlags 0** — 인박스 22개 중 KnownDLLs 밖 7개(bcryptprimitives·dwrite·winhttp·crypt32·bcrypt·dwmapi·uiautomationcore) 사이드로딩 가능 | HIGH | ☐(`/DEPENDENTLOADFLAG:0x800`+매니페스트) |
+| 4 | S | ConPTY `CreateProcessW`가 **`pwsh.exe` 이름만**으로 실행(`default_shell`이 전체 경로를 찾고도 버림) — exe 폴더/CWD 바이너리 플랜팅 | HIGH | ✔ `b16e96b` 전체 경로 lpApplicationName |
+| 5 | S | **매니페스트 부재·DependentLoadFlags 0** — 인박스 22개 중 KnownDLLs 밖 7개(bcryptprimitives·dwrite·winhttp·crypt32·bcrypt·dwmapi·uiautomationcore) 사이드로딩 가능 | HIGH | ✔ `3e829f7` CFG·CET·0x800·매니페스트(overflow-checks 보류) |
 | 6 | C | `save()` 비원자성(옛 파일 **선삭제** 후 rename·fsync 없음·임시명 고정 → 2인스턴스 교차) | HIGH | ☐ |
 | 7 | C | 설정 변경마다 **UI 스레드 전체 직렬화+4 syscall**·무변경 저장(설정 창 포커스 이탈마다)·`apply_prefs` 끝 전체 무효화 | HIGH | ☐ |
 | 8 | C | 세션 복원이 **창 생성 전 동기**(탭 전부 열거 + 펼침 경로 최대 200/탭 열거) — 끊긴 UNC면 "기동 안 됨" | HIGH | ☐ |
@@ -243,7 +243,7 @@ ID 접두: **T** 테스트 · **B** 예산(DR-2) · **P** 성능 · **S** 보안
 | 12 | F | 하위 트리 복사에서 **한 파일 실패 = 폴더 전체 중단**(`?` 전파) · 정션/디렉터리 심링크가 파일 경로로 떨어져 ACCESS_DENIED · 부분 대상 미정리 | HIGH | ☐ |
 | 13 | F | 진행 통지가 **항목마다 PostMessage + 전체 Vec 클론**(O(N²)) · 계획 단계 트리 2회 순회·취소 불가 | HIGH(perf) | ☐ |
 | 14 | F | `reload_both`가 매 작업·감시 틱마다 **양 패널 동기 재열거 + O(S×V) 선택 복원** | HIGH(perf) | ☐ |
-| 15 | S | 무서명 배포 + 같은 페이지 SHA256SUMS(출처 증명 없음) · CFG/CET/overflow-checks 없음 | MED-HIGH | ○ 정책 / ☐ 플래그 4줄 |
+| 15 | S | 무서명 배포 + 같은 페이지 SHA256SUMS(출처 증명 없음) · CFG/CET/overflow-checks 없음 | MED-HIGH | ○ 정책 / ✔ CFG·CET(`3e829f7`) · ☐ overflow-checks |
 | 16 | S | OAuth 클라이언트 시크릿 소스 하드코딩(`oauth.rs`) · 클라우드 임시 폴더 고정 경로·MOTW 미기록·정리 없음 | MED-HIGH | ○ / ☐ |
 | 17 | S | WM_APP 5종이 `Box::from_raw(wparam/lparam)` 무검증 — 같은 세션 프로세스의 임의 포인터 해제 프리미티브 | MED | ☐(쿠키/큐) |
 | 18 | G | 반환 버퍼 1MB 상한 vs 샘플 20k 엔트리(≈1.2MB) → "반환 버퍼 손상" 오표시 · 로드 오류 폐기(관측 불가) · `password` 임포트 전 플러그인 노출 · 비활성 플러그인도 실행 · 출처 검증 없음 · 서킷 브레이커 없음 · dist 드리프트 미검출 | MED | ☐ |
@@ -256,6 +256,8 @@ ID 접두: **T** 테스트 · **B** 예산(DR-2) · **P** 성능 · **S** 보안
 | 25 | R | 터미널 Ctrl+C: 클립보드 열기 실패도 `sel=None`·HTML/RTF 부분 실패 무신호 · `TextRun` faint 없음 · 글꼴 이름 = 체인 원문 | MED | ☐ |
 | 26 | R | `Kind::Select` 미지 값이면 콤보 공란(폴백 값 미기록) · 오버레이 바 DPI 미스케일·키보드 스크롤 무표시·호버 고착·테스트 0 | MED | ☐ |
 | 27 | R | 가상 붙여넣기 실패 전부 무응답 · `sanitize_rel` 예약 장치명 미거부 · 압축 창 라이트 고정·WM_QUIT 삼킴·빈 선택 전체 복사·목록 UI 스레드 동기 · fontchain 현지화 이름·수명 캐시 | MED-LOW | ☐ |
+
+**즉시 조치 결과(같은 날)**: #1·#2·#4·#5 수정 커밋 → 재판정 회차 [`docs/audit/20260904-174325/`](audit/20260904-174325/summary.md) = PASS=8 FAIL=0 WARN=0 SKIP=2(S-1/S-2 WARN 소멸).
 
 **견고한 부분(회귀 금지)**: 단일 전송 퍼널·바이트/항목 진행·취소(항목 간+4MiB마다) · 휴지통 단일 배치+사후 존재 diff · `steal_volatile` · 완료 통지 재시도 · `sanitize_rel` · 세션 저장 디바운스 · 관대한 클램프 파서 · 데이터 폴더 1회 판정 · 행 가상화·`Invalidations` 모델 · 정렬은 열거 시 1회 · 감시자 수명(OVERLAPPED·overflow 복구·자가 치유) · 아이콘 4개/80ms 동기/비동기 분리 · 재니터 트림 · 플러그인 샌드박스(임포트 6개 전부 대상 파일 한정·연료·메모리·8MB) · `Secret` zeroize · OAuth PKCE/state/루프백/TLS 강제 · 토큰 비로그 · zip-slip 정규화(nexa-vfs unsafe 0).
 
