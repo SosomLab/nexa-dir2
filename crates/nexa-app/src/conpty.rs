@@ -113,7 +113,16 @@ impl ConPty {
         si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
         si.lpAttributeList = list;
 
-        let mut cmdline: Vec<u16> = default_shell()
+        // 셸은 **전체 경로**로 실행(점검 1차 #3 — 종전은 "pwsh.exe" 이름만 넘겨 NULL 앱 이름 검색
+        // 규칙[앱 폴더·CWD 우선]에 노출 = 바이너리 플랜팅). lpApplicationName에 경로를, 명령줄에는
+        // 인용한 같은 경로를 준다(argv[0]).
+        let shell = default_shell();
+        let app_w: Vec<u16> = shell
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut cmdline: Vec<u16> = format!("\"{}\"", shell.display())
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
@@ -124,7 +133,7 @@ impl ConPty {
             .collect();
         let mut pi = PROCESS_INFORMATION::default();
         if CreateProcessW(
-            PCWSTR::null(),
+            PCWSTR(app_w.as_ptr()),
             Some(PWSTR(cmdline.as_mut_ptr())),
             None,
             None,
@@ -276,19 +285,32 @@ impl Drop for ConPty {
     }
 }
 
-/// 기본 셸 — pwsh → powershell → cmd 순(원본 DefaultShell).
-fn default_shell() -> String {
+/// 기본 셸 — pwsh → powershell → cmd 순(원본 DefaultShell). **전체 경로**를 돌려준다(점검 1차 #3):
+/// PATH에서 찾은 경로 그대로 · 못 찾으면 `%SystemRoot%\System32\cmd.exe`(이름 검색에 기대지 않는다).
+fn default_shell() -> std::path::PathBuf {
     for exe in ["pwsh.exe", "powershell.exe"] {
         if let Some(paths) = std::env::var_os("PATH") {
             for dir in std::env::split_paths(&paths) {
-                if dir.as_os_str().is_empty() {
-                    continue;
+                if dir.as_os_str().is_empty() || dir.is_relative() {
+                    continue; // 상대 경로 항목(".")은 CWD 기준 = 플랜팅 경로 — 제외
                 }
-                if dir.join(exe).is_file() {
-                    return exe.to_string();
+                let cand = dir.join(exe);
+                if cand.is_file() {
+                    return cand;
                 }
             }
         }
     }
-    "cmd.exe".into()
+    let sysroot = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    std::path::Path::new(&sysroot).join("System32").join("cmd.exe")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_shell_is_absolute_and_exists() {
+        let p = super::default_shell();
+        assert!(p.is_absolute(), "{p:?}");
+        assert!(p.is_file(), "{p:?}");
+    }
 }
