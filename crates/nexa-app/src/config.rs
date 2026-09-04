@@ -487,6 +487,12 @@ impl Settings {
                 out.push_str(&format!("cloud_client_id_{k}={v}\n"));
             }
         }
+        // 사용자 제공 client_secret(점검 1차 #6 — 파싱만 되고 직렬화되지 않아 다음 저장에 유실되던 것)
+        for (k, v) in &self.cloud_client_secrets {
+            if !v.trim().is_empty() {
+                out.push_str(&format!("cloud_client_secret_{k}={v}\n"));
+            }
+        }
         if let Some(items) = &self.launcher_items {
             out.push_str(&format!("launcher_count={}\n", items.len()));
             for (i, it) in items.iter().enumerate() {
@@ -896,15 +902,26 @@ pub fn load(dir: &Path, name: &str) -> Option<String> {
 }
 
 /// temp에 쓰고 rename — 저장 중 크래시에도 기존 파일 보존(원본 SESS 원자성 계승).
+/// 점검 1차 #6(09-04): ① 옛 파일 **선삭제 금지** — std `rename`은 Windows에서 REPLACE_EXISTING이라
+/// 교체 자체가 원자적이고, 선삭제는 rename 실패 시 파일이 사라지는 무보호 창이었다 ② `sync_all`로
+/// 전원 차단 시 0바이트 승격 방지 ③ 임시명에 pid — 두 인스턴스의 임시 파일 교차 방지.
 pub fn save(dir: &Path, name: &str, content: &str) -> io::Result<()> {
+    use std::io::Write as _;
     fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!("{name}.tmp"));
-    fs::write(&tmp, content)?;
-    let dst = dir.join(name);
-    if dst.exists() {
-        fs::remove_file(&dst)?;
+    let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    let written = (|| -> io::Result<()> {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
     }
-    fs::rename(&tmp, &dst)
+    let dst = dir.join(name);
+    fs::rename(&tmp, &dst).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp); // 옛 파일은 그대로 — 임시만 정리
+    })
 }
 
 /// 영속 파일명(사용자 지시 07-14): 저장 항목을 포괄하는 이름 + `.cfg` 확장자.
@@ -1321,6 +1338,11 @@ mod tests {
             "client_id 왕복(X-37)"
         );
         assert_eq!(parsed.client_id("dropbox"), "", "미설정 = 빈 문자열");
+        assert_eq!(
+            parsed.client_secret("googledrive"),
+            "GOCSPX-test",
+            "client_secret 왕복(점검 1차 #6 — 직렬화 누락이던 필드)"
+        );
         assert!(
             Settings::parse("").cloud_conns.is_empty(),
             "키 부재 = 연결 없음"
@@ -1511,7 +1533,30 @@ mod tests {
         assert_eq!(load(&dir, "t.txt").unwrap(), "hello=1\n");
         save(&dir, "t.txt", "hello=2\n").unwrap(); // 덮어쓰기(기존 존재)
         assert_eq!(load(&dir, "t.txt").unwrap(), "hello=2\n");
-        assert!(!dir.join("t.txt.tmp").exists(), "임시 파일 잔존 없음");
+        let leftovers = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0, "임시 파일 잔존 없음(pid 임시명 포함)");
+        // 점검 1차 #6: 대상이 잠겨 rename이 실패해도 옛 파일은 남고 임시만 정리된다(Windows 공유 모드)
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            let _lock = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0) // 공유 없음 → rename(REPLACE_EXISTING) 실패
+                .open(dir.join("t.txt"))
+                .unwrap();
+            assert!(save(&dir, "t.txt", "hello=3\n").is_err(), "잠긴 대상 = 저장 실패");
+        }
+        assert_eq!(load(&dir, "t.txt").unwrap(), "hello=2\n", "실패해도 옛 내용 보존");
+        let leftovers = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
         assert_eq!(load(&dir, "missing.txt"), None);
         fs::remove_dir_all(&dir).unwrap();
     }
