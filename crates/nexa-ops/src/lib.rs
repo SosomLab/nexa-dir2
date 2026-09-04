@@ -207,7 +207,43 @@ fn copy_dir_with_progress(
     Ok(())
 }
 
-/// 원본을 정확히 `dest`로 복사(순번 부여 없음) — overwrite면 기존 대상 대체(폴더는 삭제 후 재귀).
+/// 교체용 스테이징 경로 — 대상과 **같은 부모**(같은 볼륨이라 rename이 원자적). 숨김 규약 `.<name>.nexa-<tag>-<pid>-<seq>`.
+fn staging_path(dest: &Path, tag: &str) -> PathBuf {
+    use std::sync::atomic::AtomicU64;
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    dest.with_file_name(format!(
+        ".{name}.nexa-{tag}-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// 스테이징 → 대상 **커밋 교체**(점검 1차 #1 — 옛 대상은 새 내용이 완성된 뒤에만 사라진다).
+/// 파일: `rename`(std = MOVEFILE_REPLACE_EXISTING, 원자) · 폴더: 옛 폴더를 옆으로 치우고 rename,
+/// 실패 시 원복 · 대상이 파일인데 폴더로 교체(형 불일치)면 파일 제거 후 rename.
+fn commit_replace(staged: &Path, dest: &Path) -> io::Result<()> {
+    if dest.is_dir() {
+        let old = staging_path(dest, "old");
+        fs::rename(dest, &old)?;
+        if let Err(e) = fs::rename(staged, dest) {
+            let _ = fs::rename(&old, dest); // 원복 — 옛 대상 보존
+            return Err(e);
+        }
+        let _ = fs::remove_dir_all(&old); // 새 대상은 이미 커밋됨 — 잔여는 정리 대상일 뿐
+        return Ok(());
+    }
+    if staged.is_dir() && dest.is_file() {
+        fs::remove_file(dest)?;
+    }
+    fs::rename(staged, dest)
+}
+
+/// 원본을 정확히 `dest`로 복사(순번 부여 없음). overwrite면 **스테이징 후 교체** — 취소/실패 시
+/// 옛 대상이 그대로 남고 스테이징만 제거된다(점검 1차 #1: 종전은 폴더를 먼저 지워 취소 시 소실).
 pub fn copy_onto_with_progress(
     src: &Path,
     dest: &Path,
@@ -215,11 +251,25 @@ pub fn copy_onto_with_progress(
     on_bytes: &mut dyn FnMut(u64),
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    let replacing = overwrite && dest.exists();
     if src.is_dir() {
-        if overwrite && dest.is_dir() {
-            fs::remove_dir_all(dest)?;
+        if !replacing {
+            return copy_dir_with_progress(src, dest, on_bytes, cancel);
         }
-        copy_dir_with_progress(src, dest, on_bytes, cancel)
+        let staged = staging_path(dest, "tmp");
+        let run = copy_dir_with_progress(src, &staged, on_bytes, cancel)
+            .and_then(|()| commit_replace(&staged, dest));
+        if run.is_err() {
+            let _ = fs::remove_dir_all(&staged);
+        }
+        run
+    } else if replacing {
+        let staged = staging_path(dest, "tmp");
+        // copy_file_with_progress가 실패 시 staged를 정리한다
+        copy_file_with_progress(src, &staged, true, on_bytes, cancel)?;
+        commit_replace(&staged, dest).inspect_err(|_| {
+            let _ = fs::remove_file(&staged);
+        })
     } else {
         copy_file_with_progress(src, dest, overwrite, on_bytes, cancel)
     }
@@ -238,19 +288,26 @@ pub fn move_onto_with_progress(
     if is_dir && is_same_or_sub(src, dest) {
         return Err(io::Error::other("자기 자신/하위 폴더로는 이동할 수 없음"));
     }
-    if overwrite {
-        if dest.is_dir() {
-            fs::remove_dir_all(dest)?;
-        } else if dest.is_file() {
-            fs::remove_file(dest)?;
-        }
-    }
     if same_volume(src, dest) {
-        fs::rename(src, dest)?;
+        // 옛 대상은 새 대상이 자리를 잡은 뒤에만 사라진다(점검 1차 #1 — 종전은 선삭제 후 rename).
+        if overwrite && dest.is_dir() {
+            let old = staging_path(dest, "old");
+            fs::rename(dest, &old)?;
+            if let Err(e) = fs::rename(src, dest) {
+                let _ = fs::rename(&old, dest); // 원복
+                return Err(e);
+            }
+            let _ = fs::remove_dir_all(&old);
+        } else if overwrite && is_dir && dest.is_file() {
+            fs::remove_file(dest)?; // 형 불일치(파일 위에 폴더) — 새 내용은 원본에 온전히 있음
+            fs::rename(src, dest)?;
+        } else {
+            fs::rename(src, dest)?; // 파일 위 파일 = std rename(REPLACE_EXISTING) 원자 교체
+        }
         on_bytes(size_of(dest)); // 메타데이터 이동(즉시) — 전체 크기 1회 보고
         Ok(())
     } else {
-        copy_onto_with_progress(src, dest, true, on_bytes, cancel)?;
+        copy_onto_with_progress(src, dest, overwrite, on_bytes, cancel)?; // 스테이징 교체
         if is_dir {
             fs::remove_dir_all(src)
         } else {
@@ -672,6 +729,81 @@ mod tests {
             vec![(0, ItemStatus::Skipped), (1, ItemStatus::Done)],
             "건너뜀/성공이 항목별로 보고"
         );
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// 점검 1차 #1: 덮어쓰기 중 취소해도 **옛 대상이 보존**되고 스테이징 잔여가 없어야 한다.
+    #[test]
+    fn overwrite_keeps_old_dest_when_canceled_and_replaces_on_success() {
+        let d = fixture("overwrite_stage");
+        let (a, b) = (d.join("a"), d.join("b"));
+        fs::create_dir_all(a.join("x")).unwrap();
+        fs::create_dir_all(b.join("x")).unwrap();
+        fs::write(a.join("x").join("big.bin"), vec![1u8; 9 * 1024 * 1024]).unwrap();
+        fs::write(b.join("x").join("keep.txt"), "옛 폴더 내용").unwrap();
+        fs::write(a.join("f.bin"), vec![2u8; 9 * 1024 * 1024]).unwrap();
+        fs::write(b.join("f.bin"), "옛 파일").unwrap();
+        let leftovers = |dir: &Path| {
+            fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().contains(".nexa-"))
+                .count()
+        };
+        // ① 폴더 덮어쓰기 중 취소 → 옛 폴더 그대로
+        let cancel = AtomicBool::new(false);
+        let out = transfer(
+            &[a.join("x")],
+            &b,
+            Op::Copy,
+            &mut |_| Conflict::Overwrite,
+            &mut |ev| {
+                if matches!(ev, Event::Bytes(_)) {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+            &cancel,
+        );
+        assert!(out.canceled);
+        assert_eq!(fs::read_to_string(b.join("x").join("keep.txt")).unwrap(), "옛 폴더 내용");
+        assert!(!b.join("x").join("big.bin").exists());
+        assert_eq!(leftovers(&b), 0, "스테이징 잔여 없음");
+        // ② 파일 덮어쓰기 중 취소 → 옛 파일 그대로
+        let cancel = AtomicBool::new(false);
+        let out = transfer(
+            &[a.join("f.bin")],
+            &b,
+            Op::Copy,
+            &mut |_| Conflict::Overwrite,
+            &mut |ev| {
+                if matches!(ev, Event::Bytes(_)) {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+            &cancel,
+        );
+        assert!(out.canceled);
+        assert_eq!(fs::read_to_string(b.join("f.bin")).unwrap(), "옛 파일");
+        assert_eq!(leftovers(&b), 0);
+        // ③ 성공 시 교체 완료(폴더·파일) — 옛 내용 소거·잔여 없음
+        fs::write(a.join("x").join("big.bin"), b"new").unwrap();
+        fs::write(a.join("f.bin"), b"newf").unwrap();
+        let out = run(&[a.join("x"), a.join("f.bin")], &b, Op::Copy, &mut |_| Conflict::Overwrite);
+        assert_eq!(out.transferred.len(), 2, "{:?}", out.errors);
+        assert!(!b.join("x").join("keep.txt").exists(), "옛 폴더 내용 교체됨");
+        assert_eq!(fs::read(b.join("x").join("big.bin")).unwrap(), b"new");
+        assert_eq!(fs::read(b.join("f.bin")).unwrap(), b"newf");
+        assert_eq!(leftovers(&b), 0);
+        // ④ 같은 볼륨 이동 덮어쓰기(폴더) — 옛 폴더 옆으로 치운 뒤 rename·정리
+        fs::create_dir_all(a.join("y")).unwrap();
+        fs::write(a.join("y").join("n.txt"), "새").unwrap();
+        fs::create_dir_all(b.join("y")).unwrap();
+        fs::write(b.join("y").join("o.txt"), "옛").unwrap();
+        let out = run(&[a.join("y")], &b, Op::Move, &mut |_| Conflict::Overwrite);
+        assert_eq!(out.transferred.len(), 1, "{:?}", out.errors);
+        assert!(b.join("y").join("n.txt").exists() && !b.join("y").join("o.txt").exists());
+        assert!(!a.join("y").exists());
+        assert_eq!(leftovers(&b), 0);
         fs::remove_dir_all(&d).unwrap();
     }
 
