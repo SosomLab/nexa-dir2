@@ -254,12 +254,20 @@ pub struct VirtualRows<S> {
     mode: ViewMode,
     /// 폰트 장식(X-12): (폴더 이름 굵게, 헤더 굵게, 헤더 이탤릭).
     font_decor: (bool, bool, bool),
-    /// 오버레이 스크롤바(09-04 X-47): 썸 알파(0=숨김)·유지 틱 잔량·호버·드래그
-    /// (시작 y, 시작 scroll_row).
-    bar_alpha: u8,
-    bar_hold: u8,
-    bar_hover: bool,
+    /// 오버레이 스크롤바(09-04 X-47) — **축별 독립**(사용자 확정: 세로 스크롤 = 세로만,
+    /// 가로 스크롤 = 가로만, 가로 표시 중 세로 스크롤 = 둘 다): `[세로, 가로]` 썸 알파
+    /// (0=숨김)·유지 틱 잔량, 호버 축, 드래그.
+    bar_alpha: [u8; 2],
+    bar_hold: [u8; 2],
+    bar_hover: Option<Axis>,
     bar_drag: Option<BarDrag>,
+}
+
+/// 오버레이 바 축 인덱스(`bar_alpha`/`bar_hold`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Axis {
+    V = 0,
+    H = 1,
 }
 
 /// 오버레이 썸 드래그(09-04): 세로 = (시작 y, 시작 scroll_row) · 가로 = (시작 x, 시작 scroll_x).
@@ -299,9 +307,9 @@ impl<S: RowSource> VirtualRows<S> {
             focused: true,
             mode: ViewMode::default(),
             font_decor: (false, false, false),
-            bar_alpha: 0,
-            bar_hold: 0,
-            bar_hover: false,
+            bar_alpha: [0, 0],
+            bar_hold: [0, 0],
+            bar_hover: None,
             bar_drag: None,
         }
     }
@@ -602,17 +610,20 @@ impl<S: RowSource> VirtualRows<S> {
         if self.typeahead.tick(now_ms) {
             inv.push(self.bounds);
         }
-        if self.bar_hot() {
-            return; // 호버/드래그 중엔 페이드 보류(이탈 시 flash_bar가 재개)
-        }
-        if self.bar_hold > 0 {
-            self.bar_hold -= 1;
-            inv.request_tick();
-        } else if self.bar_alpha > 0 {
-            self.bar_alpha = self.bar_alpha.saturating_sub(BAR_FADE_STEP);
-            self.push_bar_strips(inv);
-            if self.bar_alpha > 0 {
+        for axis in [Axis::V, Axis::H] {
+            if self.axis_hot(axis) {
+                continue; // 호버/드래그 중인 축은 페이드 보류(이탈 시 flash_bar가 재개)
+            }
+            let i = axis as usize;
+            if self.bar_hold[i] > 0 {
+                self.bar_hold[i] -= 1;
                 inv.request_tick();
+            } else if self.bar_alpha[i] > 0 {
+                self.bar_alpha[i] = self.bar_alpha[i].saturating_sub(BAR_FADE_STEP);
+                self.push_bar_strip(axis, inv);
+                if self.bar_alpha[i] > 0 {
+                    inv.request_tick();
+                }
             }
         }
     }
@@ -653,27 +664,40 @@ impl<S: RowSource> VirtualRows<S> {
         Some(Rect::new(tx, b.bottom() - h - 2, tw, h))
     }
 
-    /// 바 트랙 스트립 2종(우측 세로·하단 가로) 무효화.
-    fn push_bar_strips(&self, inv: &mut Invalidations) {
+    /// 축 트랙 스트립(세로 = 우측·가로 = 하단) 무효화.
+    fn push_bar_strip(&self, axis: Axis, inv: &mut Invalidations) {
         let b = self.bounds;
-        inv.push(Rect::new(
-            b.right() - BAR_WIDE - 4,
-            self.body_top(),
-            BAR_WIDE + 4,
-            self.body_h(),
-        ));
-        inv.push(Rect::new(b.x, b.bottom() - BAR_WIDE - 4, b.w, BAR_WIDE + 4));
+        inv.push(match axis {
+            Axis::V => Rect::new(
+                b.right() - BAR_WIDE - 4,
+                self.body_top(),
+                BAR_WIDE + 4,
+                self.body_h(),
+            ),
+            Axis::H => Rect::new(b.x, b.bottom() - BAR_WIDE - 4, b.w, BAR_WIDE + 4),
+        });
     }
 
-    fn bar_hot(&self) -> bool {
-        self.bar_hover || self.bar_drag.is_some()
+    /// 축이 호버/드래그 중(두꺼운 바·페이드 보류).
+    fn axis_hot(&self, axis: Axis) -> bool {
+        self.bar_hover == Some(axis)
+            || matches!(
+                (axis, self.bar_drag),
+                (Axis::V, Some(BarDrag::V(..))) | (Axis::H, Some(BarDrag::H(..)))
+            )
     }
 
-    /// 스크롤 직후 바 표시(반투명) + 유지 → 페이드(호스트 틱 요청).
-    fn flash_bar(&mut self, inv: &mut Invalidations) {
-        self.bar_alpha = BAR_ALPHA;
-        self.bar_hold = BAR_HOLD_TICKS;
-        self.push_bar_strips(inv);
+    /// 축 바가 그려지는가(알파 > 0 또는 hot).
+    fn axis_visible(&self, axis: Axis) -> bool {
+        self.bar_alpha[axis as usize] > 0 || self.axis_hot(axis)
+    }
+
+    /// 스크롤 직후 **그 축만** 표시(반투명) + 유지 → 페이드. 다른 축은 자기 상태 유지
+    /// (가로가 보이는 중 세로 스크롤 = 둘 다 — 사용자 확정 09-04).
+    fn flash_bar(&mut self, axis: Axis, inv: &mut Invalidations) {
+        self.bar_alpha[axis as usize] = BAR_ALPHA;
+        self.bar_hold[axis as usize] = BAR_HOLD_TICKS;
+        self.push_bar_strip(axis, inv);
         inv.request_tick();
     }
 
@@ -710,60 +734,72 @@ impl<S: RowSource> VirtualRows<S> {
             }
             None => {}
         }
-        let over = self.in_thumb(x, y) || self.in_hthumb(x, y);
+        // 호버는 **보이는** 축의 썸에만(숨겨진 바 자리에 올려도 드러나지 않음 — 축 독립 규약)
+        let over = if self.axis_visible(Axis::V) && self.in_thumb(x, y) {
+            Some(Axis::V)
+        } else if self.axis_visible(Axis::H) && self.in_hthumb(x, y) {
+            Some(Axis::H)
+        } else {
+            None
+        };
         if over != self.bar_hover {
+            let prev = self.bar_hover;
             self.bar_hover = over;
-            if over {
-                self.push_bar_strips(inv);
-            } else {
-                self.flash_bar(inv); // 이탈 = 유지 → 페이드 재개
+            if let Some(ax) = prev {
+                self.flash_bar(ax, inv); // 이탈 = 유지 → 페이드 재개
+            }
+            if let Some(ax) = over {
+                self.push_bar_strip(ax, inv);
             }
         }
         false
     }
 
-    /// 가로 오프셋 설정(클램프) + 바 표시.
+    /// 가로 오프셋 설정(클램프) + 가로 바 표시.
     fn hscroll_to(&mut self, x: i32, inv: &mut Invalidations) {
         let old = self.scroll_x;
         self.scroll_x = x;
         self.clamp_scroll_x();
         if self.scroll_x != old {
             inv.push(self.bounds);
-            self.flash_bar(inv);
+            self.flash_bar(Axis::H, inv);
         }
     }
 
-    /// MouseDown — 썸 = 드래그 시작, 트랙 = 페이지 이동(둘 다 바 표시 중일 때만). true = 소비.
+    /// MouseDown — 썸 = 드래그 시작, 트랙 = 페이지 이동(그 축이 표시 중일 때만). true = 소비.
     fn bar_mouse_down(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
-        let visible = self.bar_alpha > 0 || self.bar_hot();
-        if !visible || y < self.body_top() || y >= self.bounds.bottom() {
+        if y < self.body_top() || y >= self.bounds.bottom() {
             return false;
         }
-        if self.in_thumb(x, y) {
-            self.bar_drag = Some(BarDrag::V(y, self.scroll_row));
-            self.push_bar_strips(inv);
-            return true;
-        }
-        if self.in_hthumb(x, y) {
-            self.bar_drag = Some(BarDrag::H(x, self.scroll_x));
-            self.push_bar_strips(inv);
-            return true;
-        }
-        if let Some(t) = self.thumb_rect(true) {
-            if x >= t.x - 2 {
-                let full = (self.body_h() / self.grid_h().max(1)).max(1) as isize;
-                let page = (full - 1).max(1);
-                let cur = self.scroll_row as isize;
-                self.scroll_to(if y < t.y { cur - page } else { cur + page }, inv);
+        if self.axis_visible(Axis::V) {
+            if self.in_thumb(x, y) {
+                self.bar_drag = Some(BarDrag::V(y, self.scroll_row));
+                self.push_bar_strip(Axis::V, inv);
                 return true;
             }
+            if let Some(t) = self.thumb_rect(true) {
+                if x >= t.x - 2 {
+                    let full = (self.body_h() / self.grid_h().max(1)).max(1) as isize;
+                    let page = (full - 1).max(1);
+                    let cur = self.scroll_row as isize;
+                    self.scroll_to(if y < t.y { cur - page } else { cur + page }, inv);
+                    return true;
+                }
+            }
         }
-        if let Some(t) = self.hthumb_rect(true) {
-            if y >= t.y - 2 {
-                let page = self.bounds.w.max(1);
-                let cur = self.scroll_x;
-                self.hscroll_to(if x < t.x { cur - page } else { cur + page }, inv);
+        if self.axis_visible(Axis::H) {
+            if self.in_hthumb(x, y) {
+                self.bar_drag = Some(BarDrag::H(x, self.scroll_x));
+                self.push_bar_strip(Axis::H, inv);
                 return true;
+            }
+            if let Some(t) = self.hthumb_rect(true) {
+                if y >= t.y - 2 {
+                    let page = self.bounds.w.max(1);
+                    let cur = self.scroll_x;
+                    self.hscroll_to(if x < t.x { cur - page } else { cur + page }, inv);
+                    return true;
+                }
             }
         }
         false
@@ -771,41 +807,53 @@ impl<S: RowSource> VirtualRows<S> {
 
     /// MouseUp — 드래그 종료(true = 소비).
     fn bar_mouse_up(&mut self, inv: &mut Invalidations) -> bool {
-        if self.bar_drag.take().is_some() {
-            self.flash_bar(inv);
-            return true;
+        match self.bar_drag.take() {
+            Some(BarDrag::V(..)) => self.flash_bar(Axis::V, inv),
+            Some(BarDrag::H(..)) => self.flash_bar(Axis::H, inv),
+            None => return false,
         }
-        false
+        true
     }
 
-    /// 오버레이 썸 페인트(본문 위 마지막 — 알파 합성). 세로 + 가로.
+    /// 오버레이 썸 페인트(본문 위 마지막 — 알파 합성). 축별로 보이는 것만.
     fn paint_bar(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
-        let hot = self.bar_hot();
-        if self.bar_alpha == 0 && !hot {
-            return;
-        }
-        let alpha = if hot { BAR_ALPHA_HOT } else { self.bar_alpha };
-        if let Some(t) = self.thumb_rect(hot) {
-            if matches!(self.bar_drag, Some(BarDrag::V(..))) {
-                ctx.fill_round_rect_alpha(
-                    Rect::new(t.x - 1, self.body_top(), t.w + 2, self.body_h()),
-                    0,
-                    theme.text,
-                    28,
-                );
+        if self.axis_visible(Axis::V) {
+            let hot = self.axis_hot(Axis::V);
+            if let Some(t) = self.thumb_rect(hot) {
+                if matches!(self.bar_drag, Some(BarDrag::V(..))) {
+                    ctx.fill_round_rect_alpha(
+                        Rect::new(t.x - 1, self.body_top(), t.w + 2, self.body_h()),
+                        0,
+                        theme.text,
+                        28,
+                    );
+                }
+                let alpha = if hot {
+                    BAR_ALPHA_HOT
+                } else {
+                    self.bar_alpha[0]
+                };
+                ctx.fill_round_rect_alpha(t, t.w / 2, theme.text, alpha);
             }
-            ctx.fill_round_rect_alpha(t, t.w / 2, theme.text, alpha);
         }
-        if let Some(t) = self.hthumb_rect(hot) {
-            if matches!(self.bar_drag, Some(BarDrag::H(..))) {
-                ctx.fill_round_rect_alpha(
-                    Rect::new(self.bounds.x, t.y - 1, self.bounds.w, t.h + 2),
-                    0,
-                    theme.text,
-                    28,
-                );
+        if self.axis_visible(Axis::H) {
+            let hot = self.axis_hot(Axis::H);
+            if let Some(t) = self.hthumb_rect(hot) {
+                if matches!(self.bar_drag, Some(BarDrag::H(..))) {
+                    ctx.fill_round_rect_alpha(
+                        Rect::new(self.bounds.x, t.y - 1, self.bounds.w, t.h + 2),
+                        0,
+                        theme.text,
+                        28,
+                    );
+                }
+                let alpha = if hot {
+                    BAR_ALPHA_HOT
+                } else {
+                    self.bar_alpha[1]
+                };
+                ctx.fill_round_rect_alpha(t, t.h / 2, theme.text, alpha);
             }
-            ctx.fill_round_rect_alpha(t, t.h / 2, theme.text, alpha);
         }
     }
 
@@ -932,7 +980,7 @@ impl<S: RowSource> VirtualRows<S> {
         if clamped != self.scroll_row {
             self.scroll_row = clamped;
             inv.push(self.bounds); // 전 행 이동 — 위젯 영역 전체 무효화
-            self.flash_bar(inv); // 오버레이 바 표시(09-04)
+            self.flash_bar(Axis::V, inv); // 세로 오버레이 바 표시(09-04)
         }
     }
 
@@ -965,7 +1013,7 @@ impl<S: RowSource> VirtualRows<S> {
         self.scroll_into_view(target);
         inv.push(self.bounds);
         if self.scroll_row != before {
-            self.flash_bar(inv); // 키보드 스크롤도 바 표시(09-04)
+            self.flash_bar(Axis::V, inv); // 키보드 스크롤도 세로 바 표시(09-04)
         }
     }
 
