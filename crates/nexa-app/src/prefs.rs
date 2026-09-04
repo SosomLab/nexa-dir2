@@ -149,6 +149,8 @@ enum Select {
     SchemeDark,
     /// 라이트 모드 기본 스킴(밝은 배경 스킴만).
     SchemeLight,
+    /// 터미널 복사 서식 4택(WT — 사용자 요청 09-04: 라디오 → 콤보).
+    CopyFormat,
 }
 
 impl Select {
@@ -171,6 +173,10 @@ impl Select {
             Select::SchemeLight => {
                 nexa_term::SCHEMES.iter().filter(|s| !s.dark).map(tag).collect()
             }
+            Select::CopyFormat => TERM_COPY_OPTS
+                .iter()
+                .map(|(v, lk)| (v.to_string(), tr(lk)))
+                .collect(),
         }
     }
 }
@@ -656,7 +662,7 @@ fn registry() -> Vec<Entry> {
             cat: "terminal",
             label_key: "pref.termCopy",
             desc_key: "pref.termCopy.desc",
-            kind: Kind::Radio(TERM_COPY_OPTS),
+            kind: Kind::Select(Select::CopyFormat),
             field: F_TERM_COPY_FMT,
         },
         Entry {
@@ -1391,7 +1397,6 @@ impl PrefState {
                             F_TA_SCOPE => self.values.typeahead_scope.clone(),
                             F_TA_POS => self.values.typeahead_pos.to_string(),
                             F_VIEW_SCOPE => self.values.view_scope.clone(),
-                            F_TERM_COPY_FMT => self.values.term_copy_format.clone(),
                             _ => String::new(),
                         };
                         for (gi, (val, olabel)) in opts.into_iter().enumerate() {
@@ -1445,6 +1450,7 @@ impl PrefState {
                             F_TERM_THEME => self.values.term_theme.clone(),
                             F_TERM_THEME_DARK => self.values.term_theme_dark.clone(),
                             F_TERM_THEME_LIGHT => self.values.term_theme_light.clone(),
+                            F_TERM_COPY_FMT => self.values.term_copy_format.clone(),
                             _ => String::new(),
                         };
                         let list_h = 24 + 20 * (opts.len().min(12) as i32 + 1);
@@ -2144,7 +2150,6 @@ unsafe extern "system" fn prefs_proc(
                             F_LANG => (*st).values.lang = val,
                             F_NAV_UP => (*st).values.nav_up_align = val,
                             F_VIEW_SCOPE => (*st).values.view_scope = val,
-                            F_TERM_COPY_FMT => (*st).values.term_copy_format = val,
                             F_TAB_DBL => (*st).values.tab_dblclick = val,
                             F_TA_SCOPE => (*st).values.typeahead_scope = val,
                             F_TA_POS => (*st).values.typeahead_pos = val.parse().unwrap_or(6),
@@ -2173,6 +2178,7 @@ unsafe extern "system" fn prefs_proc(
                             F_TERM_THEME => (*st).values.term_theme = val,
                             F_TERM_THEME_DARK => (*st).values.term_theme_dark = val,
                             F_TERM_THEME_LIGHT => (*st).values.term_theme_light = val,
+                            F_TERM_COPY_FMT => (*st).values.term_copy_format = val,
                             _ => {}
                         }
                         (*st).harvest();
