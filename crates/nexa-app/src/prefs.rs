@@ -1548,6 +1548,10 @@ impl PrefState {
             self.scroll_to(max);
         }
         let _ = InvalidateRect(Some(self.pane), None, true);
+        // 트리 전체 재도장(QA 09-04): 오너드로가 선택 판정을 st.category로 하는데 LISTBOX는
+        // LBN_SELCHANGE **전에** 옛/새 행을 ODA_SELECT로 그려 옛 행 하이라이트가 남는다.
+        // 예전엔 창 전체 무효화가 이를 덮었고, 컨테이너 분리 뒤 드러났다.
+        let _ = InvalidateRect(Some(self.tree), None, false);
     }
 
     /// 폰트 행 필드의 현재 표시값(X-12 — 패밀리/크기 공용).
@@ -2300,7 +2304,8 @@ unsafe fn make_icon_font() -> HFONT {
 unsafe fn make_title_font(hwnd: HWND, spec: &DlgFont) -> HFONT {
     let dpi = GetDpiForWindow(hwnd).max(96);
     let h = -(((spec.size_pt + 5).clamp(9, 30) * dpi as i32) / 72);
-    let face = windows::core::HSTRING::from(&*spec.family);
+    let face =
+        windows::core::HSTRING::from(crate::fontchain::first_installed(&spec.family, "Segoe UI")); // 체인 1순위(09-04)
     CreateFontW(
         h,
         0,
