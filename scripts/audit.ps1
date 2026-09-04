@@ -58,7 +58,7 @@ try {
 
   # ── B-2 exe 크기 ──────────────────────────────────────────────────────────
   $len = (Get-Item $Exe).Length
-  Rec 'B-2' 'exe size <= 10MB' ($(if ($len -le 10MB) { 'PASS' } else { 'FAIL' })) ("{0:N0} B = {1:N2} MB" -f $len, ($len / 1MB))
+  Rec 'B-2' 'exe size <= 10MB' ($(if ($len -le 10000000) { 'PASS' } else { 'FAIL' })) ("{0:N0} B = {1:N2} MB (십진 — docs 표기 규약)" -f $len, ($len / 1e6))
 
   # ── B-3 인박스 DLL(단일 출처 스크립트) ──────────────────────────────────────
   $b3 = & pwsh -NoProfile -File scripts/budget-b3.ps1 $Exe 2>&1 | Out-String
@@ -85,7 +85,7 @@ try {
   $txt = [Text.Encoding]::ASCII.GetString($bytes)
   $lvl = [regex]::Match($txt, 'requestedExecutionLevel\s+level="([^"]+)"')
   if ($lvl.Success) { Rec 'S-2' 'manifest execution level' ($(if ($lvl.Groups[1].Value -eq 'asInvoker') { 'PASS' } else { 'FAIL' })) $lvl.Groups[1].Value }
-  else { Rec 'S-2' 'manifest execution level' 'WARN' 'requestedExecutionLevel 미발견(매니페스트 미포함 = asInvoker 기본이나 UAC 가상화 대상)' }
+  else { Rec 'S-2' 'manifest execution level' 'WARN' 'requestedExecutionLevel 미발견(매니페스트 미포함 — asInvoker로 동작하나 명시 선언·longPathAware·DPI 선언 권장, docs/29 §4 A1/A4/A5)' }
 
   if (-not $Quick) {
     # ── P-1 폴더 열거 벤치 ────────────────────────────────────────────────
