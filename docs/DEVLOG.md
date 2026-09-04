@@ -8,7 +8,7 @@
 
 ## 2026-09-04
 
-- **마감 2차(사용자 지시 — 코드 무변경)**: 릴리스 뒤 잔존 문구("미배포") 정정·STATUS 한 장 복귀(172줄) · 실측 = winget PR 2건 OPEN(검증 대기)·choco `0.18.1` `Submitted` 불변. 상세 [journal/2026-09-04.md](journal/2026-09-04.md).
+- **마감 2차(사용자 지시 — 코드 무변경)**: 릴리스 뒤 잔존 문구("미배포") 정정·STATUS 상단 압축(175→174줄) · 실측 = winget PR 2건 OPEN(검증 대기)·choco `0.18.1` `Submitted` 불변. 상세 [journal/2026-09-04.md](journal/2026-09-04.md).
 - **릴리스 `0.19.0`(사용자 지시 — 설정 창 스크롤 재구축·글꼴 폴백 체인·파일 목록 오버레이 바·트리 픽스)**: 채널 판정 = winget 대기 0건 → 제출([#429155](https://github.com/microsoft/winget-pkgs/pull/429155)·[#429156](https://github.com/microsoft/winget-pkgs/pull/429156) — 로컬 `winget validate` 통과) · **choco = `0.18.1` `Submitted`라 제외**(`CHOCO_PUSH=false` 등록 — 승인 뒤 복원). 자산 6종·B2 **3.85MB**·CI green. 상세 [journal/2026-09-04.md](journal/2026-09-04.md).
 - **하루 마감 — 내용 정리·진행사항 최신화·main push(사용자 지시)**: 오늘 요청 10건 반영 확인 · 코드 6·문서 5 커밋 · 테스트 321 green·clippy 0·비Windows green · STATUS §5·CLAUDE.md §7·MILESTONES에 **09-04 미배포 4건 = 최우선 실기 QA** 등재 · 릴리스는 QA 뒤. 상세 [journal/2026-09-04.md](journal/2026-09-04.md).
 - **메인 파일 목록 오버레이 스크롤바 — 세로+가로(사용자 요청 — `feat(rows)`, X-47 1/2)**: 설정 창 규약을 nexa-gui 위젯에 이식 — **`Invalidations::request_tick`**(위젯→호스트 틱 요청 일반 경로·`TIMER_WIDGET_TICK` 40ms) + **`DrawCtx::fill_round_rect_alpha`**(DwCtx = 메모리 DC GDI+ — 그동안 라운드 도형 no-op) · rows.rs 세로/가로 썸·드래그·트랙 클릭·호버·키보드 스크롤 flash. 사용자 실기로 세로 확인 → 가로 추가 → **축별 독립 표시**(스크롤한 축만, 겹치면 둘 다). 잔여 = NxGrid·카드 호스트 확산.
