@@ -94,6 +94,9 @@ pub struct Settings {
     pub term_theme_dark: String,
     /// 앱 라이트 모드일 때(또는 `term_theme=light`) 쓰는 스킴 id — 기본 GitHub Light.
     pub term_theme_light: String,
+    /// 터미널 선택 복사 형식(09-04 — WT "클립보드에 복사할 텍스트 형식"): `text`(평문만, 기본) ·
+    /// `html` · `rtf` · `both`. 평문(CF_UNICODETEXT)은 항상 게시.
+    pub term_copy_format: String,
     /// 전송(복사/이동) 완료 후 진행 창 닫기 대기(ms, 0~10000 — 사용자 요청 07-21,
     /// 단위 초→ms 개정 07-21 2차). **0 = 진행 창 자체를 표시하지 않음**(전송은 그대로
     /// 수행·제목줄 %만 갱신). 닫기 버튼 카운트다운 표시는 올림 초 단위.
@@ -231,6 +234,7 @@ impl Default for Settings {
             term_theme: "system".into(),
             term_theme_dark: nexa_term::DEFAULT_DARK_ID.into(),
             term_theme_light: nexa_term::DEFAULT_LIGHT_ID.into(),
+            term_copy_format: "text".into(),
             transfer_close_ms: 2000, // 기존 하드코딩 2초 승격(07-21 — ms 단위)
             dnd_hover_ms: 3000,      // 탐색기 관례 근사(사용자 확정 07-22 — 3초)
             dlg_font: "Segoe UI".into(),
@@ -411,6 +415,7 @@ impl Settings {
             "term_theme={}\nterm_theme_dark={}\nterm_theme_light={}\n",
             self.term_theme, self.term_theme_dark, self.term_theme_light
         ));
+        out.push_str(&format!("term_copy_format={}\n", self.term_copy_format));
         out.push_str(&format!("transfer_close_ms={}\n", self.transfer_close_ms));
         out.push_str(&format!("dnd_hover_ms={}\n", self.dnd_hover_ms));
         if !self.preview_map.is_empty() {
@@ -586,6 +591,9 @@ impl Settings {
                 }
                 "term_theme_light" if !v.trim().is_empty() && v.len() <= 64 => {
                     s.term_theme_light = v.trim().into()
+                }
+                "term_copy_format" if matches!(v.trim(), "text" | "html" | "rtf" | "both") => {
+                    s.term_copy_format = v.trim().into()
                 }
                 "transfer_close_ms" => {
                     if let Ok(n) = v.parse::<i32>() {
@@ -1129,6 +1137,7 @@ mod tests {
             term_theme: "light".into(),
             term_theme_dark: "nord".into(),
             term_theme_light: "solarized-light".into(),
+            term_copy_format: "both".into(),
             transfer_close_ms: 0,
             dnd_hover_ms: 1500,
             dlg_font: "맑은 고딕".into(),
@@ -1220,6 +1229,12 @@ mod tests {
         assert_eq!(parsed.term_theme, "light", "터미널 테마 선택자 왕복(09-04)");
         assert_eq!(parsed.term_theme_dark, "nord");
         assert_eq!(parsed.term_theme_light, "solarized-light");
+        assert_eq!(parsed.term_copy_format, "both", "복사 형식 왕복(09-04)");
+        assert_eq!(
+            Settings::parse("term_copy_format=xml").term_copy_format,
+            "text",
+            "모르는 값 = 기본"
+        );
         assert_eq!(
             Settings::parse("term_theme=\n").term_theme,
             "system",

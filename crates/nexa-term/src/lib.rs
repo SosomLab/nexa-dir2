@@ -1118,6 +1118,183 @@ impl VtScreen {
     }
 }
 
+/// 같은 색·굵기의 연속 문자 런(복사 서식용 — 09-04). 색은 **기호**(팔레트로 해석 전).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TextRun {
+    pub text: String,
+    pub fg: u32,
+    pub bg: u32,
+    pub bold: bool,
+}
+
+impl VtScreen {
+    /// 선택 범위를 **줄별 런 목록**으로 추출(HTML/RTF 복사 — WT "클립보드에 복사할 텍스트 형식").
+    /// 줄 끝 공백은 [`Self::get_text`]와 같은 규칙으로 잘라 두 형식의 본문이 일치한다.
+    /// reverse 셀은 fg/bg를 바꿔 담는다(화면 그대로).
+    pub fn get_runs(
+        &self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) -> Vec<Vec<TextRun>> {
+        let count = self.line_count();
+        if count == 0 {
+            return Vec::new();
+        }
+        let sl = start_line.min(count - 1);
+        let el = end_line.min(count - 1);
+        let mut out = Vec::with_capacity(el - sl + 1);
+        for li in sl..=el {
+            let row = self.line_at(li);
+            let c0 = if li == sl { start_col } else { 0 };
+            let c1 = if li == el {
+                end_col.min(row.len().saturating_sub(1))
+            } else {
+                row.len().saturating_sub(1)
+            };
+            let cells: Vec<&TermCell> = row.iter().take(c1 + 1).skip(c0).filter(|c| c.ch != '\0').collect();
+            // 줄 끝 공백 제거(get_text 동일)
+            let keep = cells.iter().rposition(|c| c.ch != ' ').map_or(0, |i| i + 1);
+            let mut runs: Vec<TextRun> = Vec::new();
+            for cell in &cells[..keep] {
+                let (fg, bg) = if cell.reverse { (cell.bg, cell.fg) } else { (cell.fg, cell.bg) };
+                match runs.last_mut() {
+                    Some(r) if r.fg == fg && r.bg == bg && r.bold == cell.bold => r.text.push(cell.ch),
+                    _ => runs.push(TextRun { text: cell.ch.to_string(), fg, bg, bold: cell.bold }),
+                }
+            }
+            out.push(runs);
+        }
+        out
+    }
+}
+
+/// 복사 서식(09-04 — 사용자 요청 "WT처럼 HTML 및 RTF 모두"): 런 목록 + 팔레트 → HTML(CF_HTML 본문)·RTF.
+pub mod export {
+    use super::{TermPalette, TextRun};
+
+    fn hex(c: u32) -> String {
+        format!("#{:06X}", c & 0xFF_FFFF)
+    }
+
+    /// `<pre>` 한 덩어리 — 기본 색은 pre에, 셀 색은 span에(기본과 같으면 생략). `font_px` = CSS px.
+    pub fn to_html(lines: &[Vec<TextRun>], pal: &TermPalette, font: &str, font_px: i32) -> String {
+        let mut h = format!(
+            "<pre style=\"font-family:'{}',Consolas,monospace;font-size:{}px;color:{};background-color:{};margin:0;white-space:pre\">",
+            font.replace('\'', ""),
+            font_px,
+            hex(pal.fg),
+            hex(pal.bg)
+        );
+        for (i, runs) in lines.iter().enumerate() {
+            if i > 0 {
+                h.push('\n');
+            }
+            for r in runs {
+                let (fg, bg) = (pal.resolve(r.fg), pal.resolve(r.bg));
+                let mut style = String::new();
+                if fg != pal.fg {
+                    style.push_str(&format!("color:{};", hex(fg)));
+                }
+                if bg != pal.bg {
+                    style.push_str(&format!("background-color:{};", hex(bg)));
+                }
+                if r.bold {
+                    style.push_str("font-weight:bold;");
+                }
+                let text: String = r
+                    .text
+                    .chars()
+                    .map(|c| match c {
+                        '&' => "&amp;".to_string(),
+                        '<' => "&lt;".to_string(),
+                        '>' => "&gt;".to_string(),
+                        c => c.to_string(),
+                    })
+                    .collect();
+                if style.is_empty() {
+                    h.push_str(&text);
+                } else {
+                    h.push_str(&format!("<span style=\"{style}\">{text}</span>"));
+                }
+            }
+        }
+        h.push_str("</pre>");
+        h
+    }
+
+    /// Windows "HTML Format"(CF_HTML) 래핑 — 헤더의 오프셋은 **UTF-8 바이트** 기준.
+    pub fn cf_html(fragment: &str) -> String {
+        let header = |sh: usize, eh: usize, sf: usize, ef: usize| {
+            format!(
+                "Version:0.9\r\nStartHTML:{sh:010}\r\nEndHTML:{eh:010}\r\nStartFragment:{sf:010}\r\nEndFragment:{ef:010}\r\n"
+            )
+        };
+        let pre = "<html><body>\r\n<!--StartFragment-->";
+        let post = "<!--EndFragment-->\r\n</body></html>";
+        let hlen = header(0, 0, 0, 0).len(); // 자릿수 고정(010)이라 값과 무관
+        let sh = hlen;
+        let sf = sh + pre.len();
+        let ef = sf + fragment.len();
+        let eh = ef + post.len();
+        format!("{}{pre}{fragment}{post}", header(sh, eh, sf, ef))
+    }
+
+    /// RTF — 색 테이블 + `\cfN`(전경)·`\chshdng0\chcbpatN`(배경, Word)·`\b`. `font_px` → 반포인트 `\fs`.
+    pub fn to_rtf(lines: &[Vec<TextRun>], pal: &TermPalette, font: &str, font_px: i32) -> String {
+        let mut colors: Vec<u32> = vec![pal.fg & 0xFF_FFFF, pal.bg & 0xFF_FFFF];
+        let mut idx = |c: u32| -> usize {
+            let c = c & 0xFF_FFFF;
+            match colors.iter().position(|x| *x == c) {
+                Some(i) => i + 1,
+                None => {
+                    colors.push(c);
+                    colors.len()
+                }
+            }
+        };
+        let mut body = String::new();
+        for (i, runs) in lines.iter().enumerate() {
+            if i > 0 {
+                body.push_str("\\par ");
+            }
+            for r in runs {
+                let (fi, bi) = (idx(pal.resolve(r.fg)), idx(pal.resolve(r.bg)));
+                body.push_str(&format!("{{\\cf{fi}\\chshdng0\\chcbpat{bi}\\highlight{bi}"));
+                if r.bold {
+                    body.push_str("\\b");
+                }
+                body.push(' ');
+                for c in r.text.chars() {
+                    match c {
+                        '\\' => body.push_str("\\\\"),
+                        '{' => body.push_str("\\{"),
+                        '}' => body.push_str("\\}"),
+                        c if (c as u32) < 0x80 => body.push(c),
+                        c => {
+                            let mut buf = [0u16; 2];
+                            for u in c.encode_utf16(&mut buf) {
+                                body.push_str(&format!("\\u{}?", *u as i16));
+                            }
+                        }
+                    }
+                }
+                body.push('}');
+            }
+        }
+        let table: String = colors
+            .iter()
+            .map(|c| format!("\\red{}\\green{}\\blue{};", (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
+            .collect();
+        let fs = (font_px * 3 / 2).max(2); // px → pt(×0.75) → 반포인트(×2)
+        format!(
+            "{{\\rtf1\\ansi\\deff0{{\\fonttbl{{\\f0\\fmodern {};}}}}{{\\colortbl;{table}}}\\f0\\fs{fs}\\cf1\\chshdng0\\chcbpat2 {body}}}",
+            font.replace(['{', '}', '\\'], "")
+        )
+    }
+}
+
 /// 전각(2칸) 문자인가 — wcwidth 근사(한글·CJK·전각 기호, BMP 주요 범위 — 원본 동일).
 pub fn is_wide(ch: char) -> bool {
     let c = ch as u32;
@@ -1312,6 +1489,51 @@ mod tests {
         assert_eq!(d.resolve(row[8].bg), 0xFF00_37DA, "44 = 파랑 배경");
         assert_eq!(row[4].fg, DEFAULT_FG, "리셋 뒤 공백 = 기본");
         println!("cells: {:?}", row.iter().take(12).map(|c| (c.ch, c.fg, c.bg, c.bold)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn get_runs_groups_by_style_and_trims() {
+        let mut s = VtScreen::new(12, 2);
+        s.feed("\x1B[32;1mMo\x1B[0mde  \r\n\x1B[7mR\x1B[0m한");
+        let runs = s.get_runs(0, 0, 1, 11);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].len(), 2, "초록굵게 'Mo' + 기본 'de'(끝 공백 제거)");
+        assert_eq!((runs[0][0].text.as_str(), runs[0][0].bold), ("Mo", true));
+        assert_eq!(runs[0][0].fg, ANSI_TAG | 2);
+        assert_eq!(runs[0][1].text, "de");
+        // reverse = fg/bg 교환 · 전각 연속 셀 스킵
+        assert_eq!((runs[1][0].fg, runs[1][0].bg), (DEFAULT_BG, DEFAULT_FG));
+        assert_eq!(runs[1][1].text, "한");
+        // get_text와 본문 일치
+        let joined: Vec<String> = runs.iter().map(|l| l.iter().map(|r| r.text.as_str()).collect()).collect();
+        assert_eq!(joined.join("\r\n"), s.get_text(0, 0, 1, 11));
+    }
+
+    #[test]
+    fn export_html_rtf_and_cf_html_offsets() {
+        let mut s = VtScreen::new(10, 1);
+        s.feed("\x1B[31ma<b\x1B[0m&한");
+        let runs = s.get_runs(0, 0, 0, 9);
+        let pal = TermPalette::light();
+        let html = export::to_html(&runs, &pal, "Consolas", 12);
+        assert!(html.contains("color:#CF222E") && html.contains("a&lt;b") && html.contains("&amp;한"), "{html}");
+        assert!(html.starts_with("<pre style=\"font-family:'Consolas'"));
+        let cf = export::cf_html(&html);
+        // 헤더 오프셋이 실제 바이트 위치를 가리키는지(UTF-8 — 한글 3바이트 포함)
+        let get = |k: &str| -> usize {
+            let i = cf.find(k).unwrap() + k.len();
+            cf[i..i + 10].parse().unwrap()
+        };
+        let b = cf.as_bytes();
+        assert_eq!(&b[get("StartFragment:")..get("StartFragment:") + 4], b"<pre");
+        assert_eq!(&b[get("EndFragment:") - 6..get("EndFragment:")], b"</pre>");
+        assert_eq!(get("EndHTML:"), b.len());
+        assert_eq!(&b[get("StartHTML:")..get("StartHTML:") + 6], b"<html>");
+        let rtf = export::to_rtf(&runs, &pal, "Consolas", 12);
+        assert!(rtf.starts_with("{\\rtf1") && rtf.ends_with('}'));
+        assert!(rtf.contains("\\red207\\green34\\blue46;"), "빨강 색 테이블: {rtf}");
+        assert!(rtf.contains("\\cf3") && rtf.contains("\\u-10916?"), "한 = U+D55C 부호 있는 16비트");
+        assert!(rtf.contains("\\fs18"), "12px = 9pt = 18 반포인트");
     }
 
     #[test]

@@ -859,6 +859,68 @@ pub unsafe fn write_text_rich(hwnd: HWND, text: &str) -> bool {
     true
 }
 
+/// 등록 포맷 하나를 바이트로 게시(NUL 종료 부가) — 실패는 무시(평문은 이미 게시됨).
+unsafe fn put_registered(name: windows::core::PCWSTR, bytes: &[u8]) {
+    let fmt = RegisterClipboardFormatW(name);
+    if fmt == 0 {
+        return;
+    }
+    let Ok(hr) = GlobalAlloc(GMEM_MOVEABLE, bytes.len() + 1) else {
+        return;
+    };
+    let p = GlobalLock(hr) as *mut u8;
+    if p.is_null() {
+        let _ = GlobalFree(Some(hr));
+        return;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+    *p.add(bytes.len()) = 0;
+    let _ = GlobalUnlock(hr);
+    if SetClipboardData(fmt, Some(HANDLE(hr.0))).is_err() {
+        let _ = GlobalFree(Some(hr));
+    }
+}
+
+/// 터미널 선택 복사(09-04 — 사용자 요청 "WT처럼 HTML 및 RTF 모두"): CF_UNICODETEXT +
+/// "HTML Format"(CF_HTML — `cf_html`로 이미 래핑된 문자열) + "Rich Text Format". 색·굵게·
+/// 글꼴이 Word/Outlook/브라우저 편집기에 그대로 붙고, 평문 대상 앱은 CF_UNICODETEXT를 취한다.
+pub unsafe fn write_text_html_rtf(
+    hwnd: HWND,
+    text: &str,
+    cf_html: Option<&str>,
+    rtf: Option<&str>,
+) -> bool {
+    let Some(_open) = Open::new(Some(hwnd)) else {
+        return false;
+    };
+    if EmptyClipboard().is_err() {
+        return false;
+    }
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = wide.len() * 2;
+    let Ok(hmem) = GlobalAlloc(GMEM_MOVEABLE, bytes) else {
+        return false;
+    };
+    let p = GlobalLock(hmem) as *mut u8;
+    if p.is_null() {
+        let _ = GlobalFree(Some(hmem));
+        return false;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, p, bytes);
+    let _ = GlobalUnlock(hmem);
+    if SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0))).is_err() {
+        let _ = GlobalFree(Some(hmem));
+        return false;
+    }
+    if let Some(h) = cf_html {
+        put_registered(w!("HTML Format"), h.as_bytes());
+    }
+    if let Some(r) = rtf {
+        put_registered(w!("Rich Text Format"), r.as_bytes());
+    }
+    true
+}
+
 /// 평문 → 모노스페이스 RTF(7비트 ASCII 본문 + 비ASCII = `\uN?` 유니코드 이스케이프).
 fn to_rtf_mono(text: &str) -> String {
     let mut body = String::with_capacity(text.len() * 2);

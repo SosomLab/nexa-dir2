@@ -60,6 +60,8 @@ pub struct PrefValues {
     pub term_theme: String,
     pub term_theme_dark: String,
     pub term_theme_light: String,
+    /// 터미널 복사 형식(09-04): text/html/rtf/both.
+    pub term_copy_format: String,
     /// 컬럼 auto-fit 최대 폭(px @96dpi — 07-19).
     pub col_autofit_max: i32,
     /// 도구모음 순서 문자열(07-19 — 별도 창 편집).
@@ -231,6 +233,8 @@ const F_HIDE_EMPTY_GLYPH: u32 = 41;
 const F_TERM_THEME: u32 = 42;
 const F_TERM_THEME_DARK: u32 = 43;
 const F_TERM_THEME_LIGHT: u32 = 44;
+/// 터미널 복사 형식(09-04 — WT 대응).
+const F_TERM_COPY_FMT: u32 = 45;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -384,6 +388,14 @@ const VIEW_SCOPE_OPTS: &[(&str, &str)] = &[
     ("global", "pref.viewScope.global"),
     ("panel", "pref.viewScope.panel"),
     ("tab", "pref.viewScope.tab"),
+];
+
+/// 터미널 복사 형식(09-04 — WT "클립보드에 복사할 텍스트 형식" 4택).
+const TERM_COPY_OPTS: &[(&str, &str)] = &[
+    ("text", "pref.termCopy.text"),
+    ("html", "pref.termCopy.html"),
+    ("rtf", "pref.termCopy.rtf"),
+    ("both", "pref.termCopy.both"),
 ];
 
 const THEME_OPTS: &[(&str, &str)] = &[
@@ -639,6 +651,13 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.termThemeLight.desc",
             kind: Kind::Select(Select::SchemeLight),
             field: F_TERM_THEME_LIGHT,
+        },
+        Entry {
+            cat: "terminal",
+            label_key: "pref.termCopy",
+            desc_key: "pref.termCopy.desc",
+            kind: Kind::Radio(TERM_COPY_OPTS),
+            field: F_TERM_COPY_FMT,
         },
         Entry {
             cat: "dock",
@@ -1372,6 +1391,7 @@ impl PrefState {
                             F_TA_SCOPE => self.values.typeahead_scope.clone(),
                             F_TA_POS => self.values.typeahead_pos.to_string(),
                             F_VIEW_SCOPE => self.values.view_scope.clone(),
+                            F_TERM_COPY_FMT => self.values.term_copy_format.clone(),
                             _ => String::new(),
                         };
                         for (gi, (val, olabel)) in opts.into_iter().enumerate() {
@@ -1723,6 +1743,7 @@ impl PrefState {
             F_TERM_THEME => v.term_theme != d.term_theme,
             F_TERM_THEME_DARK => v.term_theme_dark != d.term_theme_dark,
             F_TERM_THEME_LIGHT => v.term_theme_light != d.term_theme_light,
+            F_TERM_COPY_FMT => v.term_copy_format != d.term_copy_format,
             F_COL_AUTOFIT => v.col_autofit_max != d.col_autofit_max,
             F_TOOLBAR_ORDER => v.toolbar_order != d.toolbar_order,
             F_COL_LAYOUT => {
@@ -2123,6 +2144,7 @@ unsafe extern "system" fn prefs_proc(
                             F_LANG => (*st).values.lang = val,
                             F_NAV_UP => (*st).values.nav_up_align = val,
                             F_VIEW_SCOPE => (*st).values.view_scope = val,
+                            F_TERM_COPY_FMT => (*st).values.term_copy_format = val,
                             F_TAB_DBL => (*st).values.tab_dblclick = val,
                             F_TA_SCOPE => (*st).values.typeahead_scope = val,
                             F_TA_POS => (*st).values.typeahead_pos = val.parse().unwrap_or(6),

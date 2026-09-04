@@ -927,6 +927,8 @@ struct State {
     term_theme: String,
     term_theme_dark: String,
     term_theme_light: String,
+    /// 터미널 복사 형식(09-04): text/html/rtf/both.
+    term_copy_format: String,
     /// 컬럼 auto-fit 최대 폭(px @96dpi — 설정 영속, 07-19).
     col_autofit_max: i32,
     /// 도구모음 순서 문자열(설정 영속 — 07-19 prefs 트리 편집).
@@ -1485,6 +1487,7 @@ pub fn run() -> Result<()> {
         term_theme: settings.term_theme,
         term_theme_dark: settings.term_theme_dark,
         term_theme_light: settings.term_theme_light,
+        term_copy_format: settings.term_copy_format,
         col_autofit_max: settings.col_autofit_max,
         toolbar_order: settings.toolbar_order.clone(),
         ctx_menu_order: settings.ctx_menu_order.clone(),
@@ -5669,6 +5672,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 term_theme: st.term_theme.clone(),
                 term_theme_dark: st.term_theme_dark.clone(),
                 term_theme_light: st.term_theme_light.clone(),
+                term_copy_format: st.term_copy_format.clone(),
                 col_autofit_max: st.col_autofit_max,
                 toolbar_order: st.toolbar_order.clone(),
                 ctx_menu_order: st.ctx_menu_order.clone(),
@@ -5927,6 +5931,7 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
         st.term_theme_light = v.term_theme_light.clone();
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
+    st.term_copy_format = v.term_copy_format.clone();
     // 폴더 우선 정렬(G-13) — 설정 창 = 전체 일괄(범위 무관·위 필터와 동일 규약)
     if v.sort_folders_first != st.sort_folders_first {
         st.sort_folders_first = v.sort_folders_first;
@@ -6267,6 +6272,7 @@ fn current_settings(st: &State) -> Settings {
         term_theme: st.term_theme.clone(),
         term_theme_dark: st.term_theme_dark.clone(),
         term_theme_light: st.term_theme_light.clone(),
+        term_copy_format: st.term_copy_format.clone(),
         transfer_close_ms: st.transfer_close_ms,
         dnd_hover_ms: st.dnd_hover_ms,
         col_autofit_max: st.col_autofit_max,
@@ -8021,14 +8027,57 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Some(ti) = st.term_focus {
                         if st.panels[ti].dock_visible() && st.panels[ti].dock.active_kind() == 2 {
                             let mut handled = false;
+                            // 복사 서식용 스냅샷(아래 &mut st.terms 차용과 겹치지 않게 미리 복사)
+                            let (term_theme, term_theme_dark, term_theme_light) = (
+                                st.term_theme.clone(),
+                                st.term_theme_dark.clone(),
+                                st.term_theme_light.clone(),
+                            );
+                            let (theme_is_dark, term_font, term_font_size) =
+                                (st.theme.is_dark, st.term_font.clone(), st.term_font_size);
+                            let copy_fmt = st.term_copy_format.clone();
                             if let Some(t) = &mut st.terms[ti] {
                                 if !t.exited {
                                     handled = true;
                                     match c {
                                         '\u{3}' if t.sel_norm().is_some() => {
+                                            // 복사 = 평문 + HTML + RTF(09-04 — WT "HTML 및 RTF 모두").
+                                            // 색은 지금 화면의 팔레트로 해석·글꼴은 체인 1순위.
                                             let ((sl, sc), (el, ec)) = t.sel_norm().unwrap();
                                             let text = t.screen.get_text(sl, sc, el, ec);
-                                            crate::clipboard::write_text(hwnd, &text);
+                                            let runs = t.screen.get_runs(sl, sc, el, ec);
+                                            let pal = nexa_term::resolve_scheme(
+                                                &term_theme,
+                                                &term_theme_dark,
+                                                &term_theme_light,
+                                                theme_is_dark,
+                                            )
+                                            .palette;
+                                            let font = term_font
+                                                .split(',')
+                                                .next()
+                                                .map(str::trim)
+                                                .filter(|f| !f.is_empty())
+                                                .unwrap_or("Consolas");
+                                            let want_html = matches!(copy_fmt.as_str(), "html" | "both");
+                                            let want_rtf = matches!(copy_fmt.as_str(), "rtf" | "both");
+                                            let html = want_html.then(|| {
+                                                nexa_term::export::cf_html(&nexa_term::export::to_html(
+                                                    &runs,
+                                                    &pal,
+                                                    font,
+                                                    term_font_size,
+                                                ))
+                                            });
+                                            let rtf = want_rtf.then(|| {
+                                                nexa_term::export::to_rtf(&runs, &pal, font, term_font_size)
+                                            });
+                                            crate::clipboard::write_text_html_rtf(
+                                                hwnd,
+                                                &text,
+                                                html.as_deref(),
+                                                rtf.as_deref(),
+                                            );
                                             t.sel = None;
                                         }
                                         '\u{16}' => {
