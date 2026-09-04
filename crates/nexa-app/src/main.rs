@@ -9,6 +9,7 @@ mod about;
 mod config;
 #[cfg(windows)]
 mod dw;
+#[cfg(windows)]
 mod fontchain;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod i18n;
