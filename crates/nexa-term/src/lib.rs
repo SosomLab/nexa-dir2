@@ -1299,6 +1299,22 @@ mod tests {
     }
 
     #[test]
+    fn pwsh_table_header_and_psreadline_colors_resolve() {
+        // 실측 09-04: pwsh 7.6 표 헤더 = ESC[32;1m(초록+굵게) · PSReadLine 명령 = ESC[93m
+        let mut s = VtScreen::new(20, 1);
+        s.feed("[32;1mMode[0m [93mls[0m [44;1m.cargo[0m");
+        let row = s.line_at(0);
+        let d = TermPalette::dark();
+        assert_eq!(row[0].fg, ANSI_TAG | 2);
+        assert_eq!(d.resolve(row[0].fg), 0xFF13_A10E, "32;1 = Campbell 초록");
+        assert!(row[0].bold);
+        assert_eq!(d.resolve(row[5].fg), 0xFFF9_F1A5, "93 = 밝은 노랑");
+        assert_eq!(d.resolve(row[8].bg), 0xFF00_37DA, "44 = 파랑 배경");
+        assert_eq!(row[4].fg, DEFAULT_FG, "리셋 뒤 공백 = 기본");
+        println!("cells: {:?}", row.iter().take(12).map(|c| (c.ch, c.fg, c.bg, c.bold)).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn resolve_scheme_selector_rules() {
         // 시스템 = 앱 테마 추종(각 모드 기본)
         assert_eq!(
