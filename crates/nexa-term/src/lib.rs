@@ -7,10 +7,11 @@
 //! 스크롤(SU/SD·DECSTBM 마진·스크롤백 보존), DECSC/DECRC. 렌더·ConPTY 배선은 앱(win.rs).
 //! 플랫폼 중립 — 전 플랫폼 테스트.
 
-/// 터미널 셀 하나 — 문자 + 전경/배경색(ARGB) + 굵게/반전/흐리게(faint).
+/// 터미널 셀 하나 — 문자 + 전경/배경색(**기호 색** — [`TermPalette::resolve`]) + 굵게/반전/흐리게(faint).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TermCell {
     pub ch: char,
+    /// 기호 색(u32 인코딩 — [`DEFAULT_FG`]/[`ANSI_TAG`]/트루컬러). 렌더 시 팔레트로 해석.
     pub fg: u32,
     pub bg: u32,
     pub bold: bool,
@@ -32,9 +33,521 @@ impl TermCell {
     }
 }
 
-pub const DEFAULT_FG: u32 = 0xFFE6_E6E6;
-pub const DEFAULT_BG: u32 = 0xFF0C_0F12;
+// ── 셀 색 인코딩(09-04 라이트 팔레트) ─────────────────────────────────────
+// 셀은 **해석된 색이 아니라 기호 색**을 담는다. 그래야 테마 전환(F6) 순간 스크롤백까지
+// 새 팔레트로 다시 칠해진다. `TermCell`을 16바이트로 유지하려고 u32의 알파 바이트를 태그로 쓴다:
+//   0xFF_RRGGBB = 트루컬러(SGR 38;2 · 256색 큐브/그레이 — 테마 무관)
+//   0x00_000000 / 0x00_000001 = 기본 전경/배경(SGR 39/49·리셋)
+//   0x01_0000ii = ANSI 16색 인덱스 ii(SGR 30~37/90~97 · 256색 0~15)
+/// 기본 전경(기호) — 팔레트 `fg`로 해석.
+pub const DEFAULT_FG: u32 = 0x0000_0000;
+/// 기본 배경(기호) — 팔레트 `bg`로 해석.
+pub const DEFAULT_BG: u32 = 0x0000_0001;
+/// ANSI 16색 태그(알파 바이트 0x01) — 하위 바이트가 인덱스.
+pub const ANSI_TAG: u32 = 0x0100_0000;
 const MAX_SCROLLBACK: usize = 800;
+
+/// 터미널 색 팔레트 — 기본 전경/배경 + ANSI 16색(0xFFRRGGBB). 앱 테마(다크/라이트)가 고른다.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TermPalette {
+    pub fg: u32,
+    pub bg: u32,
+    pub ansi: [u32; 16],
+}
+
+impl TermPalette {
+    /// 다크 — Campbell(Windows Terminal 기본) 16색 + 앱 다크 토큰보다 한 단 어두운 배경(M4-3 현행).
+    pub const fn dark() -> Self {
+        TermPalette {
+            fg: 0xFFE6_E6E6,
+            bg: 0xFF0C_0F12,
+            ansi: [
+                0xFF0C_0C0C,
+                0xFFC5_0F1F,
+                0xFF13_A10E,
+                0xFFC1_9C00,
+                0xFF00_37DA,
+                0xFF88_1798,
+                0xFF3A_96DD,
+                0xFFCC_CCCC,
+                0xFF76_7676,
+                0xFFE7_4856,
+                0xFF16_C60C,
+                0xFFF9_F1A5,
+                0xFF3B_78FF,
+                0xFFB4_009E,
+                0xFF61_D6D6,
+                0xFFF2_F2F2,
+            ],
+        }
+    }
+
+    /// 라이트 — **GitHub Light(Primer `color.ansi.*` light)** 16색 + 앱 라이트 `text`/`panel_bg`.
+    /// 선정 근거(09-04): ① 흰 배경에서 16색 전부 대비 **≥3:1**(Primer가 AA 목표로 설계 — 테스트로
+    /// 고정) ② pwsh/PSReadLine 기본이 숫자·멤버에 **bright white(97)**·타입에 white(37)를 쓰므로
+    /// 흰색 계열을 **진한 회색으로 매핑**해야 글자가 사라지지 않는다(One Half Light·Solarized Light·
+    /// Tango Light는 white≈배경이라 탈락, VS Code Light+는 bright green/yellow 2.1:1이라 탈락)
+    /// ③ 무채색(24292F·57606A·6E7781)이 앱 라이트 토큰(1B1F26·6B7280)과 같은 청회색 계열.
+    pub const fn light() -> Self {
+        TermPalette {
+            fg: 0xFF1B_1F26,
+            bg: 0xFFFF_FFFF,
+            ansi: [
+                0xFF24_292F, // black
+                0xFFCF_222E, // red
+                0xFF11_6329, // green
+                0xFF4D_2D00, // yellow(갈색 — 흰 배경에서 노랑은 읽히지 않는다)
+                0xFF09_69DA, // blue
+                0xFF82_50DF, // magenta
+                0xFF1B_7C83, // cyan
+                0xFF6E_7781, // white → 중간 회색
+                0xFF57_606A, // bright black
+                0xFFA4_0E26, // bright red
+                0xFF1A_7F37, // bright green
+                0xFF63_3C01, // bright yellow
+                0xFF21_8BFF, // bright blue
+                0xFFA4_75F9, // bright magenta
+                0xFF31_92AA, // bright cyan
+                0xFF8C_959F, // bright white → 밝은 회색(가장 옅지만 3:1 유지)
+            ],
+        }
+    }
+
+    /// 기호 색 → 불투명 0xFFRRGGBB.
+    pub fn resolve(&self, c: u32) -> u32 {
+        match c >> 24 {
+            0xFF => c,
+            0x00 => {
+                if c == DEFAULT_BG {
+                    self.bg
+                } else {
+                    self.fg
+                }
+            }
+            _ => self.ansi[(c & 0xF) as usize],
+        }
+    }
+}
+
+/// 이름 있는 터미널 색 스킴(09-04 — 사용자 요청 "라이트·다크·그외 추천"). `id`는 설정 값(안정 계약).
+#[derive(Clone, Copy, Debug)]
+pub struct TermScheme {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// 어두운 배경인가 — 설정 창 라벨 태그·다크/라이트 기본 후보 분류.
+    pub dark: bool,
+    pub palette: TermPalette,
+}
+
+const fn pal(fg: u32, bg: u32, ansi: [u32; 16]) -> TermPalette {
+    TermPalette { fg, bg, ansi }
+}
+
+/// 다크 모드 기본 스킴 id(Campbell).
+pub const DEFAULT_DARK_ID: &str = "campbell";
+/// 라이트 모드 기본 스킴 id(GitHub Light).
+pub const DEFAULT_LIGHT_ID: &str = "github-light";
+
+/// 내장 스킴 — 다크 9 + 라이트 6. 값은 각 원전(Windows Terminal defaults.json · Dracula · Nord ·
+/// Gruvbox · Catppuccin · Tokyo Night · Primer)의 공개 팔레트(전부 MIT) 그대로. 순서 = 설정 창 표시 순.
+pub const SCHEMES: &[TermScheme] = &[
+    TermScheme {
+        id: "campbell",
+        name: "Campbell",
+        dark: true,
+        palette: TermPalette::dark(),
+    },
+    TermScheme {
+        id: "one-half-dark",
+        name: "One Half Dark",
+        dark: true,
+        palette: pal(
+            0xFFDC_DFE4,
+            0xFF28_2C34,
+            [
+                0xFF28_2C34,
+                0xFFE0_6C75,
+                0xFF98_C379,
+                0xFFE5_C07B,
+                0xFF61_AFEF,
+                0xFFC6_78DD,
+                0xFF56_B6C2,
+                0xFFDC_DFE4,
+                0xFF5A_6374,
+                0xFFE0_6C75,
+                0xFF98_C379,
+                0xFFE5_C07B,
+                0xFF61_AFEF,
+                0xFFC6_78DD,
+                0xFF56_B6C2,
+                0xFFDC_DFE4,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "solarized-dark",
+        name: "Solarized Dark",
+        dark: true,
+        palette: pal(
+            0xFF83_9496,
+            0xFF00_2B36,
+            [
+                0xFF00_2B36,
+                0xFFDC_322F,
+                0xFF85_9900,
+                0xFFB5_8900,
+                0xFF26_8BD2,
+                0xFFD3_3682,
+                0xFF2A_A198,
+                0xFFEE_E8D5,
+                0xFF07_3642,
+                0xFFCB_4B16,
+                0xFF58_6E75,
+                0xFF65_7B83,
+                0xFF83_9496,
+                0xFF6C_71C4,
+                0xFF93_A1A1,
+                0xFFFD_F6E3,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "tango-dark",
+        name: "Tango Dark",
+        dark: true,
+        palette: pal(
+            0xFFD3_D7CF,
+            0xFF00_0000,
+            [
+                0xFF00_0000,
+                0xFFCC_0000,
+                0xFF4E_9A06,
+                0xFFC4_A000,
+                0xFF34_65A4,
+                0xFF75_507B,
+                0xFF06_989A,
+                0xFFD3_D7CF,
+                0xFF55_5753,
+                0xFFEF_2929,
+                0xFF8A_E234,
+                0xFFFC_E94F,
+                0xFF72_9FCF,
+                0xFFAD_7FA8,
+                0xFF34_E2E2,
+                0xFFEE_EEEC,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "dracula",
+        name: "Dracula",
+        dark: true,
+        palette: pal(
+            0xFFF8_F8F2,
+            0xFF28_2A36,
+            [
+                0xFF21_222C,
+                0xFFFF_5555,
+                0xFF50_FA7B,
+                0xFFF1_FA8C,
+                0xFFBD_93F9,
+                0xFFFF_79C6,
+                0xFF8B_E9FD,
+                0xFFF8_F8F2,
+                0xFF62_72A4,
+                0xFFFF_6E6E,
+                0xFF69_FF94,
+                0xFFFF_FFA5,
+                0xFFD6_ACFF,
+                0xFFFF_92DF,
+                0xFFA4_FFFF,
+                0xFFFF_FFFF,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "nord",
+        name: "Nord",
+        dark: true,
+        palette: pal(
+            0xFFD8_DEE9,
+            0xFF2E_3440,
+            [
+                0xFF3B_4252,
+                0xFFBF_616A,
+                0xFFA3_BE8C,
+                0xFFEB_CB8B,
+                0xFF81_A1C1,
+                0xFFB4_8EAD,
+                0xFF88_C0D0,
+                0xFFE5_E9F0,
+                0xFF4C_566A,
+                0xFFBF_616A,
+                0xFFA3_BE8C,
+                0xFFEB_CB8B,
+                0xFF81_A1C1,
+                0xFFB4_8EAD,
+                0xFF8F_BCBB,
+                0xFFEC_EFF4,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "gruvbox-dark",
+        name: "Gruvbox Dark",
+        dark: true,
+        palette: pal(
+            0xFFEB_DBB2,
+            0xFF28_2828,
+            [
+                0xFF28_2828,
+                0xFFCC_241D,
+                0xFF98_971A,
+                0xFFD7_9921,
+                0xFF45_8588,
+                0xFFB1_6286,
+                0xFF68_9D6A,
+                0xFFA8_9984,
+                0xFF92_8374,
+                0xFFFB_4934,
+                0xFFB8_BB26,
+                0xFFFA_BD2F,
+                0xFF83_A598,
+                0xFFD3_869B,
+                0xFF8E_C07C,
+                0xFFEB_DBB2,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "catppuccin-mocha",
+        name: "Catppuccin Mocha",
+        dark: true,
+        palette: pal(
+            0xFFCD_D6F4,
+            0xFF1E_1E2E,
+            [
+                0xFF45_475A,
+                0xFFF3_8BA8,
+                0xFFA6_E3A1,
+                0xFFF9_E2AF,
+                0xFF89_B4FA,
+                0xFFF5_C2E7,
+                0xFF94_E2D5,
+                0xFFBA_C2DE,
+                0xFF58_5B70,
+                0xFFF3_8BA8,
+                0xFFA6_E3A1,
+                0xFFF9_E2AF,
+                0xFF89_B4FA,
+                0xFFF5_C2E7,
+                0xFF94_E2D5,
+                0xFFA6_ADC8,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "tokyo-night",
+        name: "Tokyo Night",
+        dark: true,
+        palette: pal(
+            0xFFC0_CAF5,
+            0xFF1A_1B26,
+            [
+                0xFF15_161E,
+                0xFFF7_768E,
+                0xFF9E_CE6A,
+                0xFFE0_AF68,
+                0xFF7A_A2F7,
+                0xFFBB_9AF7,
+                0xFF7D_CFFF,
+                0xFFA9_B1D6,
+                0xFF41_4868,
+                0xFFF7_768E,
+                0xFF9E_CE6A,
+                0xFFE0_AF68,
+                0xFF7A_A2F7,
+                0xFFBB_9AF7,
+                0xFF7D_CFFF,
+                0xFFC0_CAF5,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "github-light",
+        name: "GitHub Light",
+        dark: false,
+        palette: TermPalette::light(),
+    },
+    TermScheme {
+        id: "one-half-light",
+        name: "One Half Light",
+        dark: false,
+        palette: pal(
+            0xFF38_3A42,
+            0xFFFA_FAFA,
+            [
+                0xFF38_3A42,
+                0xFFE4_5649,
+                0xFF50_A14F,
+                0xFFC1_8401,
+                0xFF01_84BC,
+                0xFFA6_26A4,
+                0xFF09_97B3,
+                0xFFFA_FAFA,
+                0xFF4F_525D,
+                0xFFDF_6C75,
+                0xFF98_C379,
+                0xFFE4_C07A,
+                0xFF61_AFEF,
+                0xFFC5_77DD,
+                0xFF56_B5C1,
+                0xFFFF_FFFF,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "solarized-light",
+        name: "Solarized Light",
+        dark: false,
+        palette: pal(
+            0xFF65_7B83,
+            0xFFFD_F6E3,
+            [
+                0xFF00_2B36,
+                0xFFDC_322F,
+                0xFF85_9900,
+                0xFFB5_8900,
+                0xFF26_8BD2,
+                0xFFD3_3682,
+                0xFF2A_A198,
+                0xFFEE_E8D5,
+                0xFF07_3642,
+                0xFFCB_4B16,
+                0xFF58_6E75,
+                0xFF65_7B83,
+                0xFF83_9496,
+                0xFF6C_71C4,
+                0xFF93_A1A1,
+                0xFFFD_F6E3,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "tango-light",
+        name: "Tango Light",
+        dark: false,
+        palette: pal(
+            0xFF55_5753,
+            0xFFFF_FFFF,
+            [
+                0xFF00_0000,
+                0xFFCC_0000,
+                0xFF4E_9A06,
+                0xFFC4_A000,
+                0xFF34_65A4,
+                0xFF75_507B,
+                0xFF06_989A,
+                0xFFD3_D7CF,
+                0xFF55_5753,
+                0xFFEF_2929,
+                0xFF8A_E234,
+                0xFFFC_E94F,
+                0xFF72_9FCF,
+                0xFFAD_7FA8,
+                0xFF34_E2E2,
+                0xFFEE_EEEC,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "gruvbox-light",
+        name: "Gruvbox Light",
+        dark: false,
+        palette: pal(
+            0xFF3C_3836,
+            0xFFFB_F1C7,
+            [
+                0xFFFB_F1C7,
+                0xFFCC_241D,
+                0xFF98_971A,
+                0xFFD7_9921,
+                0xFF45_8588,
+                0xFFB1_6286,
+                0xFF68_9D6A,
+                0xFF7C_6F64,
+                0xFF92_8374,
+                0xFF9D_0006,
+                0xFF79_740E,
+                0xFFB5_7614,
+                0xFF07_6678,
+                0xFF8F_3F71,
+                0xFF42_7B58,
+                0xFF3C_3836,
+            ],
+        ),
+    },
+    TermScheme {
+        id: "catppuccin-latte",
+        name: "Catppuccin Latte",
+        dark: false,
+        palette: pal(
+            0xFF4C_4F69,
+            0xFFEF_F1F5,
+            [
+                0xFF5C_5F77,
+                0xFFD2_0F39,
+                0xFF40_A02B,
+                0xFFDF_8E1D,
+                0xFF1E_66F5,
+                0xFFEA_76CB,
+                0xFF17_9299,
+                0xFFAC_B0BE,
+                0xFF6C_6F85,
+                0xFFD2_0F39,
+                0xFF40_A02B,
+                0xFFDF_8E1D,
+                0xFF1E_66F5,
+                0xFFEA_76CB,
+                0xFF17_9299,
+                0xFFBC_C0CC,
+            ],
+        ),
+    },
+];
+
+/// id → 스킴(모르는 id = None — 호출자가 기본으로 폴백).
+pub fn scheme(id: &str) -> Option<&'static TermScheme> {
+    SCHEMES.iter().find(|s| s.id == id)
+}
+
+/// 터미널 테마 **선택 규칙**(09-04 — 사용자 요청 "다크 모드에서 라이트 터미널도 고를 수 있게"):
+///
+/// | `selector`(설정 `term_theme`) | 결과 |
+/// | --- | --- |
+/// | `system` | 앱 테마 추종 — 다크면 `dark_default`, 라이트면 `light_default` |
+/// | `dark` / `light` | 앱 테마와 **무관하게** 다크/라이트 **기본 스킴** 강제 |
+/// | 스킴 id | 앱 테마와 무관하게 그 스킴(라이트 앱 + 다크 스킴, 그 역도 허용) |
+///
+/// `dark_default`/`light_default`(설정 `term_theme_dark`/`term_theme_light`)가 모르는 id면 내장
+/// 기본([`DEFAULT_DARK_ID`]/[`DEFAULT_LIGHT_ID`])으로, `selector`가 모르는 id면 `system`으로 폴백 —
+/// 설정 파일을 손으로 고쳐도 터미널이 검은 화면이 되지 않는다.
+pub fn resolve_scheme(
+    selector: &str,
+    dark_default: &str,
+    light_default: &str,
+    app_is_dark: bool,
+) -> &'static TermScheme {
+    let dark = scheme(dark_default).unwrap_or_else(|| scheme(DEFAULT_DARK_ID).unwrap());
+    let light = scheme(light_default).unwrap_or_else(|| scheme(DEFAULT_LIGHT_ID).unwrap());
+    let by_mode = || if app_is_dark { dark } else { light };
+    match selector {
+        "dark" => dark,
+        "light" => light,
+        "system" => by_mode(),
+        id => scheme(id).unwrap_or_else(by_mode),
+    }
+}
 
 /// 파서 상태.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -617,28 +1130,9 @@ pub fn is_wide(ch: char) -> bool {
         || (0xFFE0..=0xFFE6).contains(&c)
 }
 
-// Campbell(Windows Terminal 기본) 16색 팔레트
-const PALETTE16: [u32; 16] = [
-    0xFF0C_0C0C,
-    0xFFC5_0F1F,
-    0xFF13_A10E,
-    0xFFC1_9C00,
-    0xFF00_37DA,
-    0xFF88_1798,
-    0xFF3A_96DD,
-    0xFFCC_CCCC,
-    0xFF76_7676,
-    0xFFE7_4856,
-    0xFF16_C60C,
-    0xFFF9_F1A5,
-    0xFF3B_78FF,
-    0xFFB4_009E,
-    0xFF61_D6D6,
-    0xFFF2_F2F2,
-];
-
+/// ANSI 16색 기호 값 — 팔레트 해석은 렌더 시([`TermPalette::resolve`]).
 fn ansi16(i: usize) -> u32 {
-    PALETTE16[i.min(15)]
+    ANSI_TAG | (i.min(15) as u32)
 }
 
 fn color256(n: usize) -> u32 {
@@ -721,10 +1215,145 @@ mod tests {
         let mut s = VtScreen::new(20, 1);
         s.feed("\x1B[31mR\x1B[38;5;196mX\x1B[38;2;1;2;3mT\x1B[0mn");
         let row = s.line_at(0);
-        assert_eq!(row[0].fg, 0xFFC5_0F1F, "ANSI 빨강");
-        assert_eq!(row[1].fg, 0xFFFF_0000, "256색 196 = 순빨강");
+        assert_eq!(row[0].fg, ANSI_TAG | 1, "ANSI 빨강 = 기호(인덱스 1)");
+        assert_eq!(row[1].fg, 0xFFFF_0000, "256색 196 = 순빨강(트루컬러)");
         assert_eq!(row[2].fg, 0xFF01_0203, "트루컬러");
         assert_eq!(row[3].fg, DEFAULT_FG, "리셋");
+        // 같은 셀이 팔레트에 따라 다르게 해석된다(테마 전환 시 재도장 근거)
+        let (d, l) = (TermPalette::dark(), TermPalette::light());
+        assert_eq!(d.resolve(row[0].fg), 0xFFC5_0F1F, "다크 = Campbell 빨강");
+        assert_eq!(l.resolve(row[0].fg), 0xFFCF_222E, "라이트 = Primer 빨강");
+        assert_eq!(d.resolve(row[1].fg), 0xFFFF_0000, "트루컬러는 테마 무관");
+        assert_eq!(l.resolve(DEFAULT_BG), 0xFFFF_FFFF);
+        assert_eq!(l.resolve(DEFAULT_FG), 0xFF1B_1F26);
+    }
+
+    /// WCAG 상대 휘도·대비율.
+    fn contrast(a: u32, b: u32) -> f64 {
+        fn lum(c: u32) -> f64 {
+            let ch = |v: u32| {
+                let s = (v & 0xFF) as f64 / 255.0;
+                if s <= 0.03928 {
+                    s / 12.92
+                } else {
+                    ((s + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * ch(c >> 16) + 0.7152 * ch(c >> 8) + 0.0722 * ch(c)
+        }
+        let (l1, l2) = (lum(a), lum(b));
+        (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05)
+    }
+
+    #[test]
+    fn light_palette_is_legible_on_its_background() {
+        // 09-04 라이트 팔레트 선정 기준을 테스트로 고정: 16색 전부 배경 대비 ≥3:1 —
+        // 특히 pwsh가 숫자·멤버에 쓰는 bright white(15)·타입의 white(7)가 흰 배경에서 사라지면 안 된다.
+        let p = TermPalette::light();
+        for (i, c) in p.ansi.iter().enumerate() {
+            let r = contrast(*c, p.bg);
+            assert!(r >= 3.0, "라이트 ANSI {i} = {c:#010X} 대비 {r:.2} < 3.0");
+        }
+        assert!(contrast(p.fg, p.bg) >= 7.0, "기본 전경은 AAA");
+        // 다크(Campbell)는 원전 그대로라 이 기준을 두지 않는다 — 진파랑(4)이 2.3:1인 것은
+        // Windows Terminal 기본값의 알려진 성질(실측 09-04). 기본 전경만 확인.
+        let d = TermPalette::dark();
+        assert!(contrast(d.fg, d.bg) >= 7.0, "다크 기본 전경은 AAA");
+    }
+
+    #[test]
+    fn schemes_are_well_formed() {
+        // id 유일·기본 2종 존재·다크/라이트 분류가 배경 휘도와 일치·전 색 불투명
+        let mut ids: Vec<&str> = SCHEMES.iter().map(|s| s.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), SCHEMES.len(), "스킴 id 중복");
+        assert!(scheme(DEFAULT_DARK_ID).is_some_and(|s| s.dark));
+        assert!(scheme(DEFAULT_LIGHT_ID).is_some_and(|s| !s.dark));
+        for s in SCHEMES {
+            let bg = s.palette.bg;
+            let lum = |c: u32| {
+                0.2126 * ((c >> 16) & 0xFF) as f64
+                    + 0.7152 * ((c >> 8) & 0xFF) as f64
+                    + 0.0722 * (c & 0xFF) as f64
+            };
+            assert_eq!((lum(bg) < 128.0), s.dark, "{}: dark 분류 ≠ 배경 휘도", s.id);
+            assert!(
+                s.palette.fg >> 24 == 0xFF && bg >> 24 == 0xFF,
+                "{}: 불투명",
+                s.id
+            );
+            assert!(
+                s.palette.ansi.iter().all(|c| c >> 24 == 0xFF),
+                "{}: ANSI 불투명",
+                s.id
+            );
+            // 원전 그대로인 스킴은 대비를 강제하지 않는다(Solarized 전경은 설계상 4.3:1) —
+            // 최소 가독선(3:1)만 지킨다
+            assert!(
+                contrast(s.palette.fg, bg) >= 3.0,
+                "{}: 기본 전경 최소 가독",
+                s.id
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_scheme_selector_rules() {
+        // 시스템 = 앱 테마 추종(각 모드 기본)
+        assert_eq!(
+            resolve_scheme("system", "campbell", "github-light", true).id,
+            "campbell"
+        );
+        assert_eq!(
+            resolve_scheme("system", "campbell", "github-light", false).id,
+            "github-light"
+        );
+        // 모드 기본을 바꾸면 시스템·다크/라이트 강제가 그 값을 따른다
+        assert_eq!(
+            resolve_scheme("system", "nord", "solarized-light", true).id,
+            "nord"
+        );
+        assert_eq!(
+            resolve_scheme("system", "nord", "solarized-light", false).id,
+            "solarized-light"
+        );
+        assert_eq!(
+            resolve_scheme("dark", "nord", "solarized-light", false).id,
+            "nord",
+            "라이트 앱 + 다크 강제"
+        );
+        assert_eq!(
+            resolve_scheme("light", "nord", "solarized-light", true).id,
+            "solarized-light",
+            "다크 앱 + 라이트 강제"
+        );
+        // 개별 스킴 = 앱 테마 무관
+        assert_eq!(
+            resolve_scheme("gruvbox-light", "campbell", "github-light", true).id,
+            "gruvbox-light"
+        );
+        assert_eq!(
+            resolve_scheme("dracula", "campbell", "github-light", false).id,
+            "dracula"
+        );
+        // 폴백: 모르는 기본 id → 내장 기본 · 모르는 선택 → system
+        assert_eq!(
+            resolve_scheme("dark", "nope", "github-light", false).id,
+            DEFAULT_DARK_ID
+        );
+        assert_eq!(
+            resolve_scheme("system", "campbell", "nope", false).id,
+            DEFAULT_LIGHT_ID
+        );
+        assert_eq!(
+            resolve_scheme("nope", "campbell", "github-light", true).id,
+            "campbell"
+        );
+        assert_eq!(
+            resolve_scheme("", "campbell", "github-light", false).id,
+            "github-light"
+        );
     }
 
     #[test]

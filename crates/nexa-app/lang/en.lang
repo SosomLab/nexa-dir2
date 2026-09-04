@@ -326,6 +326,15 @@ pref.termWrap = Terminal word wrap
 pref.termWrap.desc = Wrap lines to the view width. Off = fixed columns with horizontal scroll.
 pref.termCols = Terminal columns (80~1000)
 pref.termCols.desc = Fixed column count when word wrap is off. Scroll horizontally with Shift+wheel.
+pref.termTheme = Terminal theme
+pref.termTheme.desc = System follows the app theme using the dark/light defaults below. Picking a specific theme pins it regardless of the app theme (a light terminal in dark mode works too).
+pref.termTheme.system = System (follow app theme)
+pref.termTheme.dark = Dark default theme
+pref.termTheme.light = Light default theme
+pref.termThemeDark = Default terminal theme in dark mode
+pref.termThemeDark.desc = Used when the app is dark (or when "Dark default theme" is selected above).
+pref.termThemeLight = Default terminal theme in light mode
+pref.termThemeLight.desc = Used when the app is light (or when "Light default theme" is selected above).
 pref.sortCaseSensitive = Case-sensitive sort
 pref.sortCaseSensitive.desc = Sort case-sensitively - names starting with uppercase group first.
 pref.navUpAlign = Selection position after Go Up

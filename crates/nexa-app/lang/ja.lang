@@ -326,6 +326,15 @@ pref.termWrap = ターミナルの折り返し
 pref.termWrap.desc = 表示幅で行を折り返します。オフ = 固定列 + 水平スクロール。
 pref.termCols = ターミナルの列数 (80~1000)
 pref.termCols.desc = 折り返しオフ時の固定列数。Shift+ホイールで水平スクロールします。
+pref.termTheme = ターミナルのテーマ
+pref.termTheme.desc = システム = アプリのテーマに従い、下のダーク/ライト既定テーマを使います。個別のテーマを選ぶとアプリのテーマに関係なく固定されます(ダークモードでライトのターミナルも可)。
+pref.termTheme.system = システム (アプリのテーマに従う)
+pref.termTheme.dark = ダーク既定テーマ
+pref.termTheme.light = ライト既定テーマ
+pref.termThemeDark = ダークモードの既定ターミナルテーマ
+pref.termThemeDark.desc = アプリがダークのとき(または上で「ダーク既定テーマ」を選んだとき)に使うテーマ。
+pref.termThemeLight = ライトモードの既定ターミナルテーマ
+pref.termThemeLight.desc = アプリがライトのとき(または上で「ライト既定テーマ」を選んだとき)に使うテーマ。
 pref.sortCaseSensitive = 大文字と小文字を区別して並べ替え
 pref.sortCaseSensitive.desc = 大文字と小文字を区別して並べ替えます — 大文字で始まる名前が先にまとまります。
 pref.navUpAlign = 上へ移動後の選択位置

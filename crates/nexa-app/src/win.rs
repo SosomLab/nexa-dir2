@@ -923,6 +923,10 @@ struct State {
     /// 터미널 줄 바꿈·고정 열(X-3 — 비줄바꿈이면 term_cols 고정+가로 스크롤).
     term_wrap: bool,
     term_cols: i32,
+    /// 터미널 테마 선택자·모드별 기본 스킴 id(09-04 — `nexa_term::resolve_scheme`).
+    term_theme: String,
+    term_theme_dark: String,
+    term_theme_light: String,
     /// 컬럼 auto-fit 최대 폭(px @96dpi — 설정 영속, 07-19).
     col_autofit_max: i32,
     /// 도구모음 순서 문자열(설정 영속 — 07-19 prefs 트리 편집).
@@ -1478,6 +1482,9 @@ pub fn run() -> Result<()> {
         term_font_size: settings.term_font_size,
         term_wrap: settings.term_wrap,
         term_cols: settings.term_cols,
+        term_theme: settings.term_theme,
+        term_theme_dark: settings.term_theme_dark,
+        term_theme_light: settings.term_theme_light,
         col_autofit_max: settings.col_autofit_max,
         toolbar_order: settings.toolbar_order.clone(),
         ctx_menu_order: settings.ctx_menu_order.clone(),
@@ -2209,6 +2216,7 @@ unsafe fn term_paint(
     dpi: u32,
     font_px: i32,
     theme: &nexa_gui::Theme,
+    pal: &nexa_term::TermPalette,
     caret_on: bool,
     wrap: bool,
     cols_setting: i32,
@@ -2261,6 +2269,8 @@ unsafe fn term_paint(
     }
     t.grid = (rc, cell_w, cell_h); // 마우스 히트 테스트용 캐시(QA 07-14)
     t.view_x = t.view_x.min(cols.saturating_sub(vis_cols)); // 래핑 전환·리사이즈 방어
+    // 셀은 기호 색 — 팔레트(`pal`)는 호출자가 설정·앱 테마로 고른다(09-04). 해석이 렌더
+    // 시점이라 F6 전환·설정 변경 즉시 스크롤백까지 새 팔레트로 재도장된다.
     let argb = |c: u32| Color {
         r: (c >> 16) as u8,
         g: (c >> 8) as u8,
@@ -2287,7 +2297,7 @@ unsafe fn term_paint(
         // 유효 (fg,bg): reverse 스왑 → 선택이면 다시 스왑(반전 하이라이트).
         let eff = |c: usize| -> (u32, u32, bool) {
             let cell = &line[c];
-            let (mut fg, mut bg) = (cell.fg, cell.bg);
+            let (mut fg, mut bg) = (pal.resolve(cell.fg), pal.resolve(cell.bg));
             if cell.reverse {
                 std::mem::swap(&mut fg, &mut bg);
             }
@@ -2359,8 +2369,9 @@ unsafe fn term_paint(
             let cy = rc.y + 1 + (cr - top) as i32 * cell_h;
             if cy + cell_h <= rc.bottom() {
                 let w = (dpi as i32 / 96).max(1);
-                // 밝은 회색 고정(QA 07-14) — 셀 배경이 어두워 theme.text로는 비가시
-                ctx.fill_rect(Rect::new(cx, cy + 1, w, cell_h - 2), argb(0x00CC_CCCC));
+                // 팔레트 기본 전경(09-04) — 다크는 종전 밝은 회색(QA 07-14)과 같은 계열,
+                // 라이트는 진한 회색. theme.text는 셀 배경과 무관해 쓰지 않는다.
+                ctx.fill_rect(Rect::new(cx, cy + 1, w, cell_h - 2), argb(pal.fg));
             }
         }
     }
@@ -4325,6 +4336,14 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                 let cwd = st.panels[i].root_path();
                 // 깜빡임(QA 07-14)은 키 포커스일 때만 — 비포커스는 상시 표시(원본 규약)
                 let caret_on = st.term_focus != Some(i) || st.term_caret_on;
+                // 터미널 테마(09-04): 선택자(system/dark/light/스킴 id) × 모드 기본 × 앱 테마
+                let pal = nexa_term::resolve_scheme(
+                    &st.term_theme,
+                    &st.term_theme_dark,
+                    &st.term_theme_light,
+                    st.theme.is_dark,
+                )
+                .palette;
                 term_paint(
                     &mut ctx,
                     hwnd,
@@ -4336,6 +4355,7 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     st.dpi,
                     st.term_font_size,
                     &st.theme,
+                    &pal,
                     caret_on,
                     st.term_wrap,
                     st.term_cols,
@@ -5631,6 +5651,9 @@ unsafe fn open_prefs(hwnd: HWND) {
                 term_font_size: st.term_font_size,
                 term_wrap: st.term_wrap,
                 term_cols: st.term_cols,
+                term_theme: st.term_theme.clone(),
+                term_theme_dark: st.term_theme_dark.clone(),
+                term_theme_light: st.term_theme_light.clone(),
                 col_autofit_max: st.col_autofit_max,
                 toolbar_order: st.toolbar_order.clone(),
                 ctx_menu_order: st.ctx_menu_order.clone(),
@@ -5877,6 +5900,16 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     if v.term_wrap != st.term_wrap || v.term_cols != st.term_cols {
         st.term_wrap = v.term_wrap;
         st.term_cols = v.term_cols.clamp(80, 1000);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+    // 터미널 테마(09-04) — 셀이 기호 색이라 재도장만으로 스크롤백까지 새 팔레트
+    if v.term_theme != st.term_theme
+        || v.term_theme_dark != st.term_theme_dark
+        || v.term_theme_light != st.term_theme_light
+    {
+        st.term_theme = v.term_theme.clone();
+        st.term_theme_dark = v.term_theme_dark.clone();
+        st.term_theme_light = v.term_theme_light.clone();
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
     // 폴더 우선 정렬(G-13) — 설정 창 = 전체 일괄(범위 무관·위 필터와 동일 규약)
@@ -6216,6 +6249,9 @@ fn current_settings(st: &State) -> Settings {
         term_font_size: st.term_font_size,
         term_wrap: st.term_wrap,
         term_cols: st.term_cols,
+        term_theme: st.term_theme.clone(),
+        term_theme_dark: st.term_theme_dark.clone(),
+        term_theme_light: st.term_theme_light.clone(),
         transfer_close_ms: st.transfer_close_ms,
         dnd_hover_ms: st.dnd_hover_ms,
         col_autofit_max: st.col_autofit_max,

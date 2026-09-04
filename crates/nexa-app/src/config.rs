@@ -87,6 +87,13 @@ pub struct Settings {
     pub term_wrap: bool,
     /// 터미널 고정 열 수(X-3 ② — 80~1000, 원본 MaxColumns 240. `term_wrap=false`일 때만).
     pub term_cols: i32,
+    /// 터미널 테마 선택자(09-04 — [`nexa_term::resolve_scheme`]): `system`(앱 테마 추종) ·
+    /// `dark`/`light`(각 모드 기본 강제) · 스킴 id(앱 테마 무관 고정). 검증은 해석 시(모르면 system).
+    pub term_theme: String,
+    /// 앱 다크 모드일 때(또는 `term_theme=dark`) 쓰는 스킴 id — 기본 Campbell.
+    pub term_theme_dark: String,
+    /// 앱 라이트 모드일 때(또는 `term_theme=light`) 쓰는 스킴 id — 기본 GitHub Light.
+    pub term_theme_light: String,
     /// 전송(복사/이동) 완료 후 진행 창 닫기 대기(ms, 0~10000 — 사용자 요청 07-21,
     /// 단위 초→ms 개정 07-21 2차). **0 = 진행 창 자체를 표시하지 않음**(전송은 그대로
     /// 수행·제목줄 %만 갱신). 닫기 버튼 카운트다운 표시는 올림 초 단위.
@@ -221,6 +228,9 @@ impl Default for Settings {
             term_font_size: 12,
             term_wrap: true,
             term_cols: 240,
+            term_theme: "system".into(),
+            term_theme_dark: nexa_term::DEFAULT_DARK_ID.into(),
+            term_theme_light: nexa_term::DEFAULT_LIGHT_ID.into(),
             transfer_close_ms: 2000, // 기존 하드코딩 2초 승격(07-21 — ms 단위)
             dnd_hover_ms: 3000,      // 탐색기 관례 근사(사용자 확정 07-22 — 3초)
             dlg_font: "Segoe UI".into(),
@@ -397,6 +407,10 @@ impl Settings {
             u8::from(self.term_wrap),
             self.term_cols
         ));
+        out.push_str(&format!(
+            "term_theme={}\nterm_theme_dark={}\nterm_theme_light={}\n",
+            self.term_theme, self.term_theme_dark, self.term_theme_light
+        ));
         out.push_str(&format!("transfer_close_ms={}\n", self.transfer_close_ms));
         out.push_str(&format!("dnd_hover_ms={}\n", self.dnd_hover_ms));
         if !self.preview_map.is_empty() {
@@ -562,6 +576,16 @@ impl Settings {
                     if let Ok(n) = v.parse::<i32>() {
                         s.term_cols = n.clamp(80, 1000);
                     }
+                }
+                // 스킴 id는 저장 시 검증하지 않는다(모르는 id = 해석 시 폴백) — 길이만 제한
+                "term_theme" if !v.trim().is_empty() && v.len() <= 64 => {
+                    s.term_theme = v.trim().into()
+                }
+                "term_theme_dark" if !v.trim().is_empty() && v.len() <= 64 => {
+                    s.term_theme_dark = v.trim().into()
+                }
+                "term_theme_light" if !v.trim().is_empty() && v.len() <= 64 => {
+                    s.term_theme_light = v.trim().into()
                 }
                 "transfer_close_ms" => {
                     if let Ok(n) = v.parse::<i32>() {
@@ -1102,6 +1126,9 @@ mod tests {
             term_font_size: 14,
             term_wrap: false,
             term_cols: 132,
+            term_theme: "light".into(),
+            term_theme_dark: "nord".into(),
+            term_theme_light: "solarized-light".into(),
             transfer_close_ms: 0,
             dnd_hover_ms: 1500,
             dlg_font: "맑은 고딕".into(),
@@ -1190,6 +1217,14 @@ mod tests {
         assert_eq!(parsed.term_font_size, 14);
         assert!(!parsed.term_wrap, "터미널 줄 바꿈 왕복(X-3)");
         assert_eq!(parsed.term_cols, 132, "터미널 고정 열 왕복(X-3)");
+        assert_eq!(parsed.term_theme, "light", "터미널 테마 선택자 왕복(09-04)");
+        assert_eq!(parsed.term_theme_dark, "nord");
+        assert_eq!(parsed.term_theme_light, "solarized-light");
+        assert_eq!(
+            Settings::parse("term_theme=\n").term_theme,
+            "system",
+            "빈 값 = 기본 유지"
+        );
         assert_eq!(parsed.transfer_close_ms, 0, "전송 창 닫기 시간 왕복(07-21)");
         assert_eq!(
             Settings::parse("transfer_close_ms=99999").transfer_close_ms,

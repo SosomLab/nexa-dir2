@@ -56,6 +56,10 @@ pub struct PrefValues {
     pub term_font_size: i32,
     pub term_wrap: bool,
     pub term_cols: i32,
+    /// 터미널 테마 선택자·모드별 기본 스킴 id(09-04 — [`nexa_term::resolve_scheme`]).
+    pub term_theme: String,
+    pub term_theme_dark: String,
+    pub term_theme_light: String,
     /// 컬럼 auto-fit 최대 폭(px @96dpi — 07-19).
     pub col_autofit_max: i32,
     /// 도구모음 순서 문자열(07-19 — 별도 창 편집).
@@ -116,6 +120,9 @@ enum Kind {
     Radio(&'static [(&'static str, &'static str)]),
     /// 언어 라디오(동적 — system + 발견 언어).
     LangRadio,
+    /// 드롭다운 목록(CBS_DROPDOWNLIST — 09-04): 항목이 많아 라디오로는 세로가 길어지는 값
+    /// (터미널 스킴 15종). 선택 = 즉시 적용. 항목 원천은 [`Select`].
+    Select(Select),
     /// 3×3 위치 피커(오너드로 이미지 버튼 — 원본 §7-A, QA 07-15).
     PosGrid,
     /// 자유 텍스트(EDIT) — X-12에서 글꼴이 Font 행으로 이관돼 현재 미사용(향후 텍스트 설정용).
@@ -129,6 +136,41 @@ enum Kind {
     /// 별도 편집 창 호출 버튼(07-19 사용자: 컬럼·툴바·컨텍스트 메뉴 설정은
     /// 각각 별도 창) — [`crate::ordereditor`] 공통 창.
     OrderDialog,
+}
+
+/// [`Kind::Select`] 항목 원천 — (값, 표시 라벨) 목록을 만든다.
+#[derive(Clone, Copy, PartialEq)]
+enum Select {
+    /// 터미널 테마 선택자: 시스템/다크 기본/라이트 기본 + 스킴 전부(앱 테마 무관 고정).
+    Theme,
+    /// 다크 모드 기본 스킴(어두운 배경 스킴만).
+    SchemeDark,
+    /// 라이트 모드 기본 스킴(밝은 배경 스킴만).
+    SchemeLight,
+}
+
+impl Select {
+    fn options(self) -> Vec<(String, String)> {
+        let tag = |s: &nexa_term::TermScheme| {
+            let kind = tr(if s.dark { "pref.theme.dark" } else { "pref.theme.light" });
+            (s.id.to_string(), format!("{} ({kind})", s.name))
+        };
+        match self {
+            Select::Theme => {
+                let mut o = vec![
+                    ("system".to_string(), tr("pref.termTheme.system")),
+                    ("dark".to_string(), tr("pref.termTheme.dark")),
+                    ("light".to_string(), tr("pref.termTheme.light")),
+                ];
+                o.extend(nexa_term::SCHEMES.iter().map(tag));
+                o
+            }
+            Select::SchemeDark => nexa_term::SCHEMES.iter().filter(|s| s.dark).map(tag).collect(),
+            Select::SchemeLight => {
+                nexa_term::SCHEMES.iter().filter(|s| !s.dark).map(tag).collect()
+            }
+        }
+    }
 }
 
 /// 설정 항목(레지스트리) — 카테고리·라벨키·설명키·종류·대상 필드 id.
@@ -185,6 +227,10 @@ const F_DND_HOVER: u32 = 39;
 const F_VIEW_SCOPE: u32 = 40;
 /// 빈 폴더 글리프 억제(X-43 — 08-23).
 const F_HIDE_EMPTY_GLYPH: u32 = 41;
+/// 터미널 테마 선택자·모드별 기본 스킴(09-04).
+const F_TERM_THEME: u32 = 42;
+const F_TERM_THEME_DARK: u32 = 43;
+const F_TERM_THEME_LIGHT: u32 = 44;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -572,6 +618,28 @@ fn registry() -> Vec<Entry> {
             kind: Kind::Number,
             field: F_TERM_COLS,
         },
+        // 터미널 테마(09-04 — 사용자 요청: 카테고리 **하단**에 선택자 + 모드별 기본)
+        Entry {
+            cat: "terminal",
+            label_key: "pref.termTheme",
+            desc_key: "pref.termTheme.desc",
+            kind: Kind::Select(Select::Theme),
+            field: F_TERM_THEME,
+        },
+        Entry {
+            cat: "terminal",
+            label_key: "pref.termThemeDark",
+            desc_key: "pref.termThemeDark.desc",
+            kind: Kind::Select(Select::SchemeDark),
+            field: F_TERM_THEME_DARK,
+        },
+        Entry {
+            cat: "terminal",
+            label_key: "pref.termThemeLight",
+            desc_key: "pref.termThemeLight.desc",
+            kind: Kind::Select(Select::SchemeLight),
+            field: F_TERM_THEME_LIGHT,
+        },
         Entry {
             cat: "dock",
             label_key: "pref.dock",
@@ -648,6 +716,8 @@ struct PrefState {
     editors: Vec<(u32, HWND)>,
     /// 라디오 옵션 (컨트롤 id, field, 값) — 클릭 즉시 반영(X-9).
     radios: Vec<(u32, u32, String)>,
+    /// 드롭다운 목록 (hwnd, field, 인덱스별 값) — CBN_SELCHANGE 즉시 반영(09-04).
+    selects: Vec<(HWND, u32, Vec<String>)>,
     /// 플러그인 사용 여부 체크박스 (플러그인 id, hwnd) — 플러그인 페이지에서만
     /// 채워짐(다른 페이지에서 harvest가 값을 지우지 않도록, 07-26).
     plugin_boxes: Vec<(String, HWND)>,
@@ -1055,6 +1125,7 @@ impl PrefState {
         // 수확해 values를 덮던 결함(스크롤 시 폰트 이름 공백). 비워두면 재진입 무해.
         self.editors.clear();
         self.radios.clear();
+        self.selects.clear();
         self.plugin_boxes.clear();
         for h in self.rows.drain(..) {
             let _ = DestroyWindow(h);
@@ -1331,6 +1402,63 @@ impl PrefState {
                         }
                         y += 8;
                     }
+                    Kind::Select(src) => {
+                        // 캡션 + 드롭다운 목록(09-04): 값은 인덱스 → selects 표로 역매핑.
+                        // 닫힘 높이 24 + 목록 높이(항목 수 비례·최대 ~12행) — CBS_DROPDOWNLIST라
+                        // 에디트 없음 = 값 문자열이 아니라 인덱스로 확정.
+                        let cap = mk(
+                            self.pane,
+                            self.font,
+                            w!("STATIC"),
+                            &label,
+                            0x0080,
+                            x0,
+                            y,
+                            pane_w,
+                            20,
+                            0,
+                        );
+                        self.rows.push(cap);
+                        y += 24;
+                        let opts = src.options();
+                        let cur = match e.field {
+                            F_TERM_THEME => self.values.term_theme.clone(),
+                            F_TERM_THEME_DARK => self.values.term_theme_dark.clone(),
+                            F_TERM_THEME_LIGHT => self.values.term_theme_light.clone(),
+                            _ => String::new(),
+                        };
+                        let list_h = 24 + 20 * (opts.len().min(12) as i32 + 1);
+                        let cb = mk(
+                            self.pane,
+                            self.font,
+                            w!("COMBOBOX"),
+                            "",
+                            WS_TABSTOP.0 | WS_VSCROLL.0 | 0x0003, /* CBS_DROPDOWNLIST */
+                            x0,
+                            y,
+                            EDIT_W + 72,
+                            list_h,
+                            ID_FIELD_BASE + e.field,
+                        );
+                        let mut vals = Vec::with_capacity(opts.len());
+                        for (i, (val, olabel)) in opts.into_iter().enumerate() {
+                            let w16: Vec<u16> =
+                                olabel.encode_utf16().chain(std::iter::once(0)).collect();
+                            SendMessageW(
+                                cb,
+                                0x0143, // CB_ADDSTRING
+                                None,
+                                Some(LPARAM(w16.as_ptr() as isize)),
+                            );
+                            if val == cur {
+                                SendMessageW(cb, 0x014E /* CB_SETCURSEL */, Some(WPARAM(i)), None);
+                            }
+                            vals.push(val);
+                        }
+                        self.rows.push(cb);
+                        self.selects.push((cb, e.field, vals));
+                        y += ROW_H + 4;
+                    }
                     Kind::Font(size_field) => {
                         // 폰트 행(X-12 — 사용자 확정: 이름+크기 **한 줄**): 캡션 →
                         // [패밀리 EDIT 넓게][크기 EDIT 좁게(숫자)]
@@ -1592,6 +1720,9 @@ impl PrefState {
             F_HIDE_EMPTY_GLYPH => v.hide_empty_glyph != d.hide_empty_glyph,
             F_TERM_WRAP => v.term_wrap != d.term_wrap,
             F_TERM_COLS => v.term_cols != d.term_cols,
+            F_TERM_THEME => v.term_theme != d.term_theme,
+            F_TERM_THEME_DARK => v.term_theme_dark != d.term_theme_dark,
+            F_TERM_THEME_LIGHT => v.term_theme_light != d.term_theme_light,
             F_COL_AUTOFIT => v.col_autofit_max != d.col_autofit_max,
             F_TOOLBAR_ORDER => v.toolbar_order != d.toolbar_order,
             F_COL_LAYOUT => {
@@ -1995,6 +2126,31 @@ unsafe extern "system" fn prefs_proc(
                             F_TAB_DBL => (*st).values.tab_dblclick = val,
                             F_TA_SCOPE => (*st).values.typeahead_scope = val,
                             F_TA_POS => (*st).values.typeahead_pos = val.parse().unwrap_or(6),
+                            _ => {}
+                        }
+                        (*st).harvest();
+                        (*st).apply_now();
+                    }
+                }
+                // 드롭다운 목록(09-04 — Kind::Select): CBN_SELCHANGE 인덱스 → 값 즉시 적용
+                i if i >= ID_FIELD_BASE
+                    && notify == 1
+                    && (*st).selects.iter().any(|(h, _, _)| h.0 == lparam.0 as *mut _) =>
+                {
+                    let combo = HWND(lparam.0 as *mut core::ffi::c_void);
+                    let sel = SendMessageW(combo, 0x0147 /* CB_GETCURSEL */, None, None).0;
+                    let picked = (*st)
+                        .selects
+                        .iter()
+                        .find(|(h, _, _)| *h == combo)
+                        .and_then(|(_, f, vals)| {
+                            usize::try_from(sel).ok().and_then(|i| vals.get(i)).map(|v| (*f, v.clone()))
+                        });
+                    if let Some((field, val)) = picked {
+                        match field {
+                            F_TERM_THEME => (*st).values.term_theme = val,
+                            F_TERM_THEME_DARK => (*st).values.term_theme_dark = val,
+                            F_TERM_THEME_LIGHT => (*st).values.term_theme_light = val,
                             _ => {}
                         }
                         (*st).harvest();
@@ -2422,6 +2578,7 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         rows: Vec::new(),
         editors: Vec::new(),
         radios: Vec::new(),
+        selects: Vec::new(),
         plugin_boxes: Vec::new(),
     });
     // 검색박스 = **자기완결 커스텀 컨트롤**(사용자 요청 07-16 — ctl::searchbox):
