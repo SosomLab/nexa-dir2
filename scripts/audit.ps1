@@ -5,13 +5,19 @@
 #   -Idle      : release exe를 10k 폴더로 기동해 60초 유휴 후 WorkingSet/Private/CPU 실측(B1 약식)
 #   -BigDir    : 열거 벤치 대상 폴더(기본 = System32). 10k/100k 폴더가 있으면 그 경로를 준다.
 # 출력: 항목별 PASS/FAIL/SKIP 한 줄 + 마지막 요약. 종료 코드 = FAIL 개수.
+#   -OutDir    : 결과 폴더(기본 docs/audit/<yyyyMMdd-HHmmss>/ — 회차별 원본 보관 규약, docs/29 §0).
+#                summary.md(판정 표)·audit.log(원문)를 쓴다. -NoSave면 저장 안 함.
 param(
   [switch]$Quick,
   [switch]$Coverage,
   [switch]$Idle,
   [string]$BigDir = "$env:SystemRoot\System32",
-  [string]$Exe = "target/release/nexa-app.exe"
+  [string]$Exe = "target/release/nexa-app.exe",
+  [string]$OutDir = "",
+  [switch]$NoSave
 )
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+if (-not $OutDir) { $OutDir = "docs/audit/$stamp" }
 $ErrorActionPreference = "Continue"
 $results = New-Object System.Collections.Generic.List[object]
 function Rec($id, $name, $status, $detail) {
@@ -126,5 +132,30 @@ try {
 finally { Pop-Location }
 
 $failCount = @($results | Where-Object status -eq 'FAIL').Count
-Write-Host ("`n== audit summary: PASS={0} FAIL={1} WARN={2} SKIP={3} INFO={4}" -f @($results | Where-Object status -eq 'PASS').Count, $failCount, @($results | Where-Object status -eq 'WARN').Count, @($results | Where-Object status -eq 'SKIP').Count, @($results | Where-Object status -eq 'INFO').Count)
+$summaryLine = ("== audit summary: PASS={0} FAIL={1} WARN={2} SKIP={3} INFO={4}" -f @($results | Where-Object status -eq 'PASS').Count, $failCount, @($results | Where-Object status -eq 'WARN').Count, @($results | Where-Object status -eq 'SKIP').Count, @($results | Where-Object status -eq 'INFO').Count)
+Write-Host "`n$summaryLine"
+
+# ── 회차 폴더 저장(docs/29 §0 — 결과 원본은 docs/audit/<yyyyMMdd-HHmmss>/) ──
+if (-not $NoSave) {
+  $root = Split-Path $PSScriptRoot -Parent
+  $dir = Join-Path $root $OutDir
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $mode = @(); if ($Quick) { $mode += '-Quick' }; if ($Coverage) { $mode += '-Coverage' }; if ($Idle) { $mode += '-Idle' }
+  $sha = (git -C $root rev-parse --short HEAD 2>$null)
+  $md = New-Object System.Collections.Generic.List[string]
+  $md.Add("# 점검 자동 판정 — $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ($($mode -join ' '))")
+  $md.Add("")
+  $md.Add("> 규격 [docs/29-audit-checklist.md](../../29-audit-checklist.md) · 커밋 ``$sha`` · exe ``$Exe`` · BigDir ``$BigDir``")
+  $md.Add("> 이 파일은 ``scripts/audit.ps1``이 생성한다. 정적 리뷰·실기 결과는 같은 폴더에 ``README.md``·``0N-*.md``로 사람이 추가한다.")
+  $md.Add("")
+  $md.Add("| ID | 항목 | 판정 | 상세 |")
+  $md.Add("| --- | --- | --- | --- |")
+  foreach ($r in $results) { $md.Add("| $($r.id) | $($r.name) | $($r.status) | $(($r.detail -replace '\|', '\|')) |") }
+  $md.Add("")
+  $md.Add($summaryLine)
+  [IO.File]::WriteAllLines((Join-Path $dir 'summary.md'), $md, (New-Object Text.UTF8Encoding $false))
+  $log = $results | ForEach-Object { "[{0,-4}] {1,-6} {2,-34} {3}" -f $_.status, $_.id, $_.name, $_.detail }
+  [IO.File]::WriteAllLines((Join-Path $dir 'audit.log'), @($log + $summaryLine), (New-Object Text.UTF8Encoding $false))
+  Write-Host "saved: $OutDir/summary.md, audit.log"
+}
 exit $failCount

@@ -1,0 +1,13 @@
+[PASS] T-1    cargo test --workspace             passed=330 failed=0
+[PASS] T-2    clippy warnings/errors             warnings=0 errors=0
+[PASS] T-3    linux target check                 errors=0 (경고는 기존 svg.rs 데드코드)
+[SKIP] T-4    line coverage (llvm-cov)           -Coverage 미지정
+[PASS] B-0    release build                      
+[PASS] B-2    exe size <= 10MB                   3,889,664 B = 3.71 MB
+[PASS] B-3    imports = OS inbox only            B3 통과 — 전부 화이트리스트 내
+[PASS] S-1    PE mitigations                     DllCharacteristics=0x8160 missing=[GUARD_CF]
+[WARN] S-1b   Control Flow Guard                 GUARD_CF 없음 — rustflags -C control-flow-guard 검토(docs/29 §S)
+[WARN] S-2    manifest execution level           requestedExecutionLevel 미발견(매니페스트 미포함 = asInvoker 기본이나 UAC 가상화 대상)
+[SKIP] B-1    idle memory                        -Idle 미지정(정식 B1은 docs/18: 10k 폴더·300s·3회 중앙값)
+== audit summary: PASS=7 FAIL=0 WARN=2 SKIP=2 INFO=0
+[exited with code 0]

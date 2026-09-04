@@ -18,7 +18,7 @@
 > - **릴리스 `0.19.0`**(사용자 지시): 채널 판정 = **winget 제출**([#429155](https://github.com/microsoft/winget-pkgs/pull/429155)·[#429156](https://github.com/microsoft/winget-pkgs/pull/429156) — 로컬
 >   `winget validate` 통과) · **choco 제외**(`0.18.1` `Submitted` 검수 중 → `CHOCO_PUSH=false` 등록, 승인 뒤
 >   복원). 자산 6종 · B2 **3.85MB** · CI green · 위키 발행. 실기 QA는 배포본으로 계속.
-> - **정규 점검 1차(X-51 — 사용자 요청·코드 3건 수정)**: [29](29-audit-checklist.md) 신설(순서·항목·기준·회차 기록) +
+> - **정규 점검 1차(X-51 — 사용자 요청·코드 3건 수정)**: [29](29-audit-checklist.md) 신설(순서·항목·기준·회차 기록) + **결과 폴더 [`docs/audit/20260904-165351/`](audit/20260904-165351/README.md)**(회차 보고·영역별 원본 6·로그·**§7 위험도별 조치 계획**) +
 >   [`scripts/audit.ps1`](../scripts/audit.ps1) + 벤치 예제 2 + 적대적 테스트 2 + 커버리지 도구. **실측** = B1 8.75MB@300s ·
 >   B2 3.89MB · 기동 430/814ms · 열거 100k 99ms · VT 15.5MB/s · 유휴 CPU 0.13~1.56% · PE ASLR/DEP ○ CFG/CET ×
 >   · **매니페스트 없음**. **조사 6영역 발견 27건**(HIGH 14 — 덮어쓰기 선삭제·드롭 폐기·플러그인 무타임아웃·pwsh 이름

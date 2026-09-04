@@ -1,0 +1,8 @@
+# B1 유휴 메모리 프로토콜 원본(10k 폴더 인자 기동 → 10/60/180/300s)
+B1 run: window after 430 ms pid=43776
+t=10s WS=51.05MB Private=25.73MB Threads=13 Handles=425 CPUtotal=844ms title=[Nexa Dir — [L] C:\Users\kiros33\AppData\Local\Temp\claude\d-
+t=60s WS=50.69MB Private=25.65MB Threads=10 Handles=425 CPUtotal=922ms title=[Nexa Dir — [L] C:\Users\kiros33\AppData\Local\Temp\claude\d-
+t=180s WS=6.02MB Private=19.25MB Threads=5 Handles=418 CPUtotal=1078ms title=[Nexa Dir — [L] C:\Users\kiros33\AppData\Local\Temp\claude\d-
+t=300s WS=8.75MB Private=19.31MB Threads=7 Handles=418 CPUtotal=1219ms title=[Nexa Dir — [L] C:\Users\kiros33\AppData\Local\Temp\claude\d-
+
+# 세션 복원(11탭) 기동 실측
