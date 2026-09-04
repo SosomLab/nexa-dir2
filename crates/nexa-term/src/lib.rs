@@ -785,7 +785,14 @@ impl VtScreen {
             return;
         }
         if ch.is_ascii_digit() {
-            self.cur = self.cur.max(0) * 10 + (ch as i32 - '0' as i32);
+            // 포화 누적 + 상한(09-04 적대적 입력 테스트가 잡은 곱셈 오버플로 — 디버그 패닉·
+            // 릴리스 래핑). 65535 = xterm/WT 파라미터 상한과 같은 등급, 화면 좌표는 어차피 클램프.
+            self.cur = self
+                .cur
+                .max(0)
+                .saturating_mul(10)
+                .saturating_add(ch as i32 - '0' as i32)
+                .min(65_535);
             return;
         }
         if ch == ';' {
@@ -1011,6 +1018,8 @@ impl VtScreen {
     }
 
     fn insert_lines(&mut self, n: usize) {
+        // 반복 횟수를 남은 행 수로 클램프(09-04 적대적 입력 — `ESC[999999999L`이 n회 회전 = CPU 소진)
+        let n = n.min(self.rows - self.cy);
         for _ in 0..n {
             let row = self.blank_filled_row();
             self.screen[self.cy..self.rows].rotate_right(1);
@@ -1019,6 +1028,7 @@ impl VtScreen {
     }
 
     fn delete_lines(&mut self, n: usize) {
+        let n = n.min(self.rows - self.cy);
         for _ in 0..n {
             self.screen[self.cy..self.rows].rotate_left(1);
             self.screen[self.rows - 1] = self.blank_filled_row();
@@ -1144,6 +1154,9 @@ impl VtScreen {
         }
         let sl = start_line.min(count - 1);
         let el = end_line.min(count - 1);
+        if el < sl {
+            return Vec::new(); // 역순 범위(09-04 점검 R-#1 — `el - sl + 1` 언더플로)
+        }
         let mut out = Vec::with_capacity(el - sl + 1);
         for li in sl..=el {
             let row = self.line_at(li);
@@ -1333,6 +1346,43 @@ fn rgb(r: i32, g: i32, b: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 적대적 입력(docs/29 §X-1): 거대 파라미터·미완 CSI/OSC·NUL·비BMP·범위 밖 커서 이동을
+    /// 반복 주입해도 패닉 없이 커서·스크롤백이 상한 안에 머문다.
+    #[test]
+    fn nasty_sequences_do_not_panic_and_stay_bounded() {
+        let mut s = VtScreen::new(20, 5);
+        let nasty = [
+            "\x1b[99999999999;1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20m",
+            "\x1b[",
+            "\x1b]0;title-without-terminator",
+            "\x1b[?9999h",
+            "\0",
+            "\u{1F600}\u{1F600}",
+            "\x1b[38;5;999m\x1b[48;2;300;300;300mX",
+            "\x1b[2147483647C\x1b[2147483647B",
+            "\x1b[-5;-5H",
+            "\x1b[999999999L\x1b[999999999M\x1b[999999999@\x1b[999999999P",
+            "\x1b[0;999999r\n\n\n",
+            "\x1b[999999999X",
+            "한\x1b[1D글",
+            "\x1b7\x1b[9999;9999H\x1b8",
+        ];
+        for _ in 0..500 {
+            for n in nasty {
+                s.feed(n);
+            }
+            assert!(s.cursor_row() < s.rows() && s.cursor_col() <= s.cols(), "커서 상한");
+            assert!(s.scrollback_count() <= MAX_SCROLLBACK, "스크롤백 상한");
+        }
+        s.resize(1, 1);
+        s.feed("\x1b[9999;9999Habc\x1b[2J");
+        // 열은 `cols`(줄바꿈 대기 위치)까지 허용 — 렌더가 가시 범위로 거른다
+        assert!(s.cursor_row() < 1 && s.cursor_col() <= 1, "1×1 리사이즈 뒤 클램프");
+        s.resize(300, 100);
+        let _ = s.get_text(0, 0, usize::MAX, usize::MAX);
+        let _ = s.get_runs(usize::MAX, usize::MAX, 0, 0);
+    }
 
     #[test]
     fn decset_mouse_modes_tracked() {

@@ -1115,6 +1115,56 @@ mod toolbar_order_tests {
 mod tests {
     use super::*;
 
+    /// 적대적 입력(docs/29 §X-2): 쓰레기·거대 값·이진·BOM·중복 키·`=` 없음·1MB 한 줄 — 패닉 없이
+    /// 기본값/클램프로 수렴하고 직렬화 왕복이 안정적이어야 한다(설정 파일 손상 = 앱 기동 불가가 아님).
+    #[test]
+    fn parse_garbage_is_harmless_and_clamped() {
+        let d = Settings::default();
+        let cases: Vec<String> = vec![
+            String::new(),
+            "\u{feff}".into(),
+            "=\n==\n= =\nno_equals_line\n".into(),
+            "theme=\0\0\u{fffd}binary\x01\x02\nlang=".into(),
+            "term_cols=99999999999999999999\nterm_font_size=-99999999999\nsplit=NaN\ndock_ratio=1e308\n".into(),
+            "split=-5\ndock_split=99\ntransfer_close_ms=-1\ndnd_hover_ms=1e9\n".into(),
+            format!("term_font={}\n", "x".repeat(1_048_576)),
+            format!("plugins_disabled={}\n", "a|".repeat(100_000)),
+            "theme=dark\ntheme=light\ntheme=\n".into(),
+            "\r\n\r\ntheme=light\r\n".into(),
+        ];
+        for text in &cases {
+            let s = Settings::parse(text);
+            assert!((80..=1000).contains(&s.term_cols), "term_cols 클램프: {}", s.term_cols);
+            assert!(
+                (1..=200).contains(&s.term_font_size),
+                "font size 상식 범위: {}",
+                s.term_font_size
+            );
+            assert!(s.split.is_finite() && (0.0..=1.0).contains(&s.split), "split 클램프: {}", s.split);
+            assert!(
+                s.dock_ratio.is_finite() && (0.0..=1.0).contains(&s.dock_ratio),
+                "dock_ratio 클램프"
+            );
+            assert!(s.transfer_close_ms >= 0 && s.dnd_hover_ms >= 0);
+            assert!(s.term_font.len() <= 128, "term_font 길이 상한");
+            assert!(s.plugins_disabled.len() <= 512, "plugins_disabled 길이 상한");
+            // 왕복: 직렬화 → 파싱이 같은 값(손상된 파일을 한 번 저장하면 정상화)
+            let again = Settings::parse(&s.serialize());
+            assert_eq!(again.term_cols, s.term_cols);
+            assert_eq!(again.theme, s.theme);
+        }
+        assert_eq!(
+            Settings::parse("theme=dark\ntheme=light\ntheme=\n").theme,
+            "light",
+            "마지막 유효 값 채택"
+        );
+        assert_eq!(Settings::parse("").theme, d.theme);
+        // 세션 파일도 같은 규율
+        for text in &cases {
+            let _ = Session::parse(text);
+        }
+    }
+
     #[test]
     fn settings_roundtrip_and_lenient_parse() {
         let s = Settings {

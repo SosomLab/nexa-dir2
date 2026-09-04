@@ -317,7 +317,13 @@ pub fn normalize_path(raw: &str) -> (String, bool) {
     }
     let mut out = parts.join("/");
     if out.len() > MAX_NAME {
-        out.truncate(MAX_NAME);
+        // UTF-8 문자 경계로 물러나서 자른다(09-04 점검 R-#2 — 4096바이트가 CJK 글자 중간이면
+        // `String::truncate`가 패닉 → 도크 미리보기 중 UI 스레드 abort)
+        let mut cut = MAX_NAME;
+        while cut > 0 && !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
     }
     (out, suspicious)
 }
@@ -617,4 +623,15 @@ mod tests {
         assert_eq!(decode_name("한글.txt".as_bytes(), true), "한글.txt");
         assert_eq!(decode_name(&[0x41, 0x80, 0x42], false), "AÇB");
     }
+    #[test]
+    fn long_cjk_name_truncates_on_char_boundary() {
+        // 09-04 점검 R-#2: 4096바이트 경계가 3바이트 글자 중간이어도 패닉 없이 경계에서 자른다
+        let name = "가".repeat(2000); // 6000바이트 · 4096은 글자 중간(4096 % 3 = 1)
+        let (out, suspicious) = normalize_path(&name);
+        assert!(!suspicious);
+        assert!(out.len() <= MAX_NAME && out.is_char_boundary(out.len()));
+        assert_eq!(out.len(), 4095, "3바이트 글자 1365개 = 4095바이트");
+        assert!(out.chars().all(|c| c == '가'));
+    }
+
 }
