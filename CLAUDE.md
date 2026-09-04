@@ -8,7 +8,7 @@
 **Nexa Dir** = 원본 [Nexa Dir](https://github.com/SosomLab/nexa-dir)(Rust 코어+WinUI 3/C#)의 기능을
 **포터블 단일 exe · 초저메모리(RSS ≤30MB) · unmanaged 올 러스트**로 재구축하는 Windows 파일 탐색기.
 원본은 기능 스펙·실측 교훈의 **원천(SSOT)** — 로컬 경로 `../nexa-dir`.
-현 단계: **포스트 M5 — UX 고도화 + 배포 채널 정착**. M0(`0.1.0`)~M5(`0.6.0`) 완료, 최신 릴리스 **`0.19.0`**(09-04 — 설정 창 스크롤 재구축·글꼴 폴백 체인·파일 목록 오버레이 바. winget PR 2건 제출·choco는 `0.18.1` 검수 중이라 제외[`CHOCO_PUSH=false`]. 그 전 `0.18.1` = 설치형 VERSIONINFO 보강 = Defender ML 오탐 대응 재배포. `0.18.0` = **X-46 압축 파일 미리보기**[그리드 창·암호 입력·플러그인 ABI v2 — [28](docs/28-archive-preview.md)] + **미리보기 플러그인 2종 동봉 배포**[markdown.wasm·archive.wasm — 포터블 zip·설치본·플러그인 zip. [21 §5-2](docs/21-distribution.md)]. **winget 2채널 `0.18.1` 라이브**[#423330·#423331 병합]·**Chocolatey 2종 승인**[0.8.1 — 07-20 플래그 후 44일] → 09-02 `CHOCO_PUSH=true` 등록·**`0.18.1` 두 패키지 제출·검수 중** — [21 §7·§8](docs/21-distribution.md)).
+현 단계: **포스트 M5 — UX 고도화 + 배포 채널 정착**. M0(`0.1.0`)~M5(`0.6.0`) 완료, 최신 릴리스 **`0.19.0`**(09-04 — 설정 창 스크롤 재구축·글꼴 폴백 체인·파일 목록 오버레이 바. **릴리스 뒤 미배포 = X-49 터미널 테마·X-50 복사 서식**[09-04 — 실기 QA 뒤 다음 릴리스]. winget PR 2건 제출·choco는 `0.18.1` 검수 중이라 제외[`CHOCO_PUSH=false`]. 그 전 `0.18.1` = 설치형 VERSIONINFO 보강 = Defender ML 오탐 대응 재배포. `0.18.0` = **X-46 압축 파일 미리보기**[그리드 창·암호 입력·플러그인 ABI v2 — [28](docs/28-archive-preview.md)] + **미리보기 플러그인 2종 동봉 배포**[markdown.wasm·archive.wasm — 포터블 zip·설치본·플러그인 zip. [21 §5-2](docs/21-distribution.md)]. **winget 2채널 `0.18.1` 라이브**[#423330·#423331 병합]·**Chocolatey 2종 승인**[0.8.1 — 07-20 플래그 후 44일] → 09-02 `CHOCO_PUSH=true` 등록·**`0.18.1` 두 패키지 제출·검수 중** — [21 §7·§8](docs/21-distribution.md)).
 
 - 조직: **SosomLab** · 개발자: Sangyong Bae · kiros33@gmail.com (원본과 동일)
 
