@@ -10,26 +10,33 @@
 //! 적용은 [`WM_APP_PREFS_APPLY`]로 소유자에 동기 통지.
 
 use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::POINT;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetSysColorBrush,
-    InvalidateRect, SelectObject, SetBkMode, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, DEFAULT_CHARSET,
-    DEFAULT_QUALITY, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_SEMIBOLD,
-    HBRUSH, HFONT, OUT_DEFAULT_PRECIS, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
+    DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetSysColorBrush, InvalidateRect,
+    ScreenToClient, SelectObject, SetBkMode, UpdateWindow, CLIP_DEFAULT_PRECIS, COLOR_WINDOW,
+    DEFAULT_CHARSET, DEFAULT_QUALITY, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE,
+    FW_SEMIBOLD, HBRUSH, HDC, HFONT, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetDlgCtrlID, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
-    MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_OWNERDRAW,
-    ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, HMENU, MINMAXINFO, MSG, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
-    WM_DRAWITEM, WM_GETMINMAXINFO, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_GROUP, WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
-    WS_VSCROLL,
+    AdjustWindowRectEx, BeginDeferWindowPos, CreateWindowExW, DefWindowProcW, DeferWindowPos,
+    DestroyWindow, DispatchMessageW, EndDeferWindowPos, GetClientRect, GetDlgCtrlID, GetMessageW,
+    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    KillTimer, MoveWindow, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
+    SetWindowLongPtrW, SetWindowTextW, TranslateMessage, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON,
+    BS_OWNERDRAW, ES_AUTOHSCROLL, ES_NUMBER, GWLP_USERDATA, GW_CHILD, GW_HWNDNEXT, HMENU,
+    MINMAXINFO, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NOTIFY, WM_PAINT, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_GROUP,
+    WS_MAXIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::dialog::DlgFont;
@@ -612,10 +619,29 @@ struct PrefState {
     /// 현재 클라이언트 크기(리사이즈 추종 레이아웃 — X-8).
     cw: i32,
     ch: i32,
-    /// 본문 세로 스크롤(QA 07-15 — 항목이 창보다 길 때 휠 스크롤). 재구성 시 오프셋.
+    /// 우측 본문 컨테이너(09-04 — 스크롤 컨테이너 분리): 항목 컨트롤의 부모.
+    /// WS_CLIPCHILDREN + **오버레이 스크롤바**(우측 PAD 스트립에 직접 그림 —
+    /// 그리드/카드 호스트 07-18 규약 + 반투명·호버). 스크롤 = 자식 **이동**
+    /// (DeferWindowPos 일괄 — 비트 복사라 자식 재도장 없음)이지 재구성이 아니다 —
+    /// 휠마다 전 컨트롤 파괴·재생성하던 구조가 창 전체 깜박임의 진범(QA 09-04).
+    /// WS_EX_COMPOSITED는 쓰지 않는다: 합성 DC 위에서 GDI+ 알파 썸이 그려지지 않았다
+    /// (실측 09-04 — 오버레이 바 불가시의 진범).
+    pane: HWND,
+    /// 오버레이 썸 현재 알파(0 = 숨김). 스크롤 직후 [`BAR_ALPHA`] → 유지 → 단계 페이드.
+    bar_alpha: u8,
+    /// 썸 위 마우스(두꺼운 바 + 페이드 보류).
+    bar_hover: bool,
+    /// 썸 드래그(시작 y, 시작 scroll_y) — 트랙 표시.
+    bar_drag: Option<(i32, i32)>,
+    /// TrackMouseEvent(WM_MOUSELEAVE) 무장 여부.
+    bar_track: bool,
+    /// 본문 세로 스크롤(QA 07-15 — 항목이 창보다 길 때). 재구성 시 오프셋(px).
     scroll_y: i32,
     /// 마지막 재구성의 콘텐츠 전체 높이(스크롤 상한 계산).
     content_h: i32,
+    /// 휠 델타 잔량(1/120 노치 단위 — 트랙패드의 작은 델타를 버리지 않고 누적해
+    /// 픽셀 단위로 부드럽게 스크롤, QA 09-04).
+    wheel_rem: i32,
     /// 동적 생성한 우측 컨트롤들(카테고리/검색 변경 시 파괴·재생성).
     rows: Vec<HWND>,
     /// 각 편집 컨트롤 (field, hwnd) — 값 수거용(체크박스·EDIT).
@@ -645,6 +671,32 @@ const ID_PLUGIN_BASE: u32 = 2100;
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
 const CLASS: PCWSTR = w!("NexaPrefs");
+const PANE_CLASS: PCWSTR = w!("NexaPrefsPane");
+/// 휠 한 노치(델타 120)당 스크롤 픽셀 — 델타 ÷ 2 = px라 잔량 계산이 정확(09-04).
+const WHEEL_PX: i32 = 60;
+/// 오버레이 스크롤바(사용자 확정 09-04 — 그리드 07-18 규약 계승 + 반투명·호버 두꺼움):
+/// 평소 숨김 → 스크롤 순간 반투명 표시 → 900ms 유지 → 단계 페이드아웃.
+/// 썸 위 호버/드래그 = 두꺼운 바(불투명에 가깝게)·페이드 보류.
+/// WM_MOUSELEAVE(TrackMouseEvent 통지 — windows-rs 모듈 경로 불확실을 피해 직접 정의).
+const WM_MOUSELEAVE: u32 = 0x02A3;
+const BAR_THIN: i32 = 6;
+const BAR_WIDE: i32 = 10;
+const THUMB_MIN: i32 = 24;
+/// 스크롤 직후 알파(반투명) / 호버·드래그 알파.
+const BAR_ALPHA: u8 = 120;
+const BAR_ALPHA_HOT: u8 = 210;
+/// 유지 타이머(1회) → 페이드 틱 타이머(알파 −FADE_STEP/틱).
+const TIMER_HOLD: usize = 2;
+const TIMER_FADE: usize = 3;
+const HOLD_MS: u32 = 900;
+const FADE_MS: u32 = 40;
+const FADE_STEP: u8 = 24;
+/// 썸 색(라이트 고정 창 — 중간 회색).
+const THUMB_COLOR: nexa_gui::Color = nexa_gui::Color {
+    r: 0x60,
+    g: 0x60,
+    b: 0x60,
+};
 const PAD: i32 = 16;
 const ROW_H: i32 = 30;
 const CAT_W: i32 = 180;
@@ -836,9 +888,164 @@ impl PrefState {
         );
     }
 
-    /// 우측 본문 x 시작(사이드바+구분선 이후).
+    /// 우측 본문 x 시작 — 컨테이너(pane) 클라이언트 기준(09-04).
     fn body_x(&self) -> i32 {
-        PAD + CAT_W + PAD * 2
+        PAD
+    }
+
+    /// 컨테이너 좌측 x(메인 창 클라이언트 기준) — 사이드바+구분선 이후.
+    fn pane_left(&self) -> i32 {
+        PAD + CAT_W + PAD
+    }
+
+    /// 컨테이너 클라이언트 크기(스크롤바 제외).
+    unsafe fn pane_client(&self) -> (i32, i32) {
+        let mut rc = RECT::default();
+        let _ = GetClientRect(self.pane, &mut rc);
+        (rc.right, rc.bottom)
+    }
+
+    /// 스크롤 상한(px).
+    unsafe fn scroll_max(&self) -> i32 {
+        (self.content_h - self.pane_client().1).max(0)
+    }
+
+    /// 오버레이 썸 rect — 콘텐츠가 창에 들어가면 None. `wide` = 호버/드래그.
+    unsafe fn thumb_rect(&self, wide: bool) -> Option<RECT> {
+        let (cw, view) = self.pane_client();
+        if view <= 0 || self.content_h <= view {
+            return None;
+        }
+        let th = ((view as i64 * view as i64 / self.content_h.max(1) as i64) as i32)
+            .max(THUMB_MIN)
+            .min(view);
+        let max_s = (self.content_h - view).max(1);
+        let ty = ((view - th) as i64 * self.scroll_y as i64 / max_s as i64) as i32;
+        let w = if wide { BAR_WIDE } else { BAR_THIN };
+        Some(RECT {
+            left: cw - w - 2,
+            top: ty,
+            right: cw - 2,
+            bottom: ty + th,
+        })
+    }
+
+    /// 바 트랙 스트립(우측 PAD 여백 — 자식 컨트롤이 덮지 않는 영역). 무효화 범위.
+    unsafe fn bar_strip(&self) -> RECT {
+        let (cw, view) = self.pane_client();
+        RECT {
+            left: cw - BAR_WIDE - 4,
+            top: 0,
+            right: cw,
+            bottom: view,
+        }
+    }
+
+    fn bar_hot(&self) -> bool {
+        self.bar_hover || self.bar_drag.is_some()
+    }
+
+    unsafe fn invalidate_bar(&self) {
+        let rc = self.bar_strip();
+        let _ = InvalidateRect(Some(self.pane), Some(&rc), false);
+    }
+
+    /// 스크롤 직후 바 표시(반투명) + 유지 타이머 재무장 → 이후 단계 페이드.
+    unsafe fn flash_bar(&mut self) {
+        self.bar_alpha = BAR_ALPHA;
+        let _ = KillTimer(Some(self.pane), TIMER_FADE);
+        let _ = SetTimer(Some(self.pane), TIMER_HOLD, HOLD_MS, None);
+        self.invalidate_bar();
+    }
+
+    /// 오버레이 썸 도장(GDI+ 알파) — `(ox, oy)` = 대상 DC 원점의 클라이언트 좌표
+    /// (더블버퍼 메모리 DC는 rcPaint 좌상단이 원점).
+    unsafe fn paint_bar(&self, hdc: HDC, ox: i32, oy: i32) {
+        let hot = self.bar_hot();
+        if self.bar_alpha == 0 && !hot {
+            return;
+        }
+        let Some(t) = self.thumb_rect(hot) else {
+            return;
+        };
+        let mut g = crate::ctl::gdipctx::GdipCtx::new(hdc);
+        if self.bar_drag.is_some() {
+            // 드래그 = 트랙 표시(그리드 규약 — 연회색 반투명)
+            let s = self.bar_strip();
+            g.fill_round_rect_alpha(
+                nexa_gui::Rect::new(
+                    t.left - 1 - ox,
+                    s.top - oy,
+                    t.right - t.left + 2,
+                    s.bottom - s.top,
+                ),
+                0,
+                THUMB_COLOR,
+                28,
+            );
+        }
+        let alpha = if hot { BAR_ALPHA_HOT } else { self.bar_alpha };
+        g.fill_round_rect_alpha(
+            nexa_gui::Rect::new(t.left - ox, t.top - oy, t.right - t.left, t.bottom - t.top),
+            (t.right - t.left) / 2,
+            THUMB_COLOR,
+            alpha,
+        );
+    }
+
+    /// 본문을 `ny`(px)로 스크롤 — 컨테이너 직속 자식 전부를 한 번에 이동
+    /// (DeferWindowPos 일괄 — 이동은 비트 복사, 부모는 드러난 영역만 소거).
+    /// 재구성 없음: 편집 중 값·포커스·캐럿 그대로.
+    unsafe fn scroll_to(&mut self, ny: i32) {
+        let ny = ny.clamp(0, self.scroll_max());
+        let dy = ny - self.scroll_y;
+        if dy == 0 {
+            return;
+        }
+        self.scroll_y = ny;
+        let mut kids = Vec::new();
+        let mut c = GetWindow(self.pane, GW_CHILD).unwrap_or_default();
+        while !c.is_invalid() {
+            kids.push(c);
+            c = GetWindow(c, GW_HWNDNEXT).unwrap_or_default();
+        }
+        if let Ok(mut hdwp) = BeginDeferWindowPos(kids.len() as i32) {
+            for k in kids {
+                let mut rc = RECT::default();
+                let _ = GetWindowRect(k, &mut rc);
+                let mut pt = POINT {
+                    x: rc.left,
+                    y: rc.top,
+                };
+                let _ = ScreenToClient(self.pane, &mut pt);
+                if let Ok(h) = DeferWindowPos(
+                    hdwp,
+                    k,
+                    None,
+                    pt.x,
+                    pt.y - dy,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                ) {
+                    hdwp = h;
+                }
+            }
+            let _ = EndDeferWindowPos(hdwp);
+        }
+        self.flash_bar();
+        let _ = UpdateWindow(self.pane);
+    }
+
+    /// 휠 델타(1/120 노치) → 픽셀 스크롤. 잔량 누적으로 트랙패드의 작은 델타도
+    /// 픽셀 단위 반영(예전엔 `delta / 120`이 0으로 버려져 느린 스크롤이 죽었다).
+    unsafe fn wheel(&mut self, delta: i32) {
+        let total = self.wheel_rem + delta;
+        let px = total * WHEEL_PX / 120;
+        self.wheel_rem = total - px * 120 / WHEEL_PX;
+        if px != 0 {
+            self.scroll_to(self.scroll_y - px);
+        }
     }
 
     /// 현재 카테고리/검색어에 맞는 항목만 우측에 (재)구성 — 섹션 제목 + 항목 나열(X-9).
@@ -854,7 +1061,7 @@ impl PrefState {
         }
         let reg = registry();
         let x0 = self.body_x();
-        let pane_w = (self.cw - x0 - PAD).max(120);
+        let pane_w = (self.pane_client().0 - x0 - PAD).max(120);
         // 표시 모드(드릴다운 개편 07-15 — 사용자 QA): **그룹 = 하위 메뉴 목록만**
         // (세부는 하위 메뉴 선택 시), leaf = 그 카테고리 항목(검색 중엔 **검색어 매치
         // 항목만**), 검색 중 미선택(category 빈 값) = 전 카테고리 매치 목록.
@@ -876,7 +1083,7 @@ impl PrefState {
             )
         };
         let th = mk(
-            self.hwnd,
+            self.pane,
             self.title_font,
             w!("STATIC"),
             &title,
@@ -903,7 +1110,7 @@ impl PrefState {
                 }
                 let Some(ti) = tree_index(key) else { continue };
                 let link = mk(
-                    self.hwnd,
+                    self.pane,
                     self.font,
                     w!("STATIC"),
                     &tr(lk),
@@ -962,7 +1169,7 @@ impl PrefState {
                     Kind::OrderDialog => {
                         // 별도 편집 창 호출(07-19) — 캡션 + [편집…] 버튼
                         let cap = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("STATIC"),
                             &label,
@@ -975,7 +1182,7 @@ impl PrefState {
                         );
                         self.rows.push(cap);
                         let b = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("BUTTON"),
                             &tr("pref.editBtn"),
@@ -992,7 +1199,7 @@ impl PrefState {
                     Kind::PosGrid => {
                         // 3×3 이미지 피커(원본 §7-A — QA 07-15 라디오 9종 대체)
                         let cap = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("STATIC"),
                             &label,
@@ -1008,7 +1215,7 @@ impl PrefState {
                         for gi in 0..9u32 {
                             let (col, row_i) = ((gi % 3) as i32, (gi / 3) as i32);
                             let b = mk(
-                                self.hwnd,
+                                self.pane,
                                 self.font,
                                 w!("BUTTON"),
                                 "",
@@ -1026,7 +1233,7 @@ impl PrefState {
                     Kind::CheckBox => {
                         // 라벨 일체형 체크박스(원본 스크린샷) — 클릭 즉시 적용
                         let b = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("BUTTON"),
                             &label,
@@ -1061,7 +1268,7 @@ impl PrefState {
                     Kind::Radio(_) | Kind::LangRadio => {
                         // 캡션 + 세로 라디오 그룹(원본 스크린샷 "Where to show ..." 형식)
                         let cap = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("STATIC"),
                             &label,
@@ -1104,7 +1311,7 @@ impl PrefState {
                                 style |= WS_GROUP.0; // 라디오 그룹 경계
                             }
                             let r = mk(
-                                self.hwnd,
+                                self.pane,
                                 self.font,
                                 w!("BUTTON"),
                                 &olabel,
@@ -1128,7 +1335,7 @@ impl PrefState {
                         // 폰트 행(X-12 — 사용자 확정: 이름+크기 **한 줄**): 캡션 →
                         // [패밀리 EDIT 넓게][크기 EDIT 좁게(숫자)]
                         let cap = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("STATIC"),
                             &label,
@@ -1146,7 +1353,7 @@ impl PrefState {
                         // 드롭다운(자기 글꼴 렌더)·타입어헤드 HUD·쉼표 체인 선택 규칙.
                         // 확정(선택/포커스 이탈) = EN_KILLFOCUS 재발행 → 기존 즉시 적용.
                         let ed = crate::ctl::fontbox::create(
-                            self.hwnd,
+                            self.pane,
                             x0,
                             y,
                             EDIT_W,
@@ -1159,7 +1366,7 @@ impl PrefState {
                         // 크기 = **입력 가능한 콤보**(사용자 확정 07-16): 프리셋 + 직접 입력,
                         // 선택/Enter = 즉시 적용(CBN_SELCHANGE·모달 펌프 VK_RETURN).
                         let ed2 = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("COMBOBOX"),
                             "",
@@ -1209,7 +1416,7 @@ impl PrefState {
                             style |= ES_NUMBER as u32;
                         }
                         let ed = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("EDIT"),
                             &val,
@@ -1221,7 +1428,7 @@ impl PrefState {
                             ID_FIELD_BASE + e.field,
                         );
                         let lbl = mk(
-                            self.hwnd,
+                            self.pane,
                             self.font,
                             w!("STATIC"),
                             &label,
@@ -1242,7 +1449,7 @@ impl PrefState {
                 let desc = tr(e.desc_key);
                 if desc != e.desc_key {
                     let d = mk(
-                        self.hwnd,
+                        self.pane,
                         self.font,
                         w!("STATIC"),
                         &desc,
@@ -1259,7 +1466,7 @@ impl PrefState {
                 // 수정됨 표시(X-10 ④) — 기본값과 다른 항목 좌측 세로 accent 바
                 if self.is_modified(e.field) {
                     let bar = mk(
-                        self.hwnd,
+                        self.pane,
                         self.font,
                         w!("STATIC"),
                         "",
@@ -1279,7 +1486,7 @@ impl PrefState {
         // "NAME (id) — ext, …". 체크 해제 = plugins_disabled(내장 폴백으로 대체됨).
         if self.category == "plugins" && tokens.is_empty() {
             let desc = mk(
-                self.hwnd,
+                self.pane,
                 self.font,
                 w!("STATIC"),
                 &tr("pref.plugins.desc"),
@@ -1295,7 +1502,7 @@ impl PrefState {
             let infos = crate::preview::plugin_infos();
             if infos.is_empty() {
                 let empty = mk(
-                    self.hwnd,
+                    self.pane,
                     self.font,
                     w!("STATIC"),
                     &tr("pref.plugins.empty"),
@@ -1312,7 +1519,7 @@ impl PrefState {
             for (pi, info) in infos.iter().enumerate() {
                 let label = format!("{} ({}) — {}", info.name, info.id, info.exts.join(", "));
                 let b = mk(
-                    self.hwnd,
+                    self.pane,
                     self.font,
                     w!("BUTTON"),
                     &label,
@@ -1335,7 +1542,12 @@ impl PrefState {
             }
         }
         self.content_h = y + self.scroll_y + PAD; // 스크롤 상한 계산용(QA 07-15)
-        let _ = InvalidateRect(Some(self.hwnd), None, true);
+                                                  // 콘텐츠가 줄어 오프셋이 상한을 넘으면 되돌린다(자식 이동 — 재구성 아님).
+        let max = self.scroll_max();
+        if self.scroll_y > max {
+            self.scroll_to(max);
+        }
+        let _ = InvalidateRect(Some(self.pane), None, true);
     }
 
     /// 폰트 행 필드의 현재 표시값(X-12 — 패밀리/크기 공용).
@@ -1830,17 +2042,10 @@ unsafe extern "system" fn prefs_proc(
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
-        // 본문 휠 스크롤(QA 07-15 — 항목이 창보다 길 때)
-        0x020A /* WM_MOUSEWHEEL */ => {
-            let delta = (wparam.0 >> 16) as i16 as i32;
-            let s = &mut *st;
-            let max = (s.content_h - s.ch).max(0);
-            let ny = (s.scroll_y - delta / 120 * 48).clamp(0, max);
-            if ny != s.scroll_y {
-                s.scroll_y = ny;
-                s.harvest();
-                s.rebuild();
-            }
+        // 본문 휠 스크롤(QA 07-15) — 포커스가 사이드바 밖(검색창 등)일 때 여기로 온다.
+        // 컨테이너 자식에 포커스가 있으면 pane_proc이 받는다(둘 다 같은 경로).
+        WM_MOUSEWHEEL => {
+            (*st).wheel((wparam.0 >> 16) as i16 as i32);
             LRESULT(0)
         }
         // 라이트 고정 네이티브 창(원본 스크린샷) — 라벨·체크박스 배경을 창 배경과 일치.
@@ -1879,6 +2084,9 @@ unsafe extern "system" fn prefs_proc(
                 // 트리 높이 추종(전면 개편 07-15)
                 let ty = PAD + SEARCH_H + 10;
                 let _ = MoveWindow((*st).tree, PAD, ty, CAT_W - 8, (h - ty - PAD).max(40), true);
+                // 본문 컨테이너 = 구분선 우측 전체(09-04)
+                let px = (*st).pane_left();
+                let _ = MoveWindow((*st).pane, px, 0, (w - px).max(0), h, true);
                 (*st).harvest(); // 재구성 전 편집 값 보존
                 (*st).rebuild();
             }
@@ -1908,9 +2116,173 @@ unsafe extern "system" fn prefs_proc(
     }
 }
 
+/// 본문 컨테이너 wndproc(09-04): 스크롤(바·휠)만 직접 처리하고, 자식 컨트롤의
+/// 통지(WM_COMMAND·색·오너드로)는 메인 창으로 그대로 넘긴다 — 기존 핸들러 무변경.
+unsafe extern "system" fn pane_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let st = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut PrefState;
+    if st.is_null() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+    let s = &mut *st;
+    let (mx, my) = (
+        (lparam.0 & 0xFFFF) as i16 as i32,
+        ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+    );
+    match msg {
+        // 배경 소거는 WM_PAINT가 담당(더블버퍼) — 기본 소거를 막아 썸 블링크 제거
+        // (QA 09-04: 트랙패드 미세 스크롤마다 흰색 소거 → 썸 재도장이 보였다).
+        WM_ERASEBKGND => LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let rc = ps.rcPaint;
+            let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
+            if w > 0 && h > 0 {
+                // rcPaint 크기 메모리 DC에 배경+썸을 그린 뒤 한 번에 BitBlt(무깜박임)
+                let mdc = CreateCompatibleDC(Some(hdc));
+                let bmp = CreateCompatibleBitmap(hdc, w, h);
+                let old = SelectObject(mdc, bmp.into());
+                let local = RECT {
+                    left: 0,
+                    top: 0,
+                    right: w,
+                    bottom: h,
+                };
+                FillRect(mdc, &local, GetSysColorBrush(COLOR_WINDOW));
+                s.paint_bar(mdc, rc.left, rc.top);
+                let _ = BitBlt(hdc, rc.left, rc.top, w, h, Some(mdc), 0, 0, SRCCOPY);
+                SelectObject(mdc, old);
+                let _ = DeleteObject(bmp.into());
+                let _ = DeleteDC(mdc);
+            }
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            s.wheel((wparam.0 >> 16) as i16 as i32);
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            if let Some((sy, s0)) = s.bar_drag {
+                // 썸 드래그 = 트랙 비례 이동
+                let (_, view) = s.pane_client();
+                if let Some(t) = s.thumb_rect(true) {
+                    let denom = (view - (t.bottom - t.top)).max(1) as i64;
+                    let max_s = (s.content_h - view).max(0) as i64;
+                    let ny = s0 as i64 + (my - sy) as i64 * max_s / denom;
+                    s.scroll_to(ny.clamp(0, i32::MAX as i64) as i32);
+                }
+            } else {
+                if !s.bar_track {
+                    let mut tme = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    if TrackMouseEvent(&mut tme).is_ok() {
+                        s.bar_track = true;
+                    }
+                }
+                // 호버 판정은 두꺼운 rect 기준(숨김 중에도 그 자리에 올리면 드러남)
+                let over = s.thumb_rect(true).is_some_and(|t| {
+                    mx >= t.left - 2 && mx < t.right + 2 && my >= t.top && my < t.bottom
+                });
+                if over != s.bar_hover {
+                    s.bar_hover = over;
+                    if over {
+                        let _ = KillTimer(Some(hwnd), TIMER_FADE);
+                        s.invalidate_bar();
+                    } else {
+                        s.flash_bar(); // 이탈 = 유지 → 페이드 재개
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            s.bar_track = false;
+            if s.bar_hover {
+                s.bar_hover = false;
+                s.flash_bar();
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            if let Some(t) = s.thumb_rect(true) {
+                let visible = s.bar_alpha > 0 || s.bar_hot();
+                if visible && mx >= t.left - 2 && mx < t.right + 2 && my >= t.top && my < t.bottom {
+                    s.bar_drag = Some((my, s.scroll_y));
+                    let _ = SetCapture(hwnd);
+                    let _ = KillTimer(Some(hwnd), TIMER_FADE);
+                    s.invalidate_bar();
+                } else if visible && mx >= t.left - 2 {
+                    // 트랙 클릭 = 페이지 이동
+                    let (_, view) = s.pane_client();
+                    let page = (view - ROW_H).max(ROW_H);
+                    let ny = if my < t.top {
+                        s.scroll_y - page
+                    } else {
+                        s.scroll_y + page
+                    };
+                    s.scroll_to(ny);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if s.bar_drag.take().is_some() {
+                let _ = ReleaseCapture();
+                s.flash_bar();
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            match wparam.0 {
+                TIMER_HOLD => {
+                    let _ = KillTimer(Some(hwnd), TIMER_HOLD);
+                    if !s.bar_hot() {
+                        let _ = SetTimer(Some(hwnd), TIMER_FADE, FADE_MS, None);
+                    }
+                }
+                TIMER_FADE => {
+                    if s.bar_hot() {
+                        let _ = KillTimer(Some(hwnd), TIMER_FADE);
+                    } else {
+                        s.bar_alpha = s.bar_alpha.saturating_sub(FADE_STEP);
+                        if s.bar_alpha == 0 {
+                            let _ = KillTimer(Some(hwnd), TIMER_FADE);
+                        }
+                        s.invalidate_bar();
+                    }
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_COMMAND | WM_DRAWITEM | WM_MEASUREITEM | WM_NOTIFY | WM_CTLCOLORSTATIC
+        | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+            SendMessageW(s.hwnd, msg, Some(wparam), Some(lparam))
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
 /// 설정 창 스타일 — 리사이즈 가능(VS Code식 — X-8). 기본 크기가 최소 크기.
-const PREFS_STYLE: WINDOW_STYLE =
-    WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0);
+/// WS_CLIPCHILDREN: 배경 소거가 자식 위를 덮지 않게(카테고리 전환 깜박임 완화, 09-04).
+const PREFS_STYLE: WINDOW_STYLE = WINDOW_STYLE(
+    WS_POPUP.0
+        | WS_CAPTION.0
+        | WS_SYSMENU.0
+        | WS_THICKFRAME.0
+        | WS_MAXIMIZEBOX.0
+        | WS_CLIPCHILDREN.0,
+);
 
 /// 섹션 제목용 글꼴(X-9) — 대화상자 글꼴 +5pt·세미볼드.
 /// 디스클로저 글리프 폰트(Segoe MDL2 Assets 9px — 파일 목록 mdl2_small과
@@ -1971,6 +2343,15 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
             ..Default::default()
         };
         let _ = RegisterClassW(&wc);
+        let pc = WNDCLASSW {
+            lpszClassName: PANE_CLASS,
+            lpfnWndProc: Some(pane_proc),
+            hInstance: wc.hInstance,
+            hbrBackground: wc.hbrBackground,
+            hCursor: wc.hCursor,
+            ..Default::default()
+        };
+        let _ = RegisterClassW(&pc);
     });
     let font = crate::dialog::make_font_pub(owner, font_spec);
     let mut win = RECT {
@@ -2025,8 +2406,14 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         divider: HWND::default(),
         cw: CLIENT_W,
         ch: CLIENT_H,
+        pane: HWND::default(),
+        bar_alpha: 0,
+        bar_hover: false,
+        bar_drag: None,
+        bar_track: false,
         scroll_y: 0,
         content_h: 0,
+        wheel_rem: 0,
         rows: Vec::new(),
         editors: Vec::new(),
         radios: Vec::new(),
@@ -2081,7 +2468,32 @@ pub unsafe fn show(owner: HWND, values: PrefValues, font_spec: &DlgFont) -> Opti
         CLIENT_H - PAD * 2,
         0,
     );
+    // 본문 스크롤 컨테이너(09-04) — 구분선 우측 전체. WS_EX_CONTROLPARENT: 자식이
+    // 대화상자 탭 순회의 일부로 취급되게. 스크롤바는 오버레이(자체 WM_PAINT).
+    {
+        let px = state.pane_left();
+        state.pane = CreateWindowExW(
+            WS_EX_CONTROLPARENT,
+            PANE_CLASS,
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+            px,
+            0,
+            CLIENT_W - px,
+            CLIENT_H,
+            Some(dlg),
+            None,
+            None,
+            None,
+        )
+        .unwrap_or_default();
+    }
     SetWindowLongPtrW(dlg, GWLP_USERDATA, &mut *state as *mut PrefState as isize);
+    SetWindowLongPtrW(
+        state.pane,
+        GWLP_USERDATA,
+        &mut *state as *mut PrefState as isize,
+    );
     state.repopulate_tree();
     state.rebuild();
 

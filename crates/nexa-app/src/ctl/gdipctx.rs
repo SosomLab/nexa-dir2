@@ -472,6 +472,35 @@ impl GdipCtx {
         b
     }
 
+    /// 알파 라운드 사각 채움(오버레이 스크롤바 — 09-04 설정 창): `alpha` 0=투명 …
+    /// 255=불투명. 배후와 GDI+ 소스오버 블렌드.
+    pub(crate) fn fill_round_rect_alpha(
+        &mut self,
+        rect: Rect,
+        radius: i32,
+        color: Color,
+        alpha: u8,
+    ) {
+        if self.g.is_null() {
+            return;
+        }
+        unsafe {
+            let argb = (c_argb(color) & 0x00FF_FFFF) | ((alpha as u32) << 24);
+            let mut b: *mut GpSolidFill = std::ptr::null_mut();
+            let _ = GdipCreateSolidFill(argb, &mut b);
+            let path = self.round_path(rect, radius, 0.0);
+            if !path.is_null() && !b.is_null() {
+                let _ = GdipFillPath(self.g, b as *mut GpBrush, path);
+            }
+            if !b.is_null() {
+                let _ = GdipDeleteBrush(b as *mut GpBrush);
+            }
+            if !path.is_null() {
+                let _ = GdipDeletePath(path);
+            }
+        }
+    }
+
     unsafe fn pen(&self, color: Color, width: f32) -> *mut GpPen {
         let mut p: *mut GpPen = std::ptr::null_mut();
         let _ = GdipCreatePen1(c_argb(color), width, Unit(2 /* UnitPixel */), &mut p);
