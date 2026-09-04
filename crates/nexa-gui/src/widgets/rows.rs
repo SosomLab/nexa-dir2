@@ -17,6 +17,16 @@ const HSCROLL_PX: i32 = 16;
 /// 리사이즈 핸들 판정 폭 — 컬럼 오른쪽 경계 기준 [right-6, right+2).
 const RESIZE_ZONE_L: i32 = 6;
 const RESIZE_ZONE_R: i32 = 2;
+/// 오버레이 스크롤바(09-04 — 설정 창 방식을 파일 목록에 확산, X-47): 평소 숨김 →
+/// 스크롤 순간 반투명 → 유지 → 단계 페이드. 썸 호버/드래그 = 두꺼운 바·페이드 보류.
+/// 호스트 틱 = 40ms(`Invalidations::request_tick`) — 유지 22틱 ≈ 900ms(그리드 07-18 규약).
+const BAR_THIN: i32 = 6;
+const BAR_WIDE: i32 = 10;
+const THUMB_MIN: i32 = 24;
+const BAR_ALPHA: u8 = 120;
+const BAR_ALPHA_HOT: u8 = 210;
+const BAR_HOLD_TICKS: u8 = 22;
+const BAR_FADE_STEP: u8 = 24;
 
 /// 행 왼쪽의 펼침 상태 마커.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -244,6 +254,19 @@ pub struct VirtualRows<S> {
     mode: ViewMode,
     /// 폰트 장식(X-12): (폴더 이름 굵게, 헤더 굵게, 헤더 이탤릭).
     font_decor: (bool, bool, bool),
+    /// 오버레이 스크롤바(09-04 X-47): 썸 알파(0=숨김)·유지 틱 잔량·호버·드래그
+    /// (시작 y, 시작 scroll_row).
+    bar_alpha: u8,
+    bar_hold: u8,
+    bar_hover: bool,
+    bar_drag: Option<BarDrag>,
+}
+
+/// 오버레이 썸 드래그(09-04): 세로 = (시작 y, 시작 scroll_row) · 가로 = (시작 x, 시작 scroll_x).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BarDrag {
+    V(i32, usize),
+    H(i32, i32),
 }
 
 impl<S: RowSource> VirtualRows<S> {
@@ -276,6 +299,10 @@ impl<S: RowSource> VirtualRows<S> {
             focused: true,
             mode: ViewMode::default(),
             font_decor: (false, false, false),
+            bar_alpha: 0,
+            bar_hold: 0,
+            bar_hover: false,
+            bar_drag: None,
         }
     }
 
@@ -570,10 +597,215 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
-    /// 주기 점검(WM_TIMER) — 타입어헤드 타임아웃 소거.
+    /// 주기 점검(WM_TIMER) — 타입어헤드 타임아웃 소거 + 오버레이 바 유지/페이드(09-04).
     pub fn tick(&mut self, now_ms: u64, inv: &mut Invalidations) {
         if self.typeahead.tick(now_ms) {
             inv.push(self.bounds);
+        }
+        if self.bar_hot() {
+            return; // 호버/드래그 중엔 페이드 보류(이탈 시 flash_bar가 재개)
+        }
+        if self.bar_hold > 0 {
+            self.bar_hold -= 1;
+            inv.request_tick();
+        } else if self.bar_alpha > 0 {
+            self.bar_alpha = self.bar_alpha.saturating_sub(BAR_FADE_STEP);
+            self.push_bar_strips(inv);
+            if self.bar_alpha > 0 {
+                inv.request_tick();
+            }
+        }
+    }
+
+    // ── 오버레이 스크롤바(09-04 X-47 — 설정 창 컨테이너와 같은 규약, 세로+가로) ──
+
+    /// 세로 썸 rect — 콘텐츠가 뷰포트에 들어가면 None. `wide` = 호버/드래그.
+    fn thumb_rect(&self, wide: bool) -> Option<Rect> {
+        let body_h = self.body_h();
+        let gh = self.grid_h().max(1);
+        let total = self.grid_len();
+        let full = (body_h / gh).max(0) as usize;
+        if body_h <= 0 || total <= full || full == 0 {
+            return None;
+        }
+        let th = ((body_h as i64 * full as i64 / total as i64) as i32)
+            .max(THUMB_MIN)
+            .min(body_h);
+        let max_s = self.max_scroll().max(1) as i64;
+        let ty = self.body_top() + ((body_h - th) as i64 * self.scroll_row as i64 / max_s) as i32;
+        let w = if wide { BAR_WIDE } else { BAR_THIN };
+        Some(Rect::new(self.bounds.right() - w - 2, ty, w, th))
+    }
+
+    /// 가로 썸 rect(본문 하단) — 컬럼 총폭이 위젯 폭 이하면 None.
+    fn hthumb_rect(&self, wide: bool) -> Option<Rect> {
+        let b = self.bounds;
+        let total = self.total_w();
+        if b.w <= 0 || total <= b.w {
+            return None;
+        }
+        let tw = ((b.w as i64 * b.w as i64 / total as i64) as i32)
+            .max(THUMB_MIN)
+            .min(b.w);
+        let max_x = (total - b.w).max(1) as i64;
+        let tx = b.x + ((b.w - tw) as i64 * self.scroll_x as i64 / max_x) as i32;
+        let h = if wide { BAR_WIDE } else { BAR_THIN };
+        Some(Rect::new(tx, b.bottom() - h - 2, tw, h))
+    }
+
+    /// 바 트랙 스트립 2종(우측 세로·하단 가로) 무효화.
+    fn push_bar_strips(&self, inv: &mut Invalidations) {
+        let b = self.bounds;
+        inv.push(Rect::new(
+            b.right() - BAR_WIDE - 4,
+            self.body_top(),
+            BAR_WIDE + 4,
+            self.body_h(),
+        ));
+        inv.push(Rect::new(b.x, b.bottom() - BAR_WIDE - 4, b.w, BAR_WIDE + 4));
+    }
+
+    fn bar_hot(&self) -> bool {
+        self.bar_hover || self.bar_drag.is_some()
+    }
+
+    /// 스크롤 직후 바 표시(반투명) + 유지 → 페이드(호스트 틱 요청).
+    fn flash_bar(&mut self, inv: &mut Invalidations) {
+        self.bar_alpha = BAR_ALPHA;
+        self.bar_hold = BAR_HOLD_TICKS;
+        self.push_bar_strips(inv);
+        inv.request_tick();
+    }
+
+    fn in_thumb(&self, x: i32, y: i32) -> bool {
+        self.thumb_rect(true)
+            .is_some_and(|t| x >= t.x - 2 && x < t.right() + 2 && y >= t.y && y < t.bottom())
+    }
+
+    fn in_hthumb(&self, x: i32, y: i32) -> bool {
+        self.hthumb_rect(true)
+            .is_some_and(|t| x >= t.x && x < t.right() && y >= t.y - 2 && y < t.bottom() + 2)
+    }
+
+    /// MouseMove — 드래그 중이면 비례 스크롤(true = 소비), 아니면 호버 갱신(false).
+    fn bar_mouse_move(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
+        match self.bar_drag {
+            Some(BarDrag::V(sy, s0)) => {
+                if let Some(t) = self.thumb_rect(true) {
+                    let denom = (self.body_h() - t.h).max(1) as i64;
+                    let max_s = self.max_scroll() as i64;
+                    let ny = s0 as i64 + (y - sy) as i64 * max_s / denom;
+                    self.scroll_to(ny.max(0) as isize, inv);
+                }
+                return true;
+            }
+            Some(BarDrag::H(sx, x0)) => {
+                if let Some(t) = self.hthumb_rect(true) {
+                    let denom = (self.bounds.w - t.w).max(1) as i64;
+                    let max_x = (self.total_w() - self.bounds.w).max(0) as i64;
+                    let nx = (x0 as i64 + (x - sx) as i64 * max_x / denom) as i32;
+                    self.hscroll_to(nx, inv);
+                }
+                return true;
+            }
+            None => {}
+        }
+        let over = self.in_thumb(x, y) || self.in_hthumb(x, y);
+        if over != self.bar_hover {
+            self.bar_hover = over;
+            if over {
+                self.push_bar_strips(inv);
+            } else {
+                self.flash_bar(inv); // 이탈 = 유지 → 페이드 재개
+            }
+        }
+        false
+    }
+
+    /// 가로 오프셋 설정(클램프) + 바 표시.
+    fn hscroll_to(&mut self, x: i32, inv: &mut Invalidations) {
+        let old = self.scroll_x;
+        self.scroll_x = x;
+        self.clamp_scroll_x();
+        if self.scroll_x != old {
+            inv.push(self.bounds);
+            self.flash_bar(inv);
+        }
+    }
+
+    /// MouseDown — 썸 = 드래그 시작, 트랙 = 페이지 이동(둘 다 바 표시 중일 때만). true = 소비.
+    fn bar_mouse_down(&mut self, x: i32, y: i32, inv: &mut Invalidations) -> bool {
+        let visible = self.bar_alpha > 0 || self.bar_hot();
+        if !visible || y < self.body_top() || y >= self.bounds.bottom() {
+            return false;
+        }
+        if self.in_thumb(x, y) {
+            self.bar_drag = Some(BarDrag::V(y, self.scroll_row));
+            self.push_bar_strips(inv);
+            return true;
+        }
+        if self.in_hthumb(x, y) {
+            self.bar_drag = Some(BarDrag::H(x, self.scroll_x));
+            self.push_bar_strips(inv);
+            return true;
+        }
+        if let Some(t) = self.thumb_rect(true) {
+            if x >= t.x - 2 {
+                let full = (self.body_h() / self.grid_h().max(1)).max(1) as isize;
+                let page = (full - 1).max(1);
+                let cur = self.scroll_row as isize;
+                self.scroll_to(if y < t.y { cur - page } else { cur + page }, inv);
+                return true;
+            }
+        }
+        if let Some(t) = self.hthumb_rect(true) {
+            if y >= t.y - 2 {
+                let page = self.bounds.w.max(1);
+                let cur = self.scroll_x;
+                self.hscroll_to(if x < t.x { cur - page } else { cur + page }, inv);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// MouseUp — 드래그 종료(true = 소비).
+    fn bar_mouse_up(&mut self, inv: &mut Invalidations) -> bool {
+        if self.bar_drag.take().is_some() {
+            self.flash_bar(inv);
+            return true;
+        }
+        false
+    }
+
+    /// 오버레이 썸 페인트(본문 위 마지막 — 알파 합성). 세로 + 가로.
+    fn paint_bar(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let hot = self.bar_hot();
+        if self.bar_alpha == 0 && !hot {
+            return;
+        }
+        let alpha = if hot { BAR_ALPHA_HOT } else { self.bar_alpha };
+        if let Some(t) = self.thumb_rect(hot) {
+            if matches!(self.bar_drag, Some(BarDrag::V(..))) {
+                ctx.fill_round_rect_alpha(
+                    Rect::new(t.x - 1, self.body_top(), t.w + 2, self.body_h()),
+                    0,
+                    theme.text,
+                    28,
+                );
+            }
+            ctx.fill_round_rect_alpha(t, t.w / 2, theme.text, alpha);
+        }
+        if let Some(t) = self.hthumb_rect(hot) {
+            if matches!(self.bar_drag, Some(BarDrag::H(..))) {
+                ctx.fill_round_rect_alpha(
+                    Rect::new(self.bounds.x, t.y - 1, self.bounds.w, t.h + 2),
+                    0,
+                    theme.text,
+                    28,
+                );
+            }
+            ctx.fill_round_rect_alpha(t, t.h / 2, theme.text, alpha);
         }
     }
 
@@ -700,6 +932,7 @@ impl<S: RowSource> VirtualRows<S> {
         if clamped != self.scroll_row {
             self.scroll_row = clamped;
             inv.push(self.bounds); // 전 행 이동 — 위젯 영역 전체 무효화
+            self.flash_bar(inv); // 오버레이 바 표시(09-04)
         }
     }
 
@@ -728,8 +961,12 @@ impl<S: RowSource> VirtualRows<S> {
         } else if !ctrl {
             self.src.select(target, SelectOp::Single);
         }
+        let before = self.scroll_row;
         self.scroll_into_view(target);
         inv.push(self.bounds);
+        if self.scroll_row != before {
+            self.flash_bar(inv); // 키보드 스크롤도 바 표시(09-04)
+        }
     }
 
     /// 가시 목록에서 `row`의 부모 행(더 얕은 깊이의 직전 행). 최상위면 `None`.
@@ -1009,8 +1246,7 @@ impl<S: RowSource> VirtualRows<S> {
             let name_rc = Rect::new(name_x, cell.y, cell.right() - name_x, cell.h);
             // 폴더 이름 굵게(X-12) — 폴더 행만(트리 보기 한정 = 현행 유지. X-43:
             // 빈 폴더는 marker가 억제되므로 is_dir로 판정)
-            let folder_bold =
-                self.font_decor.0 && item.is_dir && self.mode == ViewMode::Tree;
+            let folder_bold = self.font_decor.0 && item.is_dir && self.mode == ViewMode::Tree;
             if folder_bold {
                 ctx.select_font(crate::FontSlot::List, true, false);
             }
@@ -1323,6 +1559,21 @@ impl<S: RowSource> Widget for VirtualRows<S> {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 오버레이 스크롤바(09-04 X-47) — 썸 드래그/트랙 클릭/호버는 다른 처리보다 우선
+        match *ev {
+            InputEvent::MouseMove { x, y } => {
+                if self.bar_mouse_move(x, y, inv) {
+                    return;
+                }
+            }
+            InputEvent::MouseDown { x, y, .. } => {
+                if self.bar_mouse_down(x, y, inv) {
+                    return;
+                }
+            }
+            InputEvent::MouseUp { .. } if self.bar_mouse_up(inv) => return,
+            _ => {}
+        }
         // 인라인 이름변경 중: 문자는 버퍼로, 키 네비는 차단, 필드 안 클릭=캐럿 배치·
         // 밖 클릭=취소 후 정상 처리(M3-2·QA 07-13)
         if self.is_renaming() {
@@ -1372,12 +1623,8 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             InputEvent::HWheel { delta } => {
                 let lines = self.hwheel.add(delta, WHEEL_LINES);
                 if lines != 0 {
-                    let old = self.scroll_x;
-                    self.scroll_x += lines * HSCROLL_PX;
-                    self.clamp_scroll_x();
-                    if self.scroll_x != old {
-                        inv.push(self.bounds);
-                    }
+                    let x = self.scroll_x + lines * HSCROLL_PX;
+                    self.hscroll_to(x, inv); // 가로 오버레이 바 표시(09-04)
                 }
             }
             InputEvent::Key { key, shift, ctrl } => {
@@ -1697,6 +1944,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
         let b = self.bounds;
         if self.mode == ViewMode::Tiles {
             self.paint_tiles(ctx, theme);
+            self.paint_bar(ctx, theme);
             return;
         }
         let first = self.scroll_row;
@@ -1928,6 +2176,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             ctx.fill_rect(Rect::new(hud.x, hud.y, 1, hud.h), theme.accent);
             ctx.fill_rect(Rect::new(hud.right() - 1, hud.y, 1, hud.h), theme.accent);
         }
+        self.paint_bar(ctx, theme); // 오버레이 스크롤바(09-04) — 본문 위 마지막
     }
 }
 
@@ -2328,7 +2577,7 @@ mod tests {
         assert!(v.sort().is_empty(), "핸들 클릭은 정렬이 아님");
         v.on_event(&InputEvent::MouseMove { x: 257, y: 5 }, &mut inv);
         assert_eq!(v.columns()[0].width, 260); // +60
-        // 단독 조절(07-22): 이웃 불변·총폭 가변(초과분 = 가로 스크롤)
+                                               // 단독 조절(07-22): 이웃 불변·총폭 가변(초과분 = 가로 스크롤)
         assert_eq!(v.columns()[1].width, neighbor_w, "이웃 컬럼 너비 불변");
         let total: i32 = v.columns().iter().map(|c| c.width).sum();
         assert_eq!(total, total0 + 60, "총폭이 늘어난다");
@@ -2847,7 +3096,10 @@ mod tests {
         assert_eq!(v.scroll_row(), 1);
         assert!(v.drag_scroll_edge(5, &mut inv), "상단 엣지 = -1");
         assert_eq!(v.scroll_row(), 0);
-        assert!(!v.drag_scroll_edge(5, &mut inv), "최상단에서 위 = 클램프 무변");
+        assert!(
+            !v.drag_scroll_edge(5, &mut inv),
+            "최상단에서 위 = 클램프 무변"
+        );
         assert!(!v.drag_scroll_edge(150, &mut inv), "본문 밖 = 무동작");
     }
 
@@ -2898,7 +3150,10 @@ mod tests {
         assert!(!v.hover_expand(1, &mut inv), "파일 = 무동작");
         assert!(v.hover_expand(0, &mut inv), "접힌 폴더 = 펼침");
         assert!(!v.is_collapsed_dir(0), "펼침 후 = 후보 아님");
-        assert!(!v.hover_expand(0, &mut inv), "이미 펼침 = 무동작(접기 없음)");
+        assert!(
+            !v.hover_expand(0, &mut inv),
+            "이미 펼침 = 무동작(접기 없음)"
+        );
         // Flat 모드 = 펼침 개념 없음 — 접힌 폴더라도 후보 아님
         let mut f = VirtualRows::new(Dirs { expanded: false }, 20, 6, 16);
         f.set_bounds(Rect::new(0, 0, 300, 100), &mut inv);

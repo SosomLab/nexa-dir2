@@ -11,9 +11,27 @@ use crate::theme::Theme;
 #[derive(Default, Debug)]
 pub struct Invalidations {
     rects: Vec<Rect>,
+    /// 위젯이 **시간 기반 후속 처리**(오버레이 스크롤바 페이드 등)를 요청 — 호스트가
+    /// 짧은 타이머를 무장하고 `tick`을 다시 부른다(09-04). 위젯은 필요할 때마다 다시 요청.
+    tick: bool,
 }
 
 impl Invalidations {
+    /// 호스트에 틱 타이머 요청(다음 `tick` 호출까지 유지).
+    pub fn request_tick(&mut self) {
+        self.tick = true;
+    }
+
+    /// 틱 요청 여부(읽기).
+    pub fn tick_requested(&self) -> bool {
+        self.tick
+    }
+
+    /// 틱 요청을 꺼내며 초기화(호스트 flush용).
+    pub fn take_tick(&mut self) -> bool {
+        std::mem::take(&mut self.tick)
+    }
+
     pub fn push(&mut self, rect: Rect) {
         if rect.is_empty() {
             return;

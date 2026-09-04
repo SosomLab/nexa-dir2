@@ -98,6 +98,13 @@ pub trait DrawCtx {
         let _ = (rect, radius, color);
     }
 
+    /// 알파 라운드 사각 채움(오버레이 스크롤바 — 09-04): `alpha` 0=투명 … 255=불투명.
+    /// 기본 = 불투명 [`fill_round_rect`](DrawCtx::fill_round_rect)로 위임.
+    fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: u8) {
+        let _ = alpha;
+        self.fill_round_rect(rect, radius, color);
+    }
+
     /// 라운드 사각형 외곽선(폭 `width`px — 1.0/2.0 등) 안티앨리어스 스트로크.
     fn stroke_round_rect(&mut self, rect: Rect, radius: i32, color: Color, width: f32) {
         let _ = (rect, radius, color, width);

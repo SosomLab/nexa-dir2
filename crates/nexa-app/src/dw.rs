@@ -594,6 +594,19 @@ impl DrawCtx for DwCtx<'_> {
         self.back.cur_style.set(style_id(slot, bold, italic));
     }
 
+    fn fill_round_rect(&mut self, rect: Rect, radius: i32, color: Color) {
+        self.fill_round_rect_alpha(rect, radius, color, 255);
+    }
+
+    /// 알파 라운드 채움(파일 목록 오버레이 스크롤바 — 09-04): 메모리 DC 위 GDI+ 소스오버.
+    fn fill_round_rect_alpha(&mut self, rect: Rect, radius: i32, color: Color, alpha: u8) {
+        unsafe {
+            let dc = self.back.memory_dc();
+            let mut g = crate::ctl::gdipctx::GdipCtx::new(dc);
+            g.fill_round_rect_alpha(rect, radius, color, alpha);
+        }
+    }
+
     fn fill_rect(&mut self, rect: Rect, color: Color) {
         unsafe {
             let dc = self.back.memory_dc();

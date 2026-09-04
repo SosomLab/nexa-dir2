@@ -117,6 +117,10 @@ const WATCH_MAX_MS: u64 = 1_000;
 /// 비활성은 감속([`FSPOLL_IDLE_MS`] — O(1) stat 스윕 + 상한 열거라 비용 무시 수준),
 /// **최소화 시에만 정지**(안 보이면 갱신 무의미 — 유휴 백그라운드 0% 규율은 유지).
 const TIMER_FSPOLL: usize = 14;
+/// 위젯 틱 요청([`Invalidations::request_tick`] — 파일 목록 오버레이 스크롤바 페이드, 09-04).
+/// flush가 무장하고, 틱에서 더 이상 요청이 없으면 해제.
+const TIMER_WIDGET_TICK: usize = 15;
+const WIDGET_TICK_MS: u32 = 40;
 const FSPOLL_MS: u32 = 3_000;
 /// 비활성(보이는 창) 폴링 주기 — 활성 3s 대비 감속(성능 원칙과 비활성 갱신의 절충).
 /// **5차 개정(08-23)**: 셸 통지 구독이 즉시 계기를 맡으면서 스윕은 **보험으로 강등**
@@ -1620,6 +1624,9 @@ unsafe fn client_rect(hwnd: HWND) -> GRect {
 }
 
 unsafe fn flush_invalidations(hwnd: HWND, inv: &mut Invalidations) {
+    if inv.take_tick() {
+        SetTimer(Some(hwnd), TIMER_WIDGET_TICK, WIDGET_TICK_MS, None);
+    }
     for r in inv.drain() {
         let rc = RECT {
             left: r.x,
@@ -8095,6 +8102,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // X-44: 뷰포트 펼침 폴더 기준선(sub_probe)도 함께.
                         refresh_probe_baseline(st);
                     }
+                }
+                return LRESULT(0);
+            }
+            if wparam.0 == TIMER_WIDGET_TICK {
+                // 위젯 틱(오버레이 바 페이드) — 재요청 없으면 해제(flush가 재무장)
+                if let Some(st) = state_of(hwnd) {
+                    let mut inv = Invalidations::default();
+                    let now = now_ms();
+                    st.panels[0].rows_mut().tick(now, &mut inv);
+                    st.panels[1].rows_mut().tick(now, &mut inv);
+                    if !inv.tick_requested() {
+                        let _ = KillTimer(Some(hwnd), TIMER_WIDGET_TICK);
+                    }
+                    flush_invalidations(hwnd, &mut inv);
                 }
                 return LRESULT(0);
             }
