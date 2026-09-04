@@ -2286,19 +2286,6 @@ unsafe fn term_paint(
         }
         None => false,
     };
-    // 선택 하이라이트(사용자 QA 09-04 — 라이트에서 반전은 검은 블록): 글자색은 그대로 두고
-    // **배경에 accent를 반투명으로 얹는다**(WT·VS Code 규약). 팔레트 배경 휘도로 농도를 고른다 —
-    // 어두운 팔레트 42% · 밝은 팔레트 25%(라이트 sel_bg 토큰 20%보다 살짝 진하게 — 흰 셀 위 식별).
-    let pal_bg = pal.bg;
-    let pal_dark = (299 * ((pal_bg >> 16) & 0xFF) + 587 * ((pal_bg >> 8) & 0xFF) + 114 * (pal_bg & 0xFF))
-        / 1000
-        < 128;
-    let sel_alpha: u32 = if pal_dark { 42 } else { 25 };
-    let accent = theme.accent;
-    let sel_blend = |bg: u32| -> u32 {
-        let mix = |b: u32, a: u8| ((b & 0xFF) * (100 - sel_alpha) + a as u32 * sel_alpha) / 100;
-        0xFF00_0000 | (mix(bg >> 16, accent.r) << 16) | (mix(bg >> 8, accent.g) << 8) | mix(bg, accent.b)
-    };
     for r in 0..rows {
         let y = rc.y + 1 + r as i32 * cell_h;
         let row_h = cell_h.min(rc.bottom() - y);
@@ -2307,7 +2294,7 @@ unsafe fn term_paint(
         }
         let abs = top + r;
         let line = t.screen.line_at(abs);
-        // 유효 (fg,bg): reverse 스왑 → 선택이면 배경에 accent 블렌드(글자색 유지).
+        // 유효 (fg,bg): reverse 스왑 → 선택이면 다시 스왑(반전 하이라이트).
         let eff = |c: usize| -> (u32, u32, bool) {
             let cell = &line[c];
             let (mut fg, mut bg) = (pal.resolve(cell.fg), pal.resolve(cell.bg));
@@ -2315,7 +2302,7 @@ unsafe fn term_paint(
                 std::mem::swap(&mut fg, &mut bg);
             }
             if in_sel(abs, c) {
-                bg = sel_blend(bg);
+                std::mem::swap(&mut fg, &mut bg);
             }
             (fg, bg, cell.faint)
         };
