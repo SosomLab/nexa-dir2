@@ -2286,6 +2286,17 @@ unsafe fn term_paint(
         }
         None => false,
     };
+    // 선택 = 반전(사용자 확정 09-04 — 항목별 색이 블록으로 드러난다). 단 **밝은 팔레트**에서
+    // 기본색 글자(무색 텍스트)를 뒤집으면 근검정 블록이 되어 라이트에 어울리지 않는다(QA 4차)
+    // → 그 셀만 accent 블록 + 흰 글자(색 있는 셀은 그대로 제 색으로 반전). 다크 팔레트는 불변.
+    let pal_light = {
+        let b = pal.bg;
+        (299 * ((b >> 16) & 0xFF) + 587 * ((b >> 8) & 0xFF) + 114 * (b & 0xFF)) / 1000 >= 128
+    };
+    let accent = 0xFF00_0000
+        | ((theme.accent.r as u32) << 16)
+        | ((theme.accent.g as u32) << 8)
+        | theme.accent.b as u32;
     for r in 0..rows {
         let y = rc.y + 1 + r as i32 * cell_h;
         let row_h = cell_h.min(rc.bottom() - y);
@@ -2302,7 +2313,11 @@ unsafe fn term_paint(
                 std::mem::swap(&mut fg, &mut bg);
             }
             if in_sel(abs, c) {
-                std::mem::swap(&mut fg, &mut bg);
+                if pal_light && fg == pal.fg && bg == pal.bg {
+                    (fg, bg) = (pal.bg, accent);
+                } else {
+                    std::mem::swap(&mut fg, &mut bg);
+                }
             }
             (fg, bg, cell.faint)
         };
