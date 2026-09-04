@@ -2847,10 +2847,23 @@ unsafe fn drop_dest_at(hwnd: HWND, sx: i32, sy: i32) -> Option<PathBuf> {
 }
 
 /// 외부 드롭 확정(M3-5 S3, dnd.rs 훅) — 전송 엔진 합류(진행·취소·undo 기록·양쪽 재로드).
-unsafe fn handle_external_drop(hwnd: HWND, paths: Vec<PathBuf>, dest: PathBuf, op: nexa_ops::Op) {
-    if let Some(st) = state_of(hwnd) {
-        start_transfer(hwnd, st, paths, dest, op);
+/// 외부 드롭 훅 — **수락 여부를 돌려준다**(점검 1차 #2): 전송이 진행 중이면 시작하지 않고 false
+/// (dnd.rs가 확보한 파일을 원위치로 되돌린다) + 제목줄 안내. 종전은 start_transfer가 조용히 return.
+unsafe fn handle_external_drop(
+    hwnd: HWND,
+    paths: Vec<PathBuf>,
+    dest: PathBuf,
+    op: nexa_ops::Op,
+) -> bool {
+    let Some(st) = state_of(hwnd) else {
+        return false;
+    };
+    if st.transfer.is_some() {
+        update_title(hwnd, st, &tr("ops.busy"));
+        return false;
     }
+    start_transfer(hwnd, st, paths, dest, op);
+    true
 }
 
 /// 가상 파일 드롭 훅(X-42 β-ⓐ — Outlook 첨부·탐색기 zip 내부·MTP): CF_HDROP 부재
@@ -3894,7 +3907,11 @@ unsafe fn start_transfer(
     dest: PathBuf,
     op: nexa_ops::Op,
 ) {
-    if sources.is_empty() || st.transfer.is_some() {
+    if sources.is_empty() {
+        return;
+    }
+    if st.transfer.is_some() {
+        update_title(hwnd, st, &tr("ops.busy")); // 조용한 무시 금지(점검 1차 #2)
         return;
     }
     // 클라우드 → 로컬 = **다운로드**(X-37 3차). 대상이 클라우드면 업로드라 아직 차단.

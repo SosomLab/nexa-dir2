@@ -108,6 +108,7 @@ ops.progress = transferring {0}%
 ops.done = transferred {0}
 ops.skipped = {0} skipped
 ops.errors = {0} failed
+ops.busy = A transfer is in progress — try again when it finishes
 ops.canceled = canceled
 ops.overwriteTitle = Confirm Overwrite
 ops.overwrite = '{0}' already exists in the destination. Overwrite?\n(No = skip this item · Cancel = stop all)

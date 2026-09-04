@@ -108,6 +108,7 @@ ops.progress = 転送中 {0}%
 ops.done = 転送 {0}
 ops.skipped = スキップ {0}
 ops.errors = 失敗 {0}
+ops.busy = 転送中です — 完了後にもう一度お試しください
 ops.canceled = キャンセルされました
 ops.overwriteTitle = 上書きの確認
 ops.overwrite = '{0}' は宛先フォルダーに既に存在します。上書きしますか？\n(いいえ=この項目をスキップ · キャンセル=すべて中止)

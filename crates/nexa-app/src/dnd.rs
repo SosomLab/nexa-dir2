@@ -35,8 +35,9 @@ use crate::clipboard::paths_from_hdrop;
 pub struct DropHooks {
     /// 화면 좌표의 드롭 대상 폴더(폴더 행=그 폴더·그 외=해당 패널 루트·창 밖/부적합=None).
     pub dest_at: unsafe fn(HWND, i32, i32) -> Option<PathBuf>,
-    /// 드롭 확정 — 전송 엔진 시작(undo 기록 포함).
-    pub drop: unsafe fn(HWND, Vec<PathBuf>, PathBuf, nexa_ops::Op),
+    /// 드롭 확정 — 전송 엔진 시작(undo 기록 포함). **false = 수락 불가**(전송 중 등 — 점검 1차 #2):
+    /// 호출자는 확보(steal)한 파일을 원위치로 되돌린다(종전은 조용히 폐기 → 스테이징 고립).
+    pub drop: unsafe fn(HWND, Vec<PathBuf>, PathBuf, nexa_ops::Op) -> bool,
     /// 드래그 위치 추적(X-32) — DragEnter/DragOver 화면 좌표(엣지 자동 스크롤·탭/폴더
     /// 호버 대기 판정. 호스트가 폴링 타이머를 무장해 정지 커서도 계속 판정).
     pub track: unsafe fn(HWND, i32, i32),
@@ -78,9 +79,10 @@ fn same_path_set(a: &[PathBuf], b: &[PathBuf]) -> bool {
 /// 우리 `Drop`이 반환해야 삭제를 시작할 수 있으므로, **반환 전에 같은 볼륨 rename**으로
 /// 항목을 우리 스테이징(`%TEMP%\NexaDir\dnd-…`)에 옮겨 두면 크기 무관 즉시·무경쟁이다.
 /// rename 실패 항목(잠금·소스가 다른 볼륨의 작업 폴더를 쓰는 구성)은 원경로 유지
-/// (그 항목만 기존 경쟁으로 강등). 반환: (확보 후 경로들, 1개 이상 확보했는가 —
-/// 확보분은 우리 소유 사본이라 호출자가 전송을 Move로 강제해 스테이징을 자연 소거).
-fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, bool) {
+/// (그 항목만 기존 경쟁으로 강등). 반환: (확보 후 경로들, 확보 항목의 (스테이징, 원경로) 목록 —
+/// 비어 있지 않으면 확보분은 우리 소유 사본이라 호출자가 전송을 Move로 강제해 스테이징을 자연 소거.
+/// 드롭이 거부되면 [`restore_volatile`]로 원위치).
+fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<(PathBuf, PathBuf)>) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let base = std::env::temp_dir().join("NexaDir").join(format!(
@@ -88,7 +90,7 @@ fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, bool) {
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut stolen = false;
+    let mut stolen: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut out = Vec::with_capacity(paths.len());
     for (i, p) in paths.into_iter().enumerate() {
         let Some(name) = p.file_name() else {
@@ -99,7 +101,7 @@ fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, bool) {
         if std::fs::create_dir_all(&slot).is_ok() {
             let staged = slot.join(name);
             if std::fs::rename(&p, &staged).is_ok() {
-                stolen = true;
+                stolen.push((staged.clone(), p));
                 out.push(staged);
                 continue;
             }
@@ -108,6 +110,21 @@ fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, bool) {
         out.push(p);
     }
     (out, stolen)
+}
+
+/// 확보(steal)한 항목을 원위치로 되돌린다 — 드롭이 거부됐을 때(점검 1차 #2). 실패 항목은
+/// 스테이징에 남는다(소스 임시 폴더는 이미 사라졌을 수 있어 삭제하지 않는다).
+fn restore_volatile(stolen: &[(PathBuf, PathBuf)]) {
+    for (staged, orig) in stolen {
+        if std::fs::rename(staged, orig).is_ok() {
+            if let Some(slot) = staged.parent() {
+                let _ = std::fs::remove_dir(slot);
+                if let Some(base) = slot.parent() {
+                    let _ = std::fs::remove_dir(base);
+                }
+            }
+        }
+    }
 }
 
 /// 데이터 객체에서 CF_HDROP 경로 목록 추출(GetData 1회 — 실패/미지원 = 빈 Vec).
@@ -424,15 +441,20 @@ impl IDropTarget_Impl for DropTarget_Impl {
         let mut op = op;
         if let Some(dest) = dest {
             if !paths.is_empty() {
+                let mut stolen = Vec::new();
                 if delayed {
                     // Drop 반환 전 확보 — 소스 삭제와의 경쟁 원천 차단(위 ② 참조)
-                    let (secured, any) = steal_volatile(paths);
+                    let (secured, taken) = steal_volatile(paths);
                     paths = secured;
-                    if any {
+                    if !taken.is_empty() {
                         op = nexa_ops::Op::Move; // 확보분은 우리 사본 — 이동으로 스테이징 자연 소거
                     }
+                    stolen = taken;
                 }
-                unsafe { (self.hooks.drop)(self.hwnd, paths, dest, op) };
+                let accepted = unsafe { (self.hooks.drop)(self.hwnd, paths, dest, op) };
+                if !accepted && !stolen.is_empty() {
+                    restore_volatile(&stolen); // 거부 = 원위치(조용한 폐기 금지 — 점검 1차 #2)
+                }
             } else if is_virtual {
                 // 가상 파일(X-42 β-ⓐ — Outlook 첨부·zip 내부·MTP): **반환 전** 동기
                 // 추출(소스가 DoDragDrop 종료 후 스트림을 무효화할 수 있다).
@@ -491,7 +513,7 @@ mod tests {
         std::fs::write(src.join("folder").join("in.txt"), b"in").unwrap();
 
         let (out, stolen) = steal_volatile(vec![src.join("a.txt"), src.join("folder")]);
-        assert!(stolen, "1개 이상 확보");
+        assert_eq!(stolen.len(), 2, "2개 확보(스테이징, 원경로)");
         assert_eq!(out.len(), 2);
         assert!(out[0].ends_with("a.txt") && out[0] != src.join("a.txt"), "스테이징 경로로 교체");
         assert!(out[0].is_file() && !src.join("a.txt").exists(), "원위치에서 이동됨");
@@ -500,11 +522,10 @@ mod tests {
             "폴더는 내용째 rename(하위 파일 보존)"
         );
 
-        // 정리 — 스테이징·원본 흔적 제거
-        for p in &out {
-            let _ = std::fs::remove_file(p);
-            let _ = std::fs::remove_dir_all(p);
-        }
+        // 드롭 거부 시 원위치 복귀(점검 1차 #2) — 파일·폴더 모두 원경로로, 스테이징 폴더 정리
+        restore_volatile(&stolen);
+        assert!(src.join("a.txt").is_file() && src.join("folder").join("in.txt").is_file(), "원위치 복귀");
+        assert!(!out[0].exists() && !out[1].exists(), "스테이징 비움");
         let _ = std::fs::remove_dir_all(&src);
     }
 }
