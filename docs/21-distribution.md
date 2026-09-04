@@ -325,15 +325,15 @@ dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·pus
   — **채널 제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출. `winget validate`
   경고 2건[PortableCommandAlias 미지 필드·portable Scope]은 0.16.0 병합본과 동일 구조).
 
-### 채널 상태 요약 (2026-09-02 재점검 — 원천 실측: `gh pr list`/카탈로그 디렉터리·choco OData)
+### 채널 상태 요약 (2026-09-04 `0.19.0` 릴리스 시점 — 원천 실측: `gh pr list`/카탈로그 디렉터리·choco OData)
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.18.1** | ✅ [#423330](https://github.com/microsoft/winget-pkgs/pull/423330) **MERGED**(08-24 — 제출 ~1시간). 대기 PR 0건 | 없음(최신과 동기) |
-| winget | `SosomLab.NexaDir`(설치형) | **0.18.1** | ✅ [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) **MERGED**(08-24). 대기 PR 0건 | 없음(최신과 동기) |
-| Chocolatey | `nexa-dir`(설치형) | **0.8.1** | ✅ **승인**(09-02 실측 `Approved` — 07-20 플래그 후 44일) + ⏳ **`0.18.1` 검수 중**(`Submitted` — 09-02 제출) | 없음(상태 추적) |
-| Chocolatey | `nexa-dir.portable` | **0.8.1** | ✅ 동일 승인 + ⏳ `0.18.1` `Submitted` | 없음(상태 추적) |
-| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.18.1** (08-24) | ✅ 상시(**자산 6종** · 설치형 FileVersion 채워짐·SHA 6종 일치) | — |
+| winget | `SosomLab.NexaDir.Portable` | **0.18.1** | ⏳ **`0.19.0` [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) OPEN**(09-04 제출 — 로컬 `winget validate` 경고 2건 = 구식 스키마) · 직전 [#423330](https://github.com/microsoft/winget-pkgs/pull/423330) MERGED | 병합 추적 |
+| winget | `SosomLab.NexaDir`(설치형) | **0.18.1** | ⏳ **`0.19.0` [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) OPEN**(09-04 제출 — 로컬 `winget validate` 통과) · 직전 [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) MERGED | 병합 추적 |
+| Chocolatey | `nexa-dir`(설치형) | **0.8.1** | ✅ 승인 + ⏳ **`0.18.1` `Submitted`**(09-04 재확인 — 자동 검증 Passing·모더레이션 대기) → **`0.19.0`은 규칙상 제외**(`CHOCO_PUSH=false`) | 승인 확인 시 `true` 복원·최신만 제출 |
+| Chocolatey | `nexa-dir.portable` | **0.8.1** | ✅ 동일 승인 + ⏳ `0.18.1` `Submitted` → `0.19.0` 제외 | 동일 |
+| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.19.0** (09-04) | ✅ 상시(**자산 6종** · SHA256SUMS = GitHub digest 일치) | — |
 
 > **09-02 재점검(choco 승인·재개)**: choco 2종이 `Approved`로 풀려 **`CHOCO_PUSH=true` 등록**
 > → 밀린 중간 버전 생략, **`0.18.1`만 제출**(§7 "결말" 참조 — `resubmit-chocolatey` dispatch,

@@ -76,7 +76,7 @@
 - ✅ M5-2 릴리스 파이프라인(`feat/m5-release-pipeline`, 07-15) — `.github/workflows/release.yml` 신설: 버전 태그 push(`0.5.0` 형식·`v` 접두사 허용) → windows-latest `cargo test`+release 빌드 → **예산 게이트(B2 exe ≤10MB·B3 임포트 화이트리스트 — CI와 동일 스크립트 `scripts/budget-b3.ps1`)** 통과 필수 → `NexaDir-<버전>-win-x64.exe`(포터블 단일 exe — DR-3) 개명 → **GitHub Release 자동 생성·첨부**(자동 노트). `workflow_dispatch` 수동 실행=게이트+아티팩트까지(Release는 태그에서만). 릴리스 절차 SSOT = [18](18-build-and-test.md) §5(`git tag X.Y.Z && git push origin X.Y.Z`).
 - ✅ M5-3 접근성·IME 마감·서명 결정(`feat/m5-a11y`, 07-15) — **UIA SelectionItem 실동작**(Select/Add/Remove → WM_APP_UIA_SELECT UI 스레드 전달·select_program 범위 방어)·**구조 변경 이벤트**(uia_notify (패널·경로·행 수) 서명 → ChildrenInvalidated — M2-7 1차 한계 2건 해소)·**리네임 인라인 IME 조합 창 배치**(rename_edit_info — M3-2 α 해소)·**서명 = 무서명 유지 확정**(DR-3 갱신 — 원본 PKG-4 공동 보류[Store $19 vs OV 연 $100~400 비용 결정 대기]·SmartScreen 감수·인증서 확보 시 release.yml 서명 단계 추가).
 
-## 포스트 M5 — UX 고도화·배포 채널 정착 (`0.7.0`~`0.18.1`)
+## 포스트 M5 — UX 고도화·배포 채널 정착 (`0.7.0`~`0.19.0`)
 
 > M5 마감 이후는 **사용자 QA가 다음 작업을 정하는** 구간이다(마일스톤 단위가 아니라 릴리스 단위).
 > 시간순 서사 = [DEVLOG](DEVLOG.md)·[journal/](journal/), 사용자용 = 위키 [개발 여정](wiki/개발-여정.md).
@@ -101,9 +101,10 @@
   (플러그인이 한 번도 배포된 적 없었다는 실측 → 자산 6종) · `0.18.1` = 설치형 VERSIONINFO 보강으로
   **Defender ML 오탐 해소**.
 - 🚧 **실기 QA 대기** — X-40 클라우드 실검증 · X-42~X-46 배포분([TODO](TODO.md) §7).
-- 🚧 **미배포(09-04)** — **설정 창 본문 스크롤 재구축**(컨테이너 분리·트랙패드 픽셀·오버레이 바·썸 블링크) ·
+- ✅ **`0.19.0`**(09-04) — **설정 창 본문 스크롤 재구축**(컨테이너 분리·트랙패드 픽셀·오버레이 바·썸 블링크) ·
   **글꼴 폴백 체인 실적용**(두부 방지 — DW 슬롯·대화상자·미리보기 글리프 런, X-48) · **메인 파일 목록
-  오버레이 스크롤바**(세로+가로·축별 독립, X-47 1/2) · 트리 하이라이트 픽스. 실기 QA 뒤 다음 릴리스.
+  오버레이 스크롤바**(세로+가로·축별 독립, X-47 1/2) · 트리 하이라이트 픽스. B2 **3.85MB**. winget 2건
+  제출·choco 제외(`0.18.1` 검수 중).
 - ✅ **배포 채널**(09-02) — Chocolatey 2종 승인으로 **3채널(Release·winget·choco) 전부 개통**.
   제출은 [채널 제출 규칙](21-distribution.md#릴리스-시-채널-제출-규칙-2026-08-23--사용자-지시상시-규칙)에 따른다.
 
