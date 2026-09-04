@@ -10,10 +10,9 @@
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, DeleteObject, EndPaint, ExtTextOutW, GetDC, GetTextExtentPoint32W,
-    InvalidateRect, ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetTextColor,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_QUALITY, ETO_CLIPPED, ETO_OPAQUE, FF_DONTCARE,
-    FIXED_PITCH, FW_NORMAL, HBRUSH, HDC, HFONT, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+    BeginPaint, EndPaint, ExtTextOutW, GetDC, GetTextExtentPoint32W, InvalidateRect, ReleaseDC,
+    ScreenToClient, SelectObject, SetBkColor, SetTextColor, ETO_CLIPPED, ETO_OPAQUE, FF_DONTCARE,
+    FIXED_PITCH, FW_NORMAL, HBRUSH, HFONT, PAINTSTRUCT,
 };
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -26,8 +25,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, TranslateMessage,
     GWLP_USERDATA, IDC_IBEAM, MSG, SB_HORZ, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
     WINDOW_EX_STYLE, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_HSCROLL, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_TIMER, WM_VSCROLL,
-    WNDCLASSW, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSW,
+    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
 };
 
 const CLASS: PCWSTR = w!("NexaPreviewWnd");
@@ -57,11 +56,12 @@ fn parse_kind(l: &str) -> (u8, &str) {
 }
 
 struct PvState {
-    /// 콘솔(모노) 폰트 — 코드·표·다이어그램 아트.
-    font: HFONT,
-    /// 본문 프로포셔널(Segoe UI)·굵게(제목) — GitHub 근사(07-26).
-    body: HFONT,
-    body_bold: HFONT,
+    /// 콘솔(모노) 글꼴 체인 — 코드·표·다이어그램 아트. 1순위 + 폴백(09-04 fontchain —
+    /// 1순위에 없는 글리프는 체인의 다음 글꼴 런으로).
+    font: crate::fontchain::GdiChain,
+    /// 본문 프로포셔널(Segoe UI)·굵게(제목) — GitHub 근사(07-26). 폴백은 모노 체인의 나머지.
+    body: crate::fontchain::GdiChain,
+    body_bold: crate::fontchain::GdiChain,
     /// 라인 종류(parse_kind — text와 병렬).
     kinds: Vec<u8>,
     /// 라인 원문(선택/복사) — 탭 4칸 치환 후.
@@ -151,87 +151,61 @@ unsafe fn ensure_class() {
     });
 }
 
-/// 콘솔 폰트 생성 — 설정 `term_font` 1순위 패밀리 + 크기(DPI 반영·FIXED_PITCH 힌트).
-unsafe fn make_mono(hwnd: HWND, family: &str, size_pt: i32) -> HFONT {
+/// 콘솔 글꼴 체인 — 설정 `term_font` 쉼표 체인(1순위 = 설치된 첫 패밀리·폴백 = 나머지) +
+/// 크기(DPI 반영·FIXED_PITCH 힌트).
+unsafe fn make_mono(hwnd: HWND, family: &str, size_pt: i32) -> crate::fontchain::GdiChain {
     let dpi = GetDpiForWindow(hwnd).max(96);
     let h = -((size_pt.clamp(8, 32) * dpi as i32) / 72);
-    let first = family.split(',').next().unwrap_or("Consolas").trim();
-    let face = windows::core::HSTRING::from(first);
-    CreateFontW(
+    crate::fontchain::GdiChain::new(
+        family,
+        "Consolas",
         h,
-        0,
-        0,
-        0,
         FW_NORMAL.0 as i32,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        DEFAULT_QUALITY,
         (FIXED_PITCH.0 | FF_DONTCARE.0) as u32,
-        PCWSTR(face.as_ptr()),
     )
 }
 
-/// 텍스트 픽셀 폭(현재 폰트).
-/// 본문 프로포셔널 폰트(Segoe UI — GitHub 근사·07-26). `bold` = 제목.
-unsafe fn make_ui(hwnd: HWND, size_pt: i32, bold: bool) -> HFONT {
+/// 본문 프로포셔널 글꼴 체인(Segoe UI — GitHub 근사·07-26) — 폴백은 콘솔 체인의 나머지
+/// 패밀리(사용자가 체인에 넣은 기호/이모지 글꼴이 본문에도 적용). `bold` = 제목.
+unsafe fn make_ui(
+    hwnd: HWND,
+    mono_family: &str,
+    size_pt: i32,
+    bold: bool,
+) -> crate::fontchain::GdiChain {
     let dpi = GetDpiForWindow(hwnd).max(96);
     let h = -((size_pt.clamp(8, 32) * dpi as i32) / 72);
-    CreateFontW(
+    crate::fontchain::GdiChain::new(
+        &format!("Segoe UI, {mono_family}"),
+        "Segoe UI",
         h,
-        0,
-        0,
-        0,
         if bold { 700 } else { FW_NORMAL.0 as i32 },
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS,
-        DEFAULT_QUALITY,
         FF_DONTCARE.0 as u32,
-        w!("Segoe UI"),
     )
 }
 
-unsafe fn text_w(hdc: HDC, text: &str) -> i32 {
-    if text.is_empty() {
-        return 0;
-    }
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let mut sz = SIZE::default();
-    let _ = GetTextExtentPoint32W(hdc, &wide, &mut sz);
-    sz.cx
-}
-
-/// 라인 종류 → 폰트(측정·그리기 공용 — 지표 일치).
-fn line_font(st: &PvState, line: usize) -> HFONT {
+/// 라인 종류 → 글꼴 체인(측정·그리기 공용 — 런 규칙 일치).
+fn line_chain(st: &PvState, line: usize) -> &crate::fontchain::GdiChain {
     match st.kinds.get(line).copied().unwrap_or(0) {
-        1..=3 => st.body_bold,
-        4 | 6 => st.font,
-        _ => st.body,
+        1..=3 => &st.body_bold,
+        4 | 6 => &st.font,
+        _ => &st.body,
     }
 }
 
-/// 라인의 문자 경계 x 오프셋(px — 도크 offsets 규약: [0, w1, w1+w2, …]).
+/// 라인 종류 → 1순위 폰트(행 높이 등 지표).
+fn line_font(st: &PvState, line: usize) -> HFONT {
+    line_chain(st, line).primary()
+}
+
+/// 라인의 문자 경계 x 오프셋(px — 도크 offsets 규약: [0, w1, w1+w2, …]) — 폴백 런 반영.
 /// 이미지 마커/패드 라인 = 경계 0 하나(선택 대상 아님 — 07-26).
 unsafe fn char_offsets(hwnd: HWND, st: &PvState, line: usize) -> Vec<i32> {
     if st.text[line].starts_with('\u{1}') {
         return vec![0];
     }
     let hdc = GetDC(Some(hwnd));
-    let old = SelectObject(hdc, line_font(st, line).into());
-    let mut offs = vec![0i32];
-    let mut prefix = String::new();
-    for c in st.text[line].chars() {
-        prefix.push(c);
-        offs.push(text_w(hdc, &prefix));
-    }
-    SelectObject(hdc, old);
+    let offs = line_chain(st, line).offsets(hdc, &st.text[line]);
     ReleaseDC(Some(hwnd), hdc);
     offs
 }
@@ -379,7 +353,7 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if !state.is_null() {
                 let st = &mut *state;
                 let (bg, fg, selbg) = colors(st.dark);
-                let old = SelectObject(hdc, st.font.into());
+                let old = SelectObject(hdc, st.font.primary().into());
                 let rc = client(hwnd);
                 let vis = visible_rows(hwnd, st);
                 let sel = st.sel.map(|(a, c)| if a <= c { (a, c) } else { (c, a) });
@@ -464,22 +438,15 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             (offs[s], offs[e])
                         })
                         .filter(|(s, e)| e > s);
-                    let text = &st.lines[li];
-                    let n = (text.len() - 1) as u32; // NUL 제외
+                    let chain = line_chain(st, li);
+                    let text = &st.text[li];
                     match seg {
                         None => {
+                            // 행 불투명 채움 → 런별 글리프(폴백 체인 — 09-04)
                             SetBkColor(hdc, bg);
                             SetTextColor(hdc, fg);
-                            let _ = ExtTextOutW(
-                                hdc,
-                                x0,
-                                y,
-                                ETO_OPAQUE | ETO_CLIPPED,
-                                Some(&row),
-                                PCWSTR(text.as_ptr()),
-                                n,
-                                None,
-                            );
+                            let _ = ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, Some(&row), w!(""), 0, None);
+                            chain.draw(hdc, x0, y, ETO_CLIPPED, Some(&row), text);
                         }
                         Some((s, e)) => {
                             // 배경(행 전체) → 선택 배경 → 텍스트 1회(투명 아님 —
@@ -501,16 +468,7 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 hdc,
                                 windows::Win32::Graphics::Gdi::TRANSPARENT,
                             );
-                            let _ = ExtTextOutW(
-                                hdc,
-                                x0,
-                                y,
-                                ETO_CLIPPED,
-                                Some(&row),
-                                PCWSTR(text.as_ptr()),
-                                n,
-                                None,
-                            );
+                            chain.draw(hdc, x0, y, ETO_CLIPPED, Some(&row), text);
                             let _ = windows::Win32::Graphics::Gdi::SetBkMode(
                                 hdc,
                                 windows::Win32::Graphics::Gdi::OPAQUE,
@@ -772,9 +730,9 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_DESTROY => {
             if !state.is_null() {
                 let st = Box::from_raw(state);
-                let _ = DeleteObject(st.font.into());
-                let _ = DeleteObject(st.body.into());
-                let _ = DeleteObject(st.body_bold.into());
+                st.font.delete();
+                st.body.delete();
+                st.body_bold.delete();
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
             LRESULT(0)
@@ -815,8 +773,8 @@ pub unsafe fn show(owner: HWND, title: &str, lines: Vec<String>, mono: (&str, i3
         return;
     };
     let font = make_mono(hwnd, mono.0, mono.1);
-    let body = make_ui(hwnd, mono.1, false);
-    let body_bold = make_ui(hwnd, mono.1, true);
+    let body = make_ui(hwnd, mono.0, mono.1, false);
+    let body_bold = make_ui(hwnd, mono.0, mono.1, true);
     // 종류 태그 분리(\u{2}tag| — 표시/복사 텍스트는 태그 없이 저장)
     let parsed: Vec<(u8, String)> = lines
         .into_iter()
@@ -832,7 +790,7 @@ pub unsafe fn show(owner: HWND, title: &str, lines: Vec<String>, mono: (&str, i3
     let (line_h, max_w) = {
         let hdc = GetDC(Some(hwnd));
         let mut lh = 12;
-        for f in [font, body, body_bold] {
+        for f in [font.primary(), body.primary(), body_bold.primary()] {
             let old = SelectObject(hdc, f.into());
             let mut sz = SIZE::default();
             let probe: Vec<u16> = "Ag한".encode_utf16().collect();
@@ -845,14 +803,12 @@ pub unsafe fn show(owner: HWND, title: &str, lines: Vec<String>, mono: (&str, i3
             if l.starts_with('\u{1}') {
                 continue;
             }
-            let f = match kinds[i] {
-                1..=3 => body_bold,
-                4 | 6 => font,
-                _ => body,
+            let chain = match kinds[i] {
+                1..=3 => &body_bold,
+                4 | 6 => &font,
+                _ => &body,
             };
-            let old = SelectObject(hdc, f.into());
-            mw = mw.max(text_w(hdc, l));
-            SelectObject(hdc, old);
+            mw = mw.max(chain.width(hdc, l));
         }
         ReleaseDC(Some(hwnd), hdc);
         (lh + 3, mw)

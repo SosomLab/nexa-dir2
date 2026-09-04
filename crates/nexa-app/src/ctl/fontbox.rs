@@ -74,7 +74,7 @@ unsafe extern "system" fn enum_cb(
     1
 }
 
-fn families() -> &'static [String] {
+pub(crate) fn families() -> &'static [String] {
     FAMILIES.get_or_init(|| unsafe {
         let mut v: Vec<String> = Vec::new();
         let dc = GetDC(None);

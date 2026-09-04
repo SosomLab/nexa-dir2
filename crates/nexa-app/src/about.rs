@@ -68,7 +68,10 @@ unsafe fn make_font(hwnd: HWND, spec: &DlgFont, scale_pct: i32, weight: i32) -> 
     let dpi = GetDpiForWindow(hwnd).max(96);
     let pt = (spec.size_pt.clamp(7, 24) * scale_pct) / 100;
     let h = -((pt.max(7) * dpi as i32) / 72);
-    let face = windows::core::HSTRING::from(&*spec.family);
+    let face = windows::core::HSTRING::from(crate::fontchain::first_installed(
+        &spec.family,
+        "Segoe UI",
+    )); // 체인 1순위(09-04)
     CreateFontW(
         h,
         0,

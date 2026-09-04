@@ -59,7 +59,12 @@ const GAP: i32 = 6;
 unsafe fn make_font(hwnd: HWND, spec: &DlgFont) -> HFONT {
     let dpi = GetDpiForWindow(hwnd).max(96);
     let h = -((spec.size_pt.clamp(7, 24) * dpi as i32) / 72);
-    let face = windows::core::HSTRING::from(&*spec.family);
+    // 쉼표 체인 = 폴백 체인(09-04 fontchain): 설치된 첫 패밀리(체인 문자열을 얼굴 이름으로
+    // 넘기면 GDI가 못 맞춰 기본 글꼴로 대체되던 결함)
+    let face = windows::core::HSTRING::from(crate::fontchain::first_installed(
+        &spec.family,
+        "Segoe UI",
+    ));
     CreateFontW(
         h,
         0,

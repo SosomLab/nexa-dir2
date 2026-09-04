@@ -135,6 +135,44 @@ pub struct FontSpec {
     pub status: (String, f32),
 }
 
+/// 폴백 패밀리 목록 → `IDWriteFontFallback`(전 유니코드 범위에 순서대로 매핑 후 시스템 폴백
+/// 연결 — X-3 터미널 빌더를 슬롯 공용으로 뽑음, 09-04). 목록이 비면 None(시스템 폴백만).
+unsafe fn build_fallback(
+    factory: &IDWriteFactory,
+    names: &[String],
+) -> Option<windows::Win32::Graphics::DirectWrite::IDWriteFontFallback> {
+    if names.is_empty() {
+        return None;
+    }
+    use windows::core::Interface;
+    use windows::Win32::Graphics::DirectWrite::{IDWriteFactory2, DWRITE_UNICODE_RANGE};
+    let f2: IDWriteFactory2 = factory.cast().ok()?;
+    let builder = f2.CreateFontFallbackBuilder().ok()?;
+    let range = DWRITE_UNICODE_RANGE {
+        first: 0x0,
+        last: 0x10FFFF,
+    };
+    let hs: Vec<windows::core::HSTRING> = names.iter().map(windows::core::HSTRING::from).collect();
+    let ptrs: Vec<*const u16> = hs.iter().map(|h| h.as_ptr()).collect();
+    builder
+        .AddMapping(&[range], &ptrs, None, None, None, 1.0)
+        .ok()?;
+    let sys = f2.GetSystemFontFallback().ok()?;
+    builder.AddMappings(&sys).ok()?;
+    builder.CreateFontFallback().ok()
+}
+
+/// 레이아웃에 폴백 체인 적용(IDWriteTextLayout2 — Win 8.1+; 실패는 무동작).
+unsafe fn set_fallback(
+    layout: &IDWriteTextLayout,
+    fb: &windows::Win32::Graphics::DirectWrite::IDWriteFontFallback,
+) {
+    use windows::core::Interface;
+    if let Ok(l2) = layout.cast::<windows::Win32::Graphics::DirectWrite::IDWriteTextLayout2>() {
+        let _ = l2.SetFontFallback(fb);
+    }
+}
+
 /// 스타일 id = 슬롯×4 + bold + 2×italic (nexa-gui FontSlot ↔ 여기 매핑).
 fn style_id(slot: nexa_gui::FontSlot, bold: bool, italic: bool) -> u8 {
     let s = match slot {
@@ -174,6 +212,9 @@ pub struct DwBackend {
     mono_format: IDWriteTextFormat,
     /// 명시 폴백 체인(X-3 — term_font 쉼표 목록 2순위 이후·시스템 폴백 연결).
     mono_fallback: Option<windows::Win32::Graphics::DirectWrite::IDWriteFontFallback>,
+    /// UI 슬롯(0 기본·1 목록·2 상태바)별 폴백 체인(09-04 — 쉼표 목록 규약을 슬롯에도 적용).
+    /// 체인이 1개면 항목 없음 = DWrite 시스템 폴백만.
+    slot_fallback: HashMap<u8, windows::Win32::Graphics::DirectWrite::IDWriteFontFallback>,
     /// 터미널 단일 글리프 레이아웃 캐시(QA 07-14 — 셀 단위 렌더의 프레임당 생성 비용 제거).
     mono_glyphs: RefCell<HashMap<char, IDWriteTextLayout>>,
     /// (텍스트, 최대 폭 px) → 레이아웃 캐시. 폭이 트리밍을 결정하므로 키에 포함. DPI 변경 시 비움.
@@ -243,15 +284,32 @@ impl DwBackend {
             let e = factory.CreateEllipsisTrimmingSign(&f)?;
             Ok((f, e))
         };
+        // 슬롯별 폴백 체인(09-04 fontchain — 쉼표 목록 = 폴백 체인 규약을 UI 슬롯에도):
+        // 1순위 = 설치된 첫 패밀리(체인 문자열 전체를 패밀리로 넘기던 결함 정정),
+        // 2순위 이후 = IDWriteFontFallback(터미널 X-3와 같은 빌더) → 시스템 폴백 연결.
+        let base_p = crate::fontchain::first_installed(&fonts.base.0, "Segoe UI");
+        let list_p = crate::fontchain::first_installed(&fonts.list.0, "Segoe UI");
+        let status_p = crate::fontchain::first_installed(&fonts.status.0, "Segoe UI");
         let mut formats: HashMap<u8, (IDWriteTextFormat, IDWriteInlineObject)> = HashMap::new();
-        formats.insert(0, mk(&fonts.base.0, fonts.base.1, false, false)?);
+        formats.insert(0, mk(&base_p, fonts.base.1, false, false)?);
         for (b, i) in [(false, false), (true, false), (false, true), (true, true)] {
             formats.insert(
                 4 + u8::from(b) + 2 * u8::from(i),
-                mk(&fonts.list.0, fonts.list.1, b, i)?,
+                mk(&list_p, fonts.list.1, b, i)?,
             );
         }
-        formats.insert(8, mk(&fonts.status.0, fonts.status.1, false, false)?);
+        formats.insert(8, mk(&status_p, fonts.status.1, false, false)?);
+        let mut slot_fallback = HashMap::new();
+        for (slot, chain, primary) in [
+            (0u8, &fonts.base.0, &base_p),
+            (1, &fonts.list.0, &list_p),
+            (2, &fonts.status.0, &status_p),
+        ] {
+            if let Some(fb) = build_fallback(&factory, &crate::fontchain::fallbacks(chain, primary))
+            {
+                slot_fallback.insert(slot, fb);
+            }
+        }
 
         // 큰 글리프 포맷(네비 화살표 등) — 15 DIP·상하/좌우 중앙(글리프 가시성)
         let icon_format = factory.CreateTextFormat(
@@ -293,15 +351,7 @@ impl DwBackend {
         // 설정 `term_font`(QA 07-14): **쉼표 목록 = 폴백 체인**(WT식 "D2Coding,
         // JetBrainsMono Nerd Font") — 1순위 = 텍스트 포맷 패밀리, 2순위 이후는
         // IDWriteFontFallback(X-3)으로 미보유 글리프 해석 → 시스템 폴백 체인 연결.
-        let families: Vec<String> = mono_font
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let primary = families
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "Consolas".to_string());
+        let primary = crate::fontchain::first_installed(mono_font, "Consolas");
         let mono_name: Vec<u16> = primary.encode_utf16().chain(std::iter::once(0)).collect();
         let size = mono_size.clamp(8.0, 32.0);
         let mono_format = factory
@@ -327,35 +377,9 @@ impl DwBackend {
             })?;
         mono_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         mono_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-        // 명시 폴백 체인(X-3 — 2순위 이후) — 실패는 조용히 시스템 폴백만 사용
-        let mono_fallback: Option<windows::Win32::Graphics::DirectWrite::IDWriteFontFallback> =
-            if families.len() > 1 {
-                (|| {
-                    use windows::core::Interface;
-                    use windows::Win32::Graphics::DirectWrite::{
-                        IDWriteFactory2, DWRITE_UNICODE_RANGE,
-                    };
-                    let f2: IDWriteFactory2 = factory.cast().ok()?;
-                    let builder = f2.CreateFontFallbackBuilder().ok()?;
-                    let range = DWRITE_UNICODE_RANGE {
-                        first: 0x0,
-                        last: 0x10FFFF,
-                    };
-                    let names: Vec<windows::core::HSTRING> = families[1..]
-                        .iter()
-                        .map(windows::core::HSTRING::from)
-                        .collect();
-                    let ptrs: Vec<*const u16> = names.iter().map(|h| h.as_ptr()).collect();
-                    builder
-                        .AddMapping(&[range], &ptrs, None, None, None, 1.0)
-                        .ok()?;
-                    let sys = f2.GetSystemFontFallback().ok()?;
-                    builder.AddMappings(&sys).ok()?;
-                    builder.CreateFontFallback().ok()
-                })()
-            } else {
-                None
-            };
+        // 명시 폴백 체인(X-3 — 2순위 이후·설치된 것만) — 실패는 조용히 시스템 폴백만 사용
+        let mono_fallback =
+            build_fallback(&factory, &crate::fontchain::fallbacks(mono_font, &primary));
 
         let color = Rc::new(Cell::new(COLORREF(0)));
         let renderer: IDWriteTextRenderer = BrtRenderer {
@@ -378,6 +402,7 @@ impl DwBackend {
             mdl2_large_format,
             mono_format,
             mono_fallback,
+            slot_fallback,
             mono_glyphs: RefCell::new(HashMap::new()),
             layouts: RefCell::new(HashMap::new()),
             layout_count: std::cell::Cell::new(0),
@@ -420,6 +445,7 @@ impl DwBackend {
                 delimiterCount: 0,
             };
             let _ = layout.SetTrimming(&trim, ellipsis);
+            self.apply_slot_fallback(style / 4, &layout); // 폴백 체인(09-04)
             layout
         };
         let mut cache = self.layouts.borrow_mut();
@@ -442,12 +468,14 @@ impl DwBackend {
     /// 터미널 레이아웃에 명시 폴백 체인 적용(X-3 — 없으면 무동작).
     unsafe fn apply_mono_fallback(&self, layout: &IDWriteTextLayout) {
         if let Some(fb) = &self.mono_fallback {
-            use windows::core::Interface;
-            if let Ok(l2) =
-                layout.cast::<windows::Win32::Graphics::DirectWrite::IDWriteTextLayout2>()
-            {
-                let _ = l2.SetFontFallback(fb);
-            }
+            set_fallback(layout, fb);
+        }
+    }
+
+    /// UI 슬롯 레이아웃에 폴백 체인 적용(09-04 — 체인 없으면 무동작).
+    unsafe fn apply_slot_fallback(&self, slot: u8, layout: &IDWriteTextLayout) {
+        if let Some(fb) = self.slot_fallback.get(&slot) {
+            set_fallback(layout, fb);
         }
     }
 
@@ -795,7 +823,11 @@ impl DrawCtx for DwCtx<'_> {
             // 아이콘 포맷 캐시 = **음수 폭 네임스페이스**(본문 캐시와 분리 — clip.w > 0
             // 보장이므로 -clip.w는 충돌 없음). 히트 경로 무할당(X-16).
             // 대형 글리프는 같은 (폭, 문자)라도 레이아웃이 다르므로 별도 네임스페이스.
-            let ns = if large { -clip.w - GLYPH_LG_NS } else { -clip.w };
+            let ns = if large {
+                -clip.w - GLYPH_LG_NS
+            } else {
+                -clip.w
+            };
             let layout = self
                 .back
                 .layouts
@@ -815,10 +847,8 @@ impl DrawCtx for DwCtx<'_> {
                         Some(c @ '\u{E700}'..='\u{F8FF}') => {
                             if large {
                                 &self.back.mdl2_large_format
-                            } else if matches!(
-                                c,
-                                '\u{E70D}' | '\u{E70E}' | '\u{E76B}' | '\u{E76C}'
-                            ) {
+                            } else if matches!(c, '\u{E70D}' | '\u{E70E}' | '\u{E76B}' | '\u{E76C}')
+                            {
                                 &self.back.mdl2_small_format
                             } else {
                                 &self.back.mdl2_format
