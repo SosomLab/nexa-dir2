@@ -325,16 +325,21 @@ dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·pus
   — **채널 제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출. `winget validate`
   경고 2건[PortableCommandAlias 미지 필드·portable Scope]은 0.16.0 병합본과 동일 구조).
 
-### 채널 상태 요약 (2026-09-04 `0.19.0` 릴리스 시점 — 원천 실측: `gh pr list`/카탈로그 디렉터리·choco OData)
+### 채널 상태 요약 (2026-09-08 `0.20.0` 릴리스 시점 — 원천 실측: `gh pr view`·choco 패키지 페이지 Version History 열·OData)
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.18.1** | ⏳ **`0.19.0` [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) OPEN**(09-04 제출 — 로컬 `winget validate` 경고 2건 = 구식 스키마) · 직전 [#423330](https://github.com/microsoft/winget-pkgs/pull/423330) MERGED | 병합 추적 |
-| winget | `SosomLab.NexaDir`(설치형) | **0.18.1** | ⏳ **`0.19.0` [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) OPEN**(09-04 제출 — 로컬 `winget validate` 통과) · 직전 [#423331](https://github.com/microsoft/winget-pkgs/pull/423331) MERGED | 병합 추적 |
-| Chocolatey | `nexa-dir`(설치형) | **0.8.1** | ✅ 승인 + ⏳ **`0.18.1` `Submitted`**(09-04 재확인 — 자동 검증 Passing·모더레이션 대기) → **`0.19.0`은 규칙상 제외**(`CHOCO_PUSH=false`) | 승인 확인 시 `true` 복원·최신만 제출 |
-| Chocolatey | `nexa-dir.portable` | **0.8.1** | ✅ 동일 승인 + ⏳ `0.18.1` `Submitted` → `0.19.0` 제외 | 동일 |
-| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.19.0** (09-04) | ✅ 상시(**자산 6종** · SHA256SUMS = GitHub digest 일치) | — |
+| winget | `SosomLab.NexaDir.Portable` | **0.19.0** | ⏳ **`0.20.0` [#431269](https://github.com/microsoft/winget-pkgs/pull/431269) OPEN**(09-08 제출 — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.19.0과 동일) · 직전 [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) **09-04 03:23Z MERGED**(제출 ~1시간) | 병합 추적 |
+| winget | `SosomLab.NexaDir`(설치형) | **0.19.0** | ⏳ **`0.20.0` [#431268](https://github.com/microsoft/winget-pkgs/pull/431268) OPEN**(09-08 제출 — 로컬 `winget validate` 통과) · 직전 [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) **09-04 03:02Z MERGED** | 병합 추적 |
+| Chocolatey | `nexa-dir`(설치형) | **0.8.1** | ✅ 승인 + ⏳ **`0.18.1` `Ready`**(09-08 실측 — 자동 검증 09-02 01:47Z·verification 16:17Z 통과 · **스캔 플래그 23:25Z** "1~5 VirusTotal 탐지 = 승인 차단 아님" · 이후 모더레이터 코멘트 없음 = 사람 검토 대기) → **`0.20.0`은 규칙상 제외**(`CHOCO_PUSH=false` 유지 — 릴리스 run에서 push 스텝 `skipped` 확인) | 승인 확인 시 `true` 복원·최신만 제출 |
+| Chocolatey | `nexa-dir.portable` | **0.8.1** | ✅ 동일 승인 + ⏳ `0.18.1` `Ready`(동일 로그) → `0.20.0` 제외 | 동일 |
+| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.20.0** (09-08) | ✅ 상시(**자산 6종** · SHA256SUMS = GitHub digest = 로컬 `Get-FileHash` 일치 · 노트 = 앱 페이지용 한/영) | — |
 
+> **09-08 판정 원천 메모**: choco 미승인 버전의 상태는 패키지 페이지 **Version History 표의 Status 열**
+> (`Ready`/`Approved`)과 모더레이션 로그로 읽는다 — 페이지 상단 "approved by moderator …" 문구는 **최신
+> 승인 버전(0.8.1)** 의 것이라 오판 요인. OData `Packages()?$filter=Id eq '…'`가 `0.8.1`만 돌려주는 것이
+> `0.18.1` 미승인의 방증(§7 서술과 일치).
+>
 > **09-02 재점검(choco 승인·재개)**: choco 2종이 `Approved`로 풀려 **`CHOCO_PUSH=true` 등록**
 > → 밀린 중간 버전 생략, **`0.18.1`만 제출**(§7 "결말" 참조 — `resubmit-chocolatey` dispatch,
 > 빌드 없음·태그 무변). winget은 `0.18.1`이 이미 병합·라이브라 **제출 대상 없음**
