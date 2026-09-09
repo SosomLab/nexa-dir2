@@ -108,7 +108,7 @@
   **+ 정규 점검 1차(X-51)·즉시 조치 6건**([29](29-audit-checklist.md)·[docs/audit/](audit/20260904-165351/README.md)): 덮어쓰기
   스테이징 교체·드롭 거부+원위치·ConPTY 전체 경로·CFG/CET/DEPENDENTLOADFLAG+매니페스트·플러그인 벽시계/과금/브레이커·
   설정 저장 원자화 + 파서 결함 4건. 잔여 = X-52~X-57(단기·정책 결정). 실기 QA는 배포본으로. B2 **3.92MB**.
-  winget 2건 제출([#431268](https://github.com/microsoft/winget-pkgs/pull/431268)·[#431269](https://github.com/microsoft/winget-pkgs/pull/431269))·choco 제외(`0.18.1` `Ready` — 모더레이터 검토 대기).
+  winget 2건 제출·당일 병합([#431268](https://github.com/microsoft/winget-pkgs/pull/431268)·[#431269](https://github.com/microsoft/winget-pkgs/pull/431269))·choco 제외(`0.18.1` `Ready` — 모더레이터 검토 대기).
 - ✅ **`0.19.0`**(09-04) — **설정 창 본문 스크롤 재구축**(컨테이너 분리·트랙패드 픽셀·오버레이 바·썸 블링크) ·
   **글꼴 폴백 체인 실적용**(두부 방지 — DW 슬롯·대화상자·미리보기 글리프 런, X-48) · **메인 파일 목록
   오버레이 스크롤바**(세로+가로·축별 독립, X-47 1/2) · 트리 하이라이트 픽스. B2 **3.85MB**. winget 2건

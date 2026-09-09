@@ -329,8 +329,8 @@ dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·pus
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.19.0** | ⏳ **`0.20.0` [#431269](https://github.com/microsoft/winget-pkgs/pull/431269) OPEN**(09-08 제출 — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.19.0과 동일) · 직전 [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) **09-04 03:23Z MERGED**(제출 ~1시간) | 병합 추적 |
-| winget | `SosomLab.NexaDir`(설치형) | **0.19.0** | ⏳ **`0.20.0` [#431268](https://github.com/microsoft/winget-pkgs/pull/431268) OPEN**(09-08 제출 — 로컬 `winget validate` 통과) · 직전 [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) **09-04 03:02Z MERGED** | 병합 추적 |
+| winget | `SosomLab.NexaDir.Portable` | **0.20.0** | ✅ **`0.20.0` [#431269](https://github.com/microsoft/winget-pkgs/pull/431269) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.19.0과 동일) · 직전 [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) 09-04 03:23Z MERGED | 카탈로그 반영 시차만(`winget show --versions`) |
+| winget | `SosomLab.NexaDir`(설치형) | **0.20.0** | ✅ **`0.20.0` [#431268](https://github.com/microsoft/winget-pkgs/pull/431268) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 통과 · 라벨 Moderator-Approved·Publish-Pipeline-Succeeded) · 직전 [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) 09-04 03:02Z MERGED | 동일 |
 | Chocolatey | `nexa-dir`(설치형) | **0.8.1** | ✅ 승인 + ⏳ **`0.18.1` `Ready`**(09-08 실측 — 자동 검증 09-02 01:47Z·verification 16:17Z 통과 · **스캔 플래그 23:25Z** "1~5 VirusTotal 탐지 = 승인 차단 아님" · 이후 모더레이터 코멘트 없음 = 사람 검토 대기) → **`0.20.0`은 규칙상 제외**(`CHOCO_PUSH=false` 유지 — 릴리스 run에서 push 스텝 `skipped` 확인) | 승인 확인 시 `true` 복원·최신만 제출 |
 | Chocolatey | `nexa-dir.portable` | **0.8.1** | ✅ 동일 승인 + ⏳ `0.18.1` `Ready`(동일 로그) → `0.20.0` 제외 | 동일 |
 | GitHub Release | 포터블 + 설치형 + **플러그인** | **0.20.0** (09-08) | ✅ 상시(**자산 6종** · SHA256SUMS = GitHub digest = 로컬 `Get-FileHash` 일치 · 노트 = 앱 페이지용 한/영) | — |
