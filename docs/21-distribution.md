@@ -241,8 +241,9 @@ dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·pus
 **후속 (2026-09-09 실측)**: `0.18.1` 두 패키지 **모더레이터 virtualex 09-08 승인**(제출 6일 — 0.8.1의 44일과 달리
 첫 승인 이후 후속 버전은 빨리 풀린다는 "최초 등록 절차 4항"이 실측으로 확인됨. 09-08 스캔 플래그 상태에서 하루 만에).
 따라서 §8 규칙상 **`0.20.0` 제출 대상** — 절차는 09-02와 동일한 `resubmit-chocolatey` dispatch(태그 소진·빌드 없음) +
-`CHOCO_PUSH=true` 복원(다음 태그 push부터 자동 게시). 두 동작은 09-09 세션에서 자동 모드 권한 분류기가 차단해
-**사용자 실행 대기**(명령은 [journal/2026-09-09](journal/2026-09-09.md)).
+`CHOCO_PUSH=true` 복원(다음 태그 push부터 자동 게시). 두 동작은 자동 모드 권한 분류기가 차단했다가 **사용자 명시 승인
+뒤 실행** — 변수 `true`(02:50Z) · [run 34304846007](https://github.com/SosomLab/nexa-dir2/actions/runs/34304846007)(팩 2·push 성공·22초) →
+두 패키지 **`0.20.0` `Submitted`**(OData 직접 조회). 0.18.1이 6일 만에 풀린 전례대로면 다음 주 초 승인 예상.
 
 ## 8. winget — 4번째 채널 (packaging/winget, 2026-07-19)
 
@@ -337,8 +338,8 @@ dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·pus
 | --- | --- | --- | --- | --- |
 | winget | `SosomLab.NexaDir.Portable` | **0.20.0** | ✅ **`0.20.0` [#431269](https://github.com/microsoft/winget-pkgs/pull/431269) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.19.0과 동일) · 직전 [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) 09-04 03:23Z MERGED | 카탈로그 반영 시차만(`winget show --versions`) |
 | winget | `SosomLab.NexaDir`(설치형) | **0.20.0** | ✅ **`0.20.0` [#431268](https://github.com/microsoft/winget-pkgs/pull/431268) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 통과 · 라벨 Moderator-Approved·Publish-Pipeline-Succeeded) · 직전 [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) 09-04 03:02Z MERGED | 동일 |
-| Chocolatey | `nexa-dir`(설치형) | **0.18.1** | ✅ **`0.18.1` Approved**(09-09 실측 — "approved by moderator **virtualex** on 08 Sep 2026" · OData `Packages(Id,Version='0.18.1')` = `Approved` · 제출 09-02 → 승인 09-08 = **6일**, 0.8.1의 44일 대비 급단축 = 첫 승인 뒤 후속 버전 경로) · 09-08 릴리스 시점엔 `Ready`라 **`0.20.0` 제외**(push 스텝 `skipped`) | **대기 해소 → `0.20.0` 제출 대상**(`resubmit-chocolatey` dispatch `version=0.20.0`·`confirm=yes`) + `CHOCO_PUSH=true` 복원 — **둘 다 09-09 자동 모드 권한 분류기 차단 → 사용자 실행 대기** |
-| Chocolatey | `nexa-dir.portable` | **0.18.1** | ✅ 동일 승인(virtualex 09-08) → `0.20.0` 대기 해소 | 동일(같은 dispatch가 두 패키지를 함께 올린다) |
+| Chocolatey | `nexa-dir`(설치형) | **0.18.1** | ✅ **`0.18.1` Approved**(09-09 실측 — "approved by moderator **virtualex** on 08 Sep 2026" · OData `Packages(Id,Version='0.18.1')` = `Approved` · 제출 09-02 → 승인 09-08 = **6일**, 0.8.1의 44일 대비 급단축 = 첫 승인 뒤 후속 버전 경로) · 09-08 릴리스 시점엔 `Ready`라 **`0.20.0` 제외**(push 스텝 `skipped`) ⏳ **`0.20.0` `Submitted`**(09-09 02:51Z — 사용자 승인 뒤 `resubmit-chocolatey` [run 34304846007](https://github.com/SosomLab/nexa-dir2/actions/runs/34304846007) 성공 · OData `Packages(Id,Version='0.20.0')` 직접 조회) | 검수 추적 · `CHOCO_PUSH=true` 복원 완료(09-09 02:50Z) — 다음 릴리스 때 `0.20.0`이 검수 중이면 규칙상 `false`로 내려 제외 |
+| Chocolatey | `nexa-dir.portable` | **0.18.1** | ✅ 동일 승인(virtualex 09-08) → ⏳ `0.20.0` `Submitted`(같은 run) | 동일 |
 | GitHub Release | 포터블 + 설치형 + **플러그인** | **0.20.0** (09-08) | ✅ 상시(**자산 6종** · SHA256SUMS = GitHub digest = 로컬 `Get-FileHash` 일치 · 노트 = 앱 페이지용 한/영) | — |
 
 > **09-08 판정 원천 메모**: choco 미승인 버전의 상태는 패키지 페이지 **Version History 표의 Status 열**

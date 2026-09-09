@@ -8,6 +8,7 @@
 
 ## 2026-09-09
 
+- **choco `0.20.0` 제출 + `CHOCO_PUSH=true` 복원(사용자 명시 승인 "직접 수행해도 된다")**: 변수 `true`(02:50Z) → `resubmit-chocolatey` [run 34304846007](https://github.com/SosomLab/nexa-dir2/actions/runs/34304846007)(팩 2·push 성공·22초) → OData 직접 조회 두 패키지 **`0.20.0` `Submitted`**. 문서 = 21 §7 후속·§8 표(⏳ Submitted·조치 열)·STATUS 헤더/§5-4·CLAUDE §1/§7-4·위키 설치 3곳("검수 중"). 다음 릴리스 때 검수 중이면 규칙상 `false`로 내려 제외. 상세 [journal/2026-09-09.md](journal/2026-09-09.md).
 - **내용 정리 + 진행사항 최신화(사용자 지시 — 코드 무변경)**: 실측에서 바뀐 것 하나 = **Chocolatey `0.18.1` 두 패키지 승인**(모더레이터 virtualex 09-08 — 제출 6일. 0.8.1의 44일과 달리 첫 승인 뒤 후속 버전은 빨리 풀린다는 절차 문구가 실측으로 확인) → 제출 규칙상 **`0.20.0` choco 제출 + `CHOCO_PUSH=true` 복원**이 다음 조치. 두 동작(`gh variable set`·`gh workflow run resubmit-chocolatey`)을 시도했으나 **자동 모드 권한 분류기가 차단**(gh 계정은 kiros33 활성 — GitHub 권한 문제 아님) → **사용자 실행 대기**로 기록(명령은 journal). 그 외 무변동: 09-08 마감 push CI 3잡 green(run 34303825856)·트리 clean·winget 카탈로그 두 패키지 `0.20.0` 디렉터리 확인·병합 대상 브랜치 없음. 문서 = 21 §7 후속·§8 표(choco 0.18.1 ✅·조치 열)·STATUS 헤더/§5-3·4·CLAUDE §1/§7-3·4·위키 설치 3곳(choco `0.18.1` 제공 중). 상세 [journal/2026-09-09.md](journal/2026-09-09.md).
 
 ## 2026-09-08
