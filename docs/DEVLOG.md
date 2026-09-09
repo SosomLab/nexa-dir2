@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-09-10
+
+- **채널 점검 + 진행사항 최신화(사용자 지시 2건 — 코드 무변경)**: winget 두 패키지 **`0.20.0` 카탈로그 라이브 확인**(winget-pkgs 디렉터리 `0.19.0 0.20.0` + 로컬 `winget show --versions` 인덱스 반영 · 열린 NexaDir PR 0) · Chocolatey `0.20.0` 두 패키지 = 자동 검증(09-09 03:26Z)·verification(13:51Z/13:53Z) 통과 → **스캔 `Pending`**(Version History `Pending`·OData `Submitted` — 다음 = 스캔 결과 → `Ready` → 모더레이터. 0.18.1 전례 6일) · `CHOCO_PUSH=true` 유지 · CI 3잡 green(`bbc6419`) · 트리 clean · 병합 대상 없음. 문서 = 21 §8 표(winget ✅ 라이브·choco 단계)·STATUS 헤더/§5-4·CLAUDE §7-3·4·위키 설치 winget 행. 상세 [journal/2026-09-10.md](journal/2026-09-10.md).
+
 ## 2026-09-09
 
 - **choco `0.20.0` 제출 + `CHOCO_PUSH=true` 복원(사용자 명시 승인 "직접 수행해도 된다")**: 변수 `true`(02:50Z) → `resubmit-chocolatey` [run 34304846007](https://github.com/SosomLab/nexa-dir2/actions/runs/34304846007)(팩 2·push 성공·22초) → OData 직접 조회 두 패키지 **`0.20.0` `Submitted`**. 문서 = 21 §7 후속·§8 표(⏳ Submitted·조치 열)·STATUS 헤더/§5-4·CLAUDE §1/§7-4·위키 설치 3곳("검수 중"). 다음 릴리스 때 검수 중이면 규칙상 `false`로 내려 제외. 상세 [journal/2026-09-09.md](journal/2026-09-09.md).
