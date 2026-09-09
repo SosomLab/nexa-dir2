@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-09-09
+
+- **내용 정리 + 진행사항 최신화(사용자 지시 — 코드 무변경)**: 실측에서 바뀐 것 하나 = **Chocolatey `0.18.1` 두 패키지 승인**(모더레이터 virtualex 09-08 — 제출 6일. 0.8.1의 44일과 달리 첫 승인 뒤 후속 버전은 빨리 풀린다는 절차 문구가 실측으로 확인) → 제출 규칙상 **`0.20.0` choco 제출 + `CHOCO_PUSH=true` 복원**이 다음 조치. 두 동작(`gh variable set`·`gh workflow run resubmit-chocolatey`)을 시도했으나 **자동 모드 권한 분류기가 차단**(gh 계정은 kiros33 활성 — GitHub 권한 문제 아님) → **사용자 실행 대기**로 기록(명령은 journal). 그 외 무변동: 09-08 마감 push CI 3잡 green(run 34303825856)·트리 clean·winget 카탈로그 두 패키지 `0.20.0` 디렉터리 확인·병합 대상 브랜치 없음. 문서 = 21 §7 후속·§8 표(choco 0.18.1 ✅·조치 열)·STATUS 헤더/§5-3·4·CLAUDE §1/§7-3·4·위키 설치 3곳(choco `0.18.1` 제공 중). 상세 [journal/2026-09-09.md](journal/2026-09-09.md).
+
 ## 2026-09-08
 
 - **릴리스 `0.20.0` — 채널 판정·문서/위키 최신화·태그·winget 2건 제출·앱 페이지용 릴리스 노트(사용자 지시 3건)**: 실측 = winget `0.19.0` PR 2건 **09-04 당일 병합**(대기 0 → 제출 대상) · choco `0.18.1` 두 패키지 **`Ready`**(자동 검증·verification 통과·스캔 1~5 탐지 플래그·모더레이터 검토 대기 → **제외**, `CHOCO_PUSH=false` 유지) · 병합 대상 브랜치 없음(`feat/x13-launcher-crud` 보존). 내용 = X-49 터미널 테마 + X-50 복사 서식 + X-51 즉시 조치 6건 + 파서 결함 4건(코드 커밋 16 — 0.19.0 이후 코드 무변경 09-04 마감 상태 그대로). 승격 `fbcb34c`(Cargo·lang 3종) → CI 3잡 green → 태그 → Release run 성공(**자산 6종** · 포터블 exe **3.92MB** 3,923,968B · 설치형 3.38MB · 해시 3중 일치 · choco push `skipped`) → winget [#431268](https://github.com/microsoft/winget-pkgs/pull/431268)·[#431269](https://github.com/microsoft/winget-pkgs/pull/431269) 제출 → **당일 병합**(`winget validate` 0.19.0과 동일 결과 · 마감 push CI 3잡 green · 위키 발행 `28cb6f9`). 문서 = README·CLAUDE·STATUS·MILESTONES·TODO·21 §8 채널 표(choco 상태 판독 원천 메모) + 위키 5쪽(설정 표·하단 도크 테마/복사 서식 절·개발 여정 09-08 절+예산 행·설치 채널 표·Home) + 발행 · 릴리스 노트 한/영(GitHub Release 본문 — 앱 페이지용). 상세 [journal/2026-09-08.md](journal/2026-09-08.md).
