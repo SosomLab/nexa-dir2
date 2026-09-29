@@ -245,6 +245,11 @@ dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·pus
 뒤 실행** — 변수 `true`(02:50Z) · [run 34304846007](https://github.com/SosomLab/nexa-dir2/actions/runs/34304846007)(팩 2·push 성공·22초) →
 두 패키지 **`0.20.0` `Submitted`**(OData 직접 조회). 0.18.1이 6일 만에 풀린 전례대로면 다음 주 초 승인 예상.
 
+**결과 (2026-09-29 실측)**: 두 패키지 **`0.20.0` `Approved`** — 모더레이터 **virtualex 09-10 17:04Z**("approved by moderator
+virtualex on 10 Sep 2026" · OData `PackageApprovedDate`) = 제출 후 **약 38시간**(0.8.1 44일 → 0.18.1 6일 → 0.20.0 1.6일).
+스캔은 설치형 `Flagged`·포터블 `NotFlagged`(09-09 16:49Z/16:51Z) — 플래그는 승인 차단이 아님이 다시 확인됐다.
+두 패키지 모두 `IsLatestVersion=true` → **choco = 최신 릴리스와 동기, 대기 0건** → 다음 릴리스는 `CHOCO_PUSH=true` 그대로 태그 push가 자동 게시.
+
 ## 8. winget — 4번째 채널 (packaging/winget, 2026-07-19)
 
 패키지 ID **`SosomLab.NexaDir`**. Chocolatey와 마찬가지로 **설치형 exe를 그대로 참조**하는
@@ -332,14 +337,14 @@ dispatch — **빌드 없이** 릴리스 자산의 해시를 계산해 pack·pus
   — **채널 제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출. `winget validate`
   경고 2건[PortableCommandAlias 미지 필드·portable Scope]은 0.16.0 병합본과 동일 구조).
 
-### 채널 상태 요약 (2026-09-08 `0.20.0` 릴리스 시점 — 원천 실측: `gh pr view`·choco 패키지 페이지 Version History 열·OData)
+### 채널 상태 요약 (2026-09-08 `0.20.0` 릴리스 시점 → **09-29 갱신: 4행 전부 `0.20.0`** — 원천 실측: `gh pr view`·choco 패키지 페이지 Version History 열·OData)
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
 | winget | `SosomLab.NexaDir.Portable` | **0.20.0** | ✅ **`0.20.0` [#431269](https://github.com/microsoft/winget-pkgs/pull/431269) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.19.0과 동일) · 직전 [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) 09-04 03:23Z MERGED | ✅ **09-10 카탈로그 라이브 확인**(winget-pkgs 디렉터리 + 로컬 `winget show --versions` = `0.20.0 0.19.0`) — 열린 PR 0 |
 | winget | `SosomLab.NexaDir`(설치형) | **0.20.0** | ✅ **`0.20.0` [#431268](https://github.com/microsoft/winget-pkgs/pull/431268) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 통과 · 라벨 Moderator-Approved·Publish-Pipeline-Succeeded) · 직전 [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) 09-04 03:02Z MERGED | ✅ 동일(09-10 라이브 확인) |
-| Chocolatey | `nexa-dir`(설치형) | **0.18.1** | ✅ **`0.18.1` Approved**(09-09 실측 — "approved by moderator **virtualex** on 08 Sep 2026" · OData `Packages(Id,Version='0.18.1')` = `Approved` · 제출 09-02 → 승인 09-08 = **6일**, 0.8.1의 44일 대비 급단축 = 첫 승인 뒤 후속 버전 경로) · 09-08 릴리스 시점엔 `Ready`라 **`0.20.0` 제외**(push 스텝 `skipped`) ⏳ **`0.20.0` 검수 중**(09-09 02:51Z 제출 — `resubmit-chocolatey` [run 34304846007](https://github.com/SosomLab/nexa-dir2/actions/runs/34304846007)) · **09-10 실측**: 자동 검증 통과(09-09 03:26Z) · verification 통과(13:51Z) · **스캔 `Pending`** → Version History 열 `Pending`(OData `Submitted`). 다음 단계 = 스캔 결과(0.18.1은 여기서 1~5 탐지 플래그) → `Ready` → 모더레이터(0.18.1은 6일) | 검수 추적 · `CHOCO_PUSH=true`(09-09 복원) — 다음 릴리스 때 `0.20.0`이 미승인이면 규칙상 `false`로 내려 제외 |
-| Chocolatey | `nexa-dir.portable` | **0.18.1** | ✅ 동일 승인(virtualex 09-08) → ⏳ `0.20.0` 동일 진행(검증 03:26Z·verification 13:53Z·스캔 `Pending`) | 동일 |
+| Chocolatey | `nexa-dir`(설치형) | **0.20.0** | ✅ **`0.20.0` Approved**(09-29 실측 — "approved by moderator **virtualex** on 10 Sep 2026" · OData `PackageApprovedDate` 09-10 17:04Z · 제출 09-09 02:51Z → 승인 = **약 38시간** · 검증 03:26Z·verification 13:51Z·스캔 **`Flagged`**(16:49Z — 승인 차단 아님, 0.18.1과 동일) · `IsLatestVersion=true`) · 직전 `0.18.1` Approved(virtualex 09-08 — 제출 6일) | ✅ 대기 0건 — 다음 릴리스 제출 대상 · `CHOCO_PUSH=true` 유지(태그 push가 자동 게시) |
+| Chocolatey | `nexa-dir.portable` | **0.20.0** | ✅ 동일 승인(virtualex 09-10 17:04Z · 검증 03:26Z·verification 13:53Z·스캔 `NotFlagged` 16:51Z · `IsLatestVersion=true`) | 동일 |
 | GitHub Release | 포터블 + 설치형 + **플러그인** | **0.20.0** (09-08) | ✅ 상시(**자산 6종** · SHA256SUMS = GitHub digest = 로컬 `Get-FileHash` 일치 · 노트 = 앱 페이지용 한/영) | — |
 
 > **09-08 판정 원천 메모**: choco 미승인 버전의 상태는 패키지 페이지 **Version History 표의 Status 열**

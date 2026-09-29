@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-09-29
+
+- **저장소 최신화·배포 검토·진행사항 최신화(사용자 지시 3건 — 코드 무변경)**: fetch → `main` = `origin/main` 0/0(09-10 이후 커밋 0) · `0.20.0` 태그 이후 6커밋·18파일 = 문서·winget 매니페스트 사본뿐(소스·빌드 무변) → **새 버전 배포 불필요**. 채널 실측 = **Chocolatey `0.20.0` 두 패키지 `Approved`**(virtualex 09-10 17:04Z — 제출 약 38시간 · 스캔 설치형 `Flagged`·포터블 `NotFlagged`) · winget 두 패키지 `0.20.0` · Release `0.20.0` Latest → **3채널 전부 동기·대기 0건**, `CHOCO_PUSH=true` 유지. 문서 = 21 §7·§8 · STATUS · CLAUDE §1·§7-4 · MILESTONES · 위키 2쪽(설치·개발 여정) · BRANCHES. 상세 [journal/2026-09-29.md](journal/2026-09-29.md).
+
 ## 2026-09-10
 
 - **채널 점검 + 진행사항 최신화(사용자 지시 2건 — 코드 무변경)**: winget 두 패키지 **`0.20.0` 카탈로그 라이브 확인**(winget-pkgs 디렉터리 `0.19.0 0.20.0` + 로컬 `winget show --versions` 인덱스 반영 · 열린 NexaDir PR 0) · Chocolatey `0.20.0` 두 패키지 = 자동 검증(09-09 03:26Z)·verification(13:51Z/13:53Z) 통과 → **스캔 `Pending`**(Version History `Pending`·OData `Submitted` — 다음 = 스캔 결과 → `Ready` → 모더레이터. 0.18.1 전례 6일) · `CHOCO_PUSH=true` 유지 · CI 3잡 green(`bbc6419`) · 트리 clean · 병합 대상 없음. 문서 = 21 §8 표(winget ✅ 라이브·choco 단계)·STATUS 헤더/§5-4·CLAUDE §7-3·4·위키 설치 winget 행. 상세 [journal/2026-09-10.md](journal/2026-09-10.md).
