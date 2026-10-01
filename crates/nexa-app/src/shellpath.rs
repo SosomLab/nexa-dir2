@@ -15,7 +15,13 @@ use windows::Win32::UI::Shell::{Common::ITEMIDLIST, SHGetPathFromIDListEx, SHPar
 /// 경로 바 제출 파이프라인(expand_env 뒤)에서 호출 — UI 스레드(COM 초기화됨).
 pub fn resolve(input: &str) -> String {
     let trimmed = input.trim();
-    if trimmed.len() < 6 || !trimmed[..6].eq_ignore_ascii_case("shell:") {
+    // 바이트 슬라이스 금지 — 6번째 바이트가 다중 바이트 문자(한글 등) 중간이면 `[..6]`이
+    // panic해 앱이 종료되던 설치본 크래시(data\crash.txt 09-22 — "ㅔ" 경계). `get`은 경계가
+    // 아니면 None → 스킴 아님으로 처리.
+    let is_scheme = trimmed
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("shell:"));
+    if !is_scheme {
         return input.to_string();
     }
     unsafe {
@@ -79,5 +85,13 @@ mod tests {
             "shell:no-such-folder-xyz"
         );
         assert_eq!(resolve("shel"), "shel"); // 6자 미만 방어
+    }
+
+    #[test]
+    fn multibyte_prefix_does_not_panic() {
+        // 설치본 크래시 재현(09-22): 6번째 바이트가 한글 문자 중간 — 원문 그대로
+        for s in [r"C:\ㅔ", "ㅔㅔ", "다운로드", "shelㅔ", r"D:\프로젝트\x"] {
+            assert_eq!(resolve(s), s, "{s}");
+        }
     }
 }
