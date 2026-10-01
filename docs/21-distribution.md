@@ -337,15 +337,15 @@ virtualex on 10 Sep 2026" · OData `PackageApprovedDate`) = 제출 후 **약 38�
   — **채널 제출 규칙 첫 적용**: NexaDir 대기 PR 없음 실측 후 제출. `winget validate`
   경고 2건[PortableCommandAlias 미지 필드·portable Scope]은 0.16.0 병합본과 동일 구조).
 
-### 채널 상태 요약 (2026-09-08 `0.20.0` 릴리스 시점 → **09-29 갱신: 4행 전부 `0.20.0`** — 원천 실측: `gh pr view`·choco 패키지 페이지 Version History 열·OData)
+### 채널 상태 요약 (2026-10-01 `0.21.0` 릴리스 시점 — 직전 09-29: 4행 전부 `0.20.0` 동기 — 원천 실측: `gh pr view`·choco OData `Packages(Id,Version)`)
 
 | 채널 | 패키지 | 카탈로그 버전 | 상태 | 우리 측 조치 |
 | --- | --- | --- | --- | --- |
-| winget | `SosomLab.NexaDir.Portable` | **0.20.0** | ✅ **`0.20.0` [#431269](https://github.com/microsoft/winget-pkgs/pull/431269) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.19.0과 동일) · 직전 [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) 09-04 03:23Z MERGED | ✅ **09-10 카탈로그 라이브 확인**(winget-pkgs 디렉터리 + 로컬 `winget show --versions` = `0.20.0 0.19.0`) — 열린 PR 0 |
-| winget | `SosomLab.NexaDir`(설치형) | **0.20.0** | ✅ **`0.20.0` [#431268](https://github.com/microsoft/winget-pkgs/pull/431268) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 통과 · 라벨 Moderator-Approved·Publish-Pipeline-Succeeded) · 직전 [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) 09-04 03:02Z MERGED | ✅ 동일(09-10 라이브 확인) |
-| Chocolatey | `nexa-dir`(설치형) | **0.20.0** | ✅ **`0.20.0` Approved**(09-29 실측 — "approved by moderator **virtualex** on 10 Sep 2026" · OData `PackageApprovedDate` 09-10 17:04Z · 제출 09-09 02:51Z → 승인 = **약 38시간** · 검증 03:26Z·verification 13:51Z·스캔 **`Flagged`**(16:49Z — 승인 차단 아님, 0.18.1과 동일) · `IsLatestVersion=true`) · 직전 `0.18.1` Approved(virtualex 09-08 — 제출 6일) | ✅ 대기 0건 — 다음 릴리스 제출 대상 · `CHOCO_PUSH=true` 유지(태그 push가 자동 게시) |
-| Chocolatey | `nexa-dir.portable` | **0.20.0** | ✅ 동일 승인(virtualex 09-10 17:04Z · 검증 03:26Z·verification 13:53Z·스캔 `NotFlagged` 16:51Z · `IsLatestVersion=true`) | 동일 |
-| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.20.0** (09-08) | ✅ 상시(**자산 6종** · SHA256SUMS = GitHub digest = 로컬 `Get-FileHash` 일치 · 노트 = 앱 페이지용 한/영) | — |
+| winget | `SosomLab.NexaDir.Portable` | **0.20.0** | ⏳ **`0.21.0` [#444824](https://github.com/microsoft/winget-pkgs/pull/444824) 제출**(10-01 07:1xZ — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.20.0과 동일) · 직전 ✅ **`0.20.0` [#431269](https://github.com/microsoft/winget-pkgs/pull/431269) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 경고 2건 = 구식 스키마, 0.19.0과 동일) · 직전 [#429156](https://github.com/microsoft/winget-pkgs/pull/429156) 09-04 03:23Z MERGED | ✅ **09-10 카탈로그 라이브 확인**(winget-pkgs 디렉터리 + 로컬 `winget show --versions` = `0.20.0 0.19.0`) — 열린 PR 0 |
+| winget | `SosomLab.NexaDir`(설치형) | **0.20.0** | ⏳ **`0.21.0` [#444823](https://github.com/microsoft/winget-pkgs/pull/444823) 제출**(10-01 — 로컬 `winget validate` 통과) · 직전 ✅ **`0.20.0` [#431268](https://github.com/microsoft/winget-pkgs/pull/431268) MERGED**(09-08 08:44Z 제출 → **09:41Z 병합** = 57분 — 로컬 `winget validate` 통과 · 라벨 Moderator-Approved·Publish-Pipeline-Succeeded) · 직전 [#429155](https://github.com/microsoft/winget-pkgs/pull/429155) 09-04 03:02Z MERGED | ✅ 동일(09-10 라이브 확인) |
+| Chocolatey | `nexa-dir`(설치형) | **0.20.0** | ⏳ **`0.21.0` `Submitted`**(10-01 06:59:47Z — release.yml 자동 push, `CHOCO_PUSH=true`) · 직전 ✅ **`0.20.0` Approved**(09-29 실측 — "approved by moderator **virtualex** on 10 Sep 2026" · OData `PackageApprovedDate` 09-10 17:04Z · 제출 09-09 02:51Z → 승인 = **약 38시간** · 검증 03:26Z·verification 13:51Z·스캔 **`Flagged`**(16:49Z — 승인 차단 아님, 0.18.1과 동일) · `IsLatestVersion=true`) · 직전 `0.18.1` Approved(virtualex 09-08 — 제출 6일) | ✅ 대기 0건 — 다음 릴리스 제출 대상 · `CHOCO_PUSH=true` 유지(태그 push가 자동 게시) |
+| Chocolatey | `nexa-dir.portable` | **0.20.0** | ⏳ **`0.21.0` `Submitted`**(10-01 06:59:50Z) · 직전 ✅ 동일 승인(virtualex 09-10 17:04Z · 검증 03:26Z·verification 13:53Z·스캔 `NotFlagged` 16:51Z · `IsLatestVersion=true`) | 동일 |
+| GitHub Release | 포터블 + 설치형 + **플러그인** | **0.21.0** (10-01) | ✅ 상시(**자산 6종** · 포터블 exe 3,934,208B = 3.93MB · 설치형 3.38MB · SHA256SUMS = GitHub digest = 로컬 `Get-FileHash` 일치 · 노트 = 앱 페이지용 한/영) | — |
 
 > **09-08 판정 원천 메모**: choco 미승인 버전의 상태는 패키지 페이지 **Version History 표의 Status 열**
 > (`Ready`/`Approved`)과 모더레이션 로그로 읽는다 — 페이지 상단 "approved by moderator …" 문구는 **최신

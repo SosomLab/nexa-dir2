@@ -105,7 +105,7 @@
   편집·이름변경 필드 우클릭 네이티브 팝업(실행 취소/잘라내기/복사/붙여넣기/삭제/전체 선택) · 도크 Info/Preview·F3 창
   복사/전체 선택 · 터미널 복사/붙여넣기/전체 선택 · Edit 메뉴 Cut/Copy/Paste/Select All(한 디스패치 `do_clip`) · 첫 우클릭 =
   편집 진입만·둘째 = 메뉴(`af95fae`). **+ 경로 바 한글 입력 panic 수정**(`shellpath.rs` `[..6]` 문자 경계 — 설치본 crash.txt
-  09-22, `8ff3a25`). 설치본은 10-01 수동 교체(exe·플러그인 2종). winget·choco 동시 제출(`0.20.0` 두 채널 해소 상태). 실기 QA 대기.
+  09-22, `8ff3a25`). 설치본은 10-01 수동 교체(exe·플러그인 2종). B2 **3.93MB**(3,934,208B). winget [#444823](https://github.com/microsoft/winget-pkgs/pull/444823)·[#444824](https://github.com/microsoft/winget-pkgs/pull/444824) 제출 · choco 두 패키지 `Submitted`(자동 push) — `0.20.0`이 두 채널 모두 해소 상태라 동시 제출. 실기 QA 대기.
 - ✅ **`0.20.0`**(09-08) — **터미널 테마**(X-49): 라이트 팔레트(GitHub Light — 16색 ≥3:1)·스킴
   15종(다크 9·라이트 6)·선택자 system/dark/light/스킴 id + 모드별 기본(다크 앱 + 라이트 스킴 허용)·설정 창
   터미널 하단 콤보. 셀 색 기호화로 테마 전환 즉시 스크롤백 재도장. 선택 = 반전 확정(라이트 무색 셀만 accent).

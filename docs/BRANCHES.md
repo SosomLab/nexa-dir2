@@ -10,6 +10,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `release/0.21.0` | 2026-10-01 | 2026-10-01 (ff) | 2026-10-01 | 2 | **릴리스 `0.21.0` 승격 + 문서 1차** — Cargo·lock·lang 3종 `@app` · README·CLAUDE·STATUS·MILESTONES·TODO·DEVLOG·journal·위키 기능 3쪽. 태그 `0.21.0`=`45aa0d7` → Release 자산 6종 · winget 2건 제출 · choco 자동 push | [journal](journal/2026-10-01.md) |
 | `feat/x58-edit-context-menu` | 2026-10-01 | 2026-10-01 (ff) | 2026-10-01 | 2 | **X-58 텍스트 편집 컨텍스트 메뉴 + Edit 메뉴 클립보드 4종**(사용자 요청 2건) — 경로바 편집·이름변경 필드 우클릭 네이티브 팝업 6항목 · 도크 Info/Preview·F3 창 복사/전체 선택 · 터미널 복사/붙여넣기/전체 선택 · Edit 메뉴 Cut/Copy/Paste/Select All = 한 디스패치 `do_clip` · edit.rs 단일 단계 undo · lang 3종 5키 | [journal](journal/2026-10-01.md) |
 | `docs/channel-status-0929` | 2026-09-29 | 2026-09-29 (ff) | 2026-09-29 | 1 | **저장소 최신화·배포 검토·진행사항 최신화**(사용자 요청 — 코드 무변경) — `0.20.0` 이후 코드 변경 0 → 새 버전 불필요 판정 · **choco `0.20.0` 두 패키지 `Approved`**(virtualex 09-10 — 약 38시간) 반영 = 3채널 전부 `0.20.0` 동기 · 21 §7·§8·STATUS·CLAUDE·MILESTONES·DEVLOG·위키 2쪽 | [journal](journal/2026-09-29.md) |
 | `feat/x46-archive-preview` | 2026-08-24 | 2026-08-24 (ff) | 2026-08-24 | 6 | **X-46 압축 파일 미리보기**(사용자 요청 — 그리드·별도 창·내장+플러그인·암호 비기록·확장 용이) — ① `nexa-core::Secret`(Debug 마스킹·Drop 소거·경유 버퍼 소거 헬퍼) ② **nexa-vfs 압축 목록 계층**(레지스트리 = 새 포맷 파일 1개+한 줄 · ZIP/TAR/CAB/RAR5·4/7z 판정/단일 스트림 · zip slip 정규화 · 픽스처를 바이트 규약으로 조립한 테스트 30) ③ **미리보기 시임 장착**(PreviewDoc::Archive·도크 요약·`time_is_local`로 DOS 시각 이중 보정 차단·CP_ACP 이름 디코더·i18n 35키×3종) ④ **그리드 창 + 암호 모달**(NxGrid 재사용·8열 수치 정렬·Ctrl+C TSV / 마스킹 EDIT·회수 즉시 Secret 이동·잔상 소거·틀리면 재시도) ⑤ **플러그인 ABI v2**(능력 선언·nx_archive·file_size/read_at/password — 격리 불변) ⑥ **샘플 플러그인**(ISO 9660 Joliet·ar·cpio = 31KB `.wasm`·E2E 테스트 동봉). 319 green·clippy 0·B2 3.83MB·B3 무변 | [2026-08-24](journal/2026-08-24.md) |
@@ -155,6 +156,10 @@
 | `feat/m0-scaffold` | 2026-07-11 | 2026-07-11 (`e1a2e7f`) | 2026-07-24(정정) | 11 | M0-1~6 — 워크스페이스·코어 3크레이트 이식(테스트 green)·Win32 창 스켈레톤(windows 타깃 check green)·CI(예산 게이트) + 권한 복구 | [2026-07-11](journal/2026-07-11.md) |
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 ---
+## release/0.21.0
+- **생성**: 2026-10-01 (분기: main `683ddfc`). **커밋**: `5a8e2a4`(승격) → `45aa0d7`(문서 1차 + 위키 기능 3쪽). 병합(ff)·삭제: 2026-10-01. 태그 `0.21.0` = `45aa0d7`.
+- **검증**: CI run 36826679664 3잡 green · Release run 36827340655 성공(자산 6종·해시 3중 일치·choco push success) · `winget validate` 통과.
+
 ## feat/x58-edit-context-menu
 - **생성**: 2026-10-01 (분기: main `4705cc8`). **커밋**: `16dd5d9`(X-58 코드 — nexa-gui edit/pathbar/rows/dock · nexa-app win/clipboard/previewwnd · lang 3종) → docs 현행화(journal·DEVLOG·STATUS·MILESTONES·TODO·BRANCHES). 병합(ff)·삭제: 2026-10-01.
 - **검증**: Windows 실기 — `cargo test --workspace` 335 green(신설 2) · clippy 변경 파일 0 · `cargo check --target x86_64-unknown-linux-gnu` green · 릴리스 빌드 성공. 실기 QA(우클릭 메뉴·Edit 메뉴 문맥 분기)는 배포본으로.

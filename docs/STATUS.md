@@ -7,7 +7,10 @@
 > - **릴리스 `0.21.0`**(10-01 — 사용자 지시 "신규 버전 릴리즈 + winget·choco 확인 후 함께"): 채널 실측 = winget 열린 NexaDir PR 0건 ·
 >   choco `0.20.0` 두 패키지 `Approved`(OData) → **두 채널 모두 제출**(choco는 `CHOCO_PUSH=true` 자동 push). 내용 = 10-01 코드 3건
 >   (X-58 `16dd5d9` · 우클릭 순서 `af95fae` · shellpath panic `8ff3a25`). 승격 `5a8e2a4`(Cargo·lock·lang 3종 `@app`).
->   자산 실측·winget PR 번호는 릴리스 뒤 2차 커밋.
+>   CI 3잡 green(`45aa0d7`) → 태그 → Release run 36827340655 성공: **자산 6종** · 포터블 exe **3.93MB**(3,934,208B) · 설치형 3.38MB ·
+>   해시 3중 일치(SHA256SUMS = GitHub digest = 로컬) · choco pack/push 스텝 success → OData 두 패키지 **`0.21.0` `Submitted`**(06:59Z) ·
+>   winget [#444823](https://github.com/microsoft/winget-pkgs/pull/444823) 설치형·[#444824](https://github.com/microsoft/winget-pkgs/pull/444824) 포터블 제출(`winget validate` 설치형 통과·포터블 경고 2 = 0.20.0 동일) ·
+>   Release 본문 = 앱 페이지용 한/영 노트. 위키 6쪽(기능 3 + 설치·Home·개발 여정) 발행.
 > - **10-01 후속(사용자 지시 3건 — `af95fae`·`8ff3a25`·설치본 교체)**: ① 디버그 실행 실측 — 우클릭 1회에 편집 진입과 메뉴가
 >   동시에 뜨던 결함(누름→뗌 사이 재그리기) → 편집을 시작시킨 클릭의 뗌에서는 메뉴 억제 = **1회 편집·2회째 메뉴**(캡처 검증).
 >   ② 설치본 `data\crash.txt`(09-22)에서 **경로 바 한글 입력 제출 시 `shellpath.rs` `[..6]` 문자 경계 panic** 발견 → `get(..6)`
@@ -188,7 +191,7 @@
 | 항목 | 예산 | 최신 실측 | 시점 |
 | --- | --- | --- | --- |
 | B1 유휴 RSS | ≤30MB | **16.86MB**(중앙값, 3회 18/16.86/4.12 — **M5 마감 실측**: 10k·도크 정보 뷰·런처 바·유휴 300s. 활성 ~36→트림 직후 2.6MB 후 재상승 편차 큼 — 최저 4.12는 M4 수준, 재상승 원인 관찰은 β arena 회수와 공동 과제). **클라우드(X-36/37) 이후 미재측정** | 07-15 실기 |
-| B2 exe 크기 | ≤10MB | **3.92MB**(`0.20.0` 릴리스 포터블 실측 3,923,968B — 0.19.0 3.85MB 대비 +79KB: 터미널 스킴 15종·HTML/RTF 내보내기·매니페스트) | 09-08 릴리스 자산 |
+| B2 exe 크기 | ≤10MB | **3.93MB**(`0.21.0` 릴리스 포터블 실측 3,934,208B — 0.20.0 3.92MB 대비 +10KB: 편집 컨텍스트 메뉴·Edit 메뉴 디스패치) | 10-01 릴리스 자산 |
 | P1 100k 첫 렌더 | <150ms | **115ms**(중앙값, 열거 포함 — 10k는 42ms) | 07-12 실기 |
 | P2 스크롤 | 60fps(<16.7ms) | **2.1ms/프레임**(100k·200프레임 벤치) | 07-12 실기 |
 | B3 임포트 DLL | OS 인박스만 | **통과** — 기존 + dwrite·combase·ole32·bcryptprimitives·shell32 + **클라우드 4종**(winhttp·crypt32·ws2_32·bcrypt — ADR-0006 개정. `scripts/budget-b3.ps1` 단일 출처) | 08-01 실기 |
