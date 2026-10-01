@@ -76,7 +76,7 @@
 - ✅ M5-2 릴리스 파이프라인(`feat/m5-release-pipeline`, 07-15) — `.github/workflows/release.yml` 신설: 버전 태그 push(`0.5.0` 형식·`v` 접두사 허용) → windows-latest `cargo test`+release 빌드 → **예산 게이트(B2 exe ≤10MB·B3 임포트 화이트리스트 — CI와 동일 스크립트 `scripts/budget-b3.ps1`)** 통과 필수 → `NexaDir-<버전>-win-x64.exe`(포터블 단일 exe — DR-3) 개명 → **GitHub Release 자동 생성·첨부**(자동 노트). `workflow_dispatch` 수동 실행=게이트+아티팩트까지(Release는 태그에서만). 릴리스 절차 SSOT = [18](18-build-and-test.md) §5(`git tag X.Y.Z && git push origin X.Y.Z`).
 - ✅ M5-3 접근성·IME 마감·서명 결정(`feat/m5-a11y`, 07-15) — **UIA SelectionItem 실동작**(Select/Add/Remove → WM_APP_UIA_SELECT UI 스레드 전달·select_program 범위 방어)·**구조 변경 이벤트**(uia_notify (패널·경로·행 수) 서명 → ChildrenInvalidated — M2-7 1차 한계 2건 해소)·**리네임 인라인 IME 조합 창 배치**(rename_edit_info — M3-2 α 해소)·**서명 = 무서명 유지 확정**(DR-3 갱신 — 원본 PKG-4 공동 보류[Store $19 vs OV 연 $100~400 비용 결정 대기]·SmartScreen 감수·인증서 확보 시 release.yml 서명 단계 추가).
 
-## 포스트 M5 — UX 고도화·배포 채널 정착 (`0.7.0`~`0.20.0`)
+## 포스트 M5 — UX 고도화·배포 채널 정착 (`0.7.0`~`0.21.0`)
 
 > M5 마감 이후는 **사용자 QA가 다음 작업을 정하는** 구간이다(마일스톤 단위가 아니라 릴리스 단위).
 > 시간순 서사 = [DEVLOG](DEVLOG.md)·[journal/](journal/), 사용자용 = 위키 [개발 여정](wiki/개발-여정.md).
@@ -101,11 +101,11 @@
   (플러그인이 한 번도 배포된 적 없었다는 실측 → 자산 6종) · `0.18.1` = 설치형 VERSIONINFO 보강으로
   **Defender ML 오탐 해소**.
 - 🚧 **실기 QA 대기** — X-40 클라우드 실검증 · X-42~X-46 배포분([TODO](TODO.md) §7).
-- ⏳ **미배포(10-01 — 다음 릴리스 후보)** — **X-58 텍스트 편집 컨텍스트 메뉴 + Edit 메뉴 클립보드 4종**: 경로바
+- ✅ **`0.21.0`**(10-01) — **X-58 텍스트 편집 컨텍스트 메뉴 + Edit 메뉴 클립보드 4종**: 경로바
   편집·이름변경 필드 우클릭 네이티브 팝업(실행 취소/잘라내기/복사/붙여넣기/삭제/전체 선택) · 도크 Info/Preview·F3 창
   복사/전체 선택 · 터미널 복사/붙여넣기/전체 선택 · Edit 메뉴 Cut/Copy/Paste/Select All(한 디스패치 `do_clip`) · 첫 우클릭 =
   편집 진입만·둘째 = 메뉴(`af95fae`). **+ 경로 바 한글 입력 panic 수정**(`shellpath.rs` `[..6]` 문자 경계 — 설치본 crash.txt
-  09-22, `8ff3a25`). 설치본은 10-01 수동 교체(exe·플러그인 2종). 실기 QA 대기.
+  09-22, `8ff3a25`). 설치본은 10-01 수동 교체(exe·플러그인 2종). winget·choco 동시 제출(`0.20.0` 두 채널 해소 상태). 실기 QA 대기.
 - ✅ **`0.20.0`**(09-08) — **터미널 테마**(X-49): 라이트 팔레트(GitHub Light — 16색 ≥3:1)·스킴
   15종(다크 9·라이트 6)·선택자 system/dark/light/스킴 id + 모드별 기본(다크 앱 + 라이트 스킴 허용)·설정 창
   터미널 하단 콤보. 셀 색 기호화로 테마 전환 즉시 스크롤백 재도장. 선택 = 반전 확정(라이트 무색 셀만 accent).

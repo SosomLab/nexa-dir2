@@ -8,6 +8,7 @@
 
 ## 2026-10-01
 
+- **릴리스 `0.21.0`(사용자 지시 — winget·choco 확인 후 함께)**: 채널 실측 = winget 열린 NexaDir PR 0 · choco `0.20.0` 두 패키지 `Approved` → **두 채널 모두 제출**. 승격 `5a8e2a4`(Cargo·lock·lang 3종) + 문서 1차(README·CLAUDE §1/§7·STATUS·MILESTONES ✅ `0.21.0`·TODO X-58 배포·위키 기능 3쪽[탐색·하단 도크·개요]) → main ff → push → CI → 태그 → Release → winget PR 2건 → 문서 2차(실측·PR 번호·설치/Home/개발 여정 위키) → 위키 발행. 상세 [journal/2026-10-01.md](journal/2026-10-01.md).
 - **진행사항 최신화·main push(사용자 지시)**: 10-01 코드 3건(X-58 `16dd5d9`·우클릭 순서 `af95fae`·shellpath panic `8ff3a25`)을 CLAUDE §1/§7·STATUS 헤더·MILESTONES 미배포 불릿·TODO X-58 상태에 반영. 전부 main 직커밋(브랜치는 X-58만 ff). 위키는 릴리스 단위 기록이라 미배포분은 발행 보류. 상세 [journal/2026-10-01.md](journal/2026-10-01.md).
 - **설치본 교체 + `shellpath.rs` panic 수정(사용자 지시 — `8ff3a25`)**: 설치 폴더(`%LOCALAPPDATA%\Programs\Nexa Dir`)의 `NexaDir.exe 0.19.0`·플러그인 2종을 설치기 없이 현재 릴리스 빌드·dist wasm으로 교체(iss Files 섹션 동일·해시 확인·기동 확인). 설치본 `data\crash.txt`(09-22)에서 **경로 바 한글 입력 시 `trimmed[..6]` 문자 경계 panic** 발견 → `get(..6)`으로 수정 + 회귀 테스트. 132 green. 상세 [journal/2026-10-01.md](journal/2026-10-01.md).
 - **디버그 실행 + 브레드크럼 우클릭 순서 보정(사용자 요청)**: 실측상 우클릭 1회에 편집 진입과 메뉴가 동시에 떴다(누름→뗌 사이 재그리기 완료 → 뗌 시점 필드 히트 참). `rclick_began_edit` 플래그로 편집을 시작시킨 클릭의 뗌에서는 메뉴 억제 → 1회 = 편집·2회째 = 메뉴(캡처 검증). 디버그 기동 직후 `0xc0000409` 1건은 미재현(stderr 캡처 중). 상세 [journal/2026-10-01.md](journal/2026-10-01.md).
