@@ -1016,6 +1016,10 @@ struct State {
     term_drag: Option<usize>,
     /// 터미널 마우스 모드 전달 중 눌린 버튼(X-5) — (패널, SGR 버튼 코드).
     term_mouse_btn: Option<(usize, u8)>,
+    /// 이번 우클릭(누름)이 경로바 **편집을 시작**시켰음 — 같은 클릭의 뗌에서는 편집 컨텍스트
+    /// 메뉴를 띄우지 않는다(사용자 요청 10-01: 첫 우클릭 = 편집 진입만, 다음 우클릭 = 메뉴.
+    /// 누름→뗌 사이에 재그리기가 끝나면 뗌 시점 필드 히트가 참이 돼 메뉴가 즉시 뜨던 결함).
+    rclick_began_edit: bool,
     /// 터미널 캐럿 깜빡임 위상(QA 07-14) — 포커스 중 타이머가 토글, 입력 시 true 리셋.
     term_caret_on: bool,
     /// 파일 작업 undo/redo 히스토리(M3-3, 원본 B-13u) — 세션 한정.
@@ -1542,6 +1546,7 @@ pub fn run() -> Result<()> {
         term_focus: None,
         term_drag: None,
         term_mouse_btn: None,
+        rclick_began_edit: false,
         term_caret_on: true,
         history: nexa_ops::history::OperationHistory::default(),
     });
@@ -7446,7 +7451,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(idx) = st.panel_at_pt(x, y) {
                     set_active(hwnd, st, idx);
                     let mut inv = Invalidations::default();
+                    let was_editing = st.panels[idx].pathbar.is_editing();
                     st.panels[idx].on_event(&InputEvent::RightDown { x, y }, &mut inv);
+                    // 이 우클릭이 편집을 시작시켰으면 뗌의 편집 메뉴 억제(10-01)
+                    st.rclick_began_edit = !was_editing && st.panels[idx].pathbar.is_editing();
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
@@ -7476,7 +7484,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 텍스트 편집 컨텍스트 메뉴(사용자 요청 10-01 — 네이티브 EDIT 컨트롤 메뉴 대응):
             // 경로바 편집 필드·이름변경 필드·도크 Info/Preview 텍스트·도크 터미널.
             // 모달 팝업은 State 참조를 끊고 표시(재진입 규약).
-            let target = state_of(hwnd).and_then(|st| edit_menu_target_at(st, x, y));
+            let target = state_of(hwnd).and_then(|st| {
+                if std::mem::take(&mut st.rclick_began_edit) {
+                    return None; // 편집 진입 클릭 — 메뉴는 다음 우클릭부터
+                }
+                edit_menu_target_at(st, x, y)
+            });
             if let Some(target) = target {
                 if let (EditMenuTarget::Term(p), Some(st)) = (target, state_of(hwnd)) {
                     // 터미널 우클릭 = 좌클릭과 같이 키 포커스 이동(붙여넣기 대상 확정)
