@@ -947,6 +947,11 @@ fn to_rtf_mono(text: &str) -> String {
     )
 }
 
+/// 클립보드에 텍스트가 있는가(컨텍스트 메뉴 "붙여넣기" 활성 판정 — 10-01).
+pub fn has_text() -> bool {
+    unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok() }
+}
+
 /// OS 클립보드 텍스트 읽기(CF_UNICODETEXT — 시스템이 CF_TEXT를 자동 변환 제공) —
 /// 편집 필드·터미널 Ctrl+V(QA 07-14).
 pub unsafe fn read_text() -> Option<String> {

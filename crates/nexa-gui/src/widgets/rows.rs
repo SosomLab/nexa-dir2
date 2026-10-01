@@ -497,6 +497,41 @@ impl<S: RowSource> VirtualRows<S> {
         }
     }
 
+    /// 이름변경 실행 취소(단일 단계 — Edit 메뉴/컨텍스트 메뉴, 10-01). 복귀했으면 `true`.
+    pub fn rename_undo(&mut self, inv: &mut Invalidations) -> bool {
+        let Some((_, es)) = &mut self.rename else {
+            return false;
+        };
+        let did = es.undo();
+        if did {
+            inv.push(self.bounds);
+        }
+        did
+    }
+
+    /// 이름변경 선택 삭제(컨텍스트 메뉴 "삭제"). 지웠으면 `true`.
+    pub fn rename_delete(&mut self, inv: &mut Invalidations) -> bool {
+        let Some((_, es)) = &mut self.rename else {
+            return false;
+        };
+        let did = es.delete_selected();
+        if did {
+            inv.push(self.bounds);
+        }
+        did
+    }
+
+    /// 이름변경 컨텍스트 메뉴 상태: (실행 취소 가능, 선택 있음, 비어 있음). 편집 중 아니면 `None`.
+    pub fn rename_menu_state(&self) -> Option<(bool, bool, bool)> {
+        let (_, es) = self.rename.as_ref()?;
+        Some((es.can_undo(), es.has_selection(), es.is_empty()))
+    }
+
+    /// 이름변경 필드 안 좌표인가(우클릭 컨텍스트 메뉴 판정).
+    pub fn rename_hit(&self, x: i32, y: i32) -> bool {
+        self.rename.as_ref().is_some_and(|(_, es)| es.hit(x, y))
+    }
+
     /// 편집 취소(Esc·외부 클릭) — 입력 무시.
     pub fn cancel_rename(&mut self, inv: &mut Invalidations) {
         if self.rename.take().is_some() {

@@ -25,8 +25,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, TranslateMessage,
     GWLP_USERDATA, IDC_IBEAM, MSG, SB_HORZ, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
     WINDOW_EX_STYLE, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_HSCROLL, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSW,
-    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
+    WM_VSCROLL, WNDCLASSW, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
 };
 
 const CLASS: PCWSTR = w!("NexaPreviewWnd");
@@ -277,6 +277,77 @@ unsafe fn hit(hwnd: HWND, st: &PvState, x: i32, y: i32) -> (usize, usize) {
         }
     }
     (line, best)
+}
+
+/// 전체 선택(우클릭 컨텍스트 메뉴 — 10-01): 첫 라인 0 ~ 마지막 라인 끝(도크 select_all_text 규약).
+fn select_all(st: &mut PvState) -> bool {
+    if st.text.is_empty() {
+        return false;
+    }
+    let last = st.text.len() - 1;
+    let end = if st.text[last].starts_with('\u{1}') {
+        0
+    } else {
+        st.text[last].chars().count()
+    };
+    st.sel = Some(((0, 0), (last, end)));
+    st.drag = false;
+    true
+}
+
+/// 우클릭 컨텍스트 메뉴(10-01 — 도크 Info/Preview와 동일: 복사·전체 선택). 네이티브 팝업 —
+/// 모달 루프 동안 wndproc 재진입이 있으므로 `&mut PvState`를 끊고 표시 후 재차용.
+unsafe fn show_context_menu(hwnd: HWND, state: *mut PvState) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, TrackPopupMenuEx, MF_GRAYED, MF_SEPARATOR,
+        MF_STRING, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
+    };
+    const ID_COPY: usize = 1;
+    const ID_SELECT_ALL: usize = 2;
+    let (has_sel, has_text) = {
+        let st = &*state;
+        (selected_text(st).is_some(), !st.text.is_empty())
+    };
+    let Ok(menu) = CreatePopupMenu() else { return };
+    let append = |id: usize, key: &str, enabled: bool| {
+        let wide: Vec<u16> = crate::i18n::tr(key)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let flags = if enabled {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+        let _ = AppendMenuW(menu, flags, id, PCWSTR(wide.as_ptr()));
+    };
+    append(ID_COPY, "menu.edit.copy", has_sel);
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+    append(ID_SELECT_ALL, "menu.edit.selectAll", has_text);
+    let mut pt = POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    let cmd = TrackPopupMenuEx(
+        menu,
+        (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD).0,
+        pt.x,
+        pt.y,
+        hwnd,
+        None,
+    );
+    let _ = DestroyMenu(menu);
+    let st = &mut *state;
+    match cmd.0 as usize {
+        ID_COPY => {
+            if let Some(t) = selected_text(st) {
+                let _ = crate::clipboard::write_text_rich(hwnd, &t);
+            }
+        }
+        ID_SELECT_ALL => {
+            select_all(st);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+        }
+        _ => {}
+    }
 }
 
 /// 선택 텍스트(정규화 — Ctrl+C 복사. 도크 selected_text 규약 동일).
@@ -691,6 +762,13 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     }
                 }
+            }
+            LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            // 우클릭 = 복사/전체 선택 컨텍스트 메뉴(10-01 — 도크와 동일)
+            if !state.is_null() {
+                show_context_menu(hwnd, state);
             }
             LRESULT(0)
         }

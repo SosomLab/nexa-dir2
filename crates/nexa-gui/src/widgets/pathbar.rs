@@ -359,6 +359,42 @@ impl PathBar {
         }
     }
 
+    /// 편집 컨텍스트 메뉴 상태(10-01 — 네이티브 EDIT 메뉴 대응): (실행 취소 가능, 선택 있음, 비어 있음).
+    /// 편집 중이 아니면 `None`.
+    pub fn edit_menu_state(&self) -> Option<(bool, bool, bool)> {
+        let es = self.edit.as_ref()?;
+        Some((es.can_undo(), es.has_selection(), es.is_empty()))
+    }
+
+    /// 편집 필드 안 좌표인가(우클릭 컨텍스트 메뉴 판정 — 편집 중이 아니면 false).
+    pub fn edit_hit(&self, x: i32, y: i32) -> bool {
+        self.edit.as_ref().is_some_and(|es| es.hit(x, y))
+    }
+
+    /// 편집 실행 취소(단일 단계). 복귀했으면 `true`.
+    pub fn edit_undo(&mut self, inv: &mut Invalidations) -> bool {
+        let Some(es) = &mut self.edit else {
+            return false;
+        };
+        let did = es.undo();
+        if did {
+            inv.push(self.bounds);
+        }
+        did
+    }
+
+    /// 편집 선택 삭제(컨텍스트 메뉴 "삭제"). 지웠으면 `true`.
+    pub fn edit_delete(&mut self, inv: &mut Invalidations) -> bool {
+        let Some(es) = &mut self.edit else {
+            return false;
+        };
+        let did = es.delete_selected();
+        if did {
+            inv.push(self.bounds);
+        }
+        did
+    }
+
     /// 좌표의 세그먼트 인덱스(페인트가 캐시한 범위 기준).
     fn segment_at(&self, x: i32, y: i32) -> Option<usize> {
         if !self.bounds.contains(Point { x, y }) {

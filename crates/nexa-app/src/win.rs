@@ -247,6 +247,12 @@ const CMD_ABOUT: u32 = 66;
 const CMD_TOGGLE_FOLDERS_FIRST: u32 = 67;
 /// 항상 맨 위에 표시 토글(사용자 요청 08-23 — View 메뉴 + panel 블록 툴바 버튼·영속).
 const CMD_TOGGLE_TOPMOST: u32 = 68;
+/// 편집 메뉴 클립보드 4종(사용자 요청 10-01 — 포커스 문맥별 디스패치 [`do_clip`]:
+/// 경로바 편집·이름변경·도크 터미널·도크 텍스트 선택·파일 목록).
+const CMD_CUT: u32 = 69;
+const CMD_COPY: u32 = 70;
+const CMD_PASTE: u32 = 71;
+const CMD_SELECT_ALL: u32 = 72;
 /// 퀵 런처 항목(M5-1) — 200 + 항목 인덱스(항목 수 상한 32 — config.rs 파싱 방어와 동일).
 const CMD_LAUNCHER_BASE: u32 = 200;
 /// 클라우드 연결(X-36 — 검토서 26 §2): 연결별 하위 명령 + 연결 추가 후보.
@@ -439,6 +445,13 @@ fn build_menus(
                 // 활성/비활성 표시는 후속(메뉴 위젯 enabled 미지원) — 없으면 상태바로 알림(M3-3)
                 MenuItem::new(CMD_UNDO, tr("menu.edit.undo"), "Ctrl+Z"),
                 MenuItem::new(CMD_REDO, tr("menu.edit.redo"), "Ctrl+Y"),
+                MenuItem::separator(),
+                // 클립보드 4종(10-01) — 포커스 문맥별(경로바/이름변경 필드·터미널·도크 텍스트·파일)
+                MenuItem::new(CMD_CUT, tr("menu.edit.cut"), "Ctrl+X"),
+                MenuItem::new(CMD_COPY, tr("menu.edit.copy"), "Ctrl+C"),
+                MenuItem::new(CMD_PASTE, tr("menu.edit.paste"), "Ctrl+V"),
+                MenuItem::separator(),
+                MenuItem::new(CMD_SELECT_ALL, tr("menu.edit.selectAll"), "Ctrl+A"),
                 MenuItem::separator(),
                 MenuItem::new(CMD_BULK_RENAME, tr("menu.edit.bulkRename"), "Ctrl+Shift+R"),
             ],
@@ -4855,8 +4868,27 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let _ = PostMessageW(Some(hwnd), WM_APP_ABOUT, WPARAM(0), LPARAM(0));
         }
         CMD_UNDO | CMD_REDO => {
+            // 텍스트 필드 편집 중의 실행 취소는 필드 내용 복귀(10-01 — 네이티브 EDIT 메뉴 대응)
+            if id == CMD_UNDO
+                && (st.active_panel().pathbar.is_editing()
+                    || st.active_panel().rows().is_renaming())
+            {
+                do_clip(hwnd, st, ClipAct::Undo);
+                return;
+            }
             do_undo_redo(hwnd, st, id == CMD_REDO);
             return; // 결과 노트 보존(말미 update_title("")이 지우지 않도록)
+        }
+        CMD_CUT | CMD_COPY | CMD_PASTE | CMD_SELECT_ALL => {
+            // 편집 메뉴 클립보드(10-01) — 단축키와 동일 경로(포커스 문맥 디스패치)
+            let act = match id {
+                CMD_CUT => ClipAct::Cut,
+                CMD_COPY => ClipAct::Copy,
+                CMD_PASTE => ClipAct::Paste,
+                _ => ClipAct::SelectAll,
+            };
+            do_clip(hwnd, st, act);
+            return;
         }
         CMD_REFRESH => {
             // 클라우드 경로면 캐시를 버리고 재조회(F5 = 강제 새로고침 — X-37 2차)
@@ -6494,6 +6526,398 @@ fn update_path_suggest(st: &mut State, inv: &mut Invalidations) {
     st.active_panel().pathbar.set_suggestions(items, inv);
 }
 
+/// 편집 동작(Edit 메뉴·텍스트 컨텍스트 메뉴·단축키 공용 — 사용자 요청 10-01).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ClipAct {
+    Undo,
+    Cut,
+    Copy,
+    Paste,
+    /// 선택 삭제(텍스트 필드 컨텍스트 메뉴 전용 — 파일 삭제와 무관).
+    Delete,
+    SelectAll,
+}
+
+/// Ctrl+문자 → 편집 동작(편집 필드 중 단축키 — Ctrl+A는 `edit_key_of`가 EditKey로 처리).
+fn clip_act_of(vk: u16) -> Option<ClipAct> {
+    match vk as u8 {
+        b'C' => Some(ClipAct::Copy),
+        b'X' => Some(ClipAct::Cut),
+        b'V' => Some(ClipAct::Paste),
+        b'Z' => Some(ClipAct::Undo),
+        _ => None,
+    }
+}
+
+/// 포커스 문맥별 편집 동작 디스패치(10-01): ① 경로바 편집 → ② 인라인 이름변경 →
+/// ③ 도크 터미널(키 포커스) → ④ 도크 Info/Preview 텍스트 선택(복사만) → ⑤ 파일 목록
+/// (기존 Ctrl+A/C/X/V·Undo 경로). 처리했으면 `true`(Paste = 전송 시작 시).
+unsafe fn do_clip(hwnd: HWND, st: &mut State, act: ClipAct) -> bool {
+    use nexa_gui::EditKey;
+    let mut inv = Invalidations::default();
+    // ① 경로바 편집 필드
+    if st.active_panel().pathbar.is_editing() {
+        let pb = &mut st.active_panel().pathbar;
+        let changed = match act {
+            ClipAct::Undo => pb.edit_undo(&mut inv),
+            ClipAct::Cut => match pb.edit_cut(&mut inv) {
+                Some(t) => {
+                    crate::clipboard::write_text(hwnd, &t);
+                    true
+                }
+                None => false,
+            },
+            ClipAct::Copy => {
+                if let Some(t) = pb.edit_selected_text() {
+                    crate::clipboard::write_text(hwnd, &t);
+                }
+                false
+            }
+            ClipAct::Paste => match paste_line() {
+                Some(t) => {
+                    pb.edit_paste(&t, &mut inv);
+                    true
+                }
+                None => false,
+            },
+            ClipAct::Delete => pb.edit_delete(&mut inv),
+            ClipAct::SelectAll => {
+                pb.edit_key(EditKey::SelectAll, false, &mut inv);
+                false
+            }
+        };
+        if changed {
+            update_path_suggest(st, &mut inv); // 텍스트 변경 — 제안 갱신(PATH-SUG)
+        }
+        flush_invalidations(hwnd, &mut inv);
+        update_title(hwnd, st, "");
+        return true;
+    }
+    // ② 인라인 이름변경 필드
+    if st.active_panel().rows().is_renaming() {
+        let rows = st.active_panel().rows_mut();
+        match act {
+            ClipAct::Undo => {
+                rows.rename_undo(&mut inv);
+            }
+            ClipAct::Cut => {
+                if let Some(t) = rows.rename_cut(&mut inv) {
+                    crate::clipboard::write_text(hwnd, &t);
+                }
+            }
+            ClipAct::Copy => {
+                if let Some(t) = rows.rename_selected_text() {
+                    crate::clipboard::write_text(hwnd, &t);
+                }
+            }
+            ClipAct::Paste => {
+                if let Some(t) = paste_line() {
+                    rows.rename_paste(&t, &mut inv);
+                }
+            }
+            ClipAct::Delete => {
+                rows.rename_delete(&mut inv);
+            }
+            ClipAct::SelectAll => rows.rename_key(EditKey::SelectAll, false, &mut inv),
+        }
+        flush_invalidations(hwnd, &mut inv);
+        return true;
+    }
+    // ③ 도크 터미널 키 포커스(복사·붙여넣기·전체 선택 — 잘라내기는 복사로 간주)
+    if let Some(ti) = st.term_focus {
+        if term_alive(st, ti) {
+            let did = match act {
+                ClipAct::Copy | ClipAct::Cut => term_copy_selection(hwnd, st, ti),
+                ClipAct::Paste => term_paste(st, ti),
+                ClipAct::SelectAll => term_select_all(st, ti),
+                ClipAct::Undo | ClipAct::Delete => false,
+            };
+            st.term_caret_on = true;
+            invalidate_dock(hwnd, st, ti);
+            return did;
+        }
+    }
+    // ④ 도크 Info/Preview 텍스트 선택 우선(QA 07-15) — 복사만
+    if act == ClipAct::Copy {
+        if let Some(t) = st
+            .panels
+            .iter()
+            .find_map(|p| p.dock_visible().then(|| p.dock.selected_text()).flatten())
+        {
+            // rich 동시 게시(07-26) — 모노 RTF로 표/박스 정렬 유지
+            crate::clipboard::write_text_rich(hwnd, &t);
+            return true;
+        }
+    }
+    // ⑤ 파일 목록(M3-5 — CF_HDROP 단일 출처. 선택 없으면 클립보드 유지)
+    match act {
+        ClipAct::Undo => {
+            do_undo_redo(hwnd, st, false);
+            true
+        }
+        ClipAct::SelectAll => {
+            st.active_panel().on_event(&InputEvent::SelectAll, &mut inv);
+            flush_invalidations(hwnd, &mut inv);
+            update_status(hwnd, st);
+            true
+        }
+        ClipAct::Copy | ClipAct::Cut => {
+            let op = if act == ClipAct::Copy {
+                nexa_ops::Op::Copy
+            } else {
+                nexa_ops::Op::Move
+            };
+            if let Some((paths, op)) = clip_from_selection(st, op) {
+                crate::clipboard::write_file_list(hwnd, &paths, op);
+                return true;
+            }
+            false
+        }
+        ClipAct::Paste => {
+            if let Some((paths, op)) = crate::clipboard::read_file_list() {
+                if op == nexa_ops::Op::Move {
+                    crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
+                }
+                // 폴더 1개 선택 = 그 폴더 안으로(X-32), 그 외 = 현재 폴더
+                let dest = paste_dest(st);
+                start_transfer(hwnd, st, paths, dest, op);
+                return true;
+            } else if crate::clipboard::has_virtual_files() {
+                let dest = paste_dest(st);
+                paste_virtual(hwnd, st, dest); // 가상 파일 폴백(X-42)
+                return true;
+            }
+            false
+        }
+        ClipAct::Delete => false,
+    }
+}
+
+/// 도크 터미널이 표시 중·살아 있는가(do_clip ③·컨텍스트 메뉴 대상 판정).
+fn term_alive(st: &State, ti: usize) -> bool {
+    st.panels[ti].dock_visible()
+        && st.panels[ti].dock.active_kind() == 2
+        && st.terms[ti].as_ref().is_some_and(|t| !t.exited)
+}
+
+/// 터미널 선택 복사 = 평문 + HTML + RTF(X-50 — 설정 `term_copy_format`). 색은 지금 화면의
+/// 팔레트로 해석·글꼴은 체인 1순위. 선택 없으면 `false`. 복사 후 선택 해제(WT 규약).
+unsafe fn term_copy_selection(hwnd: HWND, st: &mut State, ti: usize) -> bool {
+    let pal = nexa_term::resolve_scheme(
+        &st.term_theme,
+        &st.term_theme_dark,
+        &st.term_theme_light,
+        st.theme.is_dark,
+    )
+    .palette;
+    let font = st
+        .term_font
+        .split(',')
+        .next()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .unwrap_or("Consolas")
+        .to_string();
+    let size = st.term_font_size;
+    let want_html = matches!(st.term_copy_format.as_str(), "html" | "both");
+    let want_rtf = matches!(st.term_copy_format.as_str(), "rtf" | "both");
+    let Some(t) = &mut st.terms[ti] else {
+        return false;
+    };
+    let Some(((sl, sc), (el, ec))) = t.sel_norm() else {
+        return false;
+    };
+    let text = t.screen.get_text(sl, sc, el, ec);
+    let runs = t.screen.get_runs(sl, sc, el, ec);
+    let html = want_html
+        .then(|| nexa_term::export::cf_html(&nexa_term::export::to_html(&runs, &pal, &font, size)));
+    let rtf = want_rtf.then(|| nexa_term::export::to_rtf(&runs, &pal, &font, size));
+    crate::clipboard::write_text_html_rtf(hwnd, &text, html.as_deref(), rtf.as_deref());
+    t.sel = None;
+    true
+}
+
+/// 터미널 붙여넣기 — 클립보드 텍스트를 CR 줄바꿈으로 셸 stdin에 전달(QA 07-14 규약).
+/// 스크롤백 보기 해제. 텍스트 없으면 `false`.
+unsafe fn term_paste(st: &mut State, ti: usize) -> bool {
+    let Some(txt) = crate::clipboard::read_text() else {
+        return false;
+    };
+    let Some(t) = &mut st.terms[ti] else {
+        return false;
+    };
+    t.pty.write(&txt.replace("\r\n", "\r").replace('\n', "\r"));
+    t.view_off = 0;
+    true
+}
+
+/// 터미널 전체 선택(컨텍스트 메뉴/Edit 메뉴 — 10-01): 스크롤백 첫 줄 ~ 화면 마지막 줄 끝.
+fn term_select_all(st: &mut State, ti: usize) -> bool {
+    let Some(t) = &mut st.terms[ti] else {
+        return false;
+    };
+    let n = t.screen.line_count();
+    if n == 0 {
+        return false;
+    }
+    t.sel = Some(((0, 0), (n - 1, t.screen.cols().saturating_sub(1))));
+    true
+}
+
+/// 텍스트 편집 컨텍스트 메뉴 대상(10-01 — 네이티브 EDIT 컨트롤 메뉴 대응).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EditMenuTarget {
+    /// 활성 패널 경로바 편집 필드.
+    PathBar,
+    /// 활성 패널 인라인 이름변경 필드.
+    Rename,
+    /// 패널 도크 Info/Preview 텍스트 내용.
+    Dock(usize),
+    /// 패널 도크 터미널.
+    Term(usize),
+}
+
+/// 우클릭 좌표의 텍스트 편집 메뉴 대상 판정. 해당 없음 = `None`(기존 셸 메뉴 경로).
+fn edit_menu_target_at(st: &State, x: i32, y: i32) -> Option<EditMenuTarget> {
+    let active = &st.panels[st.active];
+    if active.pathbar.edit_hit(x, y) {
+        return Some(EditMenuTarget::PathBar);
+    }
+    if active.rows().rename_hit(x, y) {
+        return Some(EditMenuTarget::Rename);
+    }
+    let p = st.panel_at_pt(x, y)?;
+    let d = &st.panels[p].dock;
+    if !(st.panels[p].dock_visible() && d.bounds().h > 0 && d.content_hit(x, y)) {
+        return None;
+    }
+    if d.active_kind() == 2 {
+        term_alive(st, p).then_some(EditMenuTarget::Term(p))
+    } else {
+        d.text_selectable().then_some(EditMenuTarget::Dock(p))
+    }
+}
+
+/// 텍스트 편집 컨텍스트 메뉴(10-01 — 사용자 요청: 설정 창의 네이티브 EDIT 메뉴와 같은
+/// 실행 취소/잘라내기/복사/붙여넣기/삭제/전체 선택). 네이티브 팝업 — TrackPopupMenuEx
+/// 모달 루프 동안 wndproc 재진입이 있으므로 **State 참조 없이** 표시 후 결과만
+/// 재획득해 반영(show_tab_menu 규약). 항목 활성은 표시 시점 상태로 판정.
+unsafe fn show_edit_popup(hwnd: HWND, target: EditMenuTarget) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenuEx, MF_GRAYED,
+        MF_SEPARATOR, MF_STRING, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
+    };
+    const ID_UNDO: usize = 1;
+    const ID_CUT: usize = 2;
+    const ID_COPY: usize = 3;
+    const ID_PASTE: usize = 4;
+    const ID_DELETE: usize = 5;
+    const ID_SELECT_ALL: usize = 6;
+    const SEP: (usize, &str, bool) = (0, "", false);
+    // 1단계: 항목·활성 판정(State 참조 종료 후 팝업)
+    let items: Vec<(usize, &str, bool)> = {
+        let Some(st) = state_of(hwnd) else { return };
+        let can_paste = crate::clipboard::has_text();
+        match target {
+            EditMenuTarget::PathBar | EditMenuTarget::Rename => {
+                let state = if target == EditMenuTarget::PathBar {
+                    st.active_panel().pathbar.edit_menu_state()
+                } else {
+                    st.active_panel().rows().rename_menu_state()
+                };
+                let Some((can_undo, has_sel, empty)) = state else {
+                    return;
+                };
+                vec![
+                    (ID_UNDO, "menu.edit.undo", can_undo),
+                    SEP,
+                    (ID_CUT, "menu.edit.cut", has_sel),
+                    (ID_COPY, "menu.edit.copy", has_sel),
+                    (ID_PASTE, "menu.edit.paste", can_paste),
+                    (ID_DELETE, "menu.edit.delete", has_sel),
+                    SEP,
+                    (ID_SELECT_ALL, "menu.edit.selectAll", !empty),
+                ]
+            }
+            EditMenuTarget::Dock(p) => {
+                let d = &st.panels[p].dock;
+                vec![
+                    (ID_COPY, "menu.edit.copy", d.selected_text().is_some()),
+                    SEP,
+                    (ID_SELECT_ALL, "menu.edit.selectAll", d.text_selectable()),
+                ]
+            }
+            EditMenuTarget::Term(p) => {
+                let has_sel = st.terms[p].as_ref().is_some_and(|t| t.sel_norm().is_some());
+                vec![
+                    (ID_COPY, "menu.edit.copy", has_sel),
+                    (ID_PASTE, "menu.edit.paste", can_paste),
+                    SEP,
+                    (ID_SELECT_ALL, "menu.edit.selectAll", true),
+                ]
+            }
+        }
+    };
+    let Ok(menu) = CreatePopupMenu() else { return };
+    for (id, key, enabled) in items {
+        if id == 0 {
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            continue;
+        }
+        let wide: Vec<u16> = tr(key).encode_utf16().chain(std::iter::once(0)).collect();
+        let flags = if enabled {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+        let _ = AppendMenuW(menu, flags, id, PCWSTR(wide.as_ptr()));
+    }
+    let mut pt = windows::Win32::Foundation::POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    let cmd = TrackPopupMenuEx(
+        menu,
+        (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD).0,
+        pt.x,
+        pt.y,
+        hwnd,
+        None,
+    );
+    let _ = DestroyMenu(menu);
+    let act = match cmd.0 as usize {
+        ID_UNDO => ClipAct::Undo,
+        ID_CUT => ClipAct::Cut,
+        ID_COPY => ClipAct::Copy,
+        ID_PASTE => ClipAct::Paste,
+        ID_DELETE => ClipAct::Delete,
+        ID_SELECT_ALL => ClipAct::SelectAll,
+        _ => return,
+    };
+    // 2단계: 결과 반영(State 재획득)
+    let Some(st) = state_of(hwnd) else { return };
+    match target {
+        EditMenuTarget::Dock(p) => {
+            // 도크 텍스트는 포커스 개념이 없어 대상 패널 직접 지정(do_clip ④는 양 패널 탐색)
+            let mut inv = Invalidations::default();
+            match act {
+                ClipAct::Copy => {
+                    if let Some(t) = st.panels[p].dock.selected_text() {
+                        crate::clipboard::write_text_rich(hwnd, &t);
+                    }
+                }
+                ClipAct::SelectAll => {
+                    st.panels[p].dock.select_all_text(&mut inv);
+                }
+                _ => {}
+            }
+            flush_invalidations(hwnd, &mut inv);
+        }
+        _ => {
+            // 경로바/이름변경/터미널 = do_clip 문맥 순서가 대상과 일치(터미널은 호출 전 포커스 이동)
+            do_clip(hwnd, st, act);
+        }
+    }
+}
+
 /// 붙여넣기용 클립보드 텍스트 정제(편집 필드는 한 줄) — 첫 줄만·제어 문자 제거.
 unsafe fn paste_line() -> Option<String> {
     let raw = crate::clipboard::read_text()?;
@@ -7049,6 +7473,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0);
                 }
             }
+            // 텍스트 편집 컨텍스트 메뉴(사용자 요청 10-01 — 네이티브 EDIT 컨트롤 메뉴 대응):
+            // 경로바 편집 필드·이름변경 필드·도크 Info/Preview 텍스트·도크 터미널.
+            // 모달 팝업은 State 참조를 끊고 표시(재진입 규약).
+            let target = state_of(hwnd).and_then(|st| edit_menu_target_at(st, x, y));
+            if let Some(target) = target {
+                if let (EditMenuTarget::Term(p), Some(st)) = (target, state_of(hwnd)) {
+                    // 터미널 우클릭 = 좌클릭과 같이 키 포커스 이동(붙여넣기 대상 확정)
+                    st.term_focus = Some(p);
+                    st.term_caret_on = true;
+                    SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
+                    let mut inv = Invalidations::default();
+                    sync_focus_visuals(st, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                }
+                show_edit_popup(hwnd, target);
+                return LRESULT(0);
+            }
             let hit = state_of(hwnd).map(|st| {
                 let active = st.panel_at(x) == Some(st.active);
                 let rows = st.active_panel().rows();
@@ -7435,21 +7876,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 자동완성 ↑/↓(PATH-SUG) — 선택 미리 채움·↑ 복원
                         let d = if vk == VK_UP.0 { -1 } else { 1 };
                         st.active_panel().pathbar.suggest_move(d, &mut inv);
-                    } else if ctrl && vk == b'C' as u16 {
-                        // 표준 편집 클립보드(QA 07-14) — 선택 복사/잘라내기/붙여넣기
-                        if let Some(t) = st.active_panel().pathbar.edit_selected_text() {
-                            crate::clipboard::write_text(hwnd, &t);
-                        }
-                    } else if ctrl && vk == b'X' as u16 {
-                        if let Some(t) = st.active_panel().pathbar.edit_cut(&mut inv) {
-                            crate::clipboard::write_text(hwnd, &t);
-                        }
-                        update_path_suggest(st, &mut inv); // 텍스트 변경 — 제안 갱신
-                    } else if ctrl && vk == b'V' as u16 {
-                        if let Some(t) = paste_line() {
-                            st.active_panel().pathbar.edit_paste(&t, &mut inv);
-                            update_path_suggest(st, &mut inv);
-                        }
+                    } else if let (true, Some(act)) = (ctrl, clip_act_of(vk)) {
+                        // 표준 편집 클립보드(QA 07-14) — 선택 복사/잘라내기/붙여넣기 +
+                        // Ctrl+Z 실행 취소(10-01). 메뉴·컨텍스트 메뉴와 동일 경로(do_clip)
+                        do_clip(hwnd, st, act);
                     } else if let Some(k) = edit_key_of(vk, ctrl) {
                         // 캐럿 이동·선택·삭제(QA 07-13 — edit.rs 공용 모델)
                         st.active_panel().pathbar.edit_key(k, shift, &mut inv);
@@ -7496,19 +7926,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                     } else if vk == VK_ESCAPE.0 {
                         st.active_panel().rows_mut().cancel_rename(&mut inv);
-                    } else if ctrl && vk == b'C' as u16 {
-                        // 표준 편집 클립보드(QA 07-14 — 경로바와 동일 규약)
-                        if let Some(t) = st.active_panel().rows().rename_selected_text() {
-                            crate::clipboard::write_text(hwnd, &t);
-                        }
-                    } else if ctrl && vk == b'X' as u16 {
-                        if let Some(t) = st.active_panel().rows_mut().rename_cut(&mut inv) {
-                            crate::clipboard::write_text(hwnd, &t);
-                        }
-                    } else if ctrl && vk == b'V' as u16 {
-                        if let Some(t) = paste_line() {
-                            st.active_panel().rows_mut().rename_paste(&t, &mut inv);
-                        }
+                    } else if let (true, Some(act)) = (ctrl, clip_act_of(vk)) {
+                        // 표준 편집 클립보드(QA 07-14 — 경로바와 동일 규약) + Ctrl+Z(10-01)
+                        do_clip(hwnd, st, act);
                     } else if let Some(k) = edit_key_of(vk, ctrl) {
                         st.active_panel().rows_mut().rename_key(k, shift, &mut inv);
                     }
@@ -7569,36 +7989,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let i = st.active_panel().active_index();
                     st.active_panel().close_tab(i, &mut inv); // Ctrl+W = 탭 닫기
                 } else if vk == b'A' as u16 && ctrl {
-                    st.active_panel().on_event(&InputEvent::SelectAll, &mut inv);
+                    do_clip(hwnd, st, ClipAct::SelectAll);
                 } else if vk == b'C' as u16 && ctrl {
                     // 도크 Info/Preview 텍스트 선택 우선(QA 07-15) — 없으면 파일 복사
-                    // (M3-5 — CF_HDROP 단일 출처. 선택 없으면 클립보드 유지)
-                    if let Some(t) = st
-                        .panels
-                        .iter()
-                        .find_map(|p| p.dock_visible().then(|| p.dock.selected_text()).flatten())
-                    {
-                        // rich 동시 게시(07-26) — 모노 RTF로 표/박스 정렬 유지
-                        crate::clipboard::write_text_rich(hwnd, &t);
-                    } else if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Copy) {
-                        crate::clipboard::write_file_list(hwnd, &paths, op);
-                    }
+                    // (M3-5 — CF_HDROP 단일 출처. 선택 없으면 클립보드 유지). 10-01 do_clip 통합
+                    do_clip(hwnd, st, ClipAct::Copy);
                 } else if vk == b'X' as u16 && ctrl {
-                    if let Some((paths, op)) = clip_from_selection(st, nexa_ops::Op::Move) {
-                        crate::clipboard::write_file_list(hwnd, &paths, op);
-                    }
+                    do_clip(hwnd, st, ClipAct::Cut);
                 } else if vk == b'V' as u16 && ctrl {
-                    if let Some((paths, op)) = crate::clipboard::read_file_list() {
-                        if op == nexa_ops::Op::Move {
-                            crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
-                        }
-                        // 폴더 1개 선택 = 그 폴더 안으로(X-32), 그 외 = 현재 폴더
-                        let dest = paste_dest(st);
-                        start_transfer(hwnd, st, paths, dest, op);
-                        return LRESULT(0);
-                    } else if crate::clipboard::has_virtual_files() {
-                        let dest = paste_dest(st);
-                        paste_virtual(hwnd, st, dest); // 가상 파일 폴백(X-42)
+                    if do_clip(hwnd, st, ClipAct::Paste) {
                         return LRESULT(0);
                     }
                 } else if vk == b'Z' as u16 && ctrl {
@@ -8044,66 +8443,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Some(ti) = st.term_focus {
                         if st.panels[ti].dock_visible() && st.panels[ti].dock.active_kind() == 2 {
                             let mut handled = false;
-                            // 복사 서식용 스냅샷(아래 &mut st.terms 차용과 겹치지 않게 미리 복사)
-                            let (term_theme, term_theme_dark, term_theme_light) = (
-                                st.term_theme.clone(),
-                                st.term_theme_dark.clone(),
-                                st.term_theme_light.clone(),
-                            );
-                            let (theme_is_dark, term_font, term_font_size) =
-                                (st.theme.is_dark, st.term_font.clone(), st.term_font_size);
-                            let copy_fmt = st.term_copy_format.clone();
                             if let Some(t) = &mut st.terms[ti] {
                                 if !t.exited {
                                     handled = true;
                                     match c {
                                         '\u{3}' if t.sel_norm().is_some() => {
                                             // 복사 = 평문 + HTML + RTF(09-04 — WT "HTML 및 RTF 모두").
-                                            // 색은 지금 화면의 팔레트로 해석·글꼴은 체인 1순위.
-                                            let ((sl, sc), (el, ec)) = t.sel_norm().unwrap();
-                                            let text = t.screen.get_text(sl, sc, el, ec);
-                                            let runs = t.screen.get_runs(sl, sc, el, ec);
-                                            let pal = nexa_term::resolve_scheme(
-                                                &term_theme,
-                                                &term_theme_dark,
-                                                &term_theme_light,
-                                                theme_is_dark,
-                                            )
-                                            .palette;
-                                            let font = term_font
-                                                .split(',')
-                                                .next()
-                                                .map(str::trim)
-                                                .filter(|f| !f.is_empty())
-                                                .unwrap_or("Consolas");
-                                            let want_html = matches!(copy_fmt.as_str(), "html" | "both");
-                                            let want_rtf = matches!(copy_fmt.as_str(), "rtf" | "both");
-                                            let html = want_html.then(|| {
-                                                nexa_term::export::cf_html(&nexa_term::export::to_html(
-                                                    &runs,
-                                                    &pal,
-                                                    font,
-                                                    term_font_size,
-                                                ))
-                                            });
-                                            let rtf = want_rtf.then(|| {
-                                                nexa_term::export::to_rtf(&runs, &pal, font, term_font_size)
-                                            });
-                                            crate::clipboard::write_text_html_rtf(
-                                                hwnd,
-                                                &text,
-                                                html.as_deref(),
-                                                rtf.as_deref(),
-                                            );
-                                            t.sel = None;
+                                            // 10-01 do_clip/컨텍스트 메뉴와 공용 helper로 분리
+                                            term_copy_selection(hwnd, st, ti);
                                         }
                                         '\u{16}' => {
-                                            if let Some(txt) = crate::clipboard::read_text() {
-                                                t.pty.write(
-                                                    &txt.replace("\r\n", "\r").replace('\n', "\r"),
-                                                );
-                                            }
-                                            t.view_off = 0;
+                                            term_paste(st, ti);
                                         }
                                         c => {
                                             let mut buf = [0u8; 4];

@@ -256,6 +256,34 @@ impl InfoDock {
         self.popout_range.set(cell);
     }
 
+    /// 텍스트 내용 전체 선택(컨텍스트 메뉴/Edit 메뉴 — 10-01). 이미지·빈 내용은 무시.
+    /// 범위 = 첫 라인 0 ~ 마지막 라인 끝(문자 수) — `selected_text` 규약과 동일 좌표.
+    pub fn select_all_text(&mut self, inv: &mut Invalidations) -> bool {
+        if !self.text_selectable() {
+            return false;
+        }
+        let last = self.lines.len() - 1;
+        let end = if self.lines[last].starts_with('\u{1}') {
+            0
+        } else {
+            self.lines[last].chars().count()
+        };
+        self.sel = Some(((0, 0), (last, end)));
+        self.sel_drag = false;
+        inv.push(self.bounds);
+        true
+    }
+
+    /// 선택 가능한 텍스트 내용이 있는가(이미지 미리보기·빈 내용·마커뿐이면 false).
+    pub fn text_selectable(&self) -> bool {
+        self.image.is_none() && self.lines.iter().any(|l| !l.starts_with('\u{1}'))
+    }
+
+    /// 종류 스트립 아래 내용 영역 안 좌표인가(우클릭 컨텍스트 메뉴 판정).
+    pub fn content_hit(&self, x: i32, y: i32) -> bool {
+        self.content_rect().contains(Point { x, y })
+    }
+
     /// 선택 해제(다른 영역 클릭 시 호스트가 호출).
     pub fn clear_text_selection(&mut self, inv: &mut Invalidations) {
         self.sel_drag = false;
@@ -800,6 +828,19 @@ mod tests {
         // 선택 끝은 문서 끝 방향으로 확장 중(앵커 = 라인 0)
         d.on_event(&InputEvent::MouseUp { x: 6, y: 400 }, &mut inv);
         assert!(d.selected_text().is_some());
+    }
+
+    #[test]
+    fn select_all_text_covers_whole_content() {
+        let mut d = InfoDock::new("Info", 20, 6);
+        let mut inv = Invalidations::default();
+        assert!(!d.select_all_text(&mut inv), "빈 내용 = 선택 불가");
+        d.set_lines(vec!["abc".into(), "de".into()], &mut inv);
+        assert!(d.text_selectable());
+        assert!(d.select_all_text(&mut inv));
+        assert_eq!(d.selected_text().as_deref(), Some("abc\r\nde"));
+        d.set_image(Some("x.png".into()), &mut inv);
+        assert!(!d.text_selectable(), "이미지 미리보기 = 텍스트 선택 없음");
     }
 
     #[test]

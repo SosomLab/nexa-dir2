@@ -32,6 +32,9 @@ pub struct EditState {
     anchor: Option<usize>,
     /// 마우스 드래그 선택 진행 중(click~release).
     dragging: bool,
+    /// 단일 단계 실행 취소 스냅샷(buf, caret, anchor) — 내용이 바뀌는 조작 직전에 기록
+    /// (컨텍스트 메뉴 "실행 취소" — 네이티브 EDIT 메뉴 대응, 10-01).
+    undo: Option<(Vec<char>, usize, Option<usize>)>,
     /// paint 캐시: (필드 rect, 그리기 원점 x, 문자 경계 오프셋 0..=len) — 클릭 캐럿 배치용.
     layout: RefCell<(Rect, i32, Vec<i32>)>,
 }
@@ -46,6 +49,7 @@ impl EditState {
             caret,
             buf,
             dragging: false,
+            undo: None,
             layout: RefCell::new((Rect::default(), 0, Vec::new())),
         }
     }
@@ -77,6 +81,46 @@ impl EditState {
         Some((a.min(self.caret), a.max(self.caret)))
     }
 
+    /// 선택 존재 여부(컨텍스트 메뉴 활성 판정).
+    pub fn has_selection(&self) -> bool {
+        self.sel_range().is_some()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// 실행 취소 가능 여부(스냅샷 보유).
+    pub fn can_undo(&self) -> bool {
+        self.undo.is_some()
+    }
+
+    /// 단일 단계 실행 취소 — 마지막 내용 변경 직전 상태로 복귀. 없으면 `false`.
+    pub fn undo(&mut self) -> bool {
+        let Some((buf, caret, anchor)) = self.undo.take() else {
+            return false;
+        };
+        self.buf = buf;
+        self.caret = caret;
+        self.anchor = anchor;
+        self.dragging = false;
+        true
+    }
+
+    /// 내용 변경 직전 스냅샷(단일 단계 — 직전 것은 버린다).
+    fn snapshot(&mut self) {
+        self.undo = Some((self.buf.clone(), self.caret, self.anchor));
+    }
+
+    /// 선택 구간 삭제(컨텍스트 메뉴 "삭제" — 선택 없으면 무변화). 지웠으면 `true`.
+    pub fn delete_selected(&mut self) -> bool {
+        if !self.has_selection() {
+            return false;
+        }
+        self.snapshot();
+        self.delete_selection()
+    }
+
     /// 선택 구간 삭제. 지웠으면 `true`.
     fn delete_selection(&mut self) -> bool {
         let Some((a, b)) = self.sel_range() else {
@@ -91,6 +135,7 @@ impl EditState {
 
     /// 문자 입력 — 선택이 있으면 대체(표준 편집 모델).
     pub fn insert(&mut self, c: char) {
+        self.snapshot();
         self.delete_selection();
         self.buf.insert(self.caret, c);
         self.caret += 1;
@@ -98,6 +143,7 @@ impl EditState {
 
     /// Backspace — 선택이 있으면 선택 삭제.
     pub fn backspace(&mut self) {
+        self.snapshot();
         if !self.delete_selection() && self.caret > 0 {
             self.caret -= 1;
             self.buf.remove(self.caret);
@@ -113,6 +159,7 @@ impl EditState {
     /// 선택 잘라내기 — 선택 텍스트를 반환하고 삭제. 선택 없으면 `None`.
     pub fn cut_selection(&mut self) -> Option<String> {
         let t = self.selected_text()?;
+        self.snapshot();
         self.delete_selection();
         Some(t)
     }
@@ -127,6 +174,7 @@ impl EditState {
 
     /// 문자열 삽입(붙여넣기) — 선택이 있으면 대체. 제어 문자 필터링은 호출자 몫.
     pub fn insert_str(&mut self, s: &str) {
+        self.snapshot();
         self.delete_selection();
         for c in s.chars() {
             self.buf.insert(self.caret, c);
@@ -160,6 +208,7 @@ impl EditState {
                 self.caret = self.buf.len();
             }
             EditKey::DeleteForward => {
+                self.snapshot();
                 if !self.delete_selection() && self.caret < self.buf.len() {
                     self.buf.remove(self.caret);
                 }
@@ -381,6 +430,23 @@ mod tests {
         e.release();
         assert_eq!(e.sel_range(), None, "클릭만 = 캐럿 배치");
         assert_eq!(e.caret, 1);
+    }
+
+    #[test]
+    fn undo_restores_last_change_and_delete_selected() {
+        let mut e = EditState::new("abc", true); // 전체 선택
+        assert!(!e.can_undo());
+        e.insert('x');
+        assert_eq!(e.text(), "x");
+        assert!(e.undo(), "스냅샷 복귀");
+        assert_eq!(e.text(), "abc");
+        assert_eq!(e.sel_range(), Some((0, 3)), "선택도 복원");
+        assert!(!e.undo(), "단일 단계");
+        assert!(e.delete_selected());
+        assert_eq!(e.text(), "");
+        assert!(!e.delete_selected(), "선택 없음 = 무변화");
+        e.undo();
+        assert_eq!(e.text(), "abc");
     }
 
     #[test]
