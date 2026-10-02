@@ -5899,7 +5899,7 @@ fn term_key_route(st: &State) -> (usize, KeyRoute) {
             ti,
             route_key_with_term(
                 Some(ti),
-                st.panels[ti].dock_visible(),
+                st.panels[ti].dock_shown(),
                 st.panels[ti].dock.active_kind(),
                 st.terms[ti].is_some(),
             ),
@@ -6020,7 +6020,7 @@ fn term_drag_extend(t: &mut TermState, x: i32, y: i32) {
 
 /// 좌표가 패널의 도크 터미널 그리드 위인가(QA 07-14 — 휠 스크롤백·선택 히트).
 fn term_hit(st: &State, panel: usize, x: i32, y: i32) -> bool {
-    st.panels[panel].dock_visible()
+    st.panels[panel].dock_shown()
         && st.panels[panel].dock.active_kind() == 2
         && st.terms[panel]
             .as_ref()
@@ -7073,7 +7073,7 @@ unsafe fn do_clip(hwnd: HWND, st: &mut State, act: ClipAct) -> bool {
         if let Some(t) = st
             .panels
             .iter()
-            .find_map(|p| p.dock_visible().then(|| p.dock.selected_text()).flatten())
+            .find_map(|p| p.dock_shown().then(|| p.dock.selected_text()).flatten())
         {
             // rich 동시 게시(07-26) — 모노 RTF로 표/박스 정렬 유지
             crate::clipboard::write_text_rich(hwnd, &t);
@@ -7126,7 +7126,7 @@ unsafe fn do_clip(hwnd: HWND, st: &mut State, act: ClipAct) -> bool {
 
 /// 도크 터미널이 표시 중·살아 있는가(do_clip ③·컨텍스트 메뉴 대상 판정).
 fn term_alive(st: &State, ti: usize) -> bool {
-    st.panels[ti].dock_visible()
+    st.panels[ti].dock_shown()
         && st.panels[ti].dock.active_kind() == 2
         && st.terms[ti].as_ref().is_some_and(|t| !t.exited)
 }
@@ -7747,7 +7747,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // 도크 밴드 상단 가로 분리선 = 높이 드래그(전폭 — X-6)
                     st.dock_drag = Some(0);
                     let _ = InvalidateRect(Some(hwnd), None, false);
-                } else if st.panels[0].dock_visible()
+                } else if st.panels[0].dock_shown()
                     && y >= st.panels[0].dock.bounds().y
                     && x >= st.panels[0].dock.bounds().right() - 2
                     && x < st.panels[1].dock.bounds().x + 2
@@ -7811,8 +7811,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         update_dock_info(st, &mut inv);
                         invalidate_dock(hwnd, st, idx);
                     }
-                    // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3)
-                    if st.panels[idx].dock_visible()
+                    // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3).
+                    // 실제 표시 중(h>0)일 때만 — 싱글 정보의 0-rect 우 도크가 터미널
+                    // 종류면 우 파일 목록 클릭마다 숨은 터미널이 키 포커스를 가져가던
+                    // 결함(X3-02 10-02 — X-20이 panel.rs만 고쳤던 잔여)
+                    if st.panels[idx].dock_shown()
                         && y >= st.panels[idx].dock.bounds().y
                         && st.panels[idx].dock.active_kind() == 2
                     {
@@ -7835,7 +7838,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 }
                             }
                         }
-                    } else if st.panels[idx].dock_visible() && y >= st.panels[idx].dock.bounds().y {
+                    } else if st.panels[idx].dock_shown() && y >= st.panels[idx].dock.bounds().y {
                         update_dock_info(st, &mut inv);
                     }
                     // 기선택 항목 재클릭(1s 이상 간격) = 이름 바꾸기 **예약**(진입은 MouseUp —

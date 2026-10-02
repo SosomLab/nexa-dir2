@@ -428,6 +428,14 @@ impl Panel {
         self.dock_visible
     }
 
+    /// 도크가 **실제 표시 중**인가 = 표시 플래그 && 레이아웃 높이 > 0(X-20 QA 07-17 ·
+    /// X3-02 10-02). 싱글 정보의 우 도크는 `dock_visible=true`지만 0-rect라 `y >= 0`이
+    /// 항상 참 — 히트·키 포커스·키 라우팅·터미널 생존 판정은 전부 이것으로 통일한다.
+    /// (`dock_visible()`은 설정값·레이아웃 밴드 계산 전용)
+    pub fn dock_shown(&self) -> bool {
+        self.dock_visible && self.dock.bounds().h > 0
+    }
+
     /// 도크 높이 비율 적용(드래그·설정 복원 — 0.15~0.5 클램프) 후 재배치.
     pub fn set_dock_ratio(&mut self, ratio: f32, inv: &mut Invalidations) {
         let r = ratio.clamp(0.15, 0.5);
@@ -1117,8 +1125,7 @@ impl Panel {
         self.session_dirty = true;
         let at = at.unwrap_or(self.tabs.len()).min(self.tabs.len());
         tab.rows.set_focused(self.focused, inv);
-        tab.rows
-            .set_columns(self.rows().columns().to_vec(), inv);
+        tab.rows.set_columns(self.rows().columns().to_vec(), inv);
         self.tabs.insert(at, tab);
         self.active = at;
         self.set_bounds(self.bounds, inv);
@@ -1454,7 +1461,7 @@ impl Panel {
                 // 도크 라우팅은 **실제 표시 중(h>0)일 때만**(X-20 QA 07-17 진범:
                 // 싱글 정보의 우 패널 도크는 0-rect라 `y >= 0`이 항상 참 — 모든 클릭이
                 // 빈 도크로 삼켜져 파일 목록이 동작하지 않았다)
-                let dock_shown = self.dock_visible && self.dock.bounds().h > 0;
+                let dock_shown = self.dock_shown();
                 // 도크 밖 클릭 = 도크 텍스트 선택 해제(QA 07-15 — Ctrl+C 우선순위 복원)
                 if dock_shown && y < self.dock.bounds().y {
                     self.dock.clear_text_selection(inv);
@@ -1636,7 +1643,10 @@ mod tests {
         p.new_tab(ctx(), &mut inv); // 탭 2 활성(방금 열거 = 신선)
         assert!(!p.active_tab_stale(), "새 탭 직후는 재열람 불요");
         p.switch_tab(0, &mut inv);
-        assert!(p.active_tab_stale(), "전환으로 드러난 탭 = 재열람 요(비활성 동안 비감시)");
+        assert!(
+            p.active_tab_stale(),
+            "전환으로 드러난 탭 = 재열람 요(비활성 동안 비감시)"
+        );
         p.reopen_filtered(ctx(), &mut inv);
         assert!(!p.active_tab_stale(), "재열람이 낡음을 소거");
         p.switch_tab(1, &mut inv);
@@ -1730,6 +1740,25 @@ mod tests {
         let mut p = Panel::new(Tree::open(base).unwrap(), ctx(), metrics(), Vec::new());
         p.set_bounds(Rect::new(0, 0, 400, 400), &mut inv);
         (p, inv)
+    }
+
+    /// X3-02(10-02) — `dock_shown` 표: 표시 플래그 **와** 레이아웃 높이가 둘 다 참일
+    /// 때만. 싱글 정보의 우 도크 = (visible=T, h=0) → false(X-20 진범 재발 방지 —
+    /// 호스트 win.rs의 터미널 포커스·키 라우팅·term_hit·term_alive가 같은 판정을 쓴다).
+    #[test]
+    fn dock_shown_requires_visible_and_height() {
+        let base = fixture("dock_shown");
+        let (mut p, mut inv) = panel(&base);
+        assert!(!p.dock_shown(), "기본 = 도크 숨김");
+        p.set_dock_visible(true, &mut inv);
+        p.dock.set_bounds(Rect::default(), &mut inv);
+        assert!(p.dock_visible(), "플래그는 켜짐");
+        assert!(!p.dock_shown(), "(T, h=0) = 싱글 정보 우 도크 — 표시 아님");
+        p.dock.set_bounds(Rect::new(0, 300, 400, 100), &mut inv);
+        assert!(p.dock_shown(), "(T, h>0) = 표시 중");
+        p.set_dock_visible(false, &mut inv);
+        assert!(!p.dock_shown(), "(F, h>0) = 숨김");
+        fs::remove_dir_all(&base).unwrap();
     }
 
     /// 탭별 보기 옵션(08-02): 값 SSOT=탭 — 새 탭 계승·활성 탭만 기입·stale 판정·
