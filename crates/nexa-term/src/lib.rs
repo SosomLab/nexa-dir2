@@ -934,6 +934,9 @@ impl VtScreen {
 
     /// SU — 전체 화면 마진이면 맨 위 줄을 스크롤백 보존, 부분 마진이면 영역만. 커서 불변.
     fn scroll_up(&mut self, n: usize) {
+        // 반복 횟수를 영역 높이로 클램프(G9-02 — `ESC[65535S`가 cols×16B 행을 65535개 할당·
+        // 스크롤백 상한 초과 뒤 절단 = 순간 피크 수백 MB). 영역 높이 이상은 결과가 같다(전부 빈 줄).
+        let n = n.min(self.bottom - self.top + 1);
         let full = self.top == 0 && self.bottom == self.rows - 1;
         for _ in 0..n {
             let removed = std::mem::replace(
@@ -954,6 +957,7 @@ impl VtScreen {
 
     /// SD — 영역 위는 빈 줄, 맨 아래는 버림. 커서 불변.
     fn scroll_down(&mut self, n: usize) {
+        let n = n.min(self.bottom - self.top + 1);
         for _ in 0..n {
             self.screen[self.top..=self.bottom].rotate_right(1);
             self.screen[self.top] = vec![TermCell::blank(DEFAULT_FG, DEFAULT_BG); self.cols];
@@ -1166,15 +1170,31 @@ impl VtScreen {
             } else {
                 row.len().saturating_sub(1)
             };
-            let cells: Vec<&TermCell> = row.iter().take(c1 + 1).skip(c0).filter(|c| c.ch != '\0').collect();
+            let cells: Vec<&TermCell> = row
+                .iter()
+                .take(c1 + 1)
+                .skip(c0)
+                .filter(|c| c.ch != '\0')
+                .collect();
             // 줄 끝 공백 제거(get_text 동일)
             let keep = cells.iter().rposition(|c| c.ch != ' ').map_or(0, |i| i + 1);
             let mut runs: Vec<TextRun> = Vec::new();
             for cell in &cells[..keep] {
-                let (fg, bg) = if cell.reverse { (cell.bg, cell.fg) } else { (cell.fg, cell.bg) };
+                let (fg, bg) = if cell.reverse {
+                    (cell.bg, cell.fg)
+                } else {
+                    (cell.fg, cell.bg)
+                };
                 match runs.last_mut() {
-                    Some(r) if r.fg == fg && r.bg == bg && r.bold == cell.bold => r.text.push(cell.ch),
-                    _ => runs.push(TextRun { text: cell.ch.to_string(), fg, bg, bold: cell.bold }),
+                    Some(r) if r.fg == fg && r.bg == bg && r.bold == cell.bold => {
+                        r.text.push(cell.ch)
+                    }
+                    _ => runs.push(TextRun {
+                        text: cell.ch.to_string(),
+                        fg,
+                        bg,
+                        bold: cell.bold,
+                    }),
                 }
             }
             out.push(runs);
@@ -1298,7 +1318,14 @@ pub mod export {
         }
         let table: String = colors
             .iter()
-            .map(|c| format!("\\red{}\\green{}\\blue{};", (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
+            .map(|c| {
+                format!(
+                    "\\red{}\\green{}\\blue{};",
+                    (c >> 16) & 0xFF,
+                    (c >> 8) & 0xFF,
+                    c & 0xFF
+                )
+            })
             .collect();
         let fs = (font_px * 3 / 2).max(2); // px → pt(×0.75) → 반포인트(×2)
         format!(
@@ -1365,6 +1392,7 @@ mod tests {
             "\x1b[999999999L\x1b[999999999M\x1b[999999999@\x1b[999999999P",
             "\x1b[0;999999r\n\n\n",
             "\x1b[999999999X",
+            "\x1b[65535S\x1b[65535T",
             "한\x1b[1D글",
             "\x1b7\x1b[9999;9999H\x1b8",
         ];
@@ -1372,13 +1400,19 @@ mod tests {
             for n in nasty {
                 s.feed(n);
             }
-            assert!(s.cursor_row() < s.rows() && s.cursor_col() <= s.cols(), "커서 상한");
+            assert!(
+                s.cursor_row() < s.rows() && s.cursor_col() <= s.cols(),
+                "커서 상한"
+            );
             assert!(s.scrollback_count() <= MAX_SCROLLBACK, "스크롤백 상한");
         }
         s.resize(1, 1);
         s.feed("\x1b[9999;9999Habc\x1b[2J");
         // 열은 `cols`(줄바꿈 대기 위치)까지 허용 — 렌더가 가시 범위로 거른다
-        assert!(s.cursor_row() < 1 && s.cursor_col() <= 1, "1×1 리사이즈 뒤 클램프");
+        assert!(
+            s.cursor_row() < 1 && s.cursor_col() <= 1,
+            "1×1 리사이즈 뒤 클램프"
+        );
         s.resize(300, 100);
         let _ = s.get_text(0, 0, usize::MAX, usize::MAX);
         let _ = s.get_runs(usize::MAX, usize::MAX, 0, 0);
@@ -1538,7 +1572,13 @@ mod tests {
         assert_eq!(d.resolve(row[5].fg), 0xFFF9_F1A5, "93 = 밝은 노랑");
         assert_eq!(d.resolve(row[8].bg), 0xFF00_37DA, "44 = 파랑 배경");
         assert_eq!(row[4].fg, DEFAULT_FG, "리셋 뒤 공백 = 기본");
-        println!("cells: {:?}", row.iter().take(12).map(|c| (c.ch, c.fg, c.bg, c.bold)).collect::<Vec<_>>());
+        println!(
+            "cells: {:?}",
+            row.iter()
+                .take(12)
+                .map(|c| (c.ch, c.fg, c.bg, c.bold))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1555,7 +1595,10 @@ mod tests {
         assert_eq!((runs[1][0].fg, runs[1][0].bg), (DEFAULT_BG, DEFAULT_FG));
         assert_eq!(runs[1][1].text, "한");
         // get_text와 본문 일치
-        let joined: Vec<String> = runs.iter().map(|l| l.iter().map(|r| r.text.as_str()).collect()).collect();
+        let joined: Vec<String> = runs
+            .iter()
+            .map(|l| l.iter().map(|r| r.text.as_str()).collect())
+            .collect();
         assert_eq!(joined.join("\r\n"), s.get_text(0, 0, 1, 11));
     }
 
@@ -1566,7 +1609,10 @@ mod tests {
         let runs = s.get_runs(0, 0, 0, 9);
         let pal = TermPalette::light();
         let html = export::to_html(&runs, &pal, "Consolas", 12);
-        assert!(html.contains("color:#CF222E") && html.contains("a&lt;b") && html.contains("&amp;한"), "{html}");
+        assert!(
+            html.contains("color:#CF222E") && html.contains("a&lt;b") && html.contains("&amp;한"),
+            "{html}"
+        );
         assert!(html.starts_with("<pre style=\"font-family:'Consolas'"));
         let cf = export::cf_html(&html);
         // 헤더 오프셋이 실제 바이트 위치를 가리키는지(UTF-8 — 한글 3바이트 포함)
@@ -1575,14 +1621,23 @@ mod tests {
             cf[i..i + 10].parse().unwrap()
         };
         let b = cf.as_bytes();
-        assert_eq!(&b[get("StartFragment:")..get("StartFragment:") + 4], b"<pre");
+        assert_eq!(
+            &b[get("StartFragment:")..get("StartFragment:") + 4],
+            b"<pre"
+        );
         assert_eq!(&b[get("EndFragment:") - 6..get("EndFragment:")], b"</pre>");
         assert_eq!(get("EndHTML:"), b.len());
         assert_eq!(&b[get("StartHTML:")..get("StartHTML:") + 6], b"<html>");
         let rtf = export::to_rtf(&runs, &pal, "Consolas", 12);
         assert!(rtf.starts_with("{\\rtf1") && rtf.ends_with('}'));
-        assert!(rtf.contains("\\red207\\green34\\blue46;"), "빨강 색 테이블: {rtf}");
-        assert!(rtf.contains("\\cf3") && rtf.contains("\\u-10916?"), "한 = U+D55C 부호 있는 16비트");
+        assert!(
+            rtf.contains("\\red207\\green34\\blue46;"),
+            "빨강 색 테이블: {rtf}"
+        );
+        assert!(
+            rtf.contains("\\cf3") && rtf.contains("\\u-10916?"),
+            "한 = U+D55C 부호 있는 16비트"
+        );
         assert!(rtf.contains("\\fs18"), "12px = 9pt = 18 반포인트");
     }
 
@@ -1670,6 +1725,46 @@ mod tests {
         assert_eq!(text_of(&s, 0), "111", "마진 밖 위 불변");
         assert_eq!(text_of(&s, 3), "444", "마진 밖 아래 불변");
         assert_eq!(s.scrollback_count(), 0, "부분 마진 = 스크롤백 미보존");
+    }
+
+    #[test]
+    fn su_sd_clamped_to_region() {
+        // 부분 마진: n > 영역 높이라도 마진 밖 불변·마진 안은 빈 줄·스크롤백 미보존
+        let mut s = VtScreen::new(5, 5);
+        s.feed("111\r\n222\r\n333\r\n444\r\n555");
+        s.feed("\x1B[2;4r\x1B[99S");
+        assert_eq!(text_of(&s, 0), "111", "마진 밖 위 불변");
+        assert_eq!(text_of(&s, 4), "555", "마진 밖 아래 불변");
+        for r in 1..4 {
+            assert_eq!(text_of(&s, r), "", "마진 안 빈 줄 {r}");
+        }
+        assert_eq!(s.scrollback_count(), 0, "부분 마진 = 스크롤백 미보존");
+        s.feed("\x1B[2;1Haaa\x1B[99T");
+        assert_eq!(text_of(&s, 0), "111", "SD 마진 밖 위 불변");
+        assert_eq!(text_of(&s, 4), "555", "SD 마진 밖 아래 불변");
+        assert_eq!(text_of(&s, 1), "", "SD 영역 전부 빈 줄");
+
+        // 전체 마진: 스크롤백 피크 ≤ rows(종전은 n 만큼 push 후 절단)
+        let mut s = VtScreen::new(5, 5);
+        s.feed("111\r\n222\r\n333\r\n444\r\n555");
+        s.feed("\x1B[9999S");
+        assert!(s.scrollback_count() <= s.rows(), "스크롤백 피크 ≤ 행 수");
+        assert_eq!(s.scrollback_count(), 5, "화면 5줄 전부 보존");
+        for r in 0..5 {
+            assert_eq!(text_of(&s, r), "", "전체 빈 화면 {r}");
+        }
+
+        // n ≤ 높이: 종전과 동일(SU 2 = 위 2줄 스크롤백·아래 2줄 빈 줄)
+        let mut s = VtScreen::new(5, 4);
+        s.feed("111\r\n222\r\n333\r\n444");
+        s.feed("\x1B[2S");
+        assert_eq!(text_of(&s, 0), "333");
+        assert_eq!(text_of(&s, 1), "444");
+        assert_eq!(text_of(&s, 2), "");
+        assert_eq!(s.scrollback_count(), 2);
+        s.feed("\x1B[1T");
+        assert_eq!(text_of(&s, 0), "");
+        assert_eq!(text_of(&s, 1), "333");
     }
 
     #[test]
