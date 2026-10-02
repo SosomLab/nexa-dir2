@@ -3,7 +3,7 @@
 //! 플랫폼 중립 — 텍스트 라인 렌더 + 상단 경계선.
 
 use crate::draw::DrawCtx;
-use crate::event::InputEvent;
+use crate::event::{InputEvent, WheelAccum};
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
@@ -57,6 +57,14 @@ pub struct InfoDock {
     content_w: std::cell::Cell<i32>,
     /// 오버레이 스크롤바 세로·가로(10-02 — rows.rs 09-04 규약의 공용 모듈).
     bars: OverlayBars,
+    /// 휠 분수 누적(10-02 QA — 트랙패드는 노치(120) 미만 delta를 잘게 보낸다. 정수 나눗셈은
+    /// 0줄로 버려 "천천히 움직이면 스크롤 안 됨"이 됐다). 세로 = 줄, 가로 = px.
+    wheel: WheelAccum,
+    hwheel: WheelAccum,
+    /// 내용 식별 키(10-02 QA): 같은 키로 내용만 바뀌면(상세 도착·액세스 시각 갱신 등)
+    /// 스크롤·선택을 **유지**한다 — 종전엔 모든 변경이 스크롤을 0으로 리셋해 스크롤 중
+    /// "끊기거나 튀는" 증상이 났다.
+    content_key: String,
 }
 
 /// 인라인 이미지 마커(07-26 다이어그램 — 이미지 수준 렌더): 라인
@@ -106,6 +114,9 @@ impl InfoDock {
             scroll_x: 0,
             content_w: std::cell::Cell::new(0),
             bars: OverlayBars::default(),
+            wheel: WheelAccum::default(),
+            hwheel: WheelAccum::default(),
+            content_key: String::new(),
         }
     }
 
@@ -451,6 +462,31 @@ impl InfoDock {
     /// 표시 내용 교체(변경 시에만 무효화 — 선택 이동마다 호출돼도 무비용 유지).
     /// 내용이 바뀌면 텍스트 선택·스크롤도 초기화(범위 무효 — QA 07-15).
     pub fn set_lines(&mut self, lines: Vec<String>, inv: &mut Invalidations) {
+        let key = lines.first().cloned().unwrap_or_default();
+        self.set_content(&key, lines, inv);
+    }
+
+    /// 키 지정 내용 교체(10-02 QA). 키가 같으면 **같은 대상의 갱신** — 스크롤·가로 스크롤은
+    /// 새 상한으로 클램프만, 선택은 범위 안이면 유지(드래그 중이면 그대로). 키가 다르면
+    /// 대상 전환 = 종전처럼 전부 리셋. 내용이 같으면 무비용.
+    pub fn set_content(&mut self, key: &str, lines: Vec<String>, inv: &mut Invalidations) {
+        if self.lines == lines && self.content_key == key {
+            return;
+        }
+        if self.content_key == key && !self.lines.is_empty() {
+            self.lines = lines;
+            self.scroll = self.scroll.min(self.max_scroll());
+            self.offsets.borrow_mut().clear();
+            if let Some(((al, _), (cl, _))) = self.sel {
+                if al.max(cl) >= self.lines.len() {
+                    self.sel = None;
+                    self.sel_drag = false;
+                }
+            }
+            inv.push(self.bounds);
+            return;
+        }
+        self.content_key = key.to_string();
         if self.lines != lines {
             self.lines = lines;
             self.sel = None;
@@ -617,16 +653,20 @@ impl Widget for InfoDock {
                 // 내용 세로 스크롤(07-26 미리보기 → 10-02 정보 포함 — 3줄/노치·터미널 규약
                 // 동일). 호스트가 내용 영역 hover일 때만 라우팅한다.
                 if self.image.is_none() && !self.lines.is_empty() {
-                    let step = delta / crate::WHEEL_DELTA * 3;
-                    let to = (self.scroll as i32 - step).max(0) as usize;
-                    let _ = self.scroll_to(to, inv);
+                    let step = self.wheel.add(delta, 3);
+                    if step != 0 {
+                        let to = (self.scroll as i32 - step).max(0) as usize;
+                        let _ = self.scroll_to(to, inv);
+                    }
                 }
             }
             InputEvent::HWheel { delta } => {
                 // 가로 스크롤(10-02 — Shift+휠·틸트 휠. 양수 = 오른쪽, 노치당 행 높이×3px)
                 if self.image.is_none() && !self.lines.is_empty() {
-                    let step = delta * self.row_h * 3 / crate::WHEEL_DELTA;
-                    let _ = self.hscroll_to(self.scroll_x + step, inv);
+                    let step = self.hwheel.add(delta, self.row_h * 3);
+                    if step != 0 {
+                        let _ = self.hscroll_to(self.scroll_x + step, inv);
+                    }
                 }
             }
             InputEvent::MouseUp { x, y } => {
@@ -1148,6 +1188,44 @@ mod tests {
             d.tick(&mut inv);
         }
         assert!(!d.bars.visible(Axis::V), "페이드 완료");
+    }
+
+    #[test]
+    fn trackpad_small_deltas_accumulate_into_scroll() {
+        // 10-02 QA: 트랙패드 delta 8씩 = 노치 1/15 — 종전 정수 나눗셈은 0줄(무반응)
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        d.set_lines((0..30).map(|i| format!("l{i}")).collect(), &mut inv);
+        for _ in 0..15 {
+            d.on_event(&InputEvent::Wheel { delta: -8 }, &mut inv);
+        }
+        assert_eq!(d.scroll, 3, "누적 120 = 3줄");
+        for _ in 0..5 {
+            d.on_event(&InputEvent::Wheel { delta: 8 }, &mut inv);
+        }
+        assert_eq!(d.scroll, 2, "역방향 40 = 1줄");
+    }
+
+    #[test]
+    fn same_key_update_keeps_scroll_and_selection() {
+        // 10-02 QA: 상세 도착·액세스 시각 갱신이 스크롤을 0으로 튕기던 결함
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        let mk = |n: usize, tag: &str| (0..n).map(|i| format!("{tag}{i}")).collect::<Vec<_>>();
+        d.set_content("a.pptx", mk(10, "x"), &mut inv);
+        d.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        assert_eq!(d.scroll, 3);
+        d.sel = Some(((3, 0), (6, 1)));
+        d.set_content("a.pptx", mk(20, "y"), &mut inv);
+        assert_eq!(d.scroll, 3, "같은 대상 갱신 = 스크롤 유지");
+        assert!(d.sel.is_some(), "범위 안 선택 유지");
+        d.set_content("a.pptx", mk(5, "z"), &mut inv);
+        assert_eq!(d.scroll, 1, "줄 수 감소 = 상한 클램프(5-4)");
+        assert!(d.sel.is_none(), "범위 밖 선택 해제");
+        d.set_content("b.pptx", mk(20, "w"), &mut inv);
+        assert_eq!(d.scroll, 0, "대상 전환 = 리셋");
     }
 
     #[test]

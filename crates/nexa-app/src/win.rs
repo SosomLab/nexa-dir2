@@ -2055,6 +2055,21 @@ unsafe fn record_vpaste_undo(st: &mut State, created: &[PathBuf]) {
     }));
 }
 
+/// 도크 내용 대상 키(10-02 QA) — 단일 선택 = 그 경로, 다중 = 개수, 없음 = 현재 폴더.
+fn dock_subject_key(p: &Panel) -> String {
+    let tree = p.rows().source().tree();
+    match tree.selection_count() {
+        0 => p.root_path().to_string_lossy().into_owned(),
+        1 => tree
+            .selected_ids()
+            .first()
+            .and_then(|&id| tree.node_path(id))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        n => format!("*{n}"),
+    }
+}
+
 /// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식 → 10-02 사용자 요청 확장) —
 /// 다중 선택=개수·없음=현재 폴더·단일=**기본 8줄**(이름·종류·경로·크기·디스크 할당 크기·
 /// 만든/수정한/액세스한 날짜 — 사용자 지정 순서) + 탐색기 "자세히" 탭 상세(속성 시스템 —
@@ -2310,7 +2325,13 @@ fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
                     (lines, None)
                 }
             };
-            st.panels[i].dock.set_lines(lines, inv);
+            // 키 = 종류 + 대상(선택 경로·없으면 현재 폴더) — 같은 대상의 갱신은 스크롤 유지(10-02 QA)
+            let key = format!(
+                "{}|{}",
+                st.panels[i].dock.active_kind(),
+                dock_subject_key(&st.panels[src])
+            );
+            st.panels[i].dock.set_content(&key, lines, inv);
             st.panels[i].dock.set_image(image, inv);
             // 미리보기 종류일 때만 ↗ "크게" 오버레이(07-26 — 독립 창 열기)
             let popout = st.panels[i].dock.active_kind() == 1;
