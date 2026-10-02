@@ -1103,6 +1103,15 @@ impl<S: RowSource> VirtualRows<S> {
         inv.push(self.bounds);
     }
 
+    /// 진행 중 프레스 취소(10-02 X3-03) — 호스트가 OLE 드래그(`dnd::begin_drag`)에서 돌아온
+    /// 직후 호출. DoDragDrop이 버튼 해제를 소비해 위젯에 MouseUp이 오지 않으므로 클릭 확정
+    /// 보류(`press_pending`)와 밴드를 여기서 지운다. **선택 집합은 불변**(다중 선택 드래그 후
+    /// 선택 유지 규약 — 단일화하지 않는다).
+    pub fn abort_press(&mut self) {
+        self.press_pending = None;
+        self.band = None;
+    }
+
     /// 데이터 공급자 교체(네비게이션 — M1-8). 스크롤·캐럿·타입어헤드는 리셋,
     /// 컬럼·정렬 상태는 유지하고 새 소스에 재적용(원본 PanelView.SortKeys 지속 규약).
     pub fn replace_source(&mut self, src: S, inv: &mut Invalidations) {
@@ -1111,6 +1120,7 @@ impl<S: RowSource> VirtualRows<S> {
         self.scroll_x = 0;
         self.caret = None;
         self.band = None;
+        self.press_pending = None; // 보조 리셋(10-02 X3-03) — 낡은 인덱스가 새 소스에 작용 금지
         self.typeahead.clear();
         // 위젯 정렬이 **명시된 경우에만** 새 소스에 재적용(07-15 수정) — 빈 상태(미지정)로
         // set_sort(&[])를 호출하면 소스 기본 정렬(이름 오름차순)이 열거 순서로 퇴행해
@@ -1647,6 +1657,15 @@ impl<S: RowSource> Widget for VirtualRows<S> {
     }
 
     fn on_event(&mut self, ev: &InputEvent, inv: &mut Invalidations) {
+        // 새 프레스 = 이전 보류 폐기(10-02 G6-01·X3-03) — OLE 드래그(DoDragDrop 모달)가
+        // 버튼 해제를 소비하면 MouseUp이 오지 않아 `press_pending`이 잔존하고, 다음 클릭의
+        // MouseUp이 낡은 행을 단일 선택해 선택이 되돌아가던 결함. 선택 집합은 건드리지 않는다.
+        if matches!(
+            *ev,
+            InputEvent::MouseDown { .. } | InputEvent::RightDown { .. }
+        ) {
+            self.press_pending = None;
+        }
         // 오버레이 스크롤바(09-04 X-47) — 썸 드래그/트랙 클릭/호버는 다른 처리보다 우선
         match *ev {
             InputEvent::MouseMove { x, y } => {
@@ -2868,6 +2887,71 @@ mod tests {
         assert_eq!(v.source().sel.len(), 2);
         v.select_program(99, SelectOp::Single, &mut inv); // 낡은 스냅샷 인덱스 — 무시
         assert_eq!(v.caret(), Some(5), "범위 밖 무시");
+    }
+
+    // ── OLE 드래그 뒤 낡은 press_pending(10-02 G6-01·X3-03) ──
+
+    #[test]
+    fn press_pending_does_not_survive_replace_source() {
+        let (mut v, mut inv) = sel_list(5, 200);
+        sdown(&mut v, &mut inv, 5, false, false); // 0행 단일
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 5 }, &mut inv);
+        sdown(&mut v, &mut inv, 45, true, false); // Shift+2행 → {0,1,2}
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 45 }, &mut inv);
+        // 기선택 1행 프레스 = 보류(다중 선택 드래그 DnD) → OLE 드래그로 MouseUp 없음
+        sdown(&mut v, &mut inv, 25, false, false);
+        assert_eq!(v.source().sel.len(), 3, "프레스 시점 선택 유지");
+        v.replace_source(SelRows::new(5), &mut inv); // 드롭 후 재로드
+                                                     // 다른 행 B(3행) 클릭 — MouseUp이 낡은 A(1행)로 되돌리면 안 된다
+        sdown(&mut v, &mut inv, 65, false, false);
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 65 }, &mut inv);
+        assert!(
+            v.source().is_selected(3) && v.source().sel.len() == 1,
+            "선택 = {{3}}, 실제 {:?}",
+            v.source().sel
+        );
+        assert_eq!(v.caret(), Some(3));
+    }
+
+    #[test]
+    fn new_press_discards_stale_pending_without_replace_source() {
+        // 재로드 없이(드래그 취소·ESC) 다음 클릭도 낡은 보류를 폐기해야 한다 — 좌·우 프레스 모두
+        let (mut v, mut inv) = sel_list(5, 200);
+        sdown(&mut v, &mut inv, 5, false, false);
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 5 }, &mut inv);
+        sdown(&mut v, &mut inv, 45, true, false); // {0,1,2}
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 45 }, &mut inv);
+        sdown(&mut v, &mut inv, 25, false, false); // 1행 보류, MouseUp 없음
+        sdown(&mut v, &mut inv, 65, false, false); // 새 프레스 = 3행 단일
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 65 }, &mut inv);
+        assert_eq!(
+            v.source().sel,
+            std::collections::HashSet::from([3]),
+            "좌 프레스가 보류 폐기"
+        );
+
+        sdown(&mut v, &mut inv, 65, false, false); // 기선택 3행 프레스 보류
+        v.on_event(&InputEvent::RightDown { x: 30, y: 85 }, &mut inv); // 4행 우클릭 단독 선택
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 85 }, &mut inv);
+        assert_eq!(
+            v.source().sel,
+            std::collections::HashSet::from([4]),
+            "우 프레스가 보류 폐기"
+        );
+    }
+
+    #[test]
+    fn abort_press_clears_pending_and_keeps_selection() {
+        let (mut v, mut inv) = sel_list(5, 200);
+        sdown(&mut v, &mut inv, 5, false, false);
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 5 }, &mut inv);
+        sdown(&mut v, &mut inv, 45, true, false); // {0,1,2}
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 45 }, &mut inv);
+        sdown(&mut v, &mut inv, 25, false, false); // 1행 보류
+        v.abort_press(); // 호스트: begin_drag 반환 직후
+        assert_eq!(v.source().sel.len(), 3, "선택 집합 불변(단일화 안 함)");
+        v.on_event(&InputEvent::MouseUp { x: 30, y: 25 }, &mut inv); // 늦게 온 해제도 무해
+        assert_eq!(v.source().sel.len(), 3, "낡은 보류 소비 없음");
     }
 
     #[test]
