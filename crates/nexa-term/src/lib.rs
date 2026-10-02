@@ -556,6 +556,10 @@ enum S {
     Esc,
     Csi,
     Osc,
+    /// ESC ( ) * + 다음 1글자(문자셋 지정자) 폐기
+    Charset,
+    /// DCS(ESC P)·SOS(ESC X)·PM(ESC ^)·APC(ESC _) 페이로드 — ST(ESC \)까지 폐기
+    Str,
 }
 
 /// VT/ANSI 파서 + 화면 버퍼 — 원본 VtScreen.
@@ -731,6 +735,8 @@ impl VtScreen {
                 S::Esc => self.escape(ch),
                 S::Csi => self.csi(ch),
                 S::Osc => self.osc(ch),
+                S::Charset => self.charset(ch),
+                S::Str => self.string_body(ch),
             }
         }
     }
@@ -761,7 +767,10 @@ impl VtScreen {
                 self.private = false;
             }
             ']' => self.state = S::Osc,
-            '(' | ')' | '*' | '+' => {} // charset 지정 — 다음 1글자 무시(간이·원본 동일)
+            // charset 지정 — 다음 1글자 폐기(G9-05: 상태 없이 Ground로 돌아가 `ESC ( B`의 B가 찍혔다)
+            '(' | ')' | '*' | '+' => self.state = S::Charset,
+            // DCS/SOS/PM/APC — 페이로드를 ST까지 폐기(종전은 Ground로 돌아가 본문이 그대로 찍혔다)
+            'P' | 'X' | '^' | '_' => self.state = S::Str,
             'M' => self.reverse_index(),
             'D' => self.line_feed(), // IND
             'E' => {
@@ -814,6 +823,20 @@ impl VtScreen {
             self.state = S::Ground;
         } else if ch == '\x1B' {
             self.state = S::Esc;
+        }
+    }
+
+    /// 문자셋 지정자 1글자 폐기. ESC가 오면 새 시퀀스로 간주(지정자 미완 — 방어).
+    fn charset(&mut self, ch: char) {
+        self.state = if ch == '\x1B' { S::Esc } else { S::Ground };
+    }
+
+    /// DCS/SOS/PM/APC 본문 — ST(ESC \)가 끝. CAN/SUB는 중단(xterm 동일). BEL은 종결자가 아니다.
+    fn string_body(&mut self, ch: char) {
+        match ch {
+            '\x1B' => self.state = S::Esc,
+            '\x18' | '\x1A' => self.state = S::Ground,
+            _ => {}
         }
     }
 
@@ -1393,6 +1416,9 @@ mod tests {
             "\x1b[0;999999r\n\n\n",
             "\x1b[999999999X",
             "\x1b[65535S\x1b[65535T",
+            "\x1b(",
+            "\x1bPq#0;2;0;0;0#0!200~-\x1b\\",
+            "\x1b_apc-without-terminator",
             "한\x1b[1D글",
             "\x1b7\x1b[9999;9999H\x1b8",
         ];
@@ -1765,6 +1791,30 @@ mod tests {
         s.feed("\x1B[1T");
         assert_eq!(text_of(&s, 0), "");
         assert_eq!(text_of(&s, 1), "333");
+    }
+
+    #[test]
+    fn charset_designator_is_discarded() {
+        let mut s = VtScreen::new(10, 1);
+        s.feed("a\x1b(Bb\x1b)0c\x1b*Ad\x1b+Be");
+        assert_eq!(text_of(&s, 0), "abcde", "지정자 1글자만 폐기");
+        s.feed("\x1b(\x1b[1;1Hz"); // 지정자 자리에 ESC — 새 시퀀스로 이어짐
+        assert_eq!(text_of(&s, 0), "zbcde");
+    }
+
+    #[test]
+    fn dcs_pm_apc_sos_payload_is_discarded() {
+        let mut s = VtScreen::new(16, 1);
+        s.feed("a\x1bPq#0;2;0;0;0#0!10~-\x1b\\b"); // DCS(sixel) … ST
+        assert_eq!(text_of(&s, 0), "ab", "DCS 본문 폐기");
+        s.feed("\x1b^privacy\x07msg\x1b\\c"); // PM — BEL은 종결자가 아님
+        assert_eq!(text_of(&s, 0), "abc", "PM 본문 폐기·BEL 무시");
+        s.feed("\x1b_G\x1b\\d\x1bXsos\x1b\\e"); // APC·SOS
+        assert_eq!(text_of(&s, 0), "abcde");
+        s.feed("\x1bPbroken\x18f"); // CAN 중단
+        assert_eq!(text_of(&s, 0), "abcdef");
+        s.feed("\x1bPbroken\x1b[1;1Hg"); // ESC [ — ST 없이 CSI가 오면 새 시퀀스
+        assert_eq!(text_of(&s, 0), "gbcdef");
     }
 
     #[test]
