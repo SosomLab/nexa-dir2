@@ -53,6 +53,7 @@ mod dnd;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod fsprobe;
 // 파일 상세 정보(10-02 — 도크 Info 기본 8줄 + 속성 시스템 자세히)
+#[cfg_attr(not(windows), allow(dead_code))]
 mod fileinfo;
 #[cfg(windows)]
 mod icon;
@@ -91,6 +92,7 @@ mod shellnotify;
 mod shellpath;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod source;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod svg;
 #[cfg(windows)]
 mod tip;
