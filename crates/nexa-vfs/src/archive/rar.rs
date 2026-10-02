@@ -59,10 +59,20 @@ fn rar5_extra_has_crypt(extra: &[u8]) -> bool {
         if rtype == 1 {
             return true; // FHEXTRA_CRYPT
         }
-        p += n1 + size as usize;
         if size == 0 {
             return false;
         }
+        // 전진 보장 — `size`는 vint(최대 2^63)라 wrapping 덧셈이면 제자리 무한 루프.
+        let Some(next) = usize::try_from(size)
+            .ok()
+            .and_then(|s| p.checked_add(n1)?.checked_add(s))
+        else {
+            return false;
+        };
+        if next <= p {
+            return false;
+        }
+        p = next;
     }
     false
 }
@@ -84,7 +94,11 @@ fn list_v5(src: &dyn ReadAt, opts: &ListOpts, out: &mut Listing) -> Result<(), A
         if hsize == 0 || hsize > super::MAX_CHUNK as u64 {
             break;
         }
-        let body = read_exact_at(src, body_at, (hsize as usize).min((size - body_at) as usize))?;
+        let body = read_exact_at(
+            src,
+            body_at,
+            (hsize as usize).min((size - body_at) as usize),
+        )?;
         let mut p = 0usize;
         let Some((htype, n1)) = vint(&body, p) else {
             break;
@@ -115,11 +129,17 @@ fn list_v5(src: &dyn ReadAt, opts: &ListOpts, out: &mut Listing) -> Result<(), A
                 }
             }
             2 | 3 => {
-                let Some((fflags, n)) = vint(&body, p) else { break };
+                let Some((fflags, n)) = vint(&body, p) else {
+                    break;
+                };
                 p += n;
-                let Some((usize_, n)) = vint(&body, p) else { break };
+                let Some((usize_, n)) = vint(&body, p) else {
+                    break;
+                };
                 p += n;
-                let Some((_attrs, n)) = vint(&body, p) else { break };
+                let Some((_attrs, n)) = vint(&body, p) else {
+                    break;
+                };
                 p += n;
                 let mut mtime = None;
                 if fflags & 0x0002 != 0 {
@@ -131,11 +151,17 @@ fn list_v5(src: &dyn ReadAt, opts: &ListOpts, out: &mut Listing) -> Result<(), A
                     crc = u32le(&body, p);
                     p += 4;
                 }
-                let Some((cinfo, n)) = vint(&body, p) else { break };
+                let Some((cinfo, n)) = vint(&body, p) else {
+                    break;
+                };
                 p += n;
-                let Some((_host, n)) = vint(&body, p) else { break };
+                let Some((_host, n)) = vint(&body, p) else {
+                    break;
+                };
                 p += n;
-                let Some((nlen, n)) = vint(&body, p) else { break };
+                let Some((nlen, n)) = vint(&body, p) else {
+                    break;
+                };
                 p += n;
                 let name_b = body.get(p..p + nlen as usize).unwrap_or(&[]);
                 p += nlen as usize;
@@ -372,10 +398,42 @@ mod tests {
         assert_eq!(l.label, "RAR 5");
         assert_eq!(l.entries.len(), 3);
         let a = l.entries.iter().find(|e| e.path == "dir/a.txt").unwrap();
-        assert_eq!((a.size, a.packed, a.method.as_str()), (Some(100), Some(40), "Normal"));
+        assert_eq!(
+            (a.size, a.packed, a.method.as_str()),
+            (Some(100), Some(40), "Normal")
+        );
         assert_eq!(a.modified, Some(1_700_000_500));
         assert!(l.entries.iter().find(|e| e.path == "dir").unwrap().is_dir);
         assert!(l.has_encrypted, "암호화 항목 집계");
+    }
+
+    #[test]
+    fn rar5_extra_wrapping_size_returns_immediately() {
+        // 정상 레코드 1개(비암호화 type 2) 뒤에 size = 2^64 - n1 레코드 → 예전 코드는
+        // `p += n1 + size`가 p로 되돌아와 무한 루프(디버그 = overflow panic).
+        let mut extra = Vec::new();
+        put_vint(&mut extra, 5);
+        put_vint(&mut extra, 2); // FHEXTRA_HASH
+        extra.extend_from_slice(&[0u8; 4]);
+        let mut sized = Vec::new();
+        put_vint(&mut sized, u64::MAX - 9);
+        let n1 = vint(&sized, 0).unwrap().1;
+        assert_eq!(n1, 10, "2^63 이상 vint = 10바이트");
+        put_vint(&mut sized, 2);
+        extra.extend_from_slice(&sized);
+        assert!(!rar5_extra_has_crypt(&extra));
+        // 같은 조립에서 암호화 레코드가 앞에 있으면 여전히 true(정상 판정 불변)
+        let mut crypt = Vec::new();
+        put_vint(&mut crypt, 5);
+        put_vint(&mut crypt, 1);
+        crypt.extend_from_slice(&[0u8; 4]);
+        crypt.extend_from_slice(&sized);
+        assert!(rar5_extra_has_crypt(&crypt));
+        // size = usize::MAX 초과 범위에서 checked_add 실패도 false
+        let mut big = Vec::new();
+        put_vint(&mut big, u64::MAX);
+        put_vint(&mut big, 2);
+        assert!(!rar5_extra_has_crypt(&big));
     }
 
     #[test]
@@ -418,7 +476,10 @@ mod tests {
         assert_eq!(l.label, "RAR 4");
         assert_eq!(l.entries.len(), 1);
         let e = &l.entries[0];
-        assert_eq!((e.path.as_str(), e.size, e.packed), ("old.txt", Some(120), Some(50)));
+        assert_eq!(
+            (e.path.as_str(), e.size, e.packed),
+            ("old.txt", Some(120), Some(50))
+        );
         assert_eq!(e.method, "Normal");
         assert_eq!(
             e.modified,
