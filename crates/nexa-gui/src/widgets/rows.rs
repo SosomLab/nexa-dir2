@@ -442,8 +442,8 @@ impl<S: RowSource> VirtualRows<S> {
         if self.mode == ViewMode::Tiles {
             return; // 타일 보기 인라인 편집은 β(필드 기하가 리스트 전용)
         }
-        if row >= self.src.len() {
-            return;
+        if row >= self.src.len() || self.tree_col().is_none() {
+            return; // 트리(이름) 열이 숨겨지면 필드를 둘 곳이 없다(A29 — 방어)
         }
         self.caret = Some(row);
         self.scroll_into_view(row);
@@ -565,13 +565,10 @@ impl<S: RowSource> VirtualRows<S> {
     }
 
     /// 인라인 이름변경 필드 rect(paint와 단일 기하 — M5-3에서 추출).
+    /// 트리 열 위치는 [`Self::tree_col`](현재 열 순서 — A29: 첫 열 가정 제거).
     fn rename_field_rect(&self, row: usize, y: i32) -> Rect {
         let b = self.bounds;
-        let (tc_x, tc_w) = if self.columns.is_empty() {
-            (b.x, b.w)
-        } else {
-            (self.col_x(0), self.columns[0].width)
-        };
+        let (tc_x, tc_w) = self.tree_col().unwrap_or((b.x, b.w));
         let item = self.src.row(row);
         let mut fx = tc_x + self.pad_x + item.depth as i32 * self.indent_w + self.indent_w;
         if self.src.icon(row).is_some() {
@@ -1011,6 +1008,19 @@ impl<S: RowSource> VirtualRows<S> {
         self.bounds.x - self.scroll_x + before
     }
 
+    /// 트리(이름) 열의 (x, 폭) — **현재 열 순서** 기준(A29 — X3-07). 컬럼 미설정이면
+    /// 위젯 전체 폭(M1-3 호환), `key == 0` 열이 숨겨졌으면 `None`. 이름변경 필드·
+    /// 마커 존·페인트(`col.key == 0`)가 같은 열을 가리키도록 하는 단일 기하.
+    fn tree_col(&self) -> Option<(i32, i32)> {
+        if self.columns.is_empty() {
+            return Some((self.bounds.x, self.bounds.w));
+        }
+        self.columns
+            .iter()
+            .position(|c| c.key == 0)
+            .map(|i| (self.col_x(i), self.columns[i].width))
+    }
+
     /// 컬럼 총폭의 오른쪽 경계 — 이 오른쪽은 **빈 본문**으로 판정(행 아님. 원본 B-4
     /// "행 히트영역=컬럼 총폭" — 클릭=해제·드래그=러버밴드, QA 07-13).
     fn columns_right(&self) -> i32 {
@@ -1275,13 +1285,8 @@ impl<S: RowSource> VirtualRows<S> {
         if self.mode != ViewMode::Tree {
             return false; // 일반/타일 보기 = 인라인 펼침 없음(07-16)
         }
-        let (tc_x, tc_w) = if self.columns.is_empty() {
-            (self.bounds.x, self.bounds.w)
-        } else {
-            match self.columns.iter().position(|c| c.key == 0) {
-                Some(i) => (self.col_x(i), self.columns[i].width),
-                None => return false,
-            }
+        let Some((tc_x, tc_w)) = self.tree_col() else {
+            return false; // 트리 열 숨김
         };
         let item = self.src.row(row);
         if item.marker == Marker::None {
@@ -2512,6 +2517,98 @@ mod tests {
         v.cancel_rename(&mut inv);
         assert!(!v.is_renaming());
         assert_eq!(v.submit_rename(&mut inv), None);
+    }
+
+    /// A29(X3-07): 이름변경 필드·마커 존은 **현재 열 순서의 트리(key 0) 열** 위에 놓인다
+    /// — 헤더 드래그로 '크기'를 맨 앞에 둬도 첫 열 위에 뜨지 않는다.
+    #[test]
+    fn rename_field_follows_tree_column_after_reorder() {
+        // `rename_hit`은 paint 캐시 기준 — 무출력 DrawCtx로 한 번 그린다
+        struct Nop;
+        impl DrawCtx for Nop {
+            fn fill_rect(&mut self, _rect: Rect, _color: Color) {}
+            fn text_opaque(&mut self, _x: i32, _y: i32, _c: Rect, _t: &str, _f: Color, _b: Color) {}
+            fn text_width(&mut self, text: &str) -> i32 {
+                text.chars().count() as i32 * 8
+            }
+        }
+        // 기본 순서(이름 첫 열) = 종전 좌표 그대로(동작 불변)
+        let (mut v, mut inv) = list_with_cols(5, 200);
+        v.begin_rename(0, "row-0", &mut inv);
+        let (_, rc, _) = v.rename_edit_info().expect("편집 중");
+        let pad = 12;
+        let indent = 16;
+        assert_eq!(rc.x, v.col_x(0) + pad + indent - RENAME_FIELD_PAD);
+        assert_eq!(rc.w, 200 - (pad + indent) + RENAME_FIELD_PAD);
+        assert_eq!(rc.y, 20, "헤더 1행 아래 행 0");
+        v.paint(&mut Nop, &Theme::dark());
+        assert!(v.rename_hit(rc.x + 2, rc.y + 2));
+        v.cancel_rename(&mut inv);
+
+        // 재배열: [크기, 이름, 수정한 날짜] — 이름 열이 둘째
+        v.set_columns(
+            vec![
+                Column::new(2, "크기", 100).right_aligned(),
+                Column::new(0, "이름", 200),
+                Column::new(3, "수정한 날짜", 150),
+            ],
+            &mut inv,
+        );
+        assert_eq!(v.tree_col(), Some((100, 200)));
+        v.begin_rename(0, "row-0", &mut inv);
+        let (_, rc, _) = v.rename_edit_info().expect("편집 중");
+        assert_eq!(
+            rc.x,
+            v.col_x(1) + pad + indent - RENAME_FIELD_PAD,
+            "필드는 둘째(이름) 열 위"
+        );
+        assert_eq!(rc.w, 200 - (pad + indent) + RENAME_FIELD_PAD);
+        v.paint(&mut Nop, &Theme::dark());
+        assert!(!v.rename_hit(50, rc.y + 2), "크기 열(첫 열) 위는 필드 아님");
+        assert!(v.rename_hit(rc.x + 2, rc.y + 2));
+        v.cancel_rename(&mut inv);
+
+        // 가로 스크롤 반영 — 열 x가 함께 밀린다
+        v.set_bounds(Rect::new(0, 0, 150, 200), &mut inv);
+        v.hscroll_to(80, &mut inv);
+        assert_eq!(v.scroll_x(), 80);
+        v.begin_rename(0, "row-0", &mut inv);
+        let (_, rc, _) = v.rename_edit_info().expect("편집 중");
+        assert_eq!(rc.x, 100 - 80 + pad + indent - RENAME_FIELD_PAD);
+        v.cancel_rename(&mut inv);
+
+        // 트리 열 숨김(방어 경로) — 필드를 둘 곳이 없으면 편집 진입 거부
+        v.set_columns(vec![Column::new(2, "크기", 100)], &mut inv);
+        assert_eq!(v.tree_col(), None);
+        v.begin_rename(0, "row-0", &mut inv);
+        assert!(!v.is_renaming());
+
+        // 컬럼 미설정 = 전체 폭(M1-3 호환)
+        v.set_columns(Vec::new(), &mut inv);
+        assert_eq!(v.tree_col(), Some((0, 150)));
+    }
+
+    /// A29: 마커 존도 같은 트리 열 기하 — 재배열 후 둘째 열의 들여쓰기 자리.
+    #[test]
+    fn marker_zone_follows_tree_column_after_reorder() {
+        let mut inv = Invalidations::default();
+        let mut v = VirtualRows::new(Expandable { expanded: false }, 20, 12, 16);
+        v.set_bounds(Rect::new(0, 0, 400, 200), &mut inv);
+        v.set_columns(cols(), &mut inv);
+        // 기본 순서: 행 0(헤더 아래 y=20..40) 마커 = [pad, pad+indent) = [12, 28)
+        assert!(v.marker_hit(20, 30));
+        assert!(!v.marker_hit(30, 30));
+        v.set_columns(
+            vec![
+                Column::new(2, "크기", 100).right_aligned(),
+                Column::new(0, "이름", 200),
+                Column::new(3, "수정한 날짜", 150),
+            ],
+            &mut inv,
+        );
+        assert!(!v.marker_hit(20, 30), "첫 열(크기) 위는 마커 아님");
+        assert!(v.marker_hit(100 + 20, 30), "둘째(이름) 열의 들여쓰기 자리");
+        assert!(!v.marker_hit(100 + 30, 30));
     }
 
     /// 정적 N행 소스(토글 없음) + set_sort 기록.
