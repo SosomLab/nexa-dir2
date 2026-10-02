@@ -25,6 +25,17 @@ pub fn icon_key(is_dir: bool, path: &str) -> String {
     }
 }
 
+/// 라지(타일 32px) 아이콘 키 접두 — `L|dir`·`L|.txt`·`L|c:\\a.exe`. 캐시 키가 달라 소/라지 공존.
+pub const LARGE_PREFIX: &str = "L|";
+
+/// 키가 **파일별 고유 아이콘**(exe·lnk… = 실제 파일을 여는 조회 → 워커)인지.
+/// `L|` 접두는 벗기고 판정한다 — 타일 보기의 `L|dir`·`L|.txt`·`L|file`은 타입
+/// 아이콘(레지스트리 조회·동기)이지 파일별이 아니다. 접두 없는 키의 결과는 종전과 동일.
+pub fn is_per_file(key: &str) -> bool {
+    let k = key.strip_prefix(LARGE_PREFIX).unwrap_or(key);
+    k != "dir" && k != "file" && !k.starts_with('.')
+}
+
 fn file_name(path: &str) -> &str {
     let trimmed = path.trim_end_matches(['\\', '/']);
     match trimmed.rfind(['\\', '/']) {
@@ -335,8 +346,7 @@ pub mod shell {
             let batch = self.store.take_batch(BATCH);
             let mut loaded = false;
             for (key, hint) in batch {
-                let per_file = key != "dir" && key != "file" && !key.starts_with('.');
-                if per_file {
+                if super::is_per_file(&key) {
                     let _ = self.worker().send((key, hint, hwnd.0 as isize, msg));
                 } else {
                     if let Some(icon) = unsafe { load_icon(&key, &hint) } {
@@ -428,7 +438,7 @@ pub mod shell {
     /// `L|` 접두사 = **라지 아이콘**(32px — 타일 보기 07-16). 캐시 키가 달라 소/라지 공존.
     unsafe fn load_icon(key: &str, hint: &str) -> Option<HICON> {
         let mut info = SHFILEINFOW::default();
-        let (key, size_flag) = match key.strip_prefix("L|") {
+        let (key, size_flag) = match key.strip_prefix(super::LARGE_PREFIX) {
             Some(k) => (k, windows::Win32::UI::Shell::SHGFI_LARGEICON),
             None => (key, SHGFI_SMALLICON),
         };
@@ -490,6 +500,43 @@ mod tests {
     fn key_dotfile_and_trailing_dot_are_generic_file() {
         assert_eq!(icon_key(false, "C:\\a\\.gitignore"), "file");
         assert_eq!(icon_key(false, "C:\\a\\name."), "file");
+    }
+
+    // ── is_per_file (G5-04 — `L|` 접두 유/무 판정 동치) ──
+
+    #[test]
+    fn per_file_strips_large_prefix() {
+        // 타입 아이콘(동기) — 접두 유/무 동일
+        assert!(!is_per_file("dir"));
+        assert!(!is_per_file("L|dir"));
+        assert!(!is_per_file("file"));
+        assert!(!is_per_file("L|file"));
+        assert!(!is_per_file(".txt"));
+        assert!(!is_per_file("L|.txt"));
+        // 파일별 고유 아이콘(워커) — 접두 유/무 동일
+        assert!(is_per_file("c:\\a.exe"));
+        assert!(is_per_file("L|c:\\a.exe"));
+        assert!(is_per_file("c:\\l\\short.lnk"));
+        assert!(is_per_file("L|c:\\l\\short.lnk"));
+    }
+
+    #[test]
+    fn per_file_matches_icon_key_contract() {
+        // icon_key가 만든 키를 그대로/접두 붙여 넣어도 판정이 같다
+        for (is_dir, path, per_file) in [
+            (true, "C:\\Users\\x", false),
+            (false, "C:\\a\\README", false),
+            (false, "C:\\a\\b.TXT", false),
+            (false, "C:\\Tools\\App.EXE", true),
+        ] {
+            let key = icon_key(is_dir, path);
+            assert_eq!(is_per_file(&key), per_file, "{key}");
+            assert_eq!(
+                is_per_file(&format!("{LARGE_PREFIX}{key}")),
+                per_file,
+                "L|{key}"
+            );
+        }
     }
 
     // ── IconStore (LRU + 큐) ──
