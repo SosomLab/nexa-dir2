@@ -186,25 +186,109 @@ pub fn copy_file_with_progress(
     run
 }
 
+/// 폴더 재귀 복사. 열거 중 `Err` 엔트리는 **오류로 전파**한다(점검 2차 A14 — 종전 `flatten()`은
+/// SMB 일시 오류·권한 등으로 빠진 항목을 조용히 버리고 Ok를 돌려줘, 교차 볼륨 이동이 원본을
+/// 통째로 지우면 그 항목이 사본에도 원본에도 남지 않았다).
+/// `copied`가 있으면 복사를 마친 원본 경로를 **후위 순서**(자식 → 부모)로 기록한다 — 교차 볼륨
+/// 이동이 복사한 항목만 골라 지우는 데 쓴다.
 fn copy_dir_with_progress(
     src: &Path,
     dest: &Path,
     on_bytes: &mut dyn FnMut(u64),
     cancel: &AtomicBool,
+    mut copied: Option<&mut Vec<PathBuf>>,
 ) -> io::Result<()> {
     fs::create_dir_all(dest)?;
-    for e in fs::read_dir(src)?.flatten() {
+    for e in fs::read_dir(src)? {
         check_cancel(cancel)?;
+        let e = e?;
         let p = e.path();
         let d = dest.join(e.file_name());
         if e.file_type()?.is_dir() {
-            copy_dir_with_progress(&p, &d, on_bytes, cancel)?;
+            copy_dir_with_progress(&p, &d, on_bytes, cancel, copied.as_deref_mut())?;
         } else {
             // 원본 규약: 디렉터리 재귀 내부는 overwrite 복사
             copy_file_with_progress(&p, &d, true, on_bytes, cancel)?;
         }
+        if let Some(c) = copied.as_deref_mut() {
+            c.push(p);
+        }
     }
     Ok(())
+}
+
+/// 교차 볼륨 이동의 원본 정리 — `copied`(후위 순서)에 적힌 항목만 지우고 마지막에 빈 `src`를
+/// `remove_dir`한다(탐색기 방식). 열거에서 빠졌거나 복사 중 새로 생긴 항목은 남고, 그 때문에 폴더가
+/// 비지 않으면 오류로 보고한다 — 사본은 완성돼 있으므로 데이터는 양쪽 어디에도 유실되지 않는다.
+fn remove_copied(src: &Path, copied: &[PathBuf]) -> io::Result<()> {
+    let mut first_err: Option<io::Error> = None;
+    let mut note = |r: io::Result<()>| {
+        if let Err(e) = r {
+            first_err.get_or_insert(e);
+        }
+    };
+    for p in copied {
+        // 파일(심링크 포함) 우선, 실패하면 폴더(빈 폴더만 — 남은 항목이 있으면 그대로 둔다)
+        let r = fs::remove_file(p).or_else(|e| {
+            if p.is_dir() {
+                remove_empty_dir(p)
+            } else {
+                Err(e)
+            }
+        });
+        note(r);
+    }
+    note(remove_empty_dir(src));
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// 빈 폴더 삭제 — 비어 있지 않으면 사용자 메시지에 사유를 담아 반환.
+fn remove_empty_dir(dir: &Path) -> io::Result<()> {
+    fs::remove_dir(dir).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!(
+                "원본 폴더를 비울 수 없어 남겨 둠(복사되지 않은 항목이 있을 수 있음): {}: {e}",
+                leaf_name(dir)
+            ),
+        )
+    })
+}
+
+/// `copy_onto_with_progress`의 본체 — `copied`는 교차 볼륨 이동 전용(복사한 원본 경로 기록).
+fn copy_onto_inner(
+    src: &Path,
+    dest: &Path,
+    overwrite: bool,
+    on_bytes: &mut dyn FnMut(u64),
+    cancel: &AtomicBool,
+    copied: Option<&mut Vec<PathBuf>>,
+) -> io::Result<()> {
+    let replacing = overwrite && dest.exists();
+    if src.is_dir() {
+        if !replacing {
+            return copy_dir_with_progress(src, dest, on_bytes, cancel, copied);
+        }
+        let staged = staging_path(dest, "tmp");
+        let run = copy_dir_with_progress(src, &staged, on_bytes, cancel, copied)
+            .and_then(|()| commit_replace(&staged, dest));
+        if run.is_err() {
+            let _ = fs::remove_dir_all(&staged);
+        }
+        run
+    } else if replacing {
+        let staged = staging_path(dest, "tmp");
+        // copy_file_with_progress가 실패 시 staged를 정리한다
+        copy_file_with_progress(src, &staged, true, on_bytes, cancel)?;
+        commit_replace(&staged, dest).inspect_err(|_| {
+            let _ = fs::remove_file(&staged);
+        })
+    } else {
+        copy_file_with_progress(src, dest, overwrite, on_bytes, cancel)
+    }
 }
 
 /// 교체용 스테이징 경로 — 대상과 **같은 부모**(같은 볼륨이라 rename이 원자적). 숨김 규약 `.<name>.nexa-<tag>-<pid>-<seq>`.
@@ -251,31 +335,29 @@ pub fn copy_onto_with_progress(
     on_bytes: &mut dyn FnMut(u64),
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    let replacing = overwrite && dest.exists();
+    copy_onto_inner(src, dest, overwrite, on_bytes, cancel, None)
+}
+
+/// 교차 볼륨 이동 = 복사 후 **복사한 항목만** 원본에서 제거(폴더는 `remove_copied`, 파일은 `remove_file`).
+/// 종전은 `remove_dir_all(src)`로 통째로 지워 열거에서 빠진 항목·복사 중 생긴 항목이 유실됐다.
+fn move_by_copy(
+    src: &Path,
+    dest: &Path,
+    overwrite: bool,
+    on_bytes: &mut dyn FnMut(u64),
+    cancel: &AtomicBool,
+) -> io::Result<()> {
     if src.is_dir() {
-        if !replacing {
-            return copy_dir_with_progress(src, dest, on_bytes, cancel);
-        }
-        let staged = staging_path(dest, "tmp");
-        let run = copy_dir_with_progress(src, &staged, on_bytes, cancel)
-            .and_then(|()| commit_replace(&staged, dest));
-        if run.is_err() {
-            let _ = fs::remove_dir_all(&staged);
-        }
-        run
-    } else if replacing {
-        let staged = staging_path(dest, "tmp");
-        // copy_file_with_progress가 실패 시 staged를 정리한다
-        copy_file_with_progress(src, &staged, true, on_bytes, cancel)?;
-        commit_replace(&staged, dest).inspect_err(|_| {
-            let _ = fs::remove_file(&staged);
-        })
+        let mut copied = Vec::new();
+        copy_onto_inner(src, dest, overwrite, on_bytes, cancel, Some(&mut copied))?; // 스테이징 교체
+        remove_copied(src, &copied)
     } else {
-        copy_file_with_progress(src, dest, overwrite, on_bytes, cancel)
+        copy_onto_inner(src, dest, overwrite, on_bytes, cancel, None)?;
+        fs::remove_file(src)
     }
 }
 
-/// 원본을 정확히 `dest`로 이동 — 같은 볼륨=rename(전체 크기 1회 보고), 다른 볼륨=복사 후 원본 삭제.
+/// 원본을 정확히 `dest`로 이동 — 같은 볼륨=rename(전체 크기 1회 보고), 다른 볼륨=복사 후 **복사한 항목만** 원본에서 삭제.
 /// 자기 자신/하위로의 폴더 이동은 오류(원본 cycleMove).
 pub fn move_onto_with_progress(
     src: &Path,
@@ -307,12 +389,7 @@ pub fn move_onto_with_progress(
         on_bytes(size_of(dest)); // 메타데이터 이동(즉시) — 전체 크기 1회 보고
         Ok(())
     } else {
-        copy_onto_with_progress(src, dest, overwrite, on_bytes, cancel)?; // 스테이징 교체
-        if is_dir {
-            fs::remove_dir_all(src)
-        } else {
-            fs::remove_file(src)
-        }
+        move_by_copy(src, dest, overwrite, on_bytes, cancel)
     }
 }
 
@@ -765,7 +842,10 @@ mod tests {
             &cancel,
         );
         assert!(out.canceled);
-        assert_eq!(fs::read_to_string(b.join("x").join("keep.txt")).unwrap(), "옛 폴더 내용");
+        assert_eq!(
+            fs::read_to_string(b.join("x").join("keep.txt")).unwrap(),
+            "옛 폴더 내용"
+        );
         assert!(!b.join("x").join("big.bin").exists());
         assert_eq!(leftovers(&b), 0, "스테이징 잔여 없음");
         // ② 파일 덮어쓰기 중 취소 → 옛 파일 그대로
@@ -788,9 +868,14 @@ mod tests {
         // ③ 성공 시 교체 완료(폴더·파일) — 옛 내용 소거·잔여 없음
         fs::write(a.join("x").join("big.bin"), b"new").unwrap();
         fs::write(a.join("f.bin"), b"newf").unwrap();
-        let out = run(&[a.join("x"), a.join("f.bin")], &b, Op::Copy, &mut |_| Conflict::Overwrite);
+        let out = run(&[a.join("x"), a.join("f.bin")], &b, Op::Copy, &mut |_| {
+            Conflict::Overwrite
+        });
         assert_eq!(out.transferred.len(), 2, "{:?}", out.errors);
-        assert!(!b.join("x").join("keep.txt").exists(), "옛 폴더 내용 교체됨");
+        assert!(
+            !b.join("x").join("keep.txt").exists(),
+            "옛 폴더 내용 교체됨"
+        );
         assert_eq!(fs::read(b.join("x").join("big.bin")).unwrap(), b"new");
         assert_eq!(fs::read(b.join("f.bin")).unwrap(), b"newf");
         assert_eq!(leftovers(&b), 0);
@@ -890,5 +975,160 @@ mod tests {
         assert_eq!(size_of(&d.join("없음")), 0, "실패 격리 = 0");
         assert!(same_volume(&d, &d.join("s")), "같은 루트");
         fs::remove_dir_all(&d).unwrap();
+    }
+    /// A14(점검 2차 G8 누락1): 교차 볼륨 폴더 이동은 **복사한 항목만** 지운다 — 열거에서 빠진 항목이
+    /// 원본에 남고 폴더는 비지 않아 오류로 보고된다(종전 `remove_dir_all`은 통째로 삭제 = 유실).
+    #[test]
+    fn move_by_copy_removes_only_copied_items_and_keeps_strays() {
+        let d = fixture("a14_strays");
+        let (src, dest) = (d.join("src"), d.join("dest"));
+        fs::create_dir_all(src.join("sub/deep")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        fs::write(src.join("sub/b.txt"), "b").unwrap();
+        fs::write(src.join("sub/deep/c.txt"), "c").unwrap();
+
+        // 복사 기록 = 후위 순서(자식 → 부모)
+        let mut copied = Vec::new();
+        let cancel = AtomicBool::new(false);
+        copy_dir_with_progress(&src, &dest, &mut |_| {}, &cancel, Some(&mut copied)).unwrap();
+        assert_eq!(copied.len(), 5, "파일 3 + 폴더 2");
+        let pos = |p: &Path| copied.iter().position(|c| c == p).unwrap();
+        assert!(pos(&src.join("sub/deep/c.txt")) < pos(&src.join("sub/deep")));
+        assert!(pos(&src.join("sub/deep")) < pos(&src.join("sub")));
+        assert!(pos(&src.join("sub/b.txt")) < pos(&src.join("sub")));
+
+        // 열거에서 빠진(=기록에 없는) 항목이 있는 상태로 원본 정리
+        fs::write(src.join("sub/stray.txt"), "열거 오류로 빠진 항목").unwrap();
+        let r = remove_copied(&src, &copied);
+        assert!(r.is_err(), "폴더가 비지 않으면 오류 보고: {r:?}");
+        assert!(!src.join("a.txt").exists());
+        assert!(!src.join("sub/b.txt").exists());
+        assert!(!src.join("sub/deep").exists(), "비워진 하위 폴더는 삭제");
+        assert_eq!(
+            fs::read_to_string(src.join("sub/stray.txt")).unwrap(),
+            "열거 오류로 빠진 항목",
+            "복사되지 않은 항목은 원본에 잔존"
+        );
+        assert!(src.is_dir(), "원본 폴더 잔존");
+        assert_eq!(
+            fs::read_to_string(dest.join("sub/deep/c.txt")).unwrap(),
+            "c"
+        );
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// 정상 이동 결과 불변: 전부 복사되면 원본은 폴더까지 사라지고 사본이 온전하다.
+    #[test]
+    fn move_by_copy_full_success_removes_source_tree() {
+        let d = fixture("a14_ok");
+        let (src, dest) = (d.join("src"), d.join("dest"));
+        fs::create_dir_all(src.join("sub/deep")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        fs::write(src.join("sub/deep/c.txt"), "c").unwrap();
+        let mut bytes = 0u64;
+        move_by_copy(
+            &src,
+            &dest,
+            false,
+            &mut |n| bytes += n,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(bytes, 2);
+        assert!(!src.exists(), "원본 소멸");
+        assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "a");
+        assert_eq!(
+            fs::read_to_string(dest.join("sub/deep/c.txt")).unwrap(),
+            "c"
+        );
+
+        // 덮어쓰기(스테이징 교체) 경로도 동일
+        let src2 = d.join("src2");
+        fs::create_dir_all(&src2).unwrap();
+        fs::write(src2.join("new.txt"), "new").unwrap();
+        move_by_copy(&src2, &dest, true, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert!(!src2.exists());
+        assert_eq!(fs::read_to_string(dest.join("new.txt")).unwrap(), "new");
+        assert!(!dest.join("a.txt").exists(), "옛 대상은 교체됨");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// 열리지 않는 파일(다른 프로세스 독점 열기 = 공유 위반)이 든 폴더 이동 → 오류, 원본 전부 잔존.
+    #[cfg(windows)]
+    #[test]
+    fn move_by_copy_locked_file_keeps_source_intact() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let d = fixture("a14_locked");
+        let (src, dest) = (d.join("src"), d.join("dest"));
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        fs::write(src.join("sub/locked.txt"), "잠김").unwrap();
+        let _hold = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(src.join("sub/locked.txt"))
+            .unwrap();
+        let r = move_by_copy(&src, &dest, false, &mut |_| {}, &AtomicBool::new(false));
+        assert!(r.is_err(), "{r:?}");
+        assert_eq!(fs::read_to_string(src.join("a.txt")).unwrap(), "a");
+        drop(_hold); // 독점 열기 해제 후 내용 확인(share_mode(0)은 자기 자신의 재열기도 거부)
+        assert_eq!(
+            fs::read_to_string(src.join("sub/locked.txt")).unwrap(),
+            "잠김"
+        );
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// 실제 교차 볼륨(임시 폴더 ≠ target 볼륨일 때만 — 로컬 C:/D:·Windows CI) 재현: 복사 중 원본에
+    /// 생긴 파일은 열거에서 빠질 수 있다. 종전엔 `remove_dir_all`로 함께 사라졌고(10-02 재현 캡처),
+    /// 이제는 원본 또는 사본 어느 한쪽에 반드시 남는다.
+    #[test]
+    fn cross_volume_move_never_loses_item_missed_by_enumeration() {
+        let src_root = fixture("a14_xvol");
+        let dst_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/nexa_ops_a14_xvol");
+        if same_volume(&src_root, &dst_root) {
+            fs::remove_dir_all(&src_root).unwrap();
+            return; // 둘째 볼륨 없음 — 건너뜀
+        }
+        let _ = fs::remove_dir_all(&dst_root);
+        fs::create_dir_all(&dst_root).unwrap();
+        let src = src_root.join("folder");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("sub/big.bin"), vec![7u8; 9 * 1024 * 1024]).unwrap();
+        let late = src.join("sub/0late.txt"); // NTFS 이름순 열거에서 big.bin 뒤에 재개되면 빠진다
+        let dest = dst_root.join("folder");
+        let mut fired = false;
+        let r = move_onto_with_progress(
+            &src,
+            &dest,
+            false,
+            &mut |_| {
+                if !fired {
+                    fired = true;
+                    fs::write(&late, "late").unwrap();
+                }
+            },
+            &AtomicBool::new(false),
+        );
+        assert!(fired);
+        assert!(dest.join("sub/big.bin").exists(), "사본 완성");
+        let in_src = late.exists();
+        let in_dest = dest.join("sub/0late.txt").exists();
+        assert!(
+            in_src || in_dest,
+            "늦게 생긴 항목이 양쪽 모두에서 사라짐(유실) — {r:?}"
+        );
+        if in_src {
+            assert!(r.is_err(), "원본에 남은 항목이 있으면 오류 보고");
+            assert!(
+                !src.join("sub/big.bin").exists(),
+                "복사한 항목은 원본에서 제거"
+            );
+        } else {
+            assert!(r.is_ok(), "{r:?}");
+            assert!(!src.exists());
+        }
+        let _ = fs::remove_dir_all(&src_root);
+        let _ = fs::remove_dir_all(&dst_root);
     }
 }
