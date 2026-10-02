@@ -8590,6 +8590,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 if let Some(idx) = zone.owner() {
                     set_active(hwnd, st, idx);
+                    // 편집 필드 안 더블클릭 = 텍스트 선택(필드 관례)이지 열기가 아니다(G3-03
+                    // 10-02). 리네임 중 첫 클릭은 rows가 캐럿 배치로 소비해 필드가 살아 있고
+                    // 둘째 클릭이 WM_LBUTTONDBLCLK로 대체되므로 종전엔 **편집 중인 그 행**이
+                    // activate_row돼 폴더면 트리 교체·파일이면 실행됐다. edit.rs에 단어 선택이
+                    // 없어 전체 선택으로 둔다. 다른 행 더블클릭은 첫 MouseDown이 리네임을
+                    // 취소하므로 종전과 동일. 경로바 편집 필드도 같은 가드(종전엔 row_at이
+                    // None이라 무해했으나 명시).
+                    if st.panels[idx].rows().rename_field_hit(x, y) {
+                        let mut inv = Invalidations::default();
+                        st.panels[idx].rows_mut().rename_key(
+                            nexa_gui::EditKey::SelectAll,
+                            false,
+                            &mut inv,
+                        );
+                        flush_invalidations(hwnd, &mut inv);
+                        return LRESULT(0);
+                    }
+                    if st.panels[idx].pathbar.edit_hit(x, y) {
+                        let mut inv = Invalidations::default();
+                        st.panels[idx].pathbar.edit_key(
+                            nexa_gui::EditKey::SelectAll,
+                            false,
+                            &mut inv,
+                        );
+                        flush_invalidations(hwnd, &mut inv);
+                        return LRESULT(0);
+                    }
                     // 탭 본체 더블클릭 = 설정 동작(사용자 요청 07-15 — 기본 닫기)
                     if let Some(ti) = st.panels[idx].tabbar.tab_index_at(x, y) {
                         let mut inv = Invalidations::default();
