@@ -1016,6 +1016,11 @@ struct State {
     slow_click: Option<(usize, String, u64)>,
     /// 느린 재클릭 리네임 예약 — **MouseUp에서 진입**(드래그가 시작되면 취소 = DnD 우선).
     rename_on_up: bool,
+    /// TIMER_RENAME이 무장된 동안의 대상 (패널, 경로) — 만료 시 **현재 활성 패널·캐럿 행과
+    /// 대조**해 일치할 때만 리네임 진입(G3-05·X2-06 10-02). 종전엔 만료 시점 캐럿 행을
+    /// 무조건 편집해 그 500ms 안의 ↓키·Delete·우클릭 셸 메뉴·재로드 뒤 **다른 행/다른
+    /// 패널**에 리네임 필드가 떴다.
+    pending_rename: Option<(usize, String)>,
     /// 패널별 폴더 watcher(M3-6) — 활성 탭 현재 폴더 감시(비재귀). 경로 변경 시 재구독.
     /// 패널별 watcher 묶음(M3-6 → X-35 QA 확장): 루트 + **가시 펼침 폴더**(상한
     /// [`WATCH_CAP`]). 전 항목이 같은 세대를 공유 — 목록 변경 시 통째 재구독.
@@ -1695,6 +1700,7 @@ pub fn run() -> Result<()> {
         dnd_hover_ms: settings.dnd_hover_ms,
         slow_click: None,
         rename_on_up: false,
+        pending_rename: None,
         watchers: [Vec::new(), Vec::new()],
         watch_gen: 0,
         watch_since: [0, 0],
@@ -3970,6 +3976,32 @@ unsafe fn on_delete_message(hwnd: HWND, st: &mut State, ok_flag: bool) {
 }
 
 /// F2 — 캐럿 행 인라인 이름변경 시작(원본 B-6).
+/// 지연 리네임 만료 판정(G3-05·X2-06 10-02) — 예약된 (패널, 경로)가 **지금의** 활성
+/// 패널·캐럿 행 경로와 일치할 때만 발화. 경로 비교는 `Tree::index_of_path` 규약(끝
+/// 구분자·ASCII 대소문자 무시 — OneDrive 케이스 변동에 안전). 예약 없음·캐럿 없음 =
+/// 발화 안 함. Win32 비의존(비Windows cargo test 포함).
+fn rename_timer_should_fire(
+    pending: Option<&(usize, String)>,
+    active: usize,
+    caret_path: Option<&str>,
+) -> bool {
+    let (Some((panel, path)), Some(cur)) = (pending, caret_path) else {
+        return false;
+    };
+    *panel == active
+        && path
+            .trim_end_matches(['\\', '/'])
+            .eq_ignore_ascii_case(cur.trim_end_matches(['\\', '/']))
+}
+
+/// 예약된 느린 재클릭 리네임 폐기 — 새 클릭·우클릭·키 입력·명령은 모두 "리네임 의도
+/// 아님"(G3-05: 셸 메뉴 모달 루프가 WM_TIMER를 디스패치해 메뉴 아래에 필드가 열리던 결함).
+unsafe fn cancel_pending_rename(hwnd: HWND, st: &mut State) {
+    if st.pending_rename.take().is_some() {
+        let _ = KillTimer(Some(hwnd), TIMER_RENAME);
+    }
+}
+
 unsafe fn begin_rename_caret(hwnd: HWND, st: &mut State) {
     let target = {
         let rows = st.active_panel().rows();
@@ -5074,6 +5106,7 @@ fn selection_sig(st: &State) -> [(usize, Option<usize>); 2] {
 
 /// 명령 실행(메뉴·도구 모음 공용).
 unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
+    cancel_pending_rename(hwnd, st); // 툴바·메뉴 명령 = 예약 리네임 폐기(G3-05 b)
     let ctx = st.nav_ctx();
     let mut inv = Invalidations::default();
     match id {
@@ -8074,7 +8107,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // 드래그가 시작되면 취소 = DnD 우선. 짧은 간격은 더블클릭 시도로 무시)
                     let now = now_ms();
                     st.rename_on_up = false;
-                    let _ = KillTimer(Some(hwnd), TIMER_RENAME); // 새 클릭 = 예약 리네임 무효
+                    cancel_pending_rename(hwnd, st); // 새 클릭 = 예약 리네임 무효
                     if let Some((_, path)) = &hit {
                         // 리네임을 끝낸 그 클릭은 예약하지 않음(기존 동작 유지 —
                         // 취소 클릭이 곧바로 새 리네임을 잡지 않도록). 시드는 유지.
@@ -8120,6 +8153,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let mut tab_menu: Option<(usize, usize)> = None;
             if let Some(st) = state_of(hwnd) {
                 let (x, y) = mouse_xy(lparam);
+                cancel_pending_rename(hwnd, st); // 우클릭 = 리네임 의도 아님(G3-05)
                 st.rbutton_down_seen = true; // 뗌은 이 짝이 있을 때만 메뉴(G3-15)
                                              // TUI 마우스 모드(X-5) — 터미널 그리드 우클릭은 앱에 전달(Shift=로컬)
                 if GetKeyState(VK_SHIFT.0 as i32) >= 0 {
@@ -8510,6 +8544,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // 진입(그 안에 두 번째 클릭 = 더블클릭 열기 → WM_LBUTTONDBLCLK가 취소, QA 07-14)
                 if st.rename_on_up {
                     st.rename_on_up = false;
+                    // 대상 스냅샷 = 이 클릭의 (패널, 경로) — 만료 시 대조(G3-05·X2-06)
+                    st.pending_rename = st
+                        .slow_click
+                        .as_ref()
+                        .map(|(p, path, _)| (*p, path.clone()));
                     SetTimer(Some(hwnd), TIMER_RENAME, GetDoubleClickTime(), None);
                 }
             }
@@ -8540,6 +8579,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let _ = KillTimer(Some(hwnd), TIMER_RENAME);
             let mut exec: Option<PathBuf> = None;
             if let Some(st) = state_of(hwnd) {
+                st.pending_rename = None;
                 let (x, y) = mouse_xy(lparam);
                 // 다른 마우스 핸들러와 같은 히트 존(G3-17 10-02 — 종전 `panel_at(x)`는
                 // 도크 밴드 더블클릭을 파일 스플리터 기준으로 반대 패널에 넘겼다).
@@ -8601,6 +8641,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let vk = wparam.0 as u16;
                 let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
                 let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
+                if vk != VK_SHIFT.0 && vk != VK_CONTROL.0 {
+                    // 키 입력 = 예약 리네임 폐기(G3-05·X2-06 — ↓·Delete·Enter 뒤 바뀐
+                    // 캐럿 행에 필드가 뜨던 결함). 수식키 단독은 클릭 조합 중일 수 있어 제외.
+                    cancel_pending_rename(hwnd, st);
+                }
                 let ctx = st.nav_ctx();
                 let mut inv = Invalidations::default();
                 if st.active_panel().pathbar.is_editing() {
@@ -9481,10 +9526,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
             } else if wparam.0 == TIMER_RENAME {
-                // 더블클릭 시간 경과 — 느린 재클릭 확정 = 리네임 진입(QA 07-14)
+                // 더블클릭 시간 경과 — 느린 재클릭 확정 = 리네임 진입(QA 07-14).
+                // 예약된 (패널, 경로)가 지금의 활성 패널·캐럿 행과 일치할 때만(G3-05·X2-06 —
+                // 그 사이 재로드로 캐럿이 clamp된 다른 행이어도 폐기).
                 let _ = KillTimer(Some(hwnd), TIMER_RENAME);
                 if let Some(st) = state_of(hwnd) {
-                    begin_rename_caret(hwnd, st);
+                    let pending = st.pending_rename.take();
+                    let caret_path = {
+                        let rows = st.active_panel().rows();
+                        let tree = rows.source().tree();
+                        rows.caret()
+                            .and_then(|c| tree.visible_id(c))
+                            .and_then(|id| tree.node_path(id))
+                            .map(|p| p.to_string_lossy().into_owned())
+                    };
+                    if rename_timer_should_fire(pending.as_ref(), st.active, caret_path.as_deref())
+                    {
+                        begin_rename_caret(hwnd, st);
+                    }
                 }
             } else if wparam.0 == TIMER_DND {
                 // DnD 추적 폴링(X-32) — 정지 커서에서도 엣지 스크롤·호버 대기 경과 판정
@@ -9602,10 +9661,51 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_staging_slots, hit_zone_impl, is_dnd_staging, route_key_with_term, should_trim,
-        split_staged, tui_btn_held, GRect, HitGeom, HitZone, KeyRoute, MK_LBUTTON, MK_RBUTTON,
+        cleanup_staging_slots, hit_zone_impl, is_dnd_staging, rename_timer_should_fire,
+        route_key_with_term, should_trim, split_staged, tui_btn_held, GRect, HitGeom, HitZone,
+        KeyRoute, MK_LBUTTON, MK_RBUTTON,
     };
     use std::path::PathBuf;
+
+    /// G3-05·X2-06 — 지연 리네임 만료 판정 표: 예약 (패널, 경로)와 **지금의** 활성 패널·
+    /// 캐럿 행이 일치할 때만 발화. 각 피연산자(패널·경로·예약 유무·캐럿 유무)가 단독으로
+    /// 결과를 뒤집는 쌍 포함.
+    #[test]
+    fn rename_timer_fires_only_on_matching_row_and_panel() {
+        let pend = (0usize, String::from("C:\\Dir\\File.txt"));
+        assert!(
+            rename_timer_should_fire(Some(&pend), 0, Some("C:\\Dir\\File.txt")),
+            "정상 느린 재클릭: 같은 패널·같은 행"
+        );
+        assert!(
+            rename_timer_should_fire(Some(&pend), 0, Some("c:\\dir\\file.TXT")),
+            "대소문자 무시(index_of_path 규약 — OneDrive 케이스 변동)"
+        );
+        assert!(
+            rename_timer_should_fire(
+                Some(&(0, String::from("C:\\Dir\\Sub\\"))),
+                0,
+                Some("C:\\Dir\\Sub")
+            ),
+            "끝 구분자 무시"
+        );
+        assert!(
+            !rename_timer_should_fire(Some(&pend), 1, Some("C:\\Dir\\File.txt")),
+            "다른 패널이 활성 — 종전엔 그 패널 캐럿 행에 필드가 떴다"
+        );
+        assert!(
+            !rename_timer_should_fire(Some(&pend), 0, Some("C:\\Dir\\Other.txt")),
+            "↓키·재로드 clamp로 캐럿이 다른 행"
+        );
+        assert!(
+            !rename_timer_should_fire(Some(&pend), 0, None),
+            "캐럿 없음(행 소실)"
+        );
+        assert!(
+            !rename_timer_should_fire(None, 0, Some("C:\\Dir\\File.txt")),
+            "예약 없음(폐기된 타이머의 뒤늦은 만료)"
+        );
+    }
 
     /// G3-01 — TUI 버튼 유지 판정은 **버튼별** MK_ 비트: (버튼, wparam) 4조합 +
     /// 종전 결함 조합(우버튼 코드인데 어떤 버튼도 안 눌림 = 더는 유지 아님).
