@@ -3,6 +3,7 @@
 pub mod chrome;
 pub mod dock;
 pub mod menubar;
+pub mod overlaybar;
 pub mod pathbar;
 pub mod rows;
 pub mod tabbar;

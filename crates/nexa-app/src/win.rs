@@ -404,8 +404,7 @@ fn build_menus(
         MenuItem::new(CMD_TOGGLE_DOCK, tr("menu.view.dock"), "Ctrl+`").checked(dock),
         MenuItem::new(CMD_TOGGLE_LAUNCHER, tr("menu.view.launcher"), "").checked(launcher),
         // 항상 맨 위에 표시(사용자 요청 08-23 — 툴바 panel 블록과 동일 값·영속)
-        MenuItem::new(CMD_TOGGLE_TOPMOST, tr("menu.view.alwaysOnTop"), "")
-            .checked(always_on_top),
+        MenuItem::new(CMD_TOGGLE_TOPMOST, tr("menu.view.alwaysOnTop"), "").checked(always_on_top),
         MenuItem::separator(),
         MenuItem::new(CMD_REFRESH, tr("menu.view.refresh"), "F5"),
         MenuItem::separator(),
@@ -532,7 +531,11 @@ fn build_cloud_items(
 fn cloud_candidates(conns: &[config::CloudConn]) -> Vec<crate::cloud::CloudCandidate> {
     crate::cloud::detect()
         .into_iter()
-        .filter(|c| !conns.iter().any(|k| std::path::Path::new(&k.path) == c.path))
+        .filter(|c| {
+            !conns
+                .iter()
+                .any(|k| std::path::Path::new(&k.path) == c.path)
+        })
         .collect()
 }
 
@@ -612,7 +615,9 @@ unsafe fn install_cloud_lister(hwnd: HWND) {
             let settings = current_settings(st);
             Some(crate::cloudfs::ConnInfo {
                 kind: c.kind.clone(),
-                client_id: svc.resolve_client_id(settings.client_id(&c.kind)).to_string(),
+                client_id: svc
+                    .resolve_client_id(settings.client_id(&c.kind))
+                    .to_string(),
                 client_secret: svc
                     .resolve_client_secret(settings.client_secret(&c.kind))
                     .to_string(),
@@ -2074,8 +2079,8 @@ fn dock_info(p: &Panel) -> Vec<String> {
         }
     }
     let root = p.root_path();
-    let disp = nexa_vfs::cloud_display(&root)
-        .unwrap_or_else(|| root.to_string_lossy().into_owned());
+    let disp =
+        nexa_vfs::cloud_display(&root).unwrap_or_else(|| root.to_string_lossy().into_owned());
     vec![trf("info.currentFolder", &[&disp])]
 }
 
@@ -2290,8 +2295,8 @@ unsafe fn term_paint(
     }
     t.grid = (rc, cell_w, cell_h); // 마우스 히트 테스트용 캐시(QA 07-14)
     t.view_x = t.view_x.min(cols.saturating_sub(vis_cols)); // 래핑 전환·리사이즈 방어
-    // 셀은 기호 색 — 팔레트(`pal`)는 호출자가 설정·앱 테마로 고른다(09-04). 해석이 렌더
-    // 시점이라 F6 전환·설정 변경 즉시 스크롤백까지 새 팔레트로 재도장된다.
+                                                            // 셀은 기호 색 — 팔레트(`pal`)는 호출자가 설정·앱 테마로 고른다(09-04). 해석이 렌더
+                                                            // 시점이라 F6 전환·설정 변경 즉시 스크롤백까지 새 팔레트로 재도장된다.
     let argb = |c: u32| Color {
         r: (c >> 16) as u8,
         g: (c >> 8) as u8,
@@ -3397,8 +3402,7 @@ unsafe fn start_recycle_delete(hwnd: HWND, st: &mut State, mut targets: Vec<Path
             &[&locked.len().to_string(), &name_list(&locked)],
         );
         let dlg_font = st.dlg_font.clone();
-        match crate::dialog::show_buttons(hwnd, &tr("del.lockedTitle"), &msg, &buttons, &dlg_font)
-        {
+        match crate::dialog::show_buttons(hwnd, &tr("del.lockedTitle"), &msg, &buttons, &dlg_font) {
             1 => {
                 targets.retain(|p| !locked.contains(p));
                 break;
@@ -3508,7 +3512,9 @@ unsafe fn select_paths(hwnd: HWND, st: &mut State, paths: &[PathBuf]) {
             } else {
                 SelectOp::Toggle
             };
-            st.active_panel().rows_mut().select_program(row, op, &mut inv);
+            st.active_panel()
+                .rows_mut()
+                .select_program(row, op, &mut inv);
             first = false;
         }
     }
@@ -3533,9 +3539,15 @@ unsafe fn on_delete_message(hwnd: HWND, st: &mut State, ok_flag: bool) {
             paths: deleted.clone(),
         }));
     }
-    let mut note = trf("del.done", &[&tr("del.kindRecycle"), &deleted.len().to_string()]);
+    let mut note = trf(
+        "del.done",
+        &[&tr("del.kindRecycle"), &deleted.len().to_string()],
+    );
     if !failed.is_empty() {
-        note = format!("{note} · {}", trf("del.partialFail", &[&failed.len().to_string()]));
+        note = format!(
+            "{note} · {}",
+            trf("del.partialFail", &[&failed.len().to_string()])
+        );
     }
     reload_both(hwnd, st, &format!(" · {note}"));
     update_status(hwnd, st);
@@ -3702,7 +3714,9 @@ unsafe fn focus_created_and_rename(hwnd: HWND, st: &mut State, path: &Path) {
         // 부모가 접힌 가시 폴더면 펼친 후 재탐색(hover_expand — 접힘일 때만 동작)
         if let Some(parent_row) = path.parent().and_then(|p| find(st, p)) {
             let mut inv = Invalidations::default();
-            st.active_panel().rows_mut().hover_expand(parent_row, &mut inv);
+            st.active_panel()
+                .rows_mut()
+                .hover_expand(parent_row, &mut inv);
             flush_invalidations(hwnd, &mut inv);
             row = find(st, path);
         }
@@ -3730,7 +3744,9 @@ fn cloud_conn_info(st: &State, idx: usize) -> Option<crate::cloudfs::ConnInfo> {
     let refresh = crate::secret::load_token(idx)?;
     Some(crate::cloudfs::ConnInfo {
         kind: c.kind.clone(),
-        client_id: svc.resolve_client_id(settings.client_id(&c.kind)).to_string(),
+        client_id: svc
+            .resolve_client_id(settings.client_id(&c.kind))
+            .to_string(),
         client_secret: svc
             .resolve_client_secret(settings.client_secret(&c.kind))
             .to_string(),
@@ -3839,7 +3855,11 @@ unsafe fn on_cloud_progress(hwnd: HWND, st: &mut State) {
         }
     }
     let pct = (d * 100).checked_div(t).unwrap_or(0);
-    update_title(hwnd, st, &format!(" · {}", trf("ops.progress", &[&pct.to_string()])));
+    update_title(
+        hwnd,
+        st,
+        &format!(" · {}", trf("ops.progress", &[&pct.to_string()])),
+    );
 }
 
 /// 클라우드 전송 개시 — 공유 상태를 걸고 취소 폴링 타이머를 켠다.
@@ -3876,7 +3896,6 @@ fn cloud_row_info(st: &State, path: &std::path::Path) -> Option<(bool, u64)> {
         })
     })
 }
-
 
 /// 클라우드 쓰기 작업 시작(X-37 4차) — 업로드·삭제·이름 변경·새 폴더 공용.
 /// 처리했으면 `true`(호출자는 로컬 경로를 타지 않는다).
@@ -3933,9 +3952,7 @@ unsafe fn start_transfer(
         return;
     }
     // 클라우드 → 로컬 = **다운로드**(X-37 3차). 대상이 클라우드면 업로드라 아직 차단.
-    let src_cloud = sources
-        .iter()
-        .any(|p| nexa_vfs::cloud_parts(p).is_some());
+    let src_cloud = sources.iter().any(|p| nexa_vfs::cloud_parts(p).is_some());
     let dest_cloud = nexa_vfs::cloud_parts(&dest).is_some();
     if dest_cloud {
         let Some((idx, dest_inner)) = nexa_vfs::cloud_parts(&dest) else {
@@ -3950,7 +3967,10 @@ unsafe fn start_transfer(
             if !same {
                 // **계정 간 복사**(X-37 6차) — 서버 사이드가 불가하므로 임시 폴더
                 // 경유(다운로드 → 업로드). 원본은 첫 연결 기준으로 모은다.
-                let Some(src_idx) = sources.iter().find_map(nexa_vfs::cloud_parts).map(|(i, _)| i)
+                let Some(src_idx) = sources
+                    .iter()
+                    .find_map(nexa_vfs::cloud_parts)
+                    .map(|(i, _)| i)
                 else {
                     return;
                 };
@@ -4543,10 +4563,10 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     update_dock_info(st, &mut inv); // 선택 변경 → 도크 정보(M4-1 — 변경 시에만 무효화)
     uia_notify(hwnd, st); // 캐럿 변경 시 스크린리더 통지(M2-7)
     sync_watchers(hwnd, st); // 경로 변경 시 watcher 재구독(M3-6 — 무변경이면 무비용)
-    // 프로브 기준선 즉시 수립(X-44 S2) — **경로가 바뀐 패널만**(탐색·탭 전환 직후
-    // 이 길목을 반드시 지난다). 종전에는 다음 폴링 틱(0~3s 뒤)에 "경로 변경 =
-    // 기준선만" 분기로 세워져, 열거~틱 사이의 외부 변경이 영영 삼켜졌다.
-    // 가상 루트·클라우드 센티널은 제외(폴링과 동일 — 네트워크·불필요 stat 없음).
+                             // 프로브 기준선 즉시 수립(X-44 S2) — **경로가 바뀐 패널만**(탐색·탭 전환 직후
+                             // 이 길목을 반드시 지난다). 종전에는 다음 폴링 틱(0~3s 뒤)에 "경로 변경 =
+                             // 기준선만" 분기로 세워져, 열거~틱 사이의 외부 변경이 영영 삼켜졌다.
+                             // 가상 루트·클라우드 센티널은 제외(폴링과 동일 — 네트워크·불필요 stat 없음).
     for i in 0..2 {
         let cur = st.panels[i].root_path();
         let moved = match &st.probe[i] {
@@ -4568,10 +4588,10 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
         sync_cloud_badges(st, &mut binv);
         flush_invalidations(hwnd, &mut binv);
     }
-                             // 세션 자동 저장(07-15): 탭/경로 변경 플래그 → 디바운스 재무장(변경 폭주 = 타이머
-                             // 연장 = 중간 상태 무효화, 조용해진 뒤 마지막 상태만 1회 flush — 원본 SESS 코얼레싱)
-                             // 보기 모드 라디오 동기(07-16 — 탭별): 활성 패널·활성 탭 기준. 탭 전환/네비/명령
-                             // 등 모든 상호작용이 이 길목을 지나므로 별도 훅 없이 항상 일치(set_checked = 무변 무시).
+    // 세션 자동 저장(07-15): 탭/경로 변경 플래그 → 디바운스 재무장(변경 폭주 = 타이머
+    // 연장 = 중간 상태 무효화, 조용해진 뒤 마지막 상태만 1회 flush — 원본 SESS 코얼레싱)
+    // 보기 모드 라디오 동기(07-16 — 탭별): 활성 패널·활성 탭 기준. 탭 전환/네비/명령
+    // 등 모든 상호작용이 이 길목을 지나므로 별도 훅 없이 항상 일치(set_checked = 무변 무시).
     {
         use nexa_gui::widgets::ViewMode;
         let cur = match st.panels[st.active].active_view_mode() {
@@ -4661,7 +4681,8 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             st.menubar.set_checked(CMD_TOGGLE_DOTFILES, sd, &mut inv);
             st.toolbar.set_checked(CMD_TOGGLE_HIDDEN, sh, &mut inv);
             st.toolbar.set_checked(CMD_TOGGLE_DOTFILES, sd, &mut inv);
-            st.toolbar.set_checked(CMD_TOGGLE_FOLDERS_FIRST, ff, &mut inv);
+            st.toolbar
+                .set_checked(CMD_TOGGLE_FOLDERS_FIRST, ff, &mut inv);
             persist_settings(st);
         }
         // 항상 맨 위에 표시 토글(사용자 요청 08-23) — 즉시 적용·체크 동기·영속
@@ -4974,9 +4995,7 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 }
             }
         }
-        id if (CMD_CLOUD_COPYURL_BASE..CMD_CLOUD_COPYURL_BASE + CLOUD_MAX as u32)
-            .contains(&id) =>
-        {
+        id if (CMD_CLOUD_COPYURL_BASE..CMD_CLOUD_COPYURL_BASE + CLOUD_MAX as u32).contains(&id) => {
             // URL 복사(사용자 요청 08-01) — 프라이빗 창에 붙여넣어 다른 계정으로 접속
             let i = (id - CMD_CLOUD_COPYURL_BASE) as usize;
             if let Some(c) = st.cloud_conns.get(i) {
@@ -5008,7 +5027,11 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                 crate::cloudfs::invalidate_all();
                 apply_cloud_change(hwnd, st, &mut inv);
                 flush_invalidations(hwnd, &mut inv);
-                update_title(hwnd, st, &format!(" · {}", trf(removed_key, &[&removed.label])));
+                update_title(
+                    hwnd,
+                    st,
+                    &format!(" · {}", trf(removed_key, &[&removed.label])),
+                );
                 update_status(hwnd, st);
                 return;
             }
@@ -5037,7 +5060,11 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
                     });
                     apply_cloud_change(hwnd, st, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
-                    update_title(hwnd, st, &format!(" · {}", trf("cloud.linked", &[&c.label])));
+                    update_title(
+                        hwnd,
+                        st,
+                        &format!(" · {}", trf("cloud.linked", &[&c.label])),
+                    );
                     update_status(hwnd, st);
                     return;
                 }
@@ -5134,7 +5161,9 @@ struct CloudAuthResult {
 unsafe fn start_cloud_oauth(hwnd: HWND, st: &mut State, svc: crate::oauth::Service) {
     // 설정 우선 → NexaDir 기본값(하이브리드 — ADR-0006 §2-4)
     let settings = current_settings(st);
-    let client_id = svc.resolve_client_id(settings.client_id(svc.kind)).to_string();
+    let client_id = svc
+        .resolve_client_id(settings.client_id(svc.kind))
+        .to_string();
     let client_secret = svc
         .resolve_client_secret(settings.client_secret(svc.kind))
         .to_string();
@@ -5206,8 +5235,9 @@ unsafe fn start_cloud_oauth(hwnd: HWND, st: &mut State, svc: crate::oauth::Servi
             },
             Err(e) => {
                 let detail = match &e {
-                    crate::oauth::AuthError::Denied(d)
-                    | crate::oauth::AuthError::Exchange(d) => d.clone(),
+                    crate::oauth::AuthError::Denied(d) | crate::oauth::AuthError::Exchange(d) => {
+                        d.clone()
+                    }
                     _ => String::new(),
                 };
                 CloudAuthResult {
@@ -5266,7 +5296,9 @@ unsafe fn on_cloud_auth(hwnd: HWND, st: &mut State, res: CloudAuthResult) {
     let idx = st
         .cloud_conns
         .iter()
-        .position(|c| c.kind == res.kind && c.is_api() && (c.account == account || c.account.is_empty()))
+        .position(|c| {
+            c.kind == res.kind && c.is_api() && (c.account == account || c.account.is_empty())
+        })
         .unwrap_or_else(|| {
             st.cloud_conns.push(config::CloudConn {
                 kind: res.kind.into(),
@@ -5287,7 +5319,10 @@ unsafe fn on_cloud_auth(hwnd: HWND, st: &mut State, res: CloudAuthResult) {
     update_title(
         hwnd,
         st,
-        &format!(" · {}", trf("cloud.connected", &[&st.cloud_conns[idx].label])),
+        &format!(
+            " · {}",
+            trf("cloud.connected", &[&st.cloud_conns[idx].label])
+        ),
     );
     update_status(hwnd, st);
 }
@@ -5560,6 +5595,18 @@ unsafe fn snap_split_x(hwnd: HWND, st: &State, x: i32, other: i32) -> i32 {
         return other;
     }
     x
+}
+
+/// 좌표가 **텍스트 도크**(정보/미리보기 — 터미널 제외) 내용 영역 위면 그 패널 인덱스
+/// (10-02 — 휠·가로 휠 라우팅 공용). 실제 표시 중(h>0)인 도크 rect로만 판정.
+fn dock_text_at(st: &State, x: i32, y: i32) -> Option<usize> {
+    (0..2).find(|&di| {
+        let d = &st.panels[di].dock;
+        st.panels[di].dock_visible()
+            && d.active_kind() != 2
+            && d.bounds().h > 0
+            && d.content_rect().contains(nexa_gui::Point { x, y })
+    })
 }
 
 /// 휠 대상 패널·클라이언트 좌표(QA 07-14) — WM_MOUSEWHEEL lparam은 **화면 좌표**.
@@ -7024,8 +7071,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 update_status(hwnd, st);
                 st.last_activity_ms = now_ms();
                 SetTimer(Some(hwnd), TIMER_JANITOR, JANITOR_TICK_MS, None); // 상주 자니터(M2-8)
-                // 프로브 폴링 기준선 + 폴링 시작(08-11 QA). 기동 시 창이 활성이므로
-                // 여기서 켜고, 이후 켜고 끄기는 WM_ACTIVATEAPP이 관리한다.
+                                                                            // 프로브 폴링 기준선 + 폴링 시작(08-11 QA). 기동 시 창이 활성이므로
+                                                                            // 여기서 켜고, 이후 켜고 끄기는 WM_ACTIVATEAPP이 관리한다.
                 poll_fs_probe(hwnd, st);
                 SetTimer(Some(hwnd), TIMER_FSPOLL, FSPOLL_MS, None);
             }
@@ -7173,25 +7220,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                     return LRESULT(0);
                 }
-                // 도크 미리보기 내용 위 휠 = 내용 스크롤(07-26 — 파일 목록 대신).
-                // QA 07-26: 패널 오판(싱글 정보 공유 도크 = 좌 위젯)·h=0 도크를
-                // 걸러내도록 **양 패널의 실제 도크 rect로 판정**(target 불신).
-                for di in 0..2 {
-                    if st.panels[di].dock_visible()
-                        && st.panels[di].dock.active_kind() == 1
-                        && st.panels[di].dock.bounds().h > 0
-                        && st.panels[di]
-                            .dock
-                            .content_rect()
-                            .contains(nexa_gui::Point { x: px, y: py })
-                    {
-                        let mut inv = Invalidations::default();
-                        st.panels[di]
-                            .dock
-                            .on_event(&InputEvent::Wheel { delta }, &mut inv);
-                        flush_invalidations(hwnd, &mut inv);
-                        return LRESULT(0);
-                    }
+                // 도크 정보/미리보기 내용 위 휠 = 내용 스크롤(07-26 미리보기 → 10-02 정보
+                // 포함 — 파일 목록 대신. Shift = 가로). QA 07-26: 패널 오판(싱글 정보
+                // 공유 도크 = 좌 위젯)·h=0 도크를 걸러내도록 **양 패널의 실제 도크 rect로
+                // 판정**(target 불신).
+                if let Some(di) = dock_text_at(st, px, py) {
+                    let ev = if wparam.0 & MK_SHIFT != 0 {
+                        InputEvent::HWheel { delta: -delta }
+                    } else {
+                        InputEvent::Wheel { delta }
+                    };
+                    let mut inv = Invalidations::default();
+                    st.panels[di].dock.on_event(&ev, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
+                    return LRESULT(0);
                 }
                 let ev = if wparam.0 & MK_SHIFT != 0 {
                     InputEvent::HWheel { delta: -delta }
@@ -7215,6 +7257,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             invalidate_dock(hwnd, st, target);
                         }
                     }
+                    return LRESULT(0);
+                }
+                // 도크 정보/미리보기 위 틸트 휠 = 내용 가로 스크롤(10-02)
+                if let Some(di) = dock_text_at(st, px, py) {
+                    let mut inv = Invalidations::default();
+                    st.panels[di]
+                        .dock
+                        .on_event(&InputEvent::HWheel { delta }, &mut inv);
+                    flush_invalidations(hwnd, &mut inv);
                     return LRESULT(0);
                 }
                 let mut inv = Invalidations::default();
@@ -8280,7 +8331,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     flush_invalidations(hwnd, &mut inv);
                     if !res.err.is_empty() {
                         // 어느 폴더에서 실패했는지 함께 — 루트는 "/"로 표기
-                        let where_ = if res.inner.is_empty() { "/" } else { &res.inner };
+                        let where_ = if res.inner.is_empty() {
+                            "/"
+                        } else {
+                            &res.inner
+                        };
                         update_title(hwnd, st, &format!(" · {} ({where_})", res.err));
                     }
                     update_status(hwnd, st);
@@ -8592,6 +8647,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let now = now_ms();
                     st.panels[0].rows_mut().tick(now, &mut inv);
                     st.panels[1].rows_mut().tick(now, &mut inv);
+                    st.panels[0].dock.tick(&mut inv); // 도크 오버레이 바 페이드(10-02)
+                    st.panels[1].dock.tick(&mut inv);
                     if !inv.tick_requested() {
                         let _ = KillTimer(Some(hwnd), TIMER_WIDGET_TICK);
                     }

@@ -20,7 +20,9 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_UNDERLINE,
     DWRITE_WORD_WRAPPING_NO_WRAP,
 };
-use windows::Win32::Graphics::Gdi::{ExtTextOutW, SetBkColor, ETO_OPAQUE, HDC};
+use windows::Win32::Graphics::Gdi::{
+    ExtTextOutW, IntersectClipRect, RestoreDC, SaveDC, SetBkColor, ETO_OPAQUE, HDC,
+};
 
 /// [`Color`] → GDI `COLORREF`(0x00BBGGRR).
 pub fn colorref(c: Color) -> COLORREF {
@@ -604,6 +606,22 @@ impl DrawCtx for DwCtx<'_> {
             let dc = self.back.memory_dc();
             let mut g = crate::ctl::gdipctx::GdipCtx::new(dc);
             g.fill_round_rect_alpha(rect, radius, color, alpha);
+        }
+    }
+
+    fn push_clip(&mut self, rect: Rect) {
+        // GDI 클립 교차(10-02 — 도크 가로 스크롤): DW 글리프도 BitBlt로 이 DC에 합성되므로
+        // 클립 영역을 따른다. SaveDC/RestoreDC 쌍으로 이전 클립 복원.
+        unsafe {
+            let dc = self.back.memory_dc();
+            let _ = SaveDC(dc);
+            let _ = IntersectClipRect(dc, rect.x, rect.y, rect.right(), rect.bottom());
+        }
+    }
+
+    fn pop_clip(&mut self) {
+        unsafe {
+            let _ = RestoreDC(self.back.memory_dc(), -1);
         }
     }
 

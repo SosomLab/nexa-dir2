@@ -7,6 +7,7 @@ use crate::event::InputEvent;
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
+use crate::widgets::overlaybar::{Axis, AxisGeom, BarHit, OverlayBars};
 
 /// 하단 도크 — 호스트가 [`set_lines`](InfoDock::set_lines)로 내용을 공급한다
 /// (원본 InfoText/PreviewPath 대응). 종류 스트립(정보|미리보기 — M4-2)은 클릭 전환,
@@ -50,6 +51,12 @@ pub struct InfoDock {
     /// edit.rs 캐시 규약). 내용/지표/크기 변경 시 비움(paint가 재계산). 폭 초과
     /// 문자는 측정 중단(클릭 가능 영역 상한 = 보이는 폭).
     offsets: std::cell::RefCell<Vec<Vec<i32>>>,
+    /// 가로 스크롤 오프셋(px — 10-02. 긴 경로·미리보기 행. 내용 교체 시 0).
+    scroll_x: i32,
+    /// paint 캐시: 가시 행 중 최대 텍스트 폭(px — 가로 스크롤 상한·가로 바 기하).
+    content_w: std::cell::Cell<i32>,
+    /// 오버레이 스크롤바 세로·가로(10-02 — rows.rs 09-04 규약의 공용 모듈).
+    bars: OverlayBars,
 }
 
 /// 인라인 이미지 마커(07-26 다이어그램 — 이미지 수준 렌더): 라인
@@ -96,6 +103,9 @@ impl InfoDock {
             sel: None,
             sel_drag: false,
             offsets: std::cell::RefCell::new(Vec::new()),
+            scroll_x: 0,
+            content_w: std::cell::Cell::new(0),
+            bars: OverlayBars::default(),
         }
     }
 
@@ -117,9 +127,79 @@ impl InfoDock {
             self.scroll = to;
             self.offsets.borrow_mut().clear();
             inv.push(self.bounds);
+            self.bars.flash(Axis::V, self.content_rect(), inv);
             return true;
         }
         false
+    }
+
+    /// 가로 스크롤 상한(px) — paint가 측정한 가시 행 최대 폭 기준(측정 전 = 0).
+    fn max_scroll_x(&self) -> i32 {
+        (self.content_w.get() + self.pad_x * 2 - self.bounds.w).max(0)
+    }
+
+    /// 가로 스크롤 이동(가로 휠·바 드래그·드래그 자동 스크롤 — 10-02). 변경 시 오프셋
+    /// 캐시 무효(측정 상한이 보이는 폭 + 오프셋이라 재측정).
+    fn hscroll_to(&mut self, to: i32, inv: &mut Invalidations) -> bool {
+        let to = to.clamp(0, self.max_scroll_x());
+        if to != self.scroll_x {
+            self.scroll_x = to;
+            self.offsets.borrow_mut().clear();
+            inv.push(self.bounds);
+            self.bars.flash(Axis::H, self.content_rect(), inv);
+            return true;
+        }
+        false
+    }
+
+    /// 두 축의 바 기하([세로, 가로]) — 뷰포트 = 내용 영역(스트립 제외).
+    fn geoms(&self) -> [AxisGeom; 2] {
+        let view = self.content_rect();
+        let text = self.image.is_none();
+        [
+            AxisGeom {
+                view,
+                content: if text { self.lines.len() as i64 } else { 0 },
+                visible: self.visible_rows() as i64,
+                offset: self.scroll as i64,
+            },
+            AxisGeom {
+                view,
+                content: if text {
+                    (self.content_w.get() + self.pad_x * 2) as i64
+                } else {
+                    0
+                },
+                visible: self.bounds.w as i64,
+                offset: self.scroll_x as i64,
+            },
+        ]
+    }
+
+    /// 바 적용 — 드래그 오프셋·트랙 페이지 이동을 축별 스크롤로 변환.
+    fn apply_bar(&mut self, axis: Axis, hit: BarHit, inv: &mut Invalidations) {
+        match (axis, hit) {
+            (Axis::V, BarHit::PageBack) => {
+                let page = self.visible_rows().saturating_sub(1).max(1);
+                let _ = self.scroll_to(self.scroll.saturating_sub(page), inv);
+            }
+            (Axis::V, BarHit::PageFwd) => {
+                let page = self.visible_rows().saturating_sub(1).max(1);
+                let _ = self.scroll_to(self.scroll + page, inv);
+            }
+            (Axis::H, BarHit::PageBack) => {
+                let _ = self.hscroll_to(self.scroll_x - self.bounds.w.max(1), inv);
+            }
+            (Axis::H, BarHit::PageFwd) => {
+                let _ = self.hscroll_to(self.scroll_x + self.bounds.w.max(1), inv);
+            }
+            (_, BarHit::Drag) => {}
+        }
+    }
+
+    /// 주기 틱(호스트 TIMER_WIDGET_TICK) — 오버레이 바 유지/페이드.
+    pub fn tick(&mut self, inv: &mut Invalidations) {
+        self.bars.tick(self.content_rect(), inv);
     }
 
     /// 내용 라인 y→**절대** 인덱스(스크롤 반영. 이미지·터미널 종류는 None).
@@ -184,7 +264,33 @@ impl InfoDock {
         if line.is_empty() {
             return Some((i, 0));
         }
-        Some((i, nearest_boundary(line, x - (self.bounds.x + self.pad_x))))
+        Some((
+            i,
+            nearest_boundary(line, x - (self.bounds.x + self.pad_x) + self.scroll_x),
+        ))
+    }
+
+    /// 드래그 선택 앵커(10-02): 라인 위 = 그 문자 경계, 마지막 라인 아래 빈 내용 영역 =
+    /// 마지막 라인 끝(메모장 규약 — 빈 곳에서 시작한 드래그가 무시되던 결함 보완).
+    fn anchor_at(&self, x: i32, y: i32) -> Option<(usize, usize)> {
+        if let Some(pos) = self.char_at(x, y) {
+            return Some(pos);
+        }
+        if self.image.is_some() || !self.content_rect().contains(Point { x, y }) {
+            return None;
+        }
+        let last = self.lines.len().checked_sub(1)?;
+        let top = self.content_rect().y;
+        let below = self.scroll + ((y - top).max(0) / self.row_h) as usize >= self.lines.len();
+        if !below {
+            return None; // 오프셋 캐시 미구축(paint 전) — 라인 위지만 경계를 모름
+        }
+        let end = if self.lines[last].starts_with('\u{1}') {
+            0
+        } else {
+            self.lines[last].chars().count()
+        };
+        Some((last, end))
     }
 
     /// 우상단 "크게"(↗) 오버레이 표시 여부(호스트 — 미리보기 종류일 때만).
@@ -250,7 +356,11 @@ impl InfoDock {
             let label = "↗";
             let tw = ctx.text_width(label);
             let ty = cell.y + (cell.h - (cell.h * 4) / 5) / 2 + off;
-            let fg = if self.focused { theme.text } else { theme.text_dim };
+            let fg = if self.focused {
+                theme.text
+            } else {
+                theme.text_dim
+            };
             ctx.text(cell.x + (cell.w - tw).max(0) / 2 + off, ty, cell, label, fg);
         }
         self.popout_range.set(cell);
@@ -346,8 +456,14 @@ impl InfoDock {
             self.sel = None;
             self.sel_drag = false;
             self.scroll = 0;
+            self.scroll_x = 0;
+            self.content_w.set(0);
             self.offsets.borrow_mut().clear();
             inv.push(self.bounds);
+            // 내용 교체 = 두 바 잠깐 표시(넘치는 축만 실제로 그려진다 — 발견성, 10-02)
+            let view = self.content_rect();
+            self.bars.flash(Axis::V, view, inv);
+            self.bars.flash(Axis::H, view, inv);
         }
     }
 
@@ -370,6 +486,7 @@ impl Widget for InfoDock {
             let old = self.bounds;
             self.bounds = bounds;
             self.scroll = self.scroll.min(self.max_scroll()); // 높이 변경 = 상한 재클램프
+            self.scroll_x = self.scroll_x.min(self.max_scroll_x()); // 폭 변경 = 가로 상한
             self.offsets.borrow_mut().clear(); // 폭 변경 = 측정 상한 무효(07-20)
             inv.push(old.union(&bounds));
         }
@@ -404,12 +521,16 @@ impl Widget for InfoDock {
                             inv.push(self.bounds);
                         }
                     }
+                } else if let Some((axis, hit)) = self.bars.mouse_down(x, y, self.geoms(), inv) {
+                    // 오버레이 바(10-02): 썸 드래그 시작·트랙 페이지 이동 — 선택 불변
+                    self.apply_bar(axis, hit, inv);
                 } else if self.popout_on && self.popout_range.get().contains(Point { x, y }) {
                     // 우상단 ↗ "크게" 이미지 버튼(07-26) — 프레스 시각만, 발화는 MouseUp
                     self.popout_pressed = true;
                     inv.push(self.popout_range.get());
-                } else if let Some(pos) = self.char_at(x, y) {
-                    // 내용 드래그 선택 시작(QA 07-15 → 07-20 **문자 단위** 앵커)
+                } else if let Some(pos) = self.anchor_at(x, y) {
+                    // 내용 드래그 선택 시작(QA 07-15 → 07-20 **문자 단위** 앵커 →
+                    // 10-02 빈 영역 = 마지막 라인 끝)
                     self.sel = Some((pos, pos));
                     self.sel_drag = true;
                     inv.push(self.bounds);
@@ -418,6 +539,18 @@ impl Widget for InfoDock {
                 }
             }
             InputEvent::MouseMove { x, y } => {
+                // 오버레이 바 드래그(10-02) = 비례 스크롤만(선택·hover 불변)
+                if let Some((axis, off)) = self.bars.mouse_move(x, y, self.geoms(), inv) {
+                    match axis {
+                        Axis::V => {
+                            let _ = self.scroll_to(off.max(0) as usize, inv);
+                        }
+                        Axis::H => {
+                            let _ = self.hscroll_to(off as i32, inv);
+                        }
+                    }
+                    return;
+                }
                 // ↗ hover 색 입힘(07-26 — X-27 sel_bg 토큰. 변경 시에만 무효화)
                 let hp = self.popout_on
                     && !self.sel_drag
@@ -434,6 +567,12 @@ impl Widget for InfoDock {
                         let _ = self.scroll_to(s, inv);
                     } else if y >= self.bounds.bottom() {
                         let _ = self.scroll_to(self.scroll + 1, inv);
+                    }
+                    // 가로 자동 스크롤(10-02): 좌/우 가장자리 밖 = 한 행 높이만큼 px 이동
+                    if x < self.bounds.x + self.pad_x {
+                        let _ = self.hscroll_to(self.scroll_x - self.row_h, inv);
+                    } else if x >= self.bounds.right() - self.pad_x {
+                        let _ = self.hscroll_to(self.scroll_x + self.row_h, inv);
                     }
                     // 내용 영역 밖은 첫/끝 라인·문자 경계로 클램프(엣지 드래그 — 07-20)
                     let offs = self.offsets.borrow();
@@ -458,7 +597,10 @@ impl Widget for InfoDock {
                         let ci = if offs[row].is_empty() {
                             0
                         } else {
-                            nearest_boundary(&offs[row], x - (self.bounds.x + self.pad_x))
+                            nearest_boundary(
+                                &offs[row],
+                                x - (self.bounds.x + self.pad_x) + self.scroll_x,
+                            )
                         };
                         (li, ci)
                     };
@@ -472,15 +614,25 @@ impl Widget for InfoDock {
                 }
             }
             InputEvent::Wheel { delta } => {
-                // 미리보기 내용 스크롤(07-26 — 3줄/노치·터미널 규약 동일). 호스트가
-                // 내용 영역 hover일 때만 라우팅한다.
+                // 내용 세로 스크롤(07-26 미리보기 → 10-02 정보 포함 — 3줄/노치·터미널 규약
+                // 동일). 호스트가 내용 영역 hover일 때만 라우팅한다.
                 if self.image.is_none() && !self.lines.is_empty() {
                     let step = delta / crate::WHEEL_DELTA * 3;
                     let to = (self.scroll as i32 - step).max(0) as usize;
                     let _ = self.scroll_to(to, inv);
                 }
             }
+            InputEvent::HWheel { delta } => {
+                // 가로 스크롤(10-02 — Shift+휠·틸트 휠. 양수 = 오른쪽, 노치당 행 높이×3px)
+                if self.image.is_none() && !self.lines.is_empty() {
+                    let step = delta * self.row_h * 3 / crate::WHEEL_DELTA;
+                    let _ = self.hscroll_to(self.scroll_x + step, inv);
+                }
+            }
             InputEvent::MouseUp { x, y } => {
+                if self.bars.mouse_up(self.content_rect(), inv) {
+                    return; // 바 드래그 종료(10-02) — 선택 상태 불변
+                }
                 // ↗ 버튼 의미론(07-26): 누른 채 버튼 **안에서 뗄 때만** 발화
                 if self.popout_pressed {
                     self.popout_pressed = false;
@@ -572,9 +724,13 @@ impl Widget for InfoDock {
         // 단위로 캐시(히트 테스트 역참조 — edit.rs paint_field 규약. 무효화 시 재측정)
         let sel = self.sel.map(|(a, c)| if a <= c { (a, c) } else { (c, a) });
         let rebuild = self.offsets.borrow().is_empty() && !self.lines.is_empty();
-        let x0 = b.x + self.pad_x;
-        let max_w = (b.w - self.pad_x).max(0);
+        // 가로 스크롤(10-02): 텍스트 원점을 오프셋만큼 왼쪽으로, 측정 상한은 보이는 폭 +
+        // 오프셋(스크롤된 구간까지 클릭 가능). 가시 행 최대 폭 = 가로 상한·바 기하.
+        let x0 = b.x + self.pad_x - self.scroll_x;
+        let max_w = (b.w - self.pad_x).max(0) + self.scroll_x;
+        let mut content_w = 0;
         let mut y = strip.bottom();
+        ctx.push_clip(self.content_rect()); // 가로 스크롤 텍스트의 왼쪽 번짐 차단(10-02)
         for (i, line) in self.lines.iter().enumerate().skip(self.scroll) {
             if y >= b.bottom() {
                 break;
@@ -590,7 +746,7 @@ impl Widget for InfoDock {
                     .take_while(|l| l.as_str() == IMG_PAD)
                     .count() as i32;
                 let area = Rect::new(
-                    x0,
+                    b.x + self.pad_x, // 인라인 이미지는 가로 스크롤 불변(폭 맞춤 렌더)
                     y,
                     (b.w - self.pad_x * 2).max(0),
                     (self.row_h * k).min(b.bottom() - y),
@@ -606,6 +762,7 @@ impl Widget for InfoDock {
                 y += self.row_h;
                 continue;
             }
+            content_w = content_w.max(ctx.text_width(line));
             if rebuild {
                 let mut offs = vec![0];
                 let mut prefix = String::new();
@@ -628,21 +785,48 @@ impl Widget for InfoDock {
                     let cs = if i == ll { lc.min(last) } else { 0 };
                     let ce = if i == hl { hc.min(last) } else { last };
                     if ce > cs {
-                        ctx.fill_rect(
-                            Rect::new(x0 + o[cs], cell.y, o[ce] - o[cs], cell.h),
-                            theme.sel_bg,
-                        );
+                        // 가로 스크롤 반영 + 셀 폭으로 클립(바깥 번짐 방지)
+                        let (sx, ex) = ((x0 + o[cs]).max(cell.x), (x0 + o[ce]).min(cell.right()));
+                        if ex > sx {
+                            ctx.fill_rect(Rect::new(sx, cell.y, ex - sx, cell.h), theme.sel_bg);
+                        }
                     }
                 }
             }
-            ctx.text(cell.x + self.pad_x, ty(cell), cell, line, theme.text);
+            // 가로 스크롤 시 **보이는 첫 문자 경계부터** 그린다(10-02 실측: DW 비트맵 렌더
+            // 타깃의 글리프 그리기는 GDI 클립을 무시 → 왼쪽 밖으로 번짐. 채움은 클립됨).
+            // 숨는 부분은 최대 한 문자 — 선택 하이라이트·히트는 전체 오프셋 기준 그대로.
+            let (draw_x, draw_text) = if self.scroll_x > 0 {
+                let offs = self.offsets.borrow();
+                match offs.get(i - self.scroll) {
+                    Some(o) => {
+                        let k = o
+                            .iter()
+                            .position(|&w| w >= self.scroll_x)
+                            .unwrap_or(o.len().saturating_sub(1));
+                        let byte = line
+                            .char_indices()
+                            .nth(k)
+                            .map(|(bi, _)| bi)
+                            .unwrap_or(line.len());
+                        (x0 + o[k], &line[byte..])
+                    }
+                    None => (x0, line.as_str()),
+                }
+            } else {
+                (x0, line.as_str())
+            };
+            ctx.text(draw_x, ty(cell), cell, draw_text, theme.text);
             y += self.row_h;
         }
+        ctx.pop_clip();
+        self.content_w.set(content_w);
         // 잔여 배경
         if y < b.bottom() {
             ctx.fill_rect(Rect::new(b.x, y, b.w, b.bottom() - y), theme.panel_bg);
         }
         self.draw_popout(ctx, theme, strip.bottom());
+        self.bars.paint(ctx, theme, self.geoms()); // 오버레이 바(10-02) — 내용 위 마지막
     }
 }
 
@@ -723,7 +907,7 @@ mod tests {
         d.paint(&mut Probe, &Theme::dark());
         d.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv); // 1노치 아래 = 3줄
         d.paint(&mut Probe, &Theme::dark()); // 오프셋 재측정(가시 행 기준)
-        // 첫 가시 행 클릭 = 절대 라인 3 — "l3"의 문자 1~2 선택 = "3"
+                                             // 첫 가시 행 클릭 = 절대 라인 3 — "l3"의 문자 1~2 선택 = "3"
         d.on_event(
             &InputEvent::MouseDown {
                 x: 6 + 8,
@@ -735,7 +919,11 @@ mod tests {
         );
         d.on_event(&InputEvent::MouseMove { x: 6 + 16, y: 121 }, &mut inv);
         d.on_event(&InputEvent::MouseUp { x: 6 + 16, y: 121 }, &mut inv);
-        assert_eq!(d.selected_text().as_deref(), Some("3"), "스크롤 반영 절대 라인");
+        assert_eq!(
+            d.selected_text().as_deref(),
+            Some("3"),
+            "스크롤 반영 절대 라인"
+        );
         // 상한 클램프(대량 휠)
         d.on_event(&InputEvent::Wheel { delta: -120 * 50 }, &mut inv);
         assert_eq!(d.scroll, 8, "max_scroll 클램프");
@@ -844,13 +1032,135 @@ mod tests {
     }
 
     #[test]
+    fn hwheel_scrolls_horizontally_and_hit_test_follows() {
+        // 10-02: 폭 100px·pad 6 → 보이는 내용 폭 94. 라인 "0123456789abcdef"(16자×8=128px)
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 100, 120), &mut inv);
+        d.set_lines(vec!["0123456789abcdef".into(), "x".into()], &mut inv);
+        d.paint(&mut Probe, &Theme::dark());
+        assert_eq!(d.content_w.get(), 128, "가시 행 최대 폭 측정");
+        assert_eq!(d.max_scroll_x(), 128 + 12 - 100);
+        // 측정 전 클램프(내용 없는 상태) = 0 — 측정 후 1노치 오른쪽 = row_h×3 = 60 → 40 클램프
+        d.on_event(&InputEvent::HWheel { delta: 120 }, &mut inv);
+        assert_eq!(d.scroll_x, 40, "가로 상한 클램프");
+        assert!(inv.tick_requested(), "스크롤 = 바 표시(틱 요청)");
+        d.paint(&mut Probe, &Theme::dark()); // 오프셋 재측정(스크롤 반영)
+                                             // 화면 x=6(원점)은 문서 x=40 → 문자 경계 5 — 2문자 드래그 = "56"
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: 6,
+                y: 121,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        d.on_event(&InputEvent::MouseMove { x: 6 + 16, y: 121 }, &mut inv);
+        d.on_event(&InputEvent::MouseUp { x: 6 + 16, y: 121 }, &mut inv);
+        assert_eq!(
+            d.selected_text().as_deref(),
+            Some("56"),
+            "가로 스크롤 반영 히트"
+        );
+        d.on_event(&InputEvent::HWheel { delta: -120 * 9 }, &mut inv);
+        assert_eq!(d.scroll_x, 0, "0 클램프");
+        // 내용 교체 = 가로 오프셋 리셋
+        d.on_event(&InputEvent::HWheel { delta: 120 }, &mut inv);
+        d.set_lines(vec!["short".into()], &mut inv);
+        assert_eq!(d.scroll_x, 0);
+    }
+
+    #[test]
+    fn drag_from_empty_area_anchors_at_end_of_last_line() {
+        // 10-02: 마지막 라인 아래 빈 영역에서 시작한 드래그 = 끝 앵커(메모장 규약)
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        d.set_lines(vec!["abc".into(), "de".into()], &mut inv);
+        d.paint(&mut Probe, &Theme::dark());
+        // 내용 top=121 · 라인1 = 141~160 · 빈 영역 y=200
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: 50,
+                y: 200,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert_eq!(d.sel, Some(((1, 2), (1, 2))), "앵커 = 마지막 라인 끝");
+        d.on_event(&InputEvent::MouseMove { x: 6 + 8, y: 121 }, &mut inv);
+        d.on_event(&InputEvent::MouseUp { x: 6 + 8, y: 121 }, &mut inv);
+        assert_eq!(
+            d.selected_text().as_deref(),
+            Some("bc\r\nde"),
+            "위로 드래그 = 역방향 영역"
+        );
+        // 이미지 종류·빈 내용은 앵커 없음
+        d.set_image(Some("x.png".into()), &mut inv);
+        assert_eq!(d.anchor_at(50, 200), None);
+    }
+
+    #[test]
+    fn vertical_bar_drag_scrolls_without_selecting() {
+        // 10-02 오버레이 바: 내용 12줄·가시 4행 → 세로 바. 썸 드래그 = 스크롤·선택 없음
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        d.set_lines((0..12).map(|i| format!("l{i}")).collect(), &mut inv);
+        d.paint(&mut Probe, &Theme::dark());
+        assert!(d.bars.visible(Axis::V), "내용 교체 = 바 표시");
+        let g = d.geoms();
+        assert_eq!((g[0].content, g[0].visible), (12, 4));
+        let t = d.bars.thumb(Axis::V, &g[0], true).expect("세로 썸");
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: t.x + 1,
+                y: t.y + 1,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert!(
+            d.bars.dragging() && d.sel.is_none(),
+            "썸 프레스 = 선택 시작 아님"
+        );
+        d.on_event(
+            &InputEvent::MouseMove {
+                x: t.x + 1,
+                y: t.y + 1 + 500,
+            },
+            &mut inv,
+        );
+        assert_eq!(d.scroll, 8, "트랙 끝까지 = 최대 스크롤");
+        d.on_event(
+            &InputEvent::MouseUp {
+                x: t.x + 1,
+                y: t.y + 501,
+            },
+            &mut inv,
+        );
+        assert!(!d.bars.dragging() && d.sel.is_none());
+        // 바 틱 = 유지 후 페이드(호스트 tick 경유)
+        for _ in 0..40 {
+            d.tick(&mut inv);
+        }
+        assert!(!d.bars.visible(Axis::V), "페이드 완료");
+    }
+
+    #[test]
     fn set_lines_invalidates_only_on_change() {
         let mut inv = Invalidations::default();
         let mut d = InfoDock::new("정보", 20, 6);
         d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
         let _ = inv.drain().count();
         d.set_lines(vec!["a.txt".into(), "크기: 10 B".into()], &mut inv);
-        assert_eq!(inv.drain().count(), 1, "내용 변경 = 무효화");
+        assert!(
+            inv.drain().count() >= 1,
+            "내용 변경 = 무효화(+바 스트립 10-02)"
+        );
         d.set_lines(vec!["a.txt".into(), "크기: 10 B".into()], &mut inv);
         assert_eq!(inv.drain().count(), 0, "동일 내용 = 무비용");
         d.paint(&mut Probe, &Theme::dark()); // 렌더 스모크
