@@ -104,7 +104,7 @@ pub(crate) fn render_svg_impl(svg: &str) -> Option<String> {
     }
     let doc = crate::svg::parse(svg)?;
     let (w, h, mut px) = unsafe { crate::ctl::gdipctx::svg_to_pixels(&doc)? };
-    for p in px.chunks_exact_mut(4) {
+    for p in px.as_chunks_mut::<4>().0 {
         p[3] = 0xFF;
     }
     use std::hash::{Hash, Hasher};
@@ -411,7 +411,10 @@ mod tests {
             v
         };
         assert_eq!(resolve(&providers, "md", "", "").id(), "markdown");
-        assert_eq!(resolve(&providers, "md", "", "markdown").id(), "builtin.text");
+        assert_eq!(
+            resolve(&providers, "md", "", "markdown").id(),
+            "builtin.text"
+        );
         assert_eq!(
             resolve(&providers, "md", "md:markdown", "markdown").id(),
             "builtin.text"

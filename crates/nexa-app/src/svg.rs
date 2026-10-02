@@ -183,7 +183,12 @@ pub fn parse(svg: &str) -> Option<Doc> {
                     .filter(|s| !s.is_empty())
                     .filter_map(|s| s.parse().ok())
                     .collect();
-                let pairs: Vec<(f32, f32)> = pts.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                let pairs: Vec<(f32, f32)> = pts
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&[x, y]| (x, y))
+                    .collect();
                 if pairs.len() >= 2 {
                     doc.ops.push(Element {
                         op: Op::Polyline(pairs),
@@ -366,7 +371,7 @@ fn apply_cmd(
     let rel = cmd.is_ascii_lowercase();
     match cmd.to_ascii_uppercase() {
         'M' => {
-            for (i, p) in n.chunks_exact(2).enumerate() {
+            for (i, p) in n.as_chunks::<2>().0.iter().enumerate() {
                 let (x, y) = if rel {
                     (*cx + p[0], *cy + p[1])
                 } else {
@@ -385,7 +390,7 @@ fn apply_cmd(
             (n.len() >= 2 && n.len().is_multiple_of(2)).then_some(())
         }
         'L' => {
-            for p in n.chunks_exact(2) {
+            for p in n.as_chunks::<2>().0 {
                 let (x, y) = if rel {
                     (*cx + p[0], *cy + p[1])
                 } else {
@@ -412,7 +417,7 @@ fn apply_cmd(
             (!n.is_empty()).then_some(())
         }
         'C' => {
-            for p in n.chunks_exact(6) {
+            for p in n.as_chunks::<6>().0 {
                 let f = |i: usize| {
                     if rel {
                         (*cx + p[i], *cy + p[i + 1])
@@ -429,7 +434,7 @@ fn apply_cmd(
         }
         'A' => {
             // 원호(F.6.5 엔드포인트→중심 변환 — 원형 한정: rx=ry·회전 무시)
-            for p in n.chunks_exact(7) {
+            for p in n.as_chunks::<7>().0 {
                 let (rx, ry) = (p[0].abs(), p[1].abs());
                 if (rx - ry).abs() > 0.01 || rx <= 0.0 {
                     return None; // 타원 호 미지원 — 문서 §서브셋
@@ -675,5 +680,13 @@ mod tests {
         let svg = r#"<svg viewBox="0 0 8 8"><title>x</title><g><line x1="0" y1="0" x2="4" y2="4"/></g></svg>"#;
         let doc = parse(svg).unwrap();
         assert_eq!(doc.ops.len(), 1);
+    }
+
+    #[test]
+    fn polyline_drops_trailing_odd_coordinate() {
+        // as_chunks::<2>() 전환 후에도 chunks_exact(2)와 같이 나머지 1개는 버린다.
+        let svg = r#"<svg viewBox="0 0 8 8"><polyline points="0,0 4,4 8"/></svg>"#;
+        let doc = parse(svg).unwrap();
+        assert_eq!(doc.ops[0].op, Op::Polyline(vec![(0.0, 0.0), (4.0, 4.0)]));
     }
 }
