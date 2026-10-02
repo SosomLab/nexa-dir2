@@ -8,6 +8,8 @@
 
 ## 2026-10-02
 
+- **도크 Info 기본 8줄 + 형식별 상세(사용자 요청 — `0ea8617`)**: 이름·종류·경로·크기·디스크 할당 크기·만든/수정한/액세스한 날짜(사용자 지정 순서) + Windows 속성 시스템(`System.PropList.FullDetails`)으로 탐색기 "자세히" 탭과 같은 상세(PPT·Excel·MP4·사진 실기 확인). 패널별 최신 요청 워커·세대 가드·플레이스홀더 생략. 설치본 재교체.
+- **우클릭 지연 탐색기 대비 측정(사용자 요청 — `ccefa2b`)**: 웜 Nexa 0.7~2.1 s vs 탐색기 0.2~0.8 s · 지연의 95% = `QueryContextMenu`(셸 확장 19개, 상위 iShare .NET 160·Defender 110 ms) · 개선안 3종 → X-61. 보고서 [audit/20261002-ultracode/ctxmenu-latency.md](audit/20261002-ultracode/ctxmenu-latency.md).
 - **UI 자동 QA 하네스(사용자 지시 "테스트 자동화" — `c421091`)**: [`scripts/ui-qa.ps1`](../scripts/ui-qa.ps1) PostMessage 마우스/휠/키 + PrintWindow 캡처 + 프로세스 실측([18 §2-2](18-build-and-test.md)). 도크 검증에 첫 사용 — DW 글리프의 GDI 클립 무시(왼쪽 번짐)를 캡처로 발견·수정.
 - **도크 Info/Preview 세로+가로 스크롤 + 빈 영역 드래그 앵커(사용자 보고 — `e230f36`)**: 공용 오버레이 바 모듈 `overlaybar.rs`(rows.rs 09-04 규약) · `scroll_x`·Shift+휠/틸트 휠·바 드래그·트랙 페이지·자동 스크롤 · 휠 라우팅을 Info 종류까지(종전 미리보기만 → Info 휠이 파일 목록으로 흐르던 결함) · 마지막 라인 아래 빈 영역 드래그 = 끝 앵커 · 가로 스크롤 시 보이는 첫 문자부터 그림(DW 글리프 클립 무시 우회). 85+132 green.
 - **우클릭 즉사 = `/CETCOMPAT` 회수(사용자 보고 — `d064819`·`f369c1a`)**: crash.txt 없음 → WER `0xC0000409`/데이터 0x30 = `FAST_FAIL_SET_CONTEXT_DENIED` · 로드 모듈에 .NET 2.0 CLR 셸 확장(iSHARE/EZShellExtensions). 격리 재현기 `examples/ctxmenu_probe.rs`로 CET 유(즉사)/무(정상) 확정 → 플래그 제거(explorer.exe도 CET OFF). docs/29 S-1·B2/B3 = CETCOMPAT 금지. 설치본 수동 교체(`.bak-0.21.0`).

@@ -4,6 +4,9 @@
 > 상세 [journal/2026-09-08.md](journal/2026-09-08.md)) · 그 앞 09-04 = 설정 창 스크롤 재구축 + 글꼴 폴백 → `0.19.0` →
 > 터미널 테마·복사 서식 → 정규 점검 1차(상세 [journal/2026-09-04.md](journal/2026-09-04.md)):
 >
+> - **10-02 X-60·X-61(사용자 요청 — 미배포·설치본 재교체)**: Info 기본 8줄(이름·종류·경로·크기·디스크 할당 크기·만든/수정한/액세스한 날짜) +
+>   속성 시스템 상세(PPT·Excel·MP4·사진 — `0ea8617`) · 우클릭 지연 측정 = 웜 Nexa 0.7~2.1 s vs 탐색기 0.2~0.8 s, 95%가 셸 확장 19개의
+>   `QueryContextMenu`(`ccefa2b` — 개선 3안 X-61 대기). Ultracode 분석 1단계 = 확정 204·기각 78(계획 재개 중).
 > - **10-02 X-59(사용자 보고 2건 + "테스트 자동화" 지시 — 미배포)**: ① OneDrive pptx 우클릭 종료 = Rust panic 아님(crash.txt 無) → WER
 >   `0xC0000409` 데이터 0x30 `FAST_FAIL_SET_CONTEXT_DENIED` + 로드 모듈에 .NET 2.0 CLR 셸 확장 → `0.20.0`의 `/CETCOMPAT`와 충돌.
 >   격리 재현기 `examples/ctxmenu_probe.rs`로 CET 유/무 확정 → 플래그 회수(`d064819`, explorer.exe도 CET OFF · docs/29 CETCOMPAT 금지).
