@@ -69,6 +69,8 @@ struct PvState {
     /// UTF-16(NUL 종료 — 그리기).
     lines: Vec<Vec<u16>>,
     line_h: i32,
+    /// 부분 줄 픽셀 오프셋(0..line_h — 10-02 트랙패드 픽셀 스크롤).
+    top_frac: i32,
     /// 최장 라인 픽셀 폭(가로 스크롤 상한).
     max_w: i32,
     /// 첫 가시 라인(세로)·가로 픽셀 오프셋.
@@ -223,7 +225,12 @@ unsafe fn visible_rows(hwnd: HWND, st: &PvState) -> i32 {
 /// 스크롤 클램프 + 스크롤바 동기(세로 = 라인·가로 = px).
 unsafe fn sync_scroll(hwnd: HWND, st: &mut PvState) {
     let vis = visible_rows(hwnd, st);
-    st.top = st.top.clamp(0, (st.lines.len() as i32 - vis).max(0));
+    let max_top = (st.lines.len() as i32 - vis).max(0);
+    st.top = st.top.clamp(0, max_top);
+    if st.top >= max_top {
+        st.top_frac = 0;
+    }
+    st.top_frac = st.top_frac.clamp(0, st.line_h.max(1) - 1);
     let cw = client(hwnd).right;
     st.left = st.left.clamp(0, (st.max_w + PAD_X * 2 - cw).max(0));
     let vsi = SCROLLINFO {
@@ -255,11 +262,30 @@ thread_local! {
         nexa_gui::WheelAccum,
         nexa_gui::WheelAccum,
         nexa_gui::fastscroll::FastScroller,
+        nexa_gui::WheelAccum, // 트랙패드 픽셀 누적(세로)
     )> = std::cell::RefCell::new(Default::default());
+}
+
+/// 세로 픽셀 스크롤(트랙패드 — 10-02). 양수 = 아래.
+unsafe fn scroll_by_px(hwnd: HWND, st: &mut PvState, dy: i32) {
+    let lh = st.line_h.max(1) as i64;
+    let vis = visible_rows(hwnd, st);
+    let max_px = (st.lines.len() as i64 - vis as i64).max(0) * lh;
+    let pos = (st.top as i64 * lh + st.top_frac as i64 + dy as i64).clamp(0, max_px);
+    let (top, frac) = ((pos / lh) as i32, (pos % lh) as i32);
+    if top != st.top || frac != st.top_frac {
+        st.top = top;
+        st.top_frac = frac;
+        sync_scroll(hwnd, st);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
 }
 
 unsafe fn scroll_to(hwnd: HWND, st: &mut PvState, top: i32, left: i32) {
     let (bt, bl) = (st.top, st.left);
+    if top != st.top {
+        st.top_frac = 0; // 줄 단위 이동 = 부분 오프셋 스냅
+    }
     st.top = top;
     st.left = left;
     sync_scroll(hwnd, st);
@@ -273,7 +299,7 @@ unsafe fn hit(hwnd: HWND, st: &PvState, x: i32, y: i32) -> (usize, usize) {
     if st.text.is_empty() {
         return (0, 0);
     }
-    let row = st.top + (y - PAD_X / 2).div_euclid(st.line_h.max(1));
+    let row = st.top + (y - PAD_X / 2 + st.top_frac).div_euclid(st.line_h.max(1));
     let line = row.clamp(0, st.text.len() as i32 - 1) as usize;
     let offs = char_offsets(hwnd, st, line);
     let rel = x - PAD_X + st.left;
@@ -440,11 +466,11 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let sel = st.sel.map(|(a, c)| if a <= c { (a, c) } else { (c, a) });
                 let x0 = PAD_X - st.left;
                 let pad_top = PAD_X / 2;
-                let mut y = pad_top;
+                let mut y = pad_top - st.top_frac; // 부분 줄 오프셋(10-02 픽셀 스크롤)
                 // 인라인 이미지(07-26 다이어그램) — 행 bg 도장 후 마지막에 그림
                 // (pad 행의 불투명 도장이 이미지를 지우지 않도록 지연)
                 let mut deferred: Vec<(i32, i32, String)> = Vec::new();
-                for i in st.top..(st.top + vis + 1).min(st.lines.len() as i32) {
+                for i in st.top..(st.top + vis + 2).min(st.lines.len() as i32) {
                     let li = i as usize;
                     let is_marker = st.text[li].starts_with('\u{1}');
                     if is_marker {
@@ -712,14 +738,22 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let left = st.left - px;
                     let top = st.top;
                     scroll_to(hwnd, st, top, left);
-                } else {
+                } else if delta.abs() >= nexa_gui::WHEEL_DELTA {
+                    // 마우스 노치 = 줄 단위(시스템 줄 수) + 고속 스크롤 배수
                     let rows = PV_WHEEL.with_borrow_mut(|w| {
-                        let rows = w.0.add(delta, 3); // 120 = 3행
+                        let rows = w.0.add(delta, nexa_gui::wheel_lines());
                         w.2.wheel(delta, rows)
                     });
                     let top = st.top - rows;
                     let left = st.left;
                     scroll_to(hwnd, st, top, left);
+                } else {
+                    // 정밀 터치패드 = 픽셀(10-02)
+                    let lh = st.line_h.max(1);
+                    let px = PV_WHEEL.with_borrow_mut(|w| w.3.add(delta, nexa_gui::wheel_lines() * lh));
+                    if px != 0 {
+                        scroll_by_px(hwnd, st, -px);
+                    }
                 }
             }
             LRESULT(0)
@@ -924,6 +958,7 @@ pub unsafe fn show(owner: HWND, title: &str, lines: Vec<String>, mono: (&str, i3
         line_h,
         max_w,
         top: 0,
+        top_frac: 0,
         left: 0,
         dark,
         sel: None,

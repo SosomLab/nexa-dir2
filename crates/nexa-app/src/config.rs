@@ -165,6 +165,8 @@ pub struct Settings {
     pub fast_scroll_hud_pos: i32,
     pub fast_scroll_hud_hold_ms: i32,
     pub fast_scroll_hud_fade_ms: i32,
+    /// 파일 그리드 한 단계 더 빠르게(nexa-sql `scroll.fast_grid_extra` — step-1·상한 두 배).
+    pub fast_scroll_grid_extra: bool,
     /// 보기 모드(사용자 요청 07-16): "tree"(계층 — 기본)|"flat"(일반 폴더)|"tiles"(타일).
     pub view_mode: String,
     /// 컬럼 너비 동기화(사용자 확정 07-18) — on = 좌/우 패널 폭 실시간 동기,
@@ -219,6 +221,12 @@ impl Settings {
             hud_hold_ms: self.fast_scroll_hud_hold_ms.clamp(0, 10_000) as u64,
             hud_fade_ms: self.fast_scroll_hud_fade_ms.clamp(0, 10_000) as u64,
         }
+    }
+
+    /// 파일 그리드 전용 한 단계 더 빠른 설정(10-02 — `fast_scroll_grid_extra`). None = 전역과 동일.
+    pub fn fast_scroll_grid(&self) -> Option<nexa_gui::fastscroll::FastScroll> {
+        self.fast_scroll_grid_extra
+            .then(|| nexa_gui::fastscroll::grid_extra_of(&self.fast_scroll()))
     }
 
     /// 종류별 client_id(미설정 = 빈 문자열).
@@ -290,13 +298,14 @@ impl Default for Settings {
             typeahead_space: true,
             typeahead_backspace: true,
             fast_scroll: true,
-            fast_scroll_step: 5,
-            fast_scroll_max: 8,
+            fast_scroll_step: 3,
+            fast_scroll_max: 16,
             fast_scroll_window_ms: 160,
             fast_scroll_hud: true,
             fast_scroll_hud_pos: 2,
             fast_scroll_hud_hold_ms: 250,
             fast_scroll_hud_fade_ms: 600,
+            fast_scroll_grid_extra: true,
             view_mode: "tree".into(),
             col_width_sync: true,
             col_autofit_max: 400,
@@ -489,7 +498,7 @@ impl Settings {
             u8::from(self.typeahead_backspace)
         ));
         out.push_str(&format!(
-            "fast_scroll={}\nfast_scroll_step={}\nfast_scroll_max={}\nfast_scroll_window_ms={}\nfast_scroll_hud={}\nfast_scroll_hud_pos={}\nfast_scroll_hud_hold_ms={}\nfast_scroll_hud_fade_ms={}\n",
+            "fast_scroll={}\nfast_scroll_step={}\nfast_scroll_max={}\nfast_scroll_window_ms={}\nfast_scroll_hud={}\nfast_scroll_hud_pos={}\nfast_scroll_hud_hold_ms={}\nfast_scroll_hud_fade_ms={}\nfast_scroll_grid_extra={}\n",
             u8::from(self.fast_scroll),
             self.fast_scroll_step,
             self.fast_scroll_max,
@@ -497,7 +506,8 @@ impl Settings {
             u8::from(self.fast_scroll_hud),
             self.fast_scroll_hud_pos,
             self.fast_scroll_hud_hold_ms,
-            self.fast_scroll_hud_fade_ms
+            self.fast_scroll_hud_fade_ms,
+            u8::from(self.fast_scroll_grid_extra)
         ));
         out.push_str(&format!(
             "base_font={}\nbase_font_size={}\nctx_font={}\nctx_font_size={}\nstatus_font={}\nstatus_font_size={}\nlist_font={}\nlist_font_size={}\nlist_folder_bold={}\nheader_bold={}\nheader_italic={}\n",
@@ -729,6 +739,7 @@ impl Settings {
                     }
                 }
                 "fast_scroll_hud" => s.fast_scroll_hud = v != "0",
+                "fast_scroll_grid_extra" => s.fast_scroll_grid_extra = v != "0",
                 "fast_scroll_hud_pos" => {
                     if let Ok(n) = v.parse::<i32>() {
                         s.fast_scroll_hud_pos = n.clamp(0, 8);
@@ -1329,6 +1340,7 @@ mod tests {
             fast_scroll_hud_pos: 8,
             fast_scroll_hud_hold_ms: 100,
             fast_scroll_hud_fade_ms: 300,
+            fast_scroll_grid_extra: false,
             view_mode: "tiles".into(),
             panel_mode: "single".into(),
             info_mode: "single".into(),

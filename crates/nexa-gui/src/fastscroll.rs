@@ -41,12 +41,13 @@ pub struct FastScroll {
 }
 
 impl Default for FastScroll {
-    /// 기본 = **켬**(사용자 10-02 "설정까지 적용" — nexa-sql 설정 기본값과 동일 수치).
+    /// 기본 = **켬**, 수치 = nexa-sql 설정 기본값(`scroll.fast_speed = fast` → step 3·max 16 —
+    /// 사용자 10-02 "nexa-sql과 동일한 값").
     fn default() -> Self {
         Self {
             enabled: true,
-            step: 5,
-            max: 8,
+            step: 3,
+            max: 16,
             window_ms: 160,
             hud: true,
             hud_pos: 2,
@@ -58,8 +59,8 @@ impl Default for FastScroll {
 
 static FAST: std::sync::RwLock<FastScroll> = std::sync::RwLock::new(FastScroll {
     enabled: true,
-    step: 5,
-    max: 8,
+    step: 3,
+    max: 16,
     window_ms: 160,
     hud: true,
     hud_pos: 2,
@@ -78,6 +79,36 @@ pub fn set_fast_scroll(cfg: FastScroll) {
 #[must_use]
 pub fn fast_scroll() -> FastScroll {
     FAST.read().map(|g| *g).unwrap_or_default()
+}
+
+/// 파일 그리드 전용 **한 단계 더 빠른** 설정(nexa-sql `scroll.fast_grid_extra` — 결과 그리드 규약:
+/// 한 번 먼저 오르고(step-1) 상한 두 배). None = 전역과 동일. 호스트가 설정 적용 때 넣는다.
+static FAST_GRID: std::sync::RwLock<Option<FastScroll>> = std::sync::RwLock::new(None);
+
+pub fn set_fast_scroll_grid(cfg: Option<FastScroll>) {
+    if let Ok(mut g) = FAST_GRID.write() {
+        *g = cfg;
+    }
+}
+
+/// 그리드 설정(없으면 전역).
+#[must_use]
+pub fn fast_scroll_grid() -> FastScroll {
+    FAST_GRID
+        .read()
+        .ok()
+        .and_then(|g| *g)
+        .unwrap_or_else(fast_scroll)
+}
+
+/// 전역에서 "한 단계 더 빠른" 그리드 설정 파생(nexa-sql 규약).
+#[must_use]
+pub fn grid_extra_of(base: &FastScroll) -> FastScroll {
+    FastScroll {
+        step: base.step.saturating_sub(1).max(1),
+        max: base.max.saturating_mul(2),
+        ..*base
+    }
 }
 
 /// 가속기 — 같은 방향 연속 사건 횟수로 배수를 낸다.
@@ -253,20 +284,39 @@ impl SpeedHud {
 }
 
 /// 위젯용 묶음 — 가속기 + 배지. 휠·키 사건 → 이동량 배수, 틱 → 배지 페이드.
+/// `grid` = 파일 그리드(한 단계 더 빠른 [`fast_scroll_grid`] 사용).
 #[derive(Debug, Clone, Default)]
 pub struct FastScroller {
     accel: ScrollAccel,
     hud: SpeedHud,
+    grid: bool,
 }
 
 impl FastScroller {
+    /// 파일 그리드용(설정 `fast_scroll_grid_extra` 반영).
+    #[must_use]
+    pub fn for_grid() -> Self {
+        Self {
+            grid: true,
+            ..Self::default()
+        }
+    }
+
+    fn cfg(&self) -> FastScroll {
+        if self.grid {
+            fast_scroll_grid()
+        } else {
+            fast_scroll()
+        }
+    }
+
     /// 휠 사건: `delta`(원시, 부호 = 방향)로 가속 판정 후 `units`(이미 노치 환산된 이동량)에
     /// 배수를 곱해 돌려준다. **노치 미만 delta(정밀 터치패드)는 배수 1** — OS 가속에 맡긴다.
     pub fn wheel(&mut self, delta: i32, units: i32) -> i32 {
         if units == 0 {
             return 0;
         }
-        let cfg = fast_scroll();
+        let cfg = self.cfg();
         if delta.abs() < WHEEL_DELTA {
             self.accel.reset();
             self.hud.note(1, &cfg);
@@ -279,7 +329,7 @@ impl FastScroller {
 
     /// 키 자동 반복 사건(`dir` 부호) → 한 번에 옮길 행 수(= 배수).
     pub fn key(&mut self, dir: i32) -> i32 {
-        let cfg = fast_scroll();
+        let cfg = self.cfg();
         let k = self.accel.factor_at(dir, Instant::now(), &cfg);
         self.hud.note(k, &cfg);
         k
@@ -295,7 +345,7 @@ impl FastScroller {
         if !self.hud.visible() {
             return;
         }
-        let cfg = fast_scroll();
+        let cfg = self.cfg();
         if self.hud.tick(Instant::now(), &cfg) {
             let r = self.hud.drawn_rect();
             inv.push(if r.w > 0 { r } else { area });
@@ -311,8 +361,7 @@ impl FastScroller {
         if !self.hud.visible() {
             return;
         }
-        self.hud
-            .paint(ctx, theme, area, row_h, pad_x, &fast_scroll());
+        self.hud.paint(ctx, theme, area, row_h, pad_x, &self.cfg());
     }
 
     /// 배지가 보이는가(호출자가 사건 직후 틱을 요청할지 판단).
@@ -336,14 +385,16 @@ mod tests {
         let mut a = ScrollAccel::default();
         let t0 = Instant::now();
         let c = cfg();
-        // 첫 5번(연속 0..4) = ×1, 6번째(연속 5) = ×2 … 상한 8
+        // step 3: 첫 3번(연속 0..2) = ×1, 4번째(연속 3) = ×2 … 상한 16
         let mut ks = Vec::new();
-        for i in 0..60 {
+        for i in 0..80 {
             ks.push(a.factor_at(-120, t0 + Duration::from_millis(50 * i), &c));
         }
-        assert_eq!(&ks[..6], &[1, 1, 1, 1, 1, 2]);
-        assert_eq!(ks[10], 3);
-        assert_eq!(*ks.last().unwrap(), 8, "상한");
+        assert_eq!(&ks[..4], &[1, 1, 1, 2]);
+        assert_eq!(ks[6], 3);
+        assert_eq!(*ks.last().unwrap(), 16, "상한");
+        let g = grid_extra_of(&c);
+        assert_eq!((g.step, g.max), (2, 32), "그리드 = 한 단계 먼저·상한 두 배");
     }
 
     #[test]
@@ -351,16 +402,16 @@ mod tests {
         let mut a = ScrollAccel::default();
         let t0 = Instant::now();
         let c = cfg();
-        for i in 0..6 {
+        for i in 0..4 {
             a.factor_at(1, t0 + Duration::from_millis(50 * i), &c);
         }
-        assert_eq!(a.factor_at(1, t0 + Duration::from_millis(300), &c), 2);
+        assert_eq!(a.factor_at(1, t0 + Duration::from_millis(200), &c), 2);
         assert_eq!(
             a.factor_at(-1, t0 + Duration::from_millis(350), &c),
             1,
             "방향 전환 = 리셋"
         );
-        for i in 0..6 {
+        for i in 0..4 {
             a.factor_at(-1, t0 + Duration::from_millis(400 + 50 * i), &c);
         }
         assert_eq!(
@@ -433,12 +484,12 @@ mod tests {
             assert_eq!(f.wheel(-8, 1), 1);
         }
         assert!(!f.hud_visible());
-        // 노치 연타 = 배수(연속 5 넘으면 ×2)
+        // 노치 연타 = 배수(연속 3 넘으면 ×2 · 6 = ×3)
         let mut last = 0;
         for _ in 0..8 {
             last = f.wheel(-120, 3);
         }
-        assert_eq!(last, 6);
+        assert_eq!(last, 9);
         assert!(f.hud_visible());
     }
 }

@@ -3,6 +3,22 @@
 /// Win32 `WHEEL_DELTA` — 휠 1노치의 delta 단위.
 pub const WHEEL_DELTA: i32 = 120;
 
+/// 휠 노치당 줄 수(10-02 — Windows `SPI_GETWHEELSCROLLLINES` 존중. 기본 3). 호스트가 기동 시
+/// [`set_wheel_lines`]로 넣고, 모든 스크롤 영역이 노치·픽셀 환산에 쓴다.
+static WHEEL_LINES_SYS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(3);
+
+/// 시스템 값 주입(-1 = 페이지 단위 → 10줄로 환산 · 1~20 클램프).
+pub fn set_wheel_lines(n: i32) {
+    let n = if n <= 0 { 10 } else { n.min(20) };
+    WHEEL_LINES_SYS.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 현재 노치당 줄 수.
+#[must_use]
+pub fn wheel_lines() -> i32 {
+    WHEEL_LINES_SYS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 네비게이션 키(키보드 우선 DR-5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {

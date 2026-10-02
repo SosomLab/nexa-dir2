@@ -18,7 +18,7 @@ pub mod widgets;
 pub use columns::{order_badge, Align, Column};
 pub use draw::{DrawCtx, FontSlot};
 pub use edit::{EditKey, EditState};
-pub use event::{InputEvent, Key, WheelAccum, WHEEL_DELTA};
+pub use event::{set_wheel_lines, wheel_lines, InputEvent, Key, WheelAccum, WHEEL_DELTA};
 pub use geom::{Point, Rect, Size};
 pub use theme::{Color, Theme};
 pub use widget::{Invalidations, Widget};

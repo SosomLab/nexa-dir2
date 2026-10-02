@@ -956,6 +956,8 @@ struct State {
     ta_pos: i32,
     /// 고속 스크롤 설정(10-02 — 전역 nexa_gui::fastscroll과 동기, 설정 저장용).
     fast: nexa_gui::fastscroll::FastScroll,
+    /// 파일 그리드 한 단계 더 빠르게(10-02 — 설정 fast_scroll_grid_extra).
+    fast_grid_extra: bool,
     ta_special: bool,
     ta_space: bool,
     ta_backspace: bool,
@@ -1084,6 +1086,13 @@ struct TermState {
     tui_wheel: nexa_gui::WheelAccum,
     /// 고속 스크롤(10-02 — 스크롤백 휠 노치 연타 배수. 배지는 term_paint가 그린다).
     fast: nexa_gui::fastscroll::FastScroller,
+    /// 부분 행 픽셀 오프셋(0..cell_h — 10-02 트랙패드 픽셀 스크롤): 뷰가 아래로 frac px 밀려
+    /// `top-1` 라인의 아래 frac px가 위에 보인다. 행 단위 이동은 0으로 스냅.
+    view_frac: i32,
+    /// 가로 부분 열 픽셀 오프셋(0..cell_w).
+    view_fx: i32,
+    /// 트랙패드 픽셀 누적(세로).
+    wheel_px: nexa_gui::WheelAccum,
 }
 
 impl TermState {
@@ -1100,17 +1109,23 @@ impl TermState {
             hwheel: nexa_gui::WheelAccum::default(),
             tui_wheel: nexa_gui::WheelAccum::default(),
             fast: nexa_gui::fastscroll::FastScroller::default(),
+            view_frac: 0,
+            view_fx: 0,
+            wheel_px: nexa_gui::WheelAccum::default(),
         }
     }
 
-    /// 가로 보기 이동(X-3 — 비줄바꿈 고정 열). 양수=오른쪽. 변화가 있었으면 `true`.
-    fn scroll_view_x(&mut self, delta_cols: i32) -> bool {
+    /// 가로 픽셀 스크롤(트랙패드 — 10-02). 양수 = 오른쪽.
+    fn scroll_view_x_px(&mut self, dx: i32) -> bool {
         let (rc, cw, _) = self.grid;
-        let vis = ((rc.w - 4) / cw.max(1)).max(1) as usize;
-        let max_x = self.screen.cols().saturating_sub(vis);
-        let nx = (self.view_x as i64 + delta_cols as i64).clamp(0, max_x as i64) as usize;
-        if nx != self.view_x {
-            self.view_x = nx;
+        let cw = cw.max(1) as i64;
+        let vis = ((rc.w - 4) / cw as i32).max(1) as usize;
+        let max_px = self.screen.cols().saturating_sub(vis) as i64 * cw;
+        let pos = (self.view_x as i64 * cw + self.view_fx as i64 + dx as i64).clamp(0, max_px);
+        let (col, fx) = ((pos / cw) as usize, (pos % cw) as i32);
+        if col != self.view_x || fx != self.view_fx {
+            self.view_x = col;
+            self.view_fx = fx;
             true
         } else {
             false
@@ -1133,13 +1148,14 @@ impl TermState {
     /// 클라이언트 좌표 → (절대 라인, 열) — 그리드 캐시 기준(범위 밖은 가장자리로 클램프).
     fn cell_at(&self, x: i32, y: i32) -> (usize, usize) {
         let (rc, cw, ch) = self.grid;
-        let col =
-            (self.view_x + ((x - rc.x - 2) / cw.max(1)).max(0) as usize).min(self.screen.cols());
-        let row = (((y - rc.y - 1) / ch.max(1)).max(0) as usize)
-            .min(self.screen.rows().saturating_sub(1));
+        let col = (self.view_x + ((x - rc.x - 2 + self.view_fx) / cw.max(1)).max(0) as usize)
+            .min(self.screen.cols());
+        // 부분 행 오프셋(10-02): 뷰가 frac px 아래로 밀려 있으면 위 가장자리는 top-1 라인
+        let row = (y - rc.y - 1 - self.view_frac).div_euclid(ch.max(1));
+        let row = row.min(self.screen.rows().saturating_sub(1) as i32);
         let sb = self.screen.scrollback_count();
         let top = sb - self.view_off.min(sb);
-        (top + row, col)
+        ((top as i64 + row as i64).max(0) as usize, col)
     }
 
     /// 스크롤백 보기 이동(양수=위로) — 변화가 있었으면 `true`.
@@ -1147,8 +1163,25 @@ impl TermState {
         let sb = self.screen.scrollback_count();
         let cur = self.view_off.min(sb) as i64;
         let next = (cur + lines as i64).clamp(0, sb as i64) as usize;
-        if next != self.view_off {
+        if next != self.view_off || self.view_frac != 0 {
             self.view_off = next;
+            self.view_frac = 0; // 행 단위 이동 = 부분 오프셋 스냅
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 세로 픽셀 스크롤(트랙패드 — 10-02). 양수 = 위(스크롤백 쪽). 위치 = view_off×cell_h + frac.
+    fn scroll_view_px(&mut self, dy: i32) -> bool {
+        let ch = self.grid.2.max(1) as i64;
+        let sb = self.screen.scrollback_count() as i64;
+        let pos = (self.view_off.min(sb as usize) as i64 * ch + self.view_frac as i64 + dy as i64)
+            .clamp(0, sb * ch);
+        let (off, frac) = ((pos / ch) as usize, (pos % ch) as i32);
+        if off != self.view_off || frac != self.view_frac {
+            self.view_off = off;
+            self.view_frac = frac;
             true
         } else {
             false
@@ -1382,6 +1415,9 @@ pub fn run() -> Result<()> {
     let theme_mode = ThemeMode::from_str(&settings.theme);
     // 고속 스크롤 전역 설정(10-02) — 위젯·창들이 사건마다 읽는다
     nexa_gui::fastscroll::set_fast_scroll(settings.fast_scroll());
+    nexa_gui::fastscroll::set_fast_scroll_grid(settings.fast_scroll_grid());
+    // 휠 노치당 줄 수 = 시스템 설정(10-02 — 마우스 설정 "한 번에 스크롤할 줄 수")
+    sync_wheel_lines();
     // i18n 활성화(M2-6) — 패널·메뉴 생성 전에(컬럼 제목·라벨이 tr() 경유)
     let langs = i18n::discover(&data);
     let code = i18n::resolve_code(&settings.lang, &unsafe { system_ui_lang() }, &langs);
@@ -1618,6 +1654,7 @@ pub fn run() -> Result<()> {
         ta_reset_ms: settings.typeahead_reset_ms,
         ta_pos: settings.typeahead_pos,
         fast: settings.fast_scroll(),
+        fast_grid_extra: settings.fast_scroll_grid_extra,
         ta_special: settings.typeahead_special,
         ta_space: settings.typeahead_space,
         ta_backspace: settings.typeahead_backspace,
@@ -2580,13 +2617,19 @@ unsafe fn term_paint(
         | ((theme.accent.r as u32) << 16)
         | ((theme.accent.g as u32) << 8)
         | theme.accent.b as u32;
-    for r in 0..rows {
-        let y = rc.y + 1 + r as i32 * cell_h;
+    // 부분 행 픽셀 오프셋(10-02 트랙패드): 뷰가 frac px 아래로 밀려 top-1 라인 아래쪽이 위에 보인다.
+    // 위로 번진 부분은 호스트가 스트립을 다시 그려 덮는다(DW 글리프는 GDI 클립 무시).
+    let frac = t.view_frac.clamp(0, cell_h - 1);
+    let fx = t.view_fx.clamp(0, cell_w - 1);
+    let r_first: i32 = if frac > 0 && top > 0 { -1 } else { 0 };
+    ctx.push_clip(rc);
+    for r in r_first..rows as i32 {
+        let y = rc.y + 1 + frac + r * cell_h;
         let row_h = cell_h.min(rc.bottom() - y);
         if row_h <= 0 {
             break;
         }
-        let abs = top + r;
+        let abs = (top as i64 + r as i64) as usize;
         let line = t.screen.line_at(abs);
         // 유효 (fg,bg): reverse 스왑 → 선택이면 다시 스왑(반전 하이라이트).
         let eff = |c: usize| -> (u32, u32, bool) {
@@ -2608,7 +2651,9 @@ unsafe fn term_paint(
         // 레이아웃은 폴백 글꼴(한글·아이콘) 전진폭이 셀 그리드와 어긋나 열이 밀림
         // (QA 07-14 — ls 이름 컬럼 깨짐).
         let c0 = t.view_x;
-        let c_end = cols.min(line.len()).min(c0 + vis_cols);
+        let c_end = cols
+            .min(line.len())
+            .min(c0 + vis_cols + usize::from(fx > 0)); // 부분 열 = 한 열 더
         let mut c = c0.min(c_end);
         while c < c_end {
             let (fg, bg, faint) = eff(c);
@@ -2620,8 +2665,13 @@ unsafe fn term_paint(
                 }
                 c += 1;
             }
-            let x = rc.x + 2 + (start - c0) as i32 * cell_w;
-            let clip = Rect::new(x, y, (c - start) as i32 * cell_w, row_h);
+            let x = rc.x + 2 - fx + (start - c0) as i32 * cell_w;
+            let clip = Rect::new(
+                x,
+                y,
+                ((c - start) as i32 * cell_w).min(rc.right() - x),
+                row_h,
+            );
             ctx.fill_rect(clip, argb(bg));
             let mut fgc = argb(fg);
             if faint {
@@ -2663,8 +2713,8 @@ unsafe fn term_paint(
         let cr = sb + t.screen.cursor_row();
         let cc = t.screen.cursor_col();
         if caret_on && cr >= top && cr < top + rows && cc >= t.view_x && cc < t.view_x + vis_cols {
-            let cx = rc.x + 2 + (cc - t.view_x) as i32 * cell_w;
-            let cy = rc.y + 1 + (cr - top) as i32 * cell_h;
+            let cx = rc.x + 2 - fx + (cc - t.view_x) as i32 * cell_w;
+            let cy = rc.y + 1 + frac + (cr - top) as i32 * cell_h;
             if cy + cell_h <= rc.bottom() {
                 let w = (dpi as i32 / 96).max(1);
                 // 팔레트 기본 전경(09-04) — 다크는 종전 밝은 회색(QA 07-14)과 같은 계열,
@@ -2673,6 +2723,7 @@ unsafe fn term_paint(
             }
         }
     }
+    ctx.pop_clip();
     // 고속 스크롤 ×N 배지(10-02) — 그리드 위 마지막
     t.fast.paint(ctx, theme, rc, cell_h, 6);
     true
@@ -4794,6 +4845,10 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     // 포커스를 목록으로 돌린다(강조 동기는 다음 입력의 sync_focus_visuals)
                     st.term_focus = None;
                 }
+                if st.terms[i].as_ref().is_some_and(|t| t.view_frac > 0) {
+                    // 부분 행(픽셀 스크롤)이 종류 스트립 위로 번짐 → 스트립 재도장(10-02)
+                    st.panels[i].dock.paint_strip(&mut ctx, &st.theme);
+                }
             }
         }
         // 스플리터(패널 영역 한정·드래그 중 accent). 싱글 패널(X-20)은 우 패널이
@@ -6211,6 +6266,27 @@ unsafe fn open_order_editor(hwnd: HWND, field: u32) {
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(font.into());
 }
 
+/// 시스템 `SPI_GETWHEELSCROLLLINES`(기본 3 · `WHEEL_PAGESCROLL` = 페이지)를 모든 스크롤 영역의
+/// 노치·픽셀 환산에 주입(10-02 — [`nexa_gui::set_wheel_lines`]). 실패 시 종전 값 유지.
+fn sync_wheel_lines() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut n: u32 = 3;
+    // SAFETY: 출력 버퍼는 u32 하나(SPI 규약)·플래그 0.
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWHEELSCROLLLINES,
+            0,
+            Some(std::ptr::from_mut(&mut n).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    if ok.is_ok() {
+        nexa_gui::set_wheel_lines(i32::try_from(n).unwrap_or(-1));
+    }
+}
+
 /// 설정 창 열기(S6 — Ctrl+, 원본 docs/40): 현재 값 스냅샷 → 모달(State 참조 차단 —
 /// 재진입 규약) → 저장 시 적용(테마/언어=기존 명령 경로 재사용·글꼴=백엔드 재생성)
 /// + settings.cfg 즉시 저장(원본 PREF 영속 규율).
@@ -6270,6 +6346,7 @@ unsafe fn open_prefs(hwnd: HWND) {
                 fast_scroll_hud_pos: st.fast.hud_pos as i32,
                 fast_scroll_hud_hold_ms: st.fast.hud_hold_ms as i32,
                 fast_scroll_hud_fade_ms: st.fast.hud_fade_ms as i32,
+                fast_scroll_grid_extra: st.fast_grid_extra,
                 transfer_close_ms: st.transfer_close_ms,
                 dnd_hover_ms: st.dnd_hover_ms,
             },
@@ -6575,9 +6652,14 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
             hud_hold_ms: v.fast_scroll_hud_hold_ms.clamp(0, 10_000) as u64,
             hud_fade_ms: v.fast_scroll_hud_fade_ms.clamp(0, 10_000) as u64,
         };
-        if cfg != st.fast {
+        if cfg != st.fast || v.fast_scroll_grid_extra != st.fast_grid_extra {
             st.fast = cfg;
+            st.fast_grid_extra = v.fast_scroll_grid_extra;
             nexa_gui::fastscroll::set_fast_scroll(cfg);
+            nexa_gui::fastscroll::set_fast_scroll_grid(
+                st.fast_grid_extra
+                    .then(|| nexa_gui::fastscroll::grid_extra_of(&cfg)),
+            );
         }
     }
     // 타입어헤드 옵션(07-15) — 전 탭 즉시 적용
@@ -6852,6 +6934,7 @@ fn current_settings(st: &State) -> Settings {
         fast_scroll_hud_pos: st.fast.hud_pos as i32,
         fast_scroll_hud_hold_ms: st.fast.hud_hold_ms as i32,
         fast_scroll_hud_fade_ms: st.fast.hud_fade_ms as i32,
+        fast_scroll_grid_extra: st.fast_grid_extra,
         dock_ratio: st.panels[0].dock_ratio(),
         dock_split: st.dock_split,
         term_font: st.term_font.clone(),
@@ -7701,8 +7784,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // Shift+휠 = 터미널 가로 스크롤(X-3 비줄바꿈 고정 열 — 4열/노치)
                 if wparam.0 & MK_SHIFT != 0 && !st.term_wrap && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
-                        let cols = t.hwheel.add(-delta, 4);
-                        if cols != 0 && t.scroll_view_x(cols) {
+                        let px = t.hwheel.add(-delta, 4 * t.grid.1.max(1)); // 노치 = 4열, 트랙패드 = 비례 px
+                        if px != 0 && t.scroll_view_x_px(px) {
                             invalidate_dock(hwnd, st, target);
                         }
                     }
@@ -7718,9 +7801,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             }
                             return LRESULT(0);
                         }
-                        let lines = t.wheel.add(delta, 3);
-                        let lines = t.fast.wheel(delta, lines); // 고속 스크롤(10-02)
-                        let scrolled = lines != 0 && t.scroll_view(lines);
+                        let scrolled = if delta.abs() >= nexa_gui::WHEEL_DELTA {
+                            // 마우스 노치 = 행 단위(시스템 줄 수) + 고속 스크롤 배수
+                            let lines = t.wheel.add(delta, nexa_gui::wheel_lines());
+                            let lines = t.fast.wheel(delta, lines);
+                            lines != 0 && t.scroll_view(lines)
+                        } else {
+                            // 정밀 터치패드 = 픽셀(10-02)
+                            let px = t
+                                .wheel_px
+                                .add(delta, nexa_gui::wheel_lines() * t.grid.2.max(1));
+                            px != 0 && t.scroll_view_px(px)
+                        };
                         let hud = t.fast.hud_visible();
                         if scrolled || hud {
                             invalidate_dock(hwnd, st, target);
@@ -7765,8 +7857,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // 터미널 위 가로 휠 = 가로 스크롤(X-3 비줄바꿈 고정 열)
                 if !st.term_wrap && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
-                        let cols = t.hwheel.add(delta, 4);
-                        if cols != 0 && t.scroll_view_x(cols) {
+                        let px = t.hwheel.add(delta, 4 * t.grid.1.max(1));
+                        if px != 0 && t.scroll_view_x_px(px) {
                             invalidate_dock(hwnd, st, target);
                         }
                     }
@@ -9425,6 +9517,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         // OS 테마 변경(ImmersiveColorSet 등) — 시스템 모드일 때 재해석(docs/39 §3)
         WM_SETTINGCHANGE => {
+            sync_wheel_lines(); // 마우스 설정 변경 즉시 반영
             if let Some(st) = state_of(hwnd) {
                 if st.theme_mode == ThemeMode::System {
                     let mut inv = Invalidations::default();

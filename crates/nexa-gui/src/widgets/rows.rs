@@ -12,7 +12,6 @@ use crate::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
 use crate::widget::{Invalidations, Widget};
 
 /// 휠 1노치당 스크롤 행 수(M0-7 계승).
-const WHEEL_LINES: i32 = 3;
 /// 가로 휠 1"행"당 픽셀.
 const HSCROLL_PX: i32 = 16;
 /// 리사이즈 핸들 판정 폭 — 컬럼 오른쪽 경계 기준 [right-6, right+2).
@@ -217,6 +216,11 @@ pub struct VirtualRows<S> {
     bounds: Rect,
     scroll_row: usize,
     scroll_x: i32,
+    /// 부분 행 픽셀 오프셋(0..grid_h — 10-02 트랙패드 픽셀 스크롤). 행 단위 조작(키·노치·
+    /// scroll_into_view)은 0으로 스냅.
+    scroll_frac: i32,
+    /// 트랙패드 픽셀 누적(노치 미만 delta → px).
+    wheel_px: WheelAccum,
     row_h: i32,
     pad_x: i32,
     /// 트리 깊이 1단계의 가로 들여쓰기(px). 마커 폭도 이 값을 쓴다.
@@ -287,12 +291,14 @@ impl<S: RowSource> VirtualRows<S> {
             bounds: Rect::default(),
             scroll_row: 0,
             scroll_x: 0,
+            scroll_frac: 0,
+            wheel_px: WheelAccum::default(),
             row_h: row_h.max(1),
             pad_x,
             indent_w: indent_w.max(1),
             wheel: WheelAccum::default(),
             hwheel: WheelAccum::default(),
-            fast: FastScroller::default(),
+            fast: FastScroller::for_grid(), // 파일 그리드 = 한 단계 더 빠른 설정(10-02)
             columns: Vec::new(),
             sort: Vec::new(),
             resize: None,
@@ -393,7 +399,7 @@ impl<S: RowSource> VirtualRows<S> {
         let gc = index % cols;
         Rect::new(
             self.bounds.x + gc as i32 * tw,
-            self.body_top() + (gr as i32 - self.scroll_row as i32) * th,
+            self.row_origin() + (gr as i32 - self.scroll_row as i32) * th,
             tw,
             th,
         )
@@ -550,7 +556,7 @@ impl<S: RowSource> VirtualRows<S> {
         if *row < self.scroll_row {
             return None;
         }
-        let y = self.body_top() + (*row - self.scroll_row) as i32 * self.row_h;
+        let y = self.row_origin() + (*row - self.scroll_row) as i32 * self.row_h;
         if y >= self.bounds.bottom() {
             return None;
         }
@@ -682,8 +688,10 @@ impl<S: RowSource> VirtualRows<S> {
         let th = ((body_h as i64 * full as i64 / total as i64) as i32)
             .max(THUMB_MIN)
             .min(body_h);
-        let max_s = self.max_scroll().max(1) as i64;
-        let ty = self.body_top() + ((body_h - th) as i64 * self.scroll_row as i64 / max_s) as i32;
+        let gh_px = gh as i64;
+        let max_s = self.max_scroll().max(1) as i64 * gh_px;
+        let pos = self.scroll_row as i64 * gh_px + self.scroll_frac as i64;
+        let ty = self.body_top() + ((body_h - th) as i64 * pos / max_s) as i32;
         let w = if wide { BAR_WIDE } else { BAR_THIN };
         Some(Rect::new(self.bounds.right() - w - 2, ty, w, th))
     }
@@ -968,6 +976,26 @@ impl<S: RowSource> VirtualRows<S> {
         (self.bounds.h - self.header_h()).max(0)
     }
 
+    /// 첫 가시 행(scroll_row)의 y — 부분 행 오프셋만큼 본문 상단보다 위(10-02 픽셀 스크롤).
+    fn row_origin(&self) -> i32 {
+        self.body_top() - self.scroll_frac
+    }
+
+    /// 픽셀 단위 세로 스크롤(트랙패드 — 10-02): 행 + 부분 오프셋을 px 위치로 환산해 이동·클램프.
+    fn scroll_by_px(&mut self, dy: i32, inv: &mut Invalidations) {
+        let gh = self.grid_h().max(1) as i64;
+        let max_px = self.max_scroll() as i64 * gh;
+        let pos =
+            (self.scroll_row as i64 * gh + self.scroll_frac as i64 + dy as i64).clamp(0, max_px);
+        let (row, frac) = ((pos / gh) as usize, (pos % gh) as i32);
+        if row != self.scroll_row || frac != self.scroll_frac {
+            self.scroll_row = row;
+            self.scroll_frac = frac;
+            inv.push(self.bounds);
+            self.flash_bar(Axis::V, inv);
+        }
+    }
+
     /// 전체 컬럼 폭 합(컬럼 없으면 위젯 폭).
     fn total_w(&self) -> i32 {
         if self.columns.is_empty() {
@@ -996,7 +1024,7 @@ impl<S: RowSource> VirtualRows<S> {
     /// 현재 높이에서 그릴 그리드 행 수(부분 행 포함).
     fn visible_rows(&self) -> usize {
         let gh = self.grid_h();
-        ((self.body_h() + gh - 1) / gh).max(0) as usize
+        ((self.body_h() + self.scroll_frac + gh - 1) / gh).max(0) as usize
     }
 
     /// 스크롤 상한 = 전체 그리드 행 - 완전 가시 그리드 행 수.
@@ -1006,7 +1034,12 @@ impl<S: RowSource> VirtualRows<S> {
     }
 
     fn clamp_scroll(&mut self) {
-        self.scroll_row = self.scroll_row.min(self.max_scroll());
+        let max = self.max_scroll();
+        if self.scroll_row >= max {
+            self.scroll_row = max;
+            self.scroll_frac = 0;
+        }
+        self.scroll_frac = self.scroll_frac.clamp(0, self.grid_h().max(1) - 1);
         self.clamp_scroll_x();
     }
 
@@ -1017,8 +1050,9 @@ impl<S: RowSource> VirtualRows<S> {
 
     fn scroll_to(&mut self, target: isize, inv: &mut Invalidations) {
         let clamped = target.clamp(0, self.max_scroll() as isize) as usize;
-        if clamped != self.scroll_row {
+        if clamped != self.scroll_row || self.scroll_frac != 0 {
             self.scroll_row = clamped;
+            self.scroll_frac = 0; // 행 단위 이동 = 부분 오프셋 스냅
             inv.push(self.bounds); // 전 행 이동 — 위젯 영역 전체 무효화
             self.flash_bar(Axis::V, inv); // 세로 오버레이 바 표시(09-04)
         }
@@ -1033,10 +1067,16 @@ impl<S: RowSource> VirtualRows<S> {
     fn scroll_into_view_idx(&mut self, index: usize) {
         let grow = index / self.grid_cols().max(1);
         let full = ((self.body_h() / self.grid_h()).max(1)) as usize;
-        if grow < self.scroll_row {
+        // 부분 행 오프셋(10-02)을 px로 환산해 완전 가시 여부 판정 — 가려져 있으면 행 단위로 스냅
+        let gh = self.grid_h().max(1) as i64;
+        let pos = self.scroll_row as i64 * gh + self.scroll_frac as i64;
+        let (r0, r1) = (grow as i64 * gh, (grow as i64 + 1) * gh);
+        if r0 < pos {
             self.scroll_row = grow;
-        } else if grow >= self.scroll_row + full {
-            self.scroll_row = grow + 1 - full;
+            self.scroll_frac = 0;
+        } else if r1 > pos + self.body_h() as i64 {
+            self.scroll_row = (grow + 1).saturating_sub(full);
+            self.scroll_frac = 0;
         }
         self.scroll_row = self.scroll_row.min(self.max_scroll());
     }
@@ -1145,14 +1185,14 @@ impl<S: RowSource> VirtualRows<S> {
             if gc >= self.grid_cols() {
                 return None; // 마지막 열 오른쪽 잔여 = 빈 본문
             }
-            let gr = self.scroll_row + ((y - self.body_top()) / th) as usize;
+            let gr = self.scroll_row + ((y - self.row_origin()) / th) as usize;
             let idx = gr * self.grid_cols() + gc;
             return (idx < self.src.len()).then_some(idx);
         }
         if x >= self.columns_right() {
             return None;
         }
-        let row = self.scroll_row + ((y - self.body_top()) / self.row_h) as usize;
+        let row = self.scroll_row + ((y - self.row_origin()) / self.row_h) as usize;
         (row < self.src.len()).then_some(row)
     }
 
@@ -1212,8 +1252,8 @@ impl<S: RowSource> VirtualRows<S> {
         if row < self.scroll_row {
             return None;
         }
-        let y = self.body_top() + ((row - self.scroll_row) as i32) * self.row_h;
-        (y + self.row_h <= self.bounds.bottom()).then_some(Point {
+        let y = self.row_origin() + ((row - self.scroll_row) as i32) * self.row_h;
+        (y >= self.body_top() && y + self.row_h <= self.bounds.bottom()).then_some(Point {
             x: self.bounds.x + self.pad_x,
             y: y + self.row_h / 2,
         })
@@ -1722,11 +1762,21 @@ impl<S: RowSource> Widget for VirtualRows<S> {
         let page = (self.body_h() / self.row_h).max(1) as isize;
         match *ev {
             InputEvent::Wheel { delta } => {
-                let lines = self.wheel.add(delta, WHEEL_LINES);
-                // 고속 스크롤(10-02): 노치 연타면 배수(정밀 터치패드 분수 delta는 그대로)
-                let lines = self.fast.wheel(delta, lines) as isize;
-                if lines != 0 {
-                    self.scroll_to(cur - lines, inv);
+                if delta.abs() >= crate::WHEEL_DELTA {
+                    // 마우스 노치 = 행 단위(시스템 줄 수) + 고속 스크롤 배수
+                    let lines = self.wheel.add(delta, crate::wheel_lines());
+                    let lines = self.fast.wheel(delta, lines) as isize;
+                    if lines != 0 {
+                        self.scroll_to(cur - lines, inv);
+                    }
+                } else {
+                    // 정밀 터치패드(노치 미만 delta) = **픽셀** 스크롤(10-02 사용자 — 조금 움직여도 즉시)
+                    let px = self
+                        .wheel_px
+                        .add(delta, crate::wheel_lines() * self.grid_h());
+                    if px != 0 {
+                        self.scroll_by_px(-px, inv);
+                    }
                 }
                 if self.fast.hud_visible() {
                     inv.push(self.bounds);
@@ -1734,10 +1784,11 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                 }
             }
             InputEvent::HWheel { delta } => {
-                let lines = self.hwheel.add(delta, WHEEL_LINES);
-                let lines = self.fast.wheel(delta, lines);
-                if lines != 0 {
-                    let x = self.scroll_x + lines * HSCROLL_PX;
+                // 가로 = 항상 픽셀(노치당 줄 수×16px · 트랙패드는 비례)
+                let px = self.hwheel.add(delta, crate::wheel_lines() * HSCROLL_PX);
+                let px = self.fast.wheel(delta, px);
+                if px != 0 {
+                    let x = self.scroll_x + px;
                     self.hscroll_to(x, inv); // 가로 오버레이 바 표시(09-04)
                 }
                 if self.fast.hud_visible() {
@@ -2004,9 +2055,10 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     let top = r.y.max(self.body_top());
                     let bot = r.bottom().min(self.bounds.bottom());
                     if bot > top && !self.src.is_empty() {
-                        let lo = self.scroll_row + ((top - self.body_top()) / self.row_h) as usize;
+                        let lo =
+                            self.scroll_row + ((top - self.row_origin()) / self.row_h) as usize;
                         let hi = (self.scroll_row
-                            + ((bot - 1 - self.body_top()) / self.row_h) as usize)
+                            + ((bot - 1 - self.row_origin()) / self.row_h) as usize)
                             .min(self.src.len() - 1);
                         if lo <= hi && lo < self.src.len() {
                             self.src.select_span(lo, hi);
@@ -2079,7 +2131,7 @@ impl<S: RowSource> Widget for VirtualRows<S> {
         let count = self
             .visible_rows()
             .min(self.src.len().saturating_sub(first));
-        let body_top = self.body_top();
+        let body_top = self.row_origin(); // 부분 행 오프셋(10-02 픽셀 스크롤) — 헤더가 뒤에 덮는다
 
         // ── 본문 행 ──
         for i in 0..count {
@@ -2604,13 +2656,37 @@ mod tests {
         for _ in 0..8 {
             v.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
         }
-        assert_eq!(v.scroll_row(), 5 * 3 + 3 * 6, "5회 ×1 + 3회 ×2");
+        assert_eq!(
+            v.scroll_row(),
+            3 * 3 + 3 * 6 + 2 * 9,
+            "3회 ×1 + 3회 ×2 + 2회 ×3(step 3)"
+        );
         assert!(inv.tick_requested(), "배지 = 틱 요청");
         let (mut v2, mut inv2) = list(100, 200);
         for _ in 0..15 {
-            v2.on_event(&InputEvent::Wheel { delta: -8 }, &mut inv2); // 트랙패드 = 누적만
+            v2.on_event(&InputEvent::Wheel { delta: -8 }, &mut inv2); // 트랙패드 = 픽셀
         }
-        assert_eq!(v2.scroll_row(), 3, "노치 미만 delta는 가속 없음(120 = 3행)");
+        assert_eq!(
+            v2.scroll_row(),
+            3,
+            "노치 미만 delta는 가속 없음(120 = 3행 = 60px)"
+        );
+        assert_eq!(v2.scroll_frac, 0);
+        // 반 노치(60 = 30px = 1.5행) 더 → 행 4 + 10px 부분 오프셋 · 행 위치·히트가 10px 위로
+        v2.on_event(&InputEvent::Wheel { delta: -60 }, &mut inv2);
+        assert_eq!((v2.scroll_row(), v2.scroll_frac), (4, 10));
+        assert_eq!(
+            v2.row_at(10, v2.body_top()),
+            Some(4),
+            "부분 행(10px 가려짐)도 첫 행"
+        );
+        assert_eq!(
+            v2.row_at(10, v2.body_top() + 10),
+            Some(5),
+            "20px 행: 10px 아래 = 다음 행"
+        );
+        v2.on_event(&key(Key::End), &mut inv2); // 스크롤이 필요한 키 이동 = 행 단위 스냅
+        assert_eq!(v2.scroll_frac, 0);
     }
 
     #[test]

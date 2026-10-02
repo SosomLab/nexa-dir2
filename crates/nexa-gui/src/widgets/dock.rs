@@ -33,6 +33,10 @@ pub struct InfoDock {
     focused: bool,
     /// 내용 첫 가시 라인(세로 스크롤 — 미리보기 07-26. 내용 교체 시 0).
     scroll: usize,
+    /// 부분 줄 픽셀 오프셋(0..row_h — 10-02 트랙패드 픽셀 스크롤).
+    scroll_frac: i32,
+    /// 트랙패드 픽셀 누적(세로).
+    wheel_px: WheelAccum,
     /// 우상단 "크게"(↗) 오버레이 버튼 표시(호스트가 미리보기 종류일 때 켬 — 07-26).
     popout_on: bool,
     /// ↗ 클릭 통지(1회성 — 호스트가 독립 미리보기 창을 연다).
@@ -106,6 +110,8 @@ impl InfoDock {
             goto_range: std::cell::Cell::new((0, 0)),
             focused: false,
             scroll: 0,
+            scroll_frac: 0,
+            wheel_px: WheelAccum::default(),
             popout_on: false,
             pending_popout: false,
             popout_range: std::cell::Cell::new(Rect::default()),
@@ -130,6 +136,28 @@ impl InfoDock {
         ((self.bounds.h - strip_h).max(0) / self.row_h.max(1)) as usize
     }
 
+    /// 첫 가시 줄의 y(부분 오프셋만큼 내용 상단보다 위 — 10-02 픽셀 스크롤).
+    fn line_origin(&self) -> i32 {
+        self.content_rect().y - self.scroll_frac
+    }
+
+    /// 픽셀 단위 세로 스크롤(트랙패드).
+    fn scroll_by_px(&mut self, dy: i32, inv: &mut Invalidations) -> bool {
+        let rh = self.row_h.max(1) as i64;
+        let max_px = self.max_scroll() as i64 * rh;
+        let pos = (self.scroll as i64 * rh + self.scroll_frac as i64 + dy as i64).clamp(0, max_px);
+        let (row, frac) = ((pos / rh) as usize, (pos % rh) as i32);
+        if row != self.scroll || frac != self.scroll_frac {
+            self.scroll = row;
+            self.scroll_frac = frac;
+            self.offsets.borrow_mut().clear();
+            inv.push(self.bounds);
+            self.bars.flash(Axis::V, self.content_rect(), inv);
+            return true;
+        }
+        false
+    }
+
     /// 스크롤 상한(마지막 페이지가 화면을 채우는 지점).
     fn max_scroll(&self) -> usize {
         self.lines.len().saturating_sub(self.visible_rows().max(1))
@@ -138,8 +166,9 @@ impl InfoDock {
     /// 세로 스크롤 이동(휠·드래그 자동 스크롤 — 07-26). 변경 시 오프셋 캐시 무효.
     fn scroll_to(&mut self, to: usize, inv: &mut Invalidations) -> bool {
         let to = to.min(self.max_scroll());
-        if to != self.scroll {
+        if to != self.scroll || self.scroll_frac != 0 {
             self.scroll = to;
+            self.scroll_frac = 0; // 줄 단위 이동 = 부분 오프셋 스냅
             self.offsets.borrow_mut().clear();
             inv.push(self.bounds);
             self.bars.flash(Axis::V, self.content_rect(), inv);
@@ -227,7 +256,7 @@ impl InfoDock {
         if !self.bounds.contains(Point { x, y }) || y < top {
             return None;
         }
-        let i = self.scroll + ((y - top) / self.row_h) as usize;
+        let i = self.scroll + ((y - self.line_origin()) / self.row_h) as usize;
         (i < self.lines.len()).then_some(i)
     }
 
@@ -481,6 +510,9 @@ impl InfoDock {
         if self.content_key == key && !self.lines.is_empty() {
             self.lines = lines;
             self.scroll = self.scroll.min(self.max_scroll());
+            if self.scroll >= self.max_scroll() {
+                self.scroll_frac = 0;
+            }
             self.offsets.borrow_mut().clear();
             if let Some(((al, _), (cl, _))) = self.sel {
                 if al.max(cl) >= self.lines.len() {
@@ -497,6 +529,7 @@ impl InfoDock {
             self.sel = None;
             self.sel_drag = false;
             self.scroll = 0;
+            self.scroll_frac = 0;
             self.scroll_x = 0;
             self.content_w.set(0);
             self.offsets.borrow_mut().clear();
@@ -514,6 +547,69 @@ impl InfoDock {
             self.image = image;
             inv.push(self.bounds);
         }
+    }
+    /// 종류 스트립(정보|미리보기|터미널 + →) 그리기 — 활성 강조·클릭 범위 캐시. paint가 부르고,
+    /// 부분 줄 픽셀 스크롤(10-02)로 내용이 스트립 위로 번진 뒤 다시 덮을 때도 쓴다.
+    fn draw_strip(&self, ctx: &mut dyn DrawCtx, theme: &Theme, strip: Rect) {
+        let ty = |cell: Rect| cell.y + (cell.h - (cell.h * 4) / 5) / 2;
+        ctx.fill_rect(strip, theme.header_bg);
+        let mut ranges = Vec::with_capacity(self.kinds.len());
+        let mut x = strip.x + self.pad_x;
+        let last = self.kinds.len().saturating_sub(1);
+        self.goto_range.set((0, 0));
+        for (i, label) in self.kinds.iter().enumerate() {
+            let w = ctx.text_width(label) + self.pad_x * 2;
+            let cell = Rect::new(x, strip.y, w.min((strip.right() - x).max(0)), strip.h);
+            let active = i == self.active;
+            let (fg, bg) = if active && self.focused {
+                (theme.text, theme.sel_bg)
+            } else if active {
+                // 비활성 패널 — 활성 종류는 무채색으로만 표시(활성 패널과 구분)
+                (theme.text, theme.sel_bg_inactive)
+            } else {
+                (theme.text_dim, theme.header_bg)
+            };
+            if cell.w > 0 {
+                ctx.text_opaque(cell.x + self.pad_x, ty(cell), cell, label, fg, bg);
+            }
+            ranges.push((cell.x, cell.x + w));
+            x += w;
+            if i == last && self.kinds.len() > 1 {
+                // 터미널 옆 "폴더로 이동"(→) — 한 몸 버튼(QA 07-14, 원본 '터미널에서 열기').
+                // 활성=accent 배경(단, 패널 비활성이면 무채색 — 활성 영역과 구분), 비활성=무색
+                let gw = ctx.text_width("→") + self.pad_x * 2;
+                let gcell = Rect::new(x, strip.y, gw.min((strip.right() - x).max(0)), strip.h);
+                let (gfg, gbg) = if active && self.focused {
+                    (theme.text, theme.accent)
+                } else if active {
+                    (theme.text, theme.sel_bg_inactive)
+                } else {
+                    (theme.text_dim, theme.header_bg)
+                };
+                if gcell.w > 0 {
+                    ctx.text_opaque(gcell.x + self.pad_x, ty(gcell), gcell, "→", gfg, gbg);
+                }
+                self.goto_range.set((gcell.x, gcell.x + gw));
+                x += gw;
+            }
+            x += self.pad_x;
+        }
+        *self.ranges.borrow_mut() = ranges;
+    }
+
+    /// 호스트용 스트립 재도장(10-02): 터미널처럼 호스트가 내용 영역을 직접 그린 뒤 부분 행이 스트립
+    /// 위로 번졌을 때 덮는다(DW 글리프는 GDI 클립을 무시).
+    pub fn paint_strip(&self, ctx: &mut dyn DrawCtx, theme: &Theme) {
+        let b = self.bounds;
+        if b.h <= 1 {
+            return;
+        }
+        ctx.select_font(crate::FontSlot::Base, false, false);
+        self.draw_strip(
+            ctx,
+            theme,
+            Rect::new(b.x, b.y + 1, b.w, self.row_h.min(b.h - 1)),
+        );
     }
 }
 
@@ -661,11 +757,20 @@ impl Widget for InfoDock {
                 // 내용 세로 스크롤(07-26 미리보기 → 10-02 정보 포함 — 3줄/노치·터미널 규약
                 // 동일). 호스트가 내용 영역 hover일 때만 라우팅한다.
                 if self.image.is_none() && !self.lines.is_empty() {
-                    let step = self.wheel.add(delta, 3);
-                    let step = self.fast.wheel(delta, step); // 고속 스크롤(10-02)
-                    if step != 0 {
-                        let to = (self.scroll as i32 - step).max(0) as usize;
-                        let _ = self.scroll_to(to, inv);
+                    if delta.abs() >= crate::WHEEL_DELTA {
+                        // 마우스 노치 = 줄 단위(시스템 줄 수) + 고속 스크롤 배수
+                        let step = self.wheel.add(delta, crate::wheel_lines());
+                        let step = self.fast.wheel(delta, step);
+                        if step != 0 {
+                            let to = (self.scroll as i32 - step).max(0) as usize;
+                            let _ = self.scroll_to(to, inv);
+                        }
+                    } else {
+                        // 정밀 터치패드 = 픽셀(10-02)
+                        let px = self.wheel_px.add(delta, crate::wheel_lines() * self.row_h);
+                        if px != 0 {
+                            let _ = self.scroll_by_px(-px, inv);
+                        }
                     }
                     if self.fast.hud_visible() {
                         inv.push(self.content_rect());
@@ -676,7 +781,7 @@ impl Widget for InfoDock {
             InputEvent::HWheel { delta } => {
                 // 가로 스크롤(10-02 — Shift+휠·틸트 휠. 양수 = 오른쪽, 노치당 행 높이×3px)
                 if self.image.is_none() && !self.lines.is_empty() {
-                    let step = self.hwheel.add(delta, self.row_h * 3);
+                    let step = self.hwheel.add(delta, self.row_h * crate::wheel_lines());
                     let step = self.fast.wheel(delta, step);
                     if step != 0 {
                         let _ = self.hscroll_to(self.scroll_x + step, inv);
@@ -722,49 +827,7 @@ impl Widget for InfoDock {
         // 종류 스트립(정보|미리보기 — 활성 강조·클릭 전환. 범위 캐시)
         let strip = Rect::new(b.x, b.y + 1, b.w, self.row_h.min(b.h - 1));
         let ty = |cell: Rect| cell.y + (cell.h - (cell.h * 4) / 5) / 2;
-        ctx.fill_rect(strip, theme.header_bg);
-        let mut ranges = Vec::with_capacity(self.kinds.len());
-        let mut x = strip.x + self.pad_x;
-        let last = self.kinds.len().saturating_sub(1);
-        self.goto_range.set((0, 0));
-        for (i, label) in self.kinds.iter().enumerate() {
-            let w = ctx.text_width(label) + self.pad_x * 2;
-            let cell = Rect::new(x, strip.y, w.min((strip.right() - x).max(0)), strip.h);
-            let active = i == self.active;
-            let (fg, bg) = if active && self.focused {
-                (theme.text, theme.sel_bg)
-            } else if active {
-                // 비활성 패널 — 활성 종류는 무채색으로만 표시(활성 패널과 구분)
-                (theme.text, theme.sel_bg_inactive)
-            } else {
-                (theme.text_dim, theme.header_bg)
-            };
-            if cell.w > 0 {
-                ctx.text_opaque(cell.x + self.pad_x, ty(cell), cell, label, fg, bg);
-            }
-            ranges.push((cell.x, cell.x + w));
-            x += w;
-            if i == last && self.kinds.len() > 1 {
-                // 터미널 옆 "폴더로 이동"(→) — 한 몸 버튼(QA 07-14, 원본 '터미널에서 열기').
-                // 활성=accent 배경(단, 패널 비활성이면 무채색 — 활성 영역과 구분), 비활성=무색
-                let gw = ctx.text_width("→") + self.pad_x * 2;
-                let gcell = Rect::new(x, strip.y, gw.min((strip.right() - x).max(0)), strip.h);
-                let (gfg, gbg) = if active && self.focused {
-                    (theme.text, theme.accent)
-                } else if active {
-                    (theme.text, theme.sel_bg_inactive)
-                } else {
-                    (theme.text_dim, theme.header_bg)
-                };
-                if gcell.w > 0 {
-                    ctx.text_opaque(gcell.x + self.pad_x, ty(gcell), gcell, "→", gfg, gbg);
-                }
-                self.goto_range.set((gcell.x, gcell.x + gw));
-                x += gw;
-            }
-            x += self.pad_x;
-        }
-        *self.ranges.borrow_mut() = ranges;
+        self.draw_strip(ctx, theme, strip);
         // 이미지 미리보기(M4-2) — 내용 영역 전체에 비율 유지 가운데 표시
         if let Some(img) = &self.image {
             let area = Rect::new(
@@ -787,7 +850,7 @@ impl Widget for InfoDock {
         let x0 = b.x + self.pad_x - self.scroll_x;
         let max_w = (b.w - self.pad_x).max(0) + self.scroll_x;
         let mut content_w = 0;
-        let mut y = strip.bottom();
+        let mut y = strip.bottom() - self.scroll_frac; // 부분 줄 오프셋(10-02 픽셀 스크롤)
         ctx.push_clip(self.content_rect()); // 가로 스크롤 텍스트의 왼쪽 번짐 차단(10-02)
         for (i, line) in self.lines.iter().enumerate().skip(self.scroll) {
             if y >= b.bottom() {
@@ -879,6 +942,10 @@ impl Widget for InfoDock {
         }
         ctx.pop_clip();
         self.content_w.set(content_w);
+        // 부분 줄이 스트립 위로 번졌을 수 있다(DW 글리프는 GDI 클립 무시) — 스트립을 **뒤에** 다시 그림
+        if self.scroll_frac > 0 {
+            self.draw_strip(ctx, theme, strip);
+        }
         // 잔여 배경
         if y < b.bottom() {
             ctx.fill_rect(Rect::new(b.x, y, b.w, b.bottom() - y), theme.panel_bg);
@@ -1282,6 +1349,23 @@ mod tests {
             d.on_event(&InputEvent::Wheel { delta: 8 }, &mut inv);
         }
         assert_eq!(d.scroll, 2, "역방향 40 = 1줄");
+    }
+
+    #[test]
+    fn trackpad_half_line_scrolls_by_pixels_and_notch_snaps() {
+        // 10-02: 노치 미만 delta = 픽셀(60 = 1.5줄 = 30px → 줄 1 + 10px), 노치 = 줄 단위 스냅
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        d.set_lines((0..30).map(|i| format!("l{i}")).collect(), &mut inv);
+        d.on_event(&InputEvent::Wheel { delta: -60 }, &mut inv);
+        assert_eq!((d.scroll, d.scroll_frac), (1, 10));
+        assert_eq!(d.line_origin(), 121 - 10);
+        d.paint(&mut Probe, &Theme::dark());
+        assert_eq!(d.line_at(6, 121), Some(1), "10px 가려진 줄 1이 첫 줄");
+        assert_eq!(d.line_at(6, 131), Some(2));
+        d.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        assert_eq!((d.scroll, d.scroll_frac), (4, 0), "노치 = 3줄 + 스냅");
     }
 
     #[test]

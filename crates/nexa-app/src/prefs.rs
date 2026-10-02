@@ -116,6 +116,7 @@ pub struct PrefValues {
     pub fast_scroll_hud_pos: i32,
     pub fast_scroll_hud_hold_ms: i32,
     pub fast_scroll_hud_fade_ms: i32,
+    pub fast_scroll_grid_extra: bool,
     /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 07-21).
     pub transfer_close_ms: i32,
     /// DnD 호버 대기(ms, 200~10000 — 드래그 중 탭 전환/폴더 펼침까지 대기, X-32).
@@ -270,6 +271,7 @@ const F_FS_HUD: u32 = 50;
 const F_FS_HUD_POS: u32 = 51;
 const F_FS_HUD_HOLD: u32 = 52;
 const F_FS_HUD_FADE: u32 = 53;
+const F_FS_GRID_EXTRA: u32 = 54;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -659,6 +661,13 @@ fn registry() -> Vec<Entry> {
             desc_key: "pref.fsEnabled.desc",
             kind: Kind::CheckBox,
             field: F_FS_ENABLED,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsGridExtra",
+            desc_key: "pref.fsGridExtra.desc",
+            kind: Kind::CheckBox,
+            field: F_FS_GRID_EXTRA,
         },
         Entry {
             cat: "scroll",
@@ -1076,6 +1085,28 @@ fn tbo_label(block: &str, item: Option<&str>) -> String {
 impl PrefState {
     /// VS Code식 즉시 적용(X-8) — 정규화한 현재 값을 소유자에 동기 통지(포인터는 통지 동안만
     /// 유효 — 같은 스레드 SendMessage라 수신 측이 복사를 마친 뒤 반환된다).
+    /// 고속 스크롤 사용 여부와 하위 설정 연동(10-02 사용자 — nexa-sql DEPENDS 규약): 사용 끔 =
+    /// 나머지 8항목 비활성 · 배지 끔 = 배지 위치/유지/페이드 비활성. 컨트롤 id = ID_FIELD_BASE+field.
+    unsafe fn sync_fast_scroll_enabled(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::GetDlgItem;
+        let on = self.values.fast_scroll;
+        let hud = on && self.values.fast_scroll_hud;
+        for (field, en) in [
+            (F_FS_STEP, on),
+            (F_FS_MAX, on),
+            (F_FS_WINDOW, on),
+            (F_FS_HUD, on),
+            (F_FS_GRID_EXTRA, on),
+            (F_FS_HUD_POS, hud),
+            (F_FS_HUD_HOLD, hud),
+            (F_FS_HUD_FADE, hud),
+        ] {
+            if let Ok(h) = GetDlgItem(Some(self.pane), (ID_FIELD_BASE + field) as i32) {
+                let _ = EnableWindow(h, en);
+            }
+        }
+    }
+
     unsafe fn apply_now(&self) {
         let mut v = self.values.clone();
         sanitize(&mut v);
@@ -1457,6 +1488,7 @@ impl PrefState {
                             F_TA_BS => self.values.typeahead_backspace,
                             F_FS_ENABLED => self.values.fast_scroll,
                             F_FS_HUD => self.values.fast_scroll_hud,
+                            F_FS_GRID_EXTRA => self.values.fast_scroll_grid_extra,
                             F_FOLDER_BOLD => self.values.list_folder_bold,
                             F_HDR_BOLD => self.values.header_bold,
                             F_HDR_ITALIC => self.values.header_italic,
@@ -1817,6 +1849,7 @@ impl PrefState {
         if self.scroll_y > max {
             self.scroll_to(max);
         }
+        self.sync_fast_scroll_enabled(); // 고속 스크롤 사용 여부 연동(10-02)
         let _ = InvalidateRect(Some(self.pane), None, true);
         // 트리 전체 재도장(QA 09-04): 오너드로가 선택 판정을 st.category로 하는데 LISTBOX는
         // LBN_SELCHANGE **전에** 옛/새 행을 ODA_SELECT로 그려 옛 행 하이라이트가 남는다.
@@ -1883,6 +1916,7 @@ impl PrefState {
             F_FS_MAX => v.fast_scroll_max != d.fast_scroll_max,
             F_FS_WINDOW => v.fast_scroll_window_ms != d.fast_scroll_window_ms,
             F_FS_HUD => v.fast_scroll_hud != d.fast_scroll_hud,
+            F_FS_GRID_EXTRA => v.fast_scroll_grid_extra != d.fast_scroll_grid_extra,
             F_FS_HUD_POS => v.fast_scroll_hud_pos != d.fast_scroll_hud_pos,
             F_FS_HUD_HOLD => v.fast_scroll_hud_hold_ms != d.fast_scroll_hud_hold_ms,
             F_FS_HUD_FADE => v.fast_scroll_hud_fade_ms != d.fast_scroll_hud_fade_ms,
@@ -1979,9 +2013,9 @@ impl PrefState {
                     self.values.typeahead_reset_ms = get_text(hw).trim().parse().unwrap_or(1000)
                 }
                 F_FS_STEP => {
-                    self.values.fast_scroll_step = get_text(hw).trim().parse().unwrap_or(5)
+                    self.values.fast_scroll_step = get_text(hw).trim().parse().unwrap_or(3)
                 }
-                F_FS_MAX => self.values.fast_scroll_max = get_text(hw).trim().parse().unwrap_or(8),
+                F_FS_MAX => self.values.fast_scroll_max = get_text(hw).trim().parse().unwrap_or(16),
                 F_FS_WINDOW => {
                     self.values.fast_scroll_window_ms = get_text(hw).trim().parse().unwrap_or(160)
                 }
@@ -2015,7 +2049,8 @@ impl PrefState {
                 }
                 F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_HIDE_EMPTY_GLYPH
                 | F_TERM_WRAP | F_CASE_SORT | F_TA_SPECIAL | F_TA_SPACE | F_TA_BS
-                | F_FOLDER_BOLD | F_HDR_BOLD | F_HDR_ITALIC | F_FS_ENABLED | F_FS_HUD => {
+                | F_FOLDER_BOLD | F_HDR_BOLD | F_HDR_ITALIC | F_FS_ENABLED | F_FS_HUD
+                | F_FS_GRID_EXTRA => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
@@ -2030,6 +2065,7 @@ impl PrefState {
                         F_TA_BS => self.values.typeahead_backspace = on,
                         F_FS_ENABLED => self.values.fast_scroll = on,
                         F_FS_HUD => self.values.fast_scroll_hud = on,
+                        F_FS_GRID_EXTRA => self.values.fast_scroll_grid_extra = on,
                         F_FOLDER_BOLD => self.values.list_folder_bold = on,
                         F_HDR_BOLD => self.values.header_bold = on,
                         F_HDR_ITALIC => self.values.header_italic = on,
@@ -2196,10 +2232,11 @@ unsafe fn paint_pos_tile(hdc: HDC, cell: RECT, idx: i32, on: bool) {
 /// 드롭다운 머리 오너드로(10-02): 콤보 상자 룩(흰 바탕 + 테두리 · 포커스/눌림 = accent)
 /// + 선택 위치 타일 + ▾.
 unsafe fn draw_pos_head(st: &PrefState, dis: &DRAWITEMSTRUCT) {
-    use windows::Win32::UI::Controls::{ODS_FOCUS, ODS_SELECTED};
+    use windows::Win32::UI::Controls::{ODS_DISABLED, ODS_FOCUS, ODS_SELECTED};
     let r = dis.rcItem;
     FillRect(dis.hDC, &r, GetSysColorBrush(COLOR_WINDOW));
-    let hot = dis.itemState.0 & (ODS_FOCUS.0 | ODS_SELECTED.0) != 0;
+    let disabled = dis.itemState.0 & ODS_DISABLED.0 != 0; // 사용 여부 연동(10-02) = 회색 타일
+    let hot = !disabled && dis.itemState.0 & (ODS_FOCUS.0 | ODS_SELECTED.0) != 0;
     frame(dis.hDC, r, 1, if hot { POS_ACCENT } else { POS_BORDER });
     let h = r.bottom - r.top;
     let th = ((h - 8) * 4 / 5).max(6);
@@ -2211,7 +2248,7 @@ unsafe fn draw_pos_head(st: &PrefState, dis: &DRAWITEMSTRUCT) {
         bottom: r.top + (h - th) / 2 + th,
     };
     let field = dis.CtlID.wrapping_sub(ID_FIELD_BASE);
-    paint_pos_tile(dis.hDC, cell, pos_value(st, field), true);
+    paint_pos_tile(dis.hDC, cell, pos_value(st, field), !disabled);
     // ▾ — 4줄 삼각형(폭 7→1)
     let cx = r.right - 10;
     let cy = r.top + h / 2 - 2;
@@ -2490,6 +2527,9 @@ unsafe extern "system" fn prefs_proc(
                 i if i >= ID_FIELD_BASE && (notify == 0 || notify == 0x0200 || notify == 4) => {
                     (*st).harvest();
                     (*st).apply_now();
+                    if matches!(i - ID_FIELD_BASE, F_FS_ENABLED | F_FS_HUD) {
+                        (*st).sync_fast_scroll_enabled(); // 사용/배지 체크 → 하위 항목 활성 연동(10-02)
+                    }
                 }
                 _ => {}
             }
@@ -2541,7 +2581,11 @@ unsafe extern "system" fn prefs_proc(
                 return LRESULT((*st).accent_brush.0 as isize);
             }
             SetBkMode(hdc, TRANSPARENT);
-            if id == ID_DESC {
+            // 비활성 컨트롤(고속 스크롤 사용 여부 연동 — 10-02): 비활성 EDIT은 WM_CTLCOLORSTATIC으로
+            // 오므로 회색 글자로(기본은 창 배경 위 검정이라 비활성이 안 보였다)
+            let disabled =
+                !windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(child).as_bool();
+            if id == ID_DESC || disabled {
                 windows::Win32::Graphics::Gdi::SetTextColor(hdc, COLORREF(0x0078_6E68));
             }
             LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
