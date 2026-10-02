@@ -74,18 +74,45 @@ fn same_path_set(a: &[PathBuf], b: &[PathBuf]) -> bool {
     x == y
 }
 
+/// 지연 렌더링 소스 판정(Drop) — DragEnter 광고(`cached`)가 **비어 있지 않고** Drop 재조회
+/// (`fresh`)와 다를 때만. 광고가 비었던 경우(GetData 일시 실패·가상 소스 겸용)는 "목록을
+/// 다시 쓴 것"이 아니라 "처음 받은 것"이라 지연 렌더링으로 보지 않는다(G8-03 — 그 조합에서
+/// 실경로를 스테이징으로 rename하면 사용자 파일이 %TEMP%를 거쳐 이동된다).
+fn is_delayed(cached: &[PathBuf], fresh: &[PathBuf]) -> bool {
+    !cached.is_empty() && !same_path_set(cached, fresh)
+}
+
+/// `p`가 `base` 아래인가 — 구성요소 단위, ASCII 대소문자 무시(Windows 경로는 대소문자 비구분:
+/// `GetTempPath`와 소스가 돌려준 경로의 표기가 다를 수 있다 — 짧은 이름 8.3 차이는 비대상).
+fn under_dir(p: &std::path::Path, base: &std::path::Path) -> bool {
+    let mut pc = p.components();
+    for b in base.components() {
+        let Some(c) = pc.next() else {
+            return false;
+        };
+        if !c.as_os_str().eq_ignore_ascii_case(b.as_os_str()) {
+            return false;
+        }
+    }
+    true
+}
+
 /// 지연 렌더링 소스의 휘발 스테이징 확보(2차 QA 08-02): 7-Zip은 `DoDragDrop` 반환
 /// 직후 임시 폴더를 삭제해 비동기 전송과 경쟁한다(4개 중 2~3개만 생존 실측). 소스는
 /// 우리 `Drop`이 반환해야 삭제를 시작할 수 있으므로, **반환 전에 같은 볼륨 rename**으로
 /// 항목을 우리 스테이징(`%TEMP%\NexaDir\dnd-…`)에 옮겨 두면 크기 무관 즉시·무경쟁이다.
 /// rename 실패 항목(잠금·소스가 다른 볼륨의 작업 폴더를 쓰는 구성)은 원경로 유지
-/// (그 항목만 기존 경쟁으로 강등). 반환: (확보 후 경로들, 확보 항목의 (스테이징, 원경로) 목록 —
+/// (그 항목만 기존 경쟁으로 강등). **임시 폴더(`%TEMP%`) 밖 항목은 확보하지 않는다**(G8-03 —
+/// 7-Zip `%TEMP%\7zXXXX`·압축 폴더 `%TEMP%\Temp1_*`는 통과, 실 폴더의 사용자 파일은 어떤
+/// 판정 오류에서도 rename하지 않는 안전 방향. TEMP 밖 작업 폴더로 설정한 압축 관리자는 종전
+/// 경쟁으로 강등). 반환: (확보 후 경로들, 확보 항목의 (스테이징, 원경로) 목록 —
 /// 비어 있지 않으면 확보분은 우리 소유 사본이라 호출자가 전송을 Move로 강제해 스테이징을 자연 소거.
 /// 드롭이 거부되면 [`restore_volatile`]로 원위치).
 fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<(PathBuf, PathBuf)>) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let base = std::env::temp_dir().join("NexaDir").join(format!(
+    let tmp = std::env::temp_dir();
+    let base = tmp.join("NexaDir").join(format!(
         "dnd-{}-{}",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
@@ -93,6 +120,10 @@ fn steal_volatile(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<(PathBuf, PathBuf)>
     let mut stolen: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut out = Vec::with_capacity(paths.len());
     for (i, p) in paths.into_iter().enumerate() {
+        if !under_dir(&p, &tmp) {
+            out.push(p); // 임시 폴더 밖 = 소스의 휘발 사본이 아님 — 확보 금지(원경로 유지)
+            continue;
+        }
         let Some(name) = p.file_name() else {
             out.push(p); // 루트 등 이름 없는 경로 — 확보 불가, 원경로 유지
             continue;
@@ -410,19 +441,25 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        unsafe { (self.hooks.leave)(self.hwnd) }; // 드롭 = 드래그 종료 — 추적 해제(X-32)
+        // 드롭 = 드래그 종료 — 추적 해제(X-32)
+        unsafe { (self.hooks.leave)(self.hwnd) };
         // **지연 렌더링 소스 대응**(7-Zip 등 압축 관리자 — 사용자 QA 08-02) 2단:
         // ① 드롭 확정 후 GetData(CF_HDROP) **재조회** — 이때 비로소 실제 추출이 일어나
         //    최종 경로가 온다(탐색기 동일 규약 — 추출 진행 UI는 소스 몫, 동기 블록 허용).
         //    재조회 실패 시엔 DragEnter 캐시 유지(즉시 렌더링 소스는 결과 동일).
         // ② 재조회가 DragEnter 광고와 **다르면** = 드롭 시점에 목록을 다시 쓰는 소스 →
         //    소스 임시 폴더가 DoDragDrop 반환 직후 삭제되므로 아래에서 스테이징 확보.
+        //    (광고가 비었던 경우는 지연이 아니다 — `is_delayed`. G8-03)
         let mut delayed = false;
         if let Some(data) = pdataobj.as_ref() {
             let fresh = unsafe { hdrop_paths(data) };
             if !fresh.is_empty() {
-                delayed = !same_path_set(self.paths.borrow().as_slice(), &fresh);
+                delayed = is_delayed(self.paths.borrow().as_slice(), &fresh);
                 *self.paths.borrow_mut() = fresh;
+                // 실경로가 왔으면 가상 소스가 아니다(G8-03 — DragEnter 판정은 낡은 값일 수
+                // 있다: Enter 땐 HDROP 실패·Drop 땐 성공인 소스). 아래 resolve가 자기/하위
+                // 검사·볼륨·수정키 판정을 건너뛰지 않도록 재판정.
+                *self.virtual_src.borrow_mut() = false;
             }
         }
         let (dest, op, fx) = unsafe { self.resolve(keys, pt) };
@@ -502,6 +539,61 @@ mod tests {
         assert!(!same_path_set(&a, &a[..1]), "개수 상이");
     }
 
+    /// 지연 렌더링 판정(G8-03) — 광고가 비었으면 지연이 아니다(처음 받은 목록) · 다른 집합만 지연.
+    #[test]
+    fn is_delayed_requires_nonempty_cache_and_different_set() {
+        let a = vec![PathBuf::from("C:\\a"), PathBuf::from("C:\\b")];
+        let c = vec![PathBuf::from("C:\\c")];
+        assert!(
+            !is_delayed(&[], &a),
+            "빈 광고 + 실경로 = 지연 아님(확보 금지)"
+        );
+        assert!(is_delayed(&a, &c), "다른 집합 = 지연 렌더링");
+        assert!(!is_delayed(&a, &a), "같은 집합 = 즉시 렌더링");
+    }
+
+    /// 임시 폴더 접두 판정 — 구성요소 단위·대소문자 무시, 접두 문자열 일치만으로는 불가.
+    #[test]
+    fn under_dir_is_componentwise_and_case_insensitive() {
+        let tmp = std::path::Path::new("C:\\Users\\u\\AppData\\Local\\Temp");
+        assert!(under_dir(
+            std::path::Path::new("C:\\Users\\u\\AppData\\Local\\Temp\\7zO1\\a.txt"),
+            tmp
+        ));
+        assert!(under_dir(
+            std::path::Path::new("c:\\users\\U\\appdata\\local\\temp\\Temp1_x.zip\\b"),
+            tmp
+        ));
+        assert!(!under_dir(std::path::Path::new("D:\\Projects\\a.txt"), tmp));
+        assert!(
+            !under_dir(
+                std::path::Path::new("C:\\Users\\u\\AppData\\Local\\Temporary\\a"),
+                tmp
+            ),
+            "문자열 접두(`Temp`→`Temporary`)는 구성요소 불일치"
+        );
+        assert!(under_dir(tmp, tmp), "자기 자신");
+    }
+
+    /// 실 폴더(임시 폴더 밖) 항목은 확보하지 않는다(G8-03) — stolen 비어 있고 원위치 유지.
+    #[test]
+    fn steal_volatile_skips_paths_outside_temp_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        if under_dir(&cwd, &std::env::temp_dir()) {
+            return; // 작업 디렉터리가 TEMP 안이면 판별 불가 — 환경 의존 생략
+        }
+        let src = cwd.join(format!(".nexa-dnd-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&src);
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("real.txt"), b"r").unwrap();
+
+        let (out, stolen) = steal_volatile(vec![src.join("real.txt")]);
+        assert!(stolen.is_empty(), "임시 폴더 밖 = 확보 0");
+        assert_eq!(out, vec![src.join("real.txt")], "원경로 그대로");
+        assert!(src.join("real.txt").is_file(), "원위치 유지(rename 안 함)");
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
     /// 휘발 스테이징 확보 — 파일·폴더가 우리 스테이징으로 rename되고 원위치에서 사라진다.
     /// (7-Zip 임시 폴더 삭제와의 경쟁 차단 경로 그대로 — 같은 볼륨 %TEMP% 안 왕복)
     #[test]
@@ -515,8 +607,14 @@ mod tests {
         let (out, stolen) = steal_volatile(vec![src.join("a.txt"), src.join("folder")]);
         assert_eq!(stolen.len(), 2, "2개 확보(스테이징, 원경로)");
         assert_eq!(out.len(), 2);
-        assert!(out[0].ends_with("a.txt") && out[0] != src.join("a.txt"), "스테이징 경로로 교체");
-        assert!(out[0].is_file() && !src.join("a.txt").exists(), "원위치에서 이동됨");
+        assert!(
+            out[0].ends_with("a.txt") && out[0] != src.join("a.txt"),
+            "스테이징 경로로 교체"
+        );
+        assert!(
+            out[0].is_file() && !src.join("a.txt").exists(),
+            "원위치에서 이동됨"
+        );
         assert!(
             out[1].join("in.txt").is_file(),
             "폴더는 내용째 rename(하위 파일 보존)"
@@ -524,7 +622,10 @@ mod tests {
 
         // 드롭 거부 시 원위치 복귀(점검 1차 #2) — 파일·폴더 모두 원경로로, 스테이징 폴더 정리
         restore_volatile(&stolen);
-        assert!(src.join("a.txt").is_file() && src.join("folder").join("in.txt").is_file(), "원위치 복귀");
+        assert!(
+            src.join("a.txt").is_file() && src.join("folder").join("in.txt").is_file(),
+            "원위치 복귀"
+        );
         assert!(!out[0].exists() && !out[1].exists(), "스테이징 비움");
         let _ = std::fs::remove_dir_all(&src);
     }
