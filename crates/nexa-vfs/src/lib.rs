@@ -30,6 +30,35 @@ pub struct Entry {
     pub target: Option<String>,
 }
 
+/// `FILE_ATTRIBUTE_DIRECTORY` — 열거 속성 비트의 폴더 표식.
+pub const ATTR_DIRECTORY: u32 = 0x10;
+/// `FILE_ATTRIBUTE_REPARSE_POINT` — 심볼릭 링크·정션·마운트 포인트 등 **링크 표식**.
+/// 종류([`FileKind`])와 별개 비트 — 폴더 링크는 `Dir` + 이 비트, 파일 링크는 `Symlink` + 이 비트.
+pub const ATTR_REPARSE_POINT: u32 = 0x400;
+
+impl Entry {
+    /// 링크형 항목(심볼릭 링크·정션)인가 — [`ATTR_REPARSE_POINT`] 단독 판정.
+    /// 종류와 독립: 폴더 정션은 `kind == Dir && is_link()`. 비Windows·메타데이터 실패 시 `false`.
+    pub fn is_link(&self) -> bool {
+        self.attrs & ATTR_REPARSE_POINT != 0
+    }
+}
+
+/// 열거 항목의 종류 판정(순수 — A31). **폴더 우선**: `is_dir` 또는 속성에
+/// [`ATTR_DIRECTORY`]가 있으면 `Dir`(폴더 심볼릭 링크·정션은 Windows `FileType`이
+/// `is_dir()=false`·`is_symlink()=true`라 종전엔 `Symlink`로 떨어져 진입·펼침이 막혔다).
+/// 그다음 `is_symlink`면 `Symlink`(파일 링크·대상 소실로 메타데이터가 없는 링크), 나머지 `File`.
+/// 링크 표식은 종류에 섞지 않고 [`Entry::is_link`](속성 0x400)로 따로 든다.
+pub fn classify_kind(is_dir: bool, is_symlink: bool, attrs: u32) -> FileKind {
+    if is_dir || attrs & ATTR_DIRECTORY != 0 {
+        FileKind::Dir
+    } else if is_symlink {
+        FileKind::Symlink
+    } else {
+        FileKind::File
+    }
+}
+
 /// 열거 메타데이터에서 Windows 파일 속성 비트를 꺼낸다(비Windows=0).
 #[cfg(windows)]
 fn file_attrs(m: &fs::Metadata) -> u32 {
@@ -53,17 +82,12 @@ pub fn read_dir_entries(
     let iter = fs::read_dir(path)?.map(|res| {
         let dirent = res?;
         let file_type = dirent.file_type()?;
-        let kind = if file_type.is_symlink() {
-            FileKind::Symlink
-        } else if file_type.is_dir() {
-            FileKind::Dir
-        } else {
-            FileKind::File
-        };
+        // 메타데이터(링크 자체 — 대상 추적 없음)를 먼저 꺼내 속성 비트로 폴더 링크를 판별한다.
         let (size, modified, attrs) = match dirent.metadata() {
             Ok(m) => (m.len(), m.modified().ok(), file_attrs(&m)),
             Err(_) => (0, None, 0),
         };
+        let kind = classify_kind(file_type.is_dir(), file_type.is_symlink(), attrs);
         Ok(Entry {
             name: dirent.file_name().to_string_lossy().into_owned(),
             kind,
@@ -344,18 +368,33 @@ mod tests {
         let _g = roots_guard();
         set_extra_roots(vec![("OneDrive – a@b.com".into(), cloud_root(0))]);
         assert_eq!(cloud_label(0).as_deref(), Some("OneDrive – a@b.com"));
-        assert_eq!(cloud_display("::CLOUD:0::").as_deref(), Some("OneDrive – a@b.com"));
+        assert_eq!(
+            cloud_display("::CLOUD:0::").as_deref(),
+            Some("OneDrive – a@b.com")
+        );
         assert_eq!(
             cloud_display("::CLOUD:0::/Docs/a.txt").as_deref(),
             Some("OneDrive – a@b.com\\Docs\\a.txt")
         );
-        assert!(cloud_display("C:\\x").is_none(), "일반 경로는 원래 표기 유지");
+        assert!(
+            cloud_display("C:\\x").is_none(),
+            "일반 경로는 원래 표기 유지"
+        );
         // 탭 제목 = 마지막 세그먼트, 루트는 연결 라벨
         assert_eq!(cloud_leaf("::CLOUD:0::/Docs").as_deref(), Some("Docs"));
-        assert_eq!(cloud_leaf("::CLOUD:0::").as_deref(), Some("OneDrive – a@b.com"));
+        assert_eq!(
+            cloud_leaf("::CLOUD:0::").as_deref(),
+            Some("OneDrive – a@b.com")
+        );
         // 상위 이동: 하위 → 부모, 루트 → 내 PC
-        assert_eq!(cloud_parent("::CLOUD:0::/Docs/x").as_deref(), Some("::CLOUD:0::/Docs"));
-        assert_eq!(cloud_parent("::CLOUD:0::/Docs").as_deref(), Some("::CLOUD:0::"));
+        assert_eq!(
+            cloud_parent("::CLOUD:0::/Docs/x").as_deref(),
+            Some("::CLOUD:0::/Docs")
+        );
+        assert_eq!(
+            cloud_parent("::CLOUD:0::/Docs").as_deref(),
+            Some("::CLOUD:0::")
+        );
         assert_eq!(cloud_parent("::CLOUD:0::").as_deref(), Some(MY_PC));
         assert!(cloud_parent("D:\\a").is_none());
         // 미등록 연결도 패닉 없이 폴백 라벨
@@ -369,7 +408,10 @@ mod tests {
         let _g = roots_guard();
         set_extra_roots(vec![
             // 동기화 폴더 링크(실경로)가 섞여 있어도 다른 연결이 죽지 않아야 한다
-            ("OneDrive – 회사".into(), "C:\\Users\\me\\OneDrive - Corp".into()),
+            (
+                "OneDrive – 회사".into(),
+                "C:\\Users\\me\\OneDrive - Corp".into(),
+            ),
             ("OneDrive – a@b.com".into(), cloud_root(0)),
             ("Google Drive – a@b.com".into(), cloud_root(1)),
         ]);
@@ -385,10 +427,16 @@ mod tests {
             cloud_from_display(r"OneDrive – a@b.com\Docs\Sub").as_deref(),
             Some("::CLOUD:0::/Docs/Sub")
         );
-        assert!(cloud_from_display(r"C:\Users").is_none(), "일반 경로는 통과");
+        assert!(
+            cloud_from_display(r"C:\Users").is_none(),
+            "일반 경로는 통과"
+        );
         // display → from_display 왕복
         let disp = cloud_display("::CLOUD:1::/Benthic").unwrap();
-        assert_eq!(cloud_from_display(&disp).as_deref(), Some("::CLOUD:1::/Benthic"));
+        assert_eq!(
+            cloud_from_display(&disp).as_deref(),
+            Some("::CLOUD:1::/Benthic")
+        );
         set_extra_roots(Vec::new());
     }
 
@@ -403,7 +451,10 @@ mod tests {
     #[test]
     fn extra_roots_roundtrip() {
         let _g = roots_guard();
-        set_extra_roots(vec![("OneDrive – Test".into(), "C:\\Users\\t\\OneDrive".into())]);
+        set_extra_roots(vec![(
+            "OneDrive – Test".into(),
+            "C:\\Users\\t\\OneDrive".into(),
+        )]);
         let e = extra_root_entries();
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].name, "OneDrive – Test");
@@ -437,6 +488,101 @@ mod tests {
         assert_eq!(file.size, 5);
         let sub = entries.iter().find(|e| e.name == "sub").unwrap();
         assert_eq!(sub.kind, FileKind::Dir);
+    }
+
+    /// A31: 종류 판정 표 — 폴더 우선, 링크 표식은 속성 비트로 분리.
+    #[test]
+    fn classify_kind_dir_wins_over_link() {
+        // (is_dir, is_symlink, attrs) → kind
+        let table: [(bool, bool, u32, FileKind); 7] = [
+            (true, false, ATTR_DIRECTORY, FileKind::Dir),
+            (false, false, 0, FileKind::File),
+            (false, false, 0x20, FileKind::File), // ARCHIVE만 — 일반 파일
+            // 폴더 정션/폴더 심볼릭 링크: Windows FileType = symlink, 속성 = DIRECTORY|REPARSE
+            (
+                false,
+                true,
+                ATTR_DIRECTORY | ATTR_REPARSE_POINT,
+                FileKind::Dir,
+            ),
+            // 파일 심볼릭 링크: 종전과 같이 Symlink
+            (false, true, ATTR_REPARSE_POINT, FileKind::Symlink),
+            // 대상 소실·메타데이터 실패(attrs=0)인 링크: Symlink 유지
+            (false, true, 0, FileKind::Symlink),
+            // 비Windows(attrs=0) 폴더
+            (true, false, 0, FileKind::Dir),
+        ];
+        for (is_dir, is_symlink, attrs, want) in table {
+            assert_eq!(
+                classify_kind(is_dir, is_symlink, attrs),
+                want,
+                "is_dir={is_dir} is_symlink={is_symlink} attrs={attrs:#x}"
+            );
+        }
+        // 링크 표식은 종류와 독립
+        let mk = |kind, attrs| Entry {
+            name: "x".into(),
+            kind,
+            size: 0,
+            modified: None,
+            attrs,
+            target: None,
+        };
+        assert!(mk(FileKind::Dir, ATTR_DIRECTORY | ATTR_REPARSE_POINT).is_link());
+        assert!(mk(FileKind::Symlink, ATTR_REPARSE_POINT).is_link());
+        assert!(!mk(FileKind::Dir, ATTR_DIRECTORY).is_link());
+        assert!(!mk(FileKind::File, 0x20).is_link());
+    }
+
+    /// A31(cfg(windows)): 실제 폴더 정션(권한 불요 `mklink /J`) — 없으면 폴더 심볼릭 링크
+    /// (개발자 모드/권한 필요) — 둘 다 못 만들면 생략. 열거 결과 `Dir` + `is_link()`.
+    #[cfg(windows)]
+    #[test]
+    fn read_dir_entries_dir_junction_is_dir() {
+        let base = std::env::temp_dir().join(format!("nexa_vfs_junction_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("real")).unwrap();
+        fs::write(base.join("real").join("inner.txt"), b"x").unwrap();
+        let link = base.join("jlink");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(base.join("real"))
+            .output()
+            .map(|o| o.status.success() && link.exists())
+            .unwrap_or(false)
+            || std::os::windows::fs::symlink_dir(base.join("real"), &link).is_ok();
+        if !made {
+            let _ = fs::remove_dir_all(&base);
+            eprintln!("skip: 정션/폴더 링크 생성 불가(권한)");
+            return;
+        }
+
+        let entries: Vec<Entry> = read_dir_entries(&base)
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        // 링크 안쪽도 폴더로 열거되는지(진입 가능) 확인
+        let inner: Vec<Entry> = read_dir_entries(&link)
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        // 정리(링크를 먼저 지워야 대상 내용이 지워지지 않는다 — remove_dir_all은 링크를 추적하지 않음)
+        let _ = fs::remove_dir(&link);
+        let _ = fs::remove_dir_all(&base);
+
+        let j = entries
+            .iter()
+            .find(|e| e.name == "jlink")
+            .expect("정션 항목");
+        assert_eq!(j.kind, FileKind::Dir, "폴더 정션은 Dir");
+        assert!(j.is_link(), "링크 표식 = REPARSE 비트 attrs={:#x}", j.attrs);
+        let r = entries.iter().find(|e| e.name == "real").unwrap();
+        assert_eq!(r.kind, FileKind::Dir);
+        assert!(!r.is_link(), "비링크 폴더는 표식 없음");
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].name, "inner.txt");
+        assert_eq!(inner[0].kind, FileKind::File);
     }
 
     #[test]
