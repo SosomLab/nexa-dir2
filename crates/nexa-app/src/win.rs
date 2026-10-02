@@ -32,7 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW,
     SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TranslateMessage, CREATESTRUCTW,
     CS_DBLCLKS, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
-    WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND,
+    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND,
     WM_GETOBJECT, WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION, WM_INITMENUPOPUP, WM_KEYDOWN,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEHWHEEL,
     WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
@@ -4770,7 +4770,11 @@ unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
             let i = st.active_panel().active_index();
             st.active_panel().close_tab(i, &mut inv);
         }
-        CMD_EXIT => PostQuitMessage(0),
+        // 종료 = 창 닫기와 같은 경로(점검 G13 누락1 — 10-02): 종전 `PostQuitMessage`는 메시지
+        // 루프만 끝내 `DestroyWindow`→WM_DESTROY(설정·세션 저장·레거시 정리)를 건너뛰었다.
+        CMD_EXIT => {
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
         // 보기 옵션 토글 3종(08-02 재정의 — 값의 SSOT는 탭·`view_scope`가 전파 폭 결정):
         // "tab"=활성 탭 · "panel"=활성 패널 전 탭 · "global"=양 패널 전 탭.
         // 숨김/Dot은 대상 패널의 **활성 탭 즉시 재열람**(비활성 탭은 stale → 전환 수렴),
