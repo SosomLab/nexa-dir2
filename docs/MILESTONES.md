@@ -101,6 +101,7 @@
   (플러그인이 한 번도 배포된 적 없었다는 실측 → 자산 6종) · `0.18.1` = 설치형 VERSIONINFO 보강으로
   **Defender ML 오탐 해소**.
 - 🚧 **실기 QA 대기** — X-40 클라우드 실검증 · X-42~X-46 배포분([TODO](TODO.md) §7).
+- 🚧 **미배포(10-02)** — **X-59 우클릭 즉사(CET) 수정 + 도크 Info/Preview 세로·가로 스크롤 + UI 자동 QA 하네스**: `0.20.0`의 `/CETCOMPAT`가 프로세스 안 비CET 셸 확장(.NET 2.0 CLR)과 충돌해 `FAST_FAIL_SET_CONTEXT_DENIED` 즉사 → 플래그 회수(격리 재현기 `ctxmenu_probe`) · 공용 오버레이 바 `overlaybar.rs`·가로 스크롤·빈 영역 드래그 앵커·Info 휠 라우팅 · `scripts/ui-qa.ps1`(PostMessage+PrintWindow). `d064819`·`e230f36`·`c421091`. 다음 릴리스 계기.
 - ✅ **`0.21.0`**(10-01) — **X-58 텍스트 편집 컨텍스트 메뉴 + Edit 메뉴 클립보드 4종**: 경로바
   편집·이름변경 필드 우클릭 네이티브 팝업(실행 취소/잘라내기/복사/붙여넣기/삭제/전체 선택) · 도크 Info/Preview·F3 창
   복사/전체 선택 · 터미널 복사/붙여넣기/전체 선택 · Edit 메뉴 Cut/Copy/Paste/Select All(한 디스패치 `do_clip`) · 첫 우클릭 =

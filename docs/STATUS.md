@@ -1,9 +1,15 @@
 # STATUS — Nexa Dir 진행 현황
 
-> **갱신: 2026-10-01 (KST)** — **릴리스 `0.21.0`**(X-58 텍스트 편집 우클릭 메뉴·Edit 메뉴 클립보드 4종 + 우클릭 순서 보정 + 경로 바 한글 panic 수정 — 사용자 지시. winget·choco 동시 제출) · 그 앞 09-29 채널 점검(3채널 전부 `0.20.0` 동기) · **릴리스 `0.20.0`**(09-08 — 터미널 테마·복사 서식 + 정규 점검 1차 즉시 조치 6건.
+> **갱신: 2026-10-02 (KST)** — **X-59 우클릭 즉사(`/CETCOMPAT` 회수) + 도크 Info/Preview 가로·세로 스크롤 + UI 자동 QA 하네스**(`d064819`·`e230f36`·`c421091` — 미배포·설치본 수동 교체) · 그 앞 10-01 **릴리스 `0.21.0`**(X-58 텍스트 편집 우클릭 메뉴·Edit 메뉴 클립보드 4종 + 우클릭 순서 보정 + 경로 바 한글 panic 수정 — 사용자 지시. winget·choco 동시 제출) · 그 앞 09-29 채널 점검(3채널 전부 `0.20.0` 동기) · **릴리스 `0.20.0`**(09-08 — 터미널 테마·복사 서식 + 정규 점검 1차 즉시 조치 6건.
 > 상세 [journal/2026-09-08.md](journal/2026-09-08.md)) · 그 앞 09-04 = 설정 창 스크롤 재구축 + 글꼴 폴백 → `0.19.0` →
 > 터미널 테마·복사 서식 → 정규 점검 1차(상세 [journal/2026-09-04.md](journal/2026-09-04.md)):
 >
+> - **10-02 X-59(사용자 보고 2건 + "테스트 자동화" 지시 — 미배포)**: ① OneDrive pptx 우클릭 종료 = Rust panic 아님(crash.txt 無) → WER
+>   `0xC0000409` 데이터 0x30 `FAST_FAIL_SET_CONTEXT_DENIED` + 로드 모듈에 .NET 2.0 CLR 셸 확장 → `0.20.0`의 `/CETCOMPAT`와 충돌.
+>   격리 재현기 `examples/ctxmenu_probe.rs`로 CET 유/무 확정 → 플래그 회수(`d064819`, explorer.exe도 CET OFF · docs/29 CETCOMPAT 금지).
+>   ② Info 패널 = 휠이 미리보기 종류에만 라우팅·가로 스크롤 부재·빈 영역 드래그 무시 → 공용 오버레이 바(`overlaybar.rs`) 세로+가로·
+>   Shift/틸트 휠·빈 영역 앵커·Info 휠 라우팅(`e230f36`). ③ `scripts/ui-qa.ps1` PostMessage 조작+PrintWindow 캡처 하네스(`c421091`)로
+>   검증 — DW 글리프 GDI 클립 무시(왼쪽 번짐)를 캡처에서 발견·수정. 설치본 exe 교체(`.bak-0.21.0`). **Ultracode 분석 착수**.
 > - **릴리스 `0.21.0`**(10-01 — 사용자 지시 "신규 버전 릴리즈 + winget·choco 확인 후 함께"): 채널 실측 = winget 열린 NexaDir PR 0건 ·
 >   choco `0.20.0` 두 패키지 `Approved`(OData) → **두 채널 모두 제출**(choco는 `CHOCO_PUSH=true` 자동 push). 내용 = 10-01 코드 3건
 >   (X-58 `16dd5d9` · 우클릭 순서 `af95fae` · shellpath panic `8ff3a25`). 승격 `5a8e2a4`(Cargo·lock·lang 3종 `@app`).

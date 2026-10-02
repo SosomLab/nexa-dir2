@@ -6,6 +6,13 @@
 
 ---
 
+## 2026-10-02
+
+- **UI 자동 QA 하네스(사용자 지시 "테스트 자동화" — `c421091`)**: [`scripts/ui-qa.ps1`](../scripts/ui-qa.ps1) PostMessage 마우스/휠/키 + PrintWindow 캡처 + 프로세스 실측([18 §2-2](18-build-and-test.md)). 도크 검증에 첫 사용 — DW 글리프의 GDI 클립 무시(왼쪽 번짐)를 캡처로 발견·수정.
+- **도크 Info/Preview 세로+가로 스크롤 + 빈 영역 드래그 앵커(사용자 보고 — `e230f36`)**: 공용 오버레이 바 모듈 `overlaybar.rs`(rows.rs 09-04 규약) · `scroll_x`·Shift+휠/틸트 휠·바 드래그·트랙 페이지·자동 스크롤 · 휠 라우팅을 Info 종류까지(종전 미리보기만 → Info 휠이 파일 목록으로 흐르던 결함) · 마지막 라인 아래 빈 영역 드래그 = 끝 앵커 · 가로 스크롤 시 보이는 첫 문자부터 그림(DW 글리프 클립 무시 우회). 85+132 green.
+- **우클릭 즉사 = `/CETCOMPAT` 회수(사용자 보고 — `d064819`·`f369c1a`)**: crash.txt 없음 → WER `0xC0000409`/데이터 0x30 = `FAST_FAIL_SET_CONTEXT_DENIED` · 로드 모듈에 .NET 2.0 CLR 셸 확장(iSHARE/EZShellExtensions). 격리 재현기 `examples/ctxmenu_probe.rs`로 CET 유(즉사)/무(정상) 확정 → 플래그 제거(explorer.exe도 CET OFF). docs/29 S-1·B2/B3 = CETCOMPAT 금지. 설치본 수동 교체(`.bak-0.21.0`).
+- **Ultracode 착수(사용자 지시)**: 리팩토링·성능·UX·테스트 자동화를 다중 에이전트 워크플로로 — 1단계 = 전 모듈 분석(중복·불용·성능·MC/DC·견고성·테스트 갭) → 반박 검증 → 계획. 상세 [journal/2026-10-02.md](journal/2026-10-02.md).
+
 ## 2026-10-01
 
 - **릴리스 `0.21.0`(사용자 지시 — winget·choco 확인 후 함께)**: 채널 실측 = winget 열린 NexaDir PR 0 · choco `0.20.0` 두 패키지 `Approved` → **두 채널 모두 제출**. 승격 `5a8e2a4`(Cargo·lock·lang 3종) + 문서 1차(README·CLAUDE §1/§7·STATUS·MILESTONES ✅ `0.21.0`·TODO X-58 배포·위키 기능 3쪽[탐색·하단 도크·개요]) → main ff → push → CI 3잡 green → 태그 → Release run 성공(**자산 6종** · 포터블 exe **3.93MB** · 설치형 3.38MB · 해시 3중 일치 · choco push success → 두 패키지 **`Submitted`**) → winget [#444823](https://github.com/microsoft/winget-pkgs/pull/444823)·[#444824](https://github.com/microsoft/winget-pkgs/pull/444824) 제출 → 문서 2차 `f44a69c`(실측·PR 번호·21 §8 표·위키 설치/Home/개발 여정) → **위키 발행 `68b3496`**(6쪽). 상세 [journal/2026-10-01.md](journal/2026-10-01.md).
