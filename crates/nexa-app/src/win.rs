@@ -2368,7 +2368,7 @@ unsafe fn term_paint(
     caret_on: bool,
     wrap: bool,
     cols_setting: i32,
-) {
+) -> bool {
     use nexa_gui::{Color, DrawCtx, Rect};
     let cell_w = ctx.term_cell_w();
     let cell_h = ((font_px * 4 / 3 * dpi as i32) / 96).max(12); // 줄 높이 ≈ 1.33×(X-3 크기 설정)
@@ -2381,7 +2381,7 @@ unsafe fn term_paint(
     };
     let rows = ((rc.h - 2) / cell_h) as usize;
     if vis_cols < 2 || rows < 2 {
-        return;
+        return true;
     }
     if term.is_none() {
         *term_gen += 1;
@@ -2406,7 +2406,7 @@ unsafe fn term_paint(
                     theme.text_dim,
                     theme.panel_bg,
                 );
-                return;
+                return false; // 호출자가 터미널 키 포커스를 해제(X2-03 — 영구 키 삼킴 방지)
             }
         }
     }
@@ -2538,6 +2538,7 @@ unsafe fn term_paint(
             }
         }
     }
+    true
 }
 
 /// 키보드 조작 대상(M3-2, 원본 KeyboardTargets) — 선택(있으면) 아니면 캐럿 행.
@@ -4539,7 +4540,7 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     st.theme.is_dark,
                 )
                 .palette;
-                term_paint(
+                let started = term_paint(
                     &mut ctx,
                     hwnd,
                     i,
@@ -4555,6 +4556,11 @@ unsafe fn paint(hwnd: HWND, st: &mut State) {
                     st.term_wrap,
                     st.term_cols,
                 );
+                if !started && st.term_focus == Some(i) {
+                    // ConPty 기동 실패(X2-03 위험): 터미널 포커스가 남으면 키가 영구히 삼켜진다 —
+                    // 포커스를 목록으로 돌린다(강조 동기는 다음 입력의 sync_focus_visuals)
+                    st.term_focus = None;
+                }
             }
         }
         // 스플리터(패널 영역 한정·드래그 중 accent). 싱글 패널(X-20)은 우 패널이
@@ -5681,6 +5687,58 @@ unsafe fn bench(hwnd: HWND, st: &mut State) {
     }
     if let Some(s) = state_of(hwnd) {
         update_title(hwnd, s, " · 벤치 완료");
+    }
+}
+
+/// 키 입력 라우팅 판정(점검 X2-03·G3-08·X3-09 — 10-02): 터미널이 키 포커스를 가진 동안은
+/// `terms[ti]`가 아직 없어도(종료 → 재기동 대기·첫 페인트 전) **파일 목록으로 내려가지 않는다**.
+/// 종전엔 `if let Some(t) = &mut st.terms[ti]`의 거짓 분기에 return이 없어 Delete=휴지통·
+/// Enter=실행·문자=타입어헤드가 **보이지 않는 목록 캐럿**에 적용됐다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyRoute {
+    /// 살아 있는 터미널 — 키/문자를 PTY로(종료 상태면 재시작 트리거).
+    Term,
+    /// 터미널 포커스인데 PTY 미기동(재기동 대기) — 키 삼킴(목록 누수 금지).
+    TermPending,
+    /// 터미널 포커스 없음 — 목록·경로바 등 종전 경로.
+    List,
+    /// 낡은 터미널 포커스(도크 숨김/종류 전환) — 포커스 해제 후 종전 경로.
+    ClearFocus,
+}
+
+/// [`KeyRoute`] 판정 — `kind`는 도크 활성 종류(2 = 터미널), `term_started`는 `terms[ti].is_some()`.
+fn route_key_with_term(
+    term_focus: Option<usize>,
+    dock_visible: bool,
+    kind: usize,
+    term_started: bool,
+) -> KeyRoute {
+    if term_focus.is_none() {
+        return KeyRoute::List;
+    }
+    if !(dock_visible && kind == 2) {
+        return KeyRoute::ClearFocus;
+    }
+    if term_started {
+        KeyRoute::Term
+    } else {
+        KeyRoute::TermPending
+    }
+}
+
+/// 현 상태의 키 라우팅 — (터미널 패널 인덱스, 판정). 포커스 없으면 (0, List).
+fn term_key_route(st: &State) -> (usize, KeyRoute) {
+    match st.term_focus {
+        Some(ti) => (
+            ti,
+            route_key_with_term(
+                Some(ti),
+                st.panels[ti].dock_visible(),
+                st.panels[ti].dock.active_kind(),
+                st.terms[ti].is_some(),
+            ),
+        ),
+        None => (0, KeyRoute::List),
     }
 }
 
@@ -8090,9 +8148,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     return LRESULT(0);
                 }
                 // 도크 터미널 포커스(M4-3) — 비문자 키를 VT 시퀀스로 전달, 그 외는 WM_CHAR로
-                // (리스트 단축키 차단). 종료 상태에서 아무 키 = 재시작.
-                if let Some(ti) = st.term_focus {
-                    if st.panels[ti].dock_visible() && st.panels[ti].dock.active_kind() == 2 {
+                // (리스트 단축키 차단). 종료 상태에서 아무 키 = 재시작. 터미널 포커스 중엔
+                // PTY가 없어도(재기동 대기) 목록으로 내려가지 않는다(X2-03 — 10-02).
+                let (ti, route) = term_key_route(st);
+                match route {
+                    KeyRoute::Term => {
                         if let Some(t) = &mut st.terms[ti] {
                             if t.exited {
                                 st.terms[ti] = None; // 다음 페인트에서 재시작(원본 exit 재시작)
@@ -8102,15 +8162,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             if let Some(seq) = term_key_seq(vk) {
                                 t.pty.write(seq);
                             }
-                            return LRESULT(0); // 문자 입력은 WM_CHAR 경로로 수신
                         }
-                    } else {
+                        return LRESULT(0); // 문자 입력은 WM_CHAR 경로로 수신
+                    }
+                    KeyRoute::TermPending => {
+                        // 재기동 대기 — 다음 페인트가 ConPty를 시작한다. 키는 삼킨다.
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                        return LRESULT(0);
+                    }
+                    KeyRoute::ClearFocus => {
                         // 낡은 터미널 포커스(도크 숨김/종류 전환) 해제 — 강조 동기(QA 07-15)
                         st.term_focus = None;
                         let mut inv = Invalidations::default();
                         sync_focus_visuals(st, &mut inv);
                         flush_invalidations(hwnd, &mut inv);
                     }
+                    KeyRoute::List => {}
                 }
                 if st.active_panel().rows().is_renaming() {
                     // 인라인 이름변경 중 — Enter=확정·Esc=취소·편집 키 라우팅(M3-2·QA 07-13)
@@ -8664,12 +8731,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // 삭제)로 해석하므로 교차 매핑(원본 TerminalView.OnKeyDown 규약).
                     // Ctrl+C(0x03)=선택 있으면 복사·없으면 인터럽트, Ctrl+V(0x16)=붙여넣기
                     // (Windows Terminal 규약, QA 07-14). 입력 시 스크롤백 보기 해제.
-                    if let Some(ti) = st.term_focus {
-                        if st.panels[ti].dock_visible() && st.panels[ti].dock.active_kind() == 2 {
-                            let mut handled = false;
+                    // 터미널 포커스 중엔 PTY 미기동·종료 상태여도 문자를 삼킨다(X3-09·G3-08 —
+                    // 종전엔 `exit` 뒤 재시작 키의 WM_CHAR가 목록 타입어헤드로 새어 캐럿이 점프).
+                    let (ti, route) = term_key_route(st);
+                    if matches!(route, KeyRoute::Term | KeyRoute::TermPending) {
+                        {
+                            let mut handled = route == KeyRoute::TermPending;
                             if let Some(t) = &mut st.terms[ti] {
-                                if !t.exited {
-                                    handled = true;
+                                handled = true;
+                                if t.exited {
+                                    // KEYDOWN 없이 온 문자(IME 등) — 아무 키 = 재시작 규약 동일
+                                    st.terms[ti] = None;
+                                    let _ = InvalidateRect(Some(hwnd), None, false);
+                                } else {
                                     match c {
                                         '\u{3}' if t.sel_norm().is_some() => {
                                             // 복사 = 평문 + HTML + RTF(09-04 — WT "HTML 및 RTF 모두").
@@ -8993,7 +9067,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 #[cfg(test)]
 mod tests {
-    use super::should_trim;
+    use super::{route_key_with_term, should_trim, KeyRoute};
+
+    /// X2-03·G3-08·X3-09 — MC/DC: 피연산자(포커스·도크 표시·종류·PTY 기동) 각각의 독립 전환.
+    #[test]
+    fn key_route_mcdc_pairs() {
+        // 기준: 터미널 포커스 + 도크 표시 + 종류 터미널 + PTY 있음 = Term
+        assert_eq!(route_key_with_term(Some(0), true, 2, true), KeyRoute::Term);
+        // ① term_focus 전환 — 포커스 없음 = 목록(다른 피연산자 무관)
+        assert_eq!(route_key_with_term(None, true, 2, true), KeyRoute::List);
+        assert_eq!(route_key_with_term(None, false, 0, false), KeyRoute::List);
+        // ② dock_visible 전환 — 숨은 도크 = 낡은 포커스 해제
+        assert_eq!(
+            route_key_with_term(Some(1), false, 2, true),
+            KeyRoute::ClearFocus
+        );
+        // ③ kind 전환 — 종류가 터미널이 아니면 해제
+        assert_eq!(
+            route_key_with_term(Some(1), true, 1, true),
+            KeyRoute::ClearFocus
+        );
+        // ④ term_started 전환 — PTY 미기동(재기동 대기)은 **목록이 아니라** 삼킴
+        assert_eq!(
+            route_key_with_term(Some(0), true, 2, false),
+            KeyRoute::TermPending,
+            "종전 결함: (T,T,F)가 목록 처리로 떨어져 Delete가 보이지 않는 캐럿을 휴지통으로"
+        );
+    }
 
     #[test]
     fn idle_trim_threshold_and_once() {
