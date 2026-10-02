@@ -128,7 +128,7 @@ impl ArchiveFormat for Tar {
         let mut pending_mtime: Option<i64> = None;
         let mut zeros = 0;
 
-        while off + BLOCK <= size && out.entries.len() <= limit {
+        while off.checked_add(BLOCK).is_some_and(|end| end <= size) && out.entries.len() <= limit {
             let h = read_exact_at(src, off, BLOCK as usize)?;
             off += BLOCK;
             if h.iter().all(|&b| b == 0) {
@@ -148,7 +148,15 @@ impl ArchiveFormat for Tar {
             let esize = numeric(&h[124..136]).unwrap_or(0);
             let mtime = numeric(&h[136..148]).map(|t| t as i64);
             let typeflag = h[156];
-            let data_blocks = esize.div_ceil(BLOCK) * BLOCK;
+            // base-256 크기는 u64 전 범위라 `div_ceil * BLOCK`·`off +=`가 wrap할 수 있다 —
+            // wrap하면 off가 같은 헤더로 되돌아가 UI 스레드가 무한 루프에 빠진다(G7-11).
+            // checked 연산 실패 = 조작/손상 → 여기서 목록을 끝낸다.
+            let Some(data_blocks) = esize.checked_next_multiple_of(BLOCK) else {
+                break;
+            };
+            let Some(after_data) = off.checked_add(data_blocks) else {
+                break;
+            };
 
             match typeflag {
                 b'L' | b'K' => {
@@ -157,7 +165,7 @@ impl ArchiveFormat for Tar {
                     if typeflag == b'L' {
                         pending_name = Some(decode_name(cstr(&body), false));
                     }
-                    off += data_blocks;
+                    off = after_data;
                     continue;
                 }
                 b'x' | b'g' => {
@@ -172,7 +180,7 @@ impl ArchiveFormat for Tar {
                             _ => {}
                         }
                     }
-                    off += data_blocks;
+                    off = after_data;
                     continue;
                 }
                 _ => {}
@@ -208,7 +216,7 @@ impl ArchiveFormat for Tar {
                     suspicious,
                 });
             }
-            off += data_blocks;
+            off = after_data;
         }
         if out.entries.is_empty() {
             return Err(ArchiveError::Corrupt("TAR 항목 없음".into()));
@@ -262,6 +270,27 @@ mod tests {
             }
             n += 1;
         }
+    }
+
+    /// 크기 필드(124..136)를 GNU base-256으로 쓰고 체크섬을 다시 계산한다.
+    fn with_base256_size(mut h: Vec<u8>, size: u64) -> Vec<u8> {
+        h[124] = 0x80; // base-256 표식
+        h[125..128].copy_from_slice(&[0, 0, 0]);
+        h[128..136].copy_from_slice(&size.to_be_bytes());
+        let sum: u64 = h
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| {
+                if (148..156).contains(&i) {
+                    32
+                } else {
+                    b as u64
+                }
+            })
+            .sum();
+        h[148..154].copy_from_slice(format!("{sum:06o}").as_bytes());
+        h[155] = b' ';
+        h
     }
 
     fn body(data: &[u8]) -> Vec<u8> {
@@ -373,28 +402,55 @@ mod tests {
 
     #[test]
     fn base256_size_field_is_read() {
-        let mut h = header("big.bin", 0, b'0', 0, "");
-        h[124] = 0x80; // base-256 표식
-        h[125..136].copy_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-        h[132..136].copy_from_slice(&0x1_0000u32.to_be_bytes()); // 64KB
-        let sum: u64 = h
-            .iter()
-            .enumerate()
-            .map(|(i, &b)| {
-                if (148..156).contains(&i) {
-                    32
-                } else {
-                    b as u64
-                }
-            })
-            .sum();
-        h[148..154].copy_from_slice(format!("{sum:06o}").as_bytes());
-        h[155] = b' ';
-        let mut v = h;
+        let mut v = with_base256_size(header("big.bin", 0, b'0', 0, ""), 0x1_0000); // 64KB
         v.extend(vec![0u8; 0x1_0000]);
         v.extend_from_slice(&[0u8; 1024]);
         let l = Tar.list(&SliceSource(&v), &ListOpts::default()).unwrap();
         assert_eq!(l.entries[0].size, Some(0x1_0000));
+    }
+
+    /// 조작된 base-256 크기 — `off += data_blocks`가 wrap해 같은 헤더로 되돌아가던 경우.
+    /// 'L' 헤더는 항목을 push하지 않아 limit에도 걸리지 않고 영원히 돌았다(G7-11).
+    #[test]
+    fn wrapping_base256_size_on_long_name_header_terminates() {
+        // esize ∈ (2^64-1024, 2^64-512] → data_blocks = 2^64-512, off(512)+data_blocks wrap → 512
+        let bogus = u64::MAX - 600;
+        let mut v = with_base256_size(header("././@LongLink", 0, b'L', 0, ""), bogus);
+        v.extend(vec![0u8; 4096]); // 헤더 뒤 본문 몇 KB만 있어도 read_exact_at 통과
+        v.extend_from_slice(&[0u8; 1024]);
+        let r = Tar.list(&SliceSource(&v), &ListOpts::default());
+        // 항목 0 → Corrupt. 핵심은 즉시 반환(무한 루프·panic 없음)
+        assert!(matches!(r, Err(ArchiveError::Corrupt(_))), "{r:?}");
+    }
+
+    #[test]
+    fn wrapping_base256_size_on_regular_header_stops_after_prior_entries() {
+        // 정상 항목 하나 뒤에 크기가 u64::MAX인 일반 헤더(next_multiple_of 자체가 overflow)
+        let mut v = Vec::new();
+        v.extend(header("ok.txt", 3, b'0', 0, ""));
+        v.extend(body(b"abc"));
+        v.extend(with_base256_size(
+            header("huge.bin", 0, b'0', 0, ""),
+            u64::MAX,
+        ));
+        v.extend(vec![0u8; 4096]);
+        v.extend_from_slice(&[0u8; 1024]);
+        let l = Tar.list(&SliceSource(&v), &ListOpts::default()).unwrap();
+        // 조작 헤더에서 목록을 끝내고(중복 5만 개가 아닌) 앞 항목만 남는다
+        assert_eq!(l.entries.len(), 1);
+        assert_eq!(l.entries[0].path, "ok.txt");
+        assert!(!l.truncated);
+    }
+
+    #[test]
+    fn pax_header_with_wrapping_size_terminates() {
+        // 'x' 헤더(push 없음) + off+data_blocks만 wrap하는 값(next_multiple_of는 성공)
+        let bogus = u64::MAX - 1000; // next multiple = 2^64-512 ≤ u64::MAX
+        let mut v = with_base256_size(header("PaxHeader", 0, b'x', 0, ""), bogus);
+        v.extend(vec![0u8; 4096]);
+        v.extend_from_slice(&[0u8; 1024]);
+        let r = Tar.list(&SliceSource(&v), &ListOpts::default());
+        assert!(matches!(r, Err(ArchiveError::Corrupt(_))), "{r:?}");
     }
 
     #[test]
