@@ -83,7 +83,11 @@ impl ArchiveFormat for Cab {
         };
         let limit = opts.limit();
         let mut off = coff_files;
-        for _ in 0..n_files.min(limit) {
+        // 다른 포맷과 같은 +1 규약 — 상한을 1개 넘겨 push하면 `finish`가 truncated 표시
+        for _ in 0..n_files {
+            if out.entries.len() > limit {
+                break;
+            }
             let f = read_exact_at(src, off, 16)?;
             let size = u32le(&f, 0).unwrap_or(0) as u64;
             let ifolder = u16le(&f, 8).unwrap_or(0) as usize;
@@ -191,6 +195,23 @@ mod tests {
             d.modified,
             Some(crate::archive::ymd_hms_to_unix(2026, 8, 24, 9, 30, 0))
         );
+    }
+
+    #[test]
+    fn limit_marks_truncated_like_other_formats() {
+        let c = build(&[("a", 1), ("b", 2), ("c", 3), ("d", 4)]);
+        let opts = ListOpts {
+            limit: 2,
+            ..Default::default()
+        };
+        let l = Cab.list(&SliceSource(&c), &opts).unwrap();
+        assert_eq!(l.entries.len(), 2);
+        assert!(l.truncated, "상한 초과 CAB = truncated");
+        // 상한과 같은 수는 잘리지 않는다
+        let c = build(&[("a", 1), ("b", 2)]);
+        let l = Cab.list(&SliceSource(&c), &opts).unwrap();
+        assert_eq!(l.entries.len(), 2);
+        assert!(!l.truncated);
     }
 
     #[test]

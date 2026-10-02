@@ -150,7 +150,10 @@ impl ArchiveFormat for Zip {
     }
     fn sniff(&self, head: &[u8], _src: &dyn ReadAt) -> bool {
         // 로컬 헤더 · 빈 아카이브(EOCD 선두) · 분할 표식
-        matches!(head.get(..4), Some(b"PK\x03\x04") | Some(b"PK\x05\x06") | Some(b"PK\x07\x08"))
+        matches!(
+            head.get(..4),
+            Some(b"PK\x03\x04") | Some(b"PK\x05\x06") | Some(b"PK\x07\x08")
+        )
     }
 
     fn list(&self, src: &dyn ReadAt, opts: &ListOpts) -> Result<Listing, ArchiveError> {
@@ -183,7 +186,8 @@ impl ArchiveFormat for Zip {
             return Err(ArchiveError::Corrupt("중앙 디렉터리 과대".into()));
         }
         // SFX 등 앞에 데이터가 붙은 파일 보정 — EOCD 직전이 CD 끝이어야 한다
-        if cd_off + cd_size != eocd_abs {
+        // (Zip64 u64 오프셋이 거대하면 덧셈이 wrap하므로 checked — 실패도 보정 대상)
+        if cd_off.checked_add(cd_size) != Some(eocd_abs) {
             if let Some(delta) = eocd_abs.checked_sub(cd_size) {
                 cd_off = delta;
             }
@@ -225,7 +229,8 @@ impl ArchiveFormat for Zip {
             let ex = parse_extra(extra_b, size == 0xFFFF_FFFF, packed == 0xFFFF_FFFF);
             let raw = decode_name(name_b, flags & 0x800 != 0);
             let (path, suspicious) = normalize_path(&raw);
-            let is_dir = raw.ends_with('/') || raw.ends_with('\\') || (attrs & 0x10 != 0 && size == 0);
+            let is_dir =
+                raw.ends_with('/') || raw.ends_with('\\') || (attrs & 0x10 != 0 && size == 0);
             let method_label = match ex.aes {
                 Some((inner, strength)) => format!(
                     "AES-{} + {}",
@@ -340,7 +345,10 @@ mod tests {
         assert_eq!(l.entries.len(), 3);
         assert_eq!(l.comment.as_deref(), Some("메모"));
         let a = l.entries.iter().find(|e| e.path == "docs/a.txt").unwrap();
-        assert_eq!((a.size, a.packed, a.method.as_str()), (Some(11), Some(11), "Deflate"));
+        assert_eq!(
+            (a.size, a.packed, a.method.as_str()),
+            (Some(11), Some(11), "Deflate")
+        );
         assert_eq!(
             a.modified,
             Some(crate::archive::ymd_hms_to_unix(2026, 8, 24, 13, 45, 30))
@@ -387,6 +395,65 @@ mod tests {
         let l = Zip.list(&SliceSource(&z), &ListOpts::default()).unwrap();
         assert_eq!(l.entries[0].path, "evil.sh");
         assert!(l.entries[0].suspicious);
+    }
+
+    /// 중앙 디렉터리 레코드의 외부 속성(오프셋 +38)을 덮어쓴다.
+    fn set_external_attrs(z: &mut [u8], name: &str, attrs: u32) {
+        let pos = z
+            .windows(46 + name.len())
+            .position(|w| w.starts_with(b"PK\x01\x02") && w.ends_with(name.as_bytes()))
+            .unwrap();
+        z[pos + 38..pos + 42].copy_from_slice(&attrs.to_le_bytes());
+    }
+
+    #[test]
+    fn is_dir_external_attr_requires_zero_size() {
+        // MC/DC: 슬래시 없는 이름에서 `attrs & 0x10 && size == 0`만으로 결과가 갈린다
+        let mut z = build_zip(&[("d", b"", false, 0), ("f", b"x", false, 0)], b"");
+        set_external_attrs(&mut z, "d", 0x10);
+        set_external_attrs(&mut z, "f", 0x10);
+        let l = Zip.list(&SliceSource(&z), &ListOpts::default()).unwrap();
+        let d = l.entries.iter().find(|e| e.path == "d").unwrap();
+        let f = l.entries.iter().find(|e| e.path == "f").unwrap();
+        assert!(d.is_dir, "속성 0x10 + 크기 0 = 디렉터리");
+        assert!(!f.is_dir, "속성 0x10이라도 크기 > 0 = 파일");
+        // 속성 없음 + 크기 0 = 파일(세 번째 피연산자의 다른 쪽)
+        let z = build_zip(&[("e", b"", false, 0)], b"");
+        let l = Zip.list(&SliceSource(&z), &ListOpts::default()).unwrap();
+        assert!(!l.entries[0].is_dir);
+    }
+
+    #[test]
+    fn zip64_huge_cd_offset_does_not_overflow() {
+        // EOCD cd_off 포화(0xFFFFFFFF) → Zip64 로케이터 → Zip64 EOCD의 cd_off = u64::MAX.
+        // 예전 `cd_off + cd_size`는 디버그에서 overflow panic — 지금은 보정 또는 Corrupt.
+        let z = build_zip(&[("a.txt", b"1", false, 0)], b"");
+        let eocd = z.len() - EOCD_MIN;
+        let cd_size = u32le(&z, eocd + 12).unwrap() as u64;
+        let mut out = z[..eocd].to_vec();
+        let z64_at = out.len() as u64;
+        out.extend_from_slice(b"PK\x06\x06");
+        out.extend_from_slice(&44u64.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&u64::MAX.to_le_bytes()); // cd_off
+        out.extend_from_slice(b"PK\x06\x07");
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&z64_at.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        let mut e = z[eocd..].to_vec();
+        e[16..20].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out.extend_from_slice(&e);
+        let r = Zip.list(&SliceSource(&out), &ListOpts::default());
+        assert!(
+            matches!(r, Ok(_) | Err(ArchiveError::Corrupt(_))),
+            "패닉 없이 보정 또는 Corrupt: {r:?}"
+        );
     }
 
     #[test]

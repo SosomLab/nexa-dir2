@@ -194,7 +194,13 @@ fn list_v5(src: &dyn ReadAt, opts: &ListOpts, out: &mut Listing) -> Result<(), A
             5 => break, // 끝 표식
             _ => {}
         }
-        let next = body_at + hsize + data_size;
+        // data_size는 vint(최대 2^63) — wrapping 덧셈 대신 checked, 실패 = 손상
+        let Some(next) = body_at
+            .checked_add(hsize)
+            .and_then(|v| v.checked_add(data_size))
+        else {
+            break;
+        };
         if next <= off {
             break; // 전진 없음 = 손상
         }
@@ -434,6 +440,32 @@ mod tests {
         put_vint(&mut big, u64::MAX);
         put_vint(&mut big, 2);
         assert!(!rar5_extra_has_crypt(&big));
+    }
+
+    #[test]
+    fn rar5_huge_data_size_stops_without_overflow() {
+        // data_size = u64::MAX인 파일 블록 → 예전 `body_at + hsize + data_size`는
+        // 디버그에서 overflow panic. 지금은 그 항목까지 목록 후 중단.
+        let mut body = Vec::new();
+        put_vint(&mut body, 2); // 파일 헤더
+        put_vint(&mut body, 0x0002); // data area 있음
+        put_vint(&mut body, u64::MAX);
+        put_vint(&mut body, 0); // file_flags
+        put_vint(&mut body, 7); // unpacked size
+        put_vint(&mut body, 0x20); // attributes
+        put_vint(&mut body, 0); // compression_info
+        put_vint(&mut body, 0); // host os
+        put_vint(&mut body, 5);
+        body.extend_from_slice(b"a.txt");
+        let mut v = SIG5.to_vec();
+        v.extend(block(1, &[0], &[], 0, &[]));
+        v.extend_from_slice(&0u32.to_le_bytes());
+        put_vint(&mut v, body.len() as u64);
+        v.extend_from_slice(&body);
+        v.extend_from_slice(&[0u8; 16]);
+        let l = Rar.list(&SliceSource(&v), &ListOpts::default()).unwrap();
+        assert_eq!(l.entries.len(), 1);
+        assert_eq!(l.entries[0].packed, Some(u64::MAX));
     }
 
     #[test]
