@@ -56,6 +56,7 @@ const SNAP_PX: i32 = 20;
 
 /// wParam 마우스 수식키 비트(winuser.h MK_LBUTTON/MK_SHIFT/MK_CONTROL).
 const MK_LBUTTON: usize = 0x0001;
+const MK_RBUTTON: usize = 0x0002;
 const MK_SHIFT: usize = 0x0004;
 const MK_CONTROL: usize = 0x0008;
 
@@ -1047,6 +1048,10 @@ struct State {
     term_drag: Option<usize>,
     /// 터미널 마우스 모드 전달 중 눌린 버튼(X-5) — (패널, SGR 버튼 코드).
     term_mouse_btn: Option<(usize, u8)>,
+    /// 이 창이 WM_RBUTTONDOWN을 받았음(G3-15 10-02) — 뗌(WM_RBUTTONUP)은 짝이 있을 때만
+    /// 메뉴를 연다(모달 팝업·툴팁·설정 창이 누름을 흡수하고 뗌만 도착하면 선택 규약이
+    /// 반영되지 않은 기존 선택에 대한 메뉴가 뜨던 것).
+    rbutton_down_seen: bool,
     /// 이번 우클릭(누름)이 경로바 **편집을 시작**시켰음 — 같은 클릭의 뗌에서는 편집 컨텍스트
     /// 메뉴를 띄우지 않는다(사용자 요청 10-01: 첫 우클릭 = 편집 진입만, 다음 우클릭 = 메뉴.
     /// 누름→뗌 사이에 재그리기가 끝나면 뗌 시점 필드 히트가 참이 돼 메뉴가 즉시 뜨던 결함).
@@ -1668,6 +1673,7 @@ pub fn run() -> Result<()> {
         term_drag: None,
         term_mouse_btn: None,
         rclick_began_edit: false,
+        rbutton_down_seen: false,
         term_caret_on: true,
         history: nexa_ops::history::OperationHistory::default(),
     });
@@ -5874,6 +5880,43 @@ unsafe fn cancel_tab_drag(hwnd: HWND, st: &mut State) -> bool {
     handled
 }
 
+/// 캡처 상실 시 마우스 과도 상태 일괄 정리(G3-09·G3-01 10-02 — WM_CAPTURECHANGED 전용).
+/// 종전엔 스플리터류 플래그만 복구해, Alt+Tab·팝업·OLE 시작으로 WM_LBUTTONUP이 오지 않으면
+/// 터미널 선택 드래그(60ms 자동 스크롤 타이머가 `term_drag_extend`+`invalidate_dock`을 계속
+/// 돌림)·OLE 드래그 후보(`drag_press` — 다음 MK_LBUTTON 모션에서 의도치 않은 발신)·
+/// TUI 버튼(`term_mouse_btn` — 모든 WM_MOUSEMOVE 조기 반환)·탭 드래그 미리 보기·느린
+/// 재클릭 리네임 예약이 잔존했다. 자가 `ReleaseCapture`(WM_LBUTTONUP 꼬리·OLE 발신 직전·
+/// TUI 우클릭 뗌)에서는 각 핸들러가 먼저 지운 뒤라 사실상 no-op — 그 호출은 State 참조
+/// 밖에서 한다(동기 재진입).
+unsafe fn reset_mouse_transients(hwnd: HWND, st: &mut State) {
+    let repaint = st.split_drag || st.dock_split_drag || st.dock_drag.is_some();
+    st.split_drag = false;
+    st.dock_split_drag = false;
+    st.dock_drag = None;
+    if st.term_drag.take().is_some() {
+        let _ = KillTimer(Some(hwnd), TIMER_TERM_SEL); // 선택은 유지(LBUTTONUP과 동일)
+    }
+    st.drag_press = None;
+    st.rename_on_up = false;
+    st.term_mouse_btn = None;
+    let _ = cancel_tab_drag(hwnd, st); // 미리 보기 교차 이동 복귀(ESC 경로와 동일)
+    if repaint {
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+}
+
+/// TUI 마우스 버튼이 아직 눌린 채인가(G3-01 10-02) — `b`는 SGR 버튼 코드(0=좌·2=우),
+/// `wparam`은 WM_MOUSEMOVE의 MK_* 비트. 종전 `MK_LBUTTON != 0 || b == 2`는 우버튼 상태를
+/// 아예 보지 않아, 캡처 없이 창 밖에서 뗀 뒤 창의 모든 마우스 이동(hover·툴팁·스플리터·
+/// 탭 드래그·컬럼 리사이즈·터미널 선택)이 조기 반환으로 죽었다.
+fn tui_btn_held(b: u8, wparam: usize) -> bool {
+    match b {
+        0 => wparam & MK_LBUTTON != 0,
+        2 => wparam & MK_RBUTTON != 0,
+        _ => false,
+    }
+}
+
 unsafe fn set_active(hwnd: HWND, st: &mut State, idx: usize) {
     let idx = if single_panel(st) { 0 } else { idx }; // 싱글 패널 = 좌 고정(07-16)
     if st.active != idx {
@@ -7747,6 +7790,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_LBUTTONDOWN => {
             if let Some(st) = state_of(hwnd) {
                 tip_cancel(hwnd, st); // 클릭 = 툴팁 즉시 파괴(07-18)
+                st.drag_press = None; // 새 프레스 = 이전 OLE 후보 폐기(G3-09 — 뗌 유실 방어)
                 let (x, y) = mouse_xy(lparam);
                 let shift = wparam.0 & MK_SHIFT != 0;
                 let ctrl = wparam.0 & MK_CONTROL != 0;
@@ -7967,12 +8011,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let mut tab_menu: Option<(usize, usize)> = None;
             if let Some(st) = state_of(hwnd) {
                 let (x, y) = mouse_xy(lparam);
-                // TUI 마우스 모드(X-5) — 터미널 그리드 우클릭은 앱에 전달(Shift=로컬)
+                st.rbutton_down_seen = true; // 뗌은 이 짝이 있을 때만 메뉴(G3-15)
+                                             // TUI 마우스 모드(X-5) — 터미널 그리드 우클릭은 앱에 전달(Shift=로컬)
                 if GetKeyState(VK_SHIFT.0 as i32) >= 0 {
                     if let Some(ti) = st.term_focus {
                         if term_hit(st, ti, x, y) {
                             if let Some(t) = &st.terms[ti] {
                                 if term_send_mouse(t, x, y, 2, true) {
+                                    // 좌클릭과 같은 캡처 규약(G3-01) — 창 밖에서 떼도
+                                    // WM_RBUTTONUP이 도착해 버튼 상태가 잔존하지 않는다
+                                    SetCapture(hwnd);
                                     st.term_mouse_btn = Some((ti, 2));
                                     return LRESULT(0);
                                 }
@@ -8007,15 +8055,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 행 우클릭 = 셸 컨텍스트 메뉴 · 빈 본문 = 폴더 배경 메뉴(M3-4, ADR-0003).
             // 선택 규약(단독 선택/유지/해제)은 RBUTTONDOWN에서 반영됨.
             let (x, y) = mouse_xy(lparam);
+            let mut tui_release = false;
             if let Some(st) = state_of(hwnd) {
                 // TUI 마우스 릴리스(X-5 — 우클릭) — 컨텍스트 메뉴 억제
                 if let Some((ti, 2)) = st.term_mouse_btn {
                     st.term_mouse_btn = None;
+                    st.rbutton_down_seen = false;
                     if let Some(t) = &st.terms[ti] {
                         term_send_mouse(t, x, y, 2, false);
                     }
+                    tui_release = true;
+                } else if !std::mem::take(&mut st.rbutton_down_seen) {
+                    // 짝 없는 뗌(누름은 모달 팝업·다른 창이 흡수) — 선택 규약이 반영되지
+                    // 않은 기존 선택에 대한 메뉴를 열지 않는다(G3-15)
                     return LRESULT(0);
                 }
+            }
+            if tui_release {
+                let _ = ReleaseCapture(); // RBUTTONDOWN TUI 분기의 짝 — State 참조 밖(재진입)
+                return LRESULT(0);
             }
             // 텍스트 편집 컨텍스트 메뉴(사용자 요청 10-01 — 네이티브 EDIT 컨트롤 메뉴 대응):
             // 경로바 편집 필드·이름변경 필드·도크 Info/Preview 텍스트·도크 터미널.
@@ -8072,7 +8130,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // TUI 마우스 모션 전달(X-5 — 1002/1003·버튼 유지 중)
                 if let Some(st) = state_of(hwnd) {
                     if let Some((ti, b)) = st.term_mouse_btn {
-                        if wparam.0 & MK_LBUTTON != 0 || b == 2 {
+                        if tui_btn_held(b, wparam.0) {
                             if let Some(t) = &st.terms[ti] {
                                 if matches!(t.screen.mouse_mode(), Some((m, _)) if m >= 1002) {
                                     term_send_mouse(t, x, y, b | 32, true);
@@ -8241,15 +8299,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_CAPTURECHANGED => {
-            // 캡처 강탈(팝업·전환 등)로 WM_LBUTTONUP이 안 오는 경로 — 스플리터류 드래그
-            // 플래그가 남아 accent 강조가 잔존하는 것을 방어(QA 07-15).
+            // 캡처 강탈(팝업·전환·WM_CANCELMODE 등)로 WM_LBUTTONUP/WM_RBUTTONUP이 안 오는
+            // 경로 — 스플리터류 플래그(QA 07-15)에 더해 터미널 선택 타이머·OLE 후보·TUI
+            // 버튼·탭 드래그·리네임 예약까지 일괄 정리(G3-09·G3-01 10-02).
             if let Some(st) = state_of(hwnd) {
-                if st.split_drag || st.dock_split_drag || st.dock_drag.is_some() {
-                    st.split_drag = false;
-                    st.dock_split_drag = false;
-                    st.dock_drag = None;
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                }
+                reset_mouse_transients(hwnd, st);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -8342,7 +8396,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     SetTimer(Some(hwnd), TIMER_RENAME, GetDoubleClickTime(), None);
                 }
             }
-            let _ = ReleaseCapture();
+            // TUI 우버튼이 아직 눌린 채(좌·우 동시)면 그 캡처는 RBUTTONUP의 몫 —
+            // 여기서 풀면 CAPTURECHANGED 정리가 term_mouse_btn을 지워 뗌이 전달되지 않는다
+            let keep_capture =
+                state_of(hwnd).is_some_and(|st| matches!(st.term_mouse_btn, Some((_, 2))));
+            if !keep_capture {
+                let _ = ReleaseCapture(); // State 참조 밖 — CAPTURECHANGED 동기 재진입
+            }
             LRESULT(0)
         }
         WM_XBUTTONDOWN => {
@@ -9420,9 +9480,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 mod tests {
     use super::{
         cleanup_staging_slots, hit_zone_impl, is_dnd_staging, route_key_with_term, should_trim,
-        split_staged, GRect, HitGeom, HitZone, KeyRoute,
+        split_staged, tui_btn_held, GRect, HitGeom, HitZone, KeyRoute, MK_LBUTTON, MK_RBUTTON,
     };
     use std::path::PathBuf;
+
+    /// G3-01 — TUI 버튼 유지 판정은 **버튼별** MK_ 비트: (버튼, wparam) 4조합 +
+    /// 종전 결함 조합(우버튼 코드인데 어떤 버튼도 안 눌림 = 더는 유지 아님).
+    #[test]
+    fn tui_btn_held_per_button() {
+        assert!(tui_btn_held(0, MK_LBUTTON), "좌 코드 + 좌 눌림");
+        assert!(tui_btn_held(2, MK_RBUTTON), "우 코드 + 우 눌림");
+        assert!(
+            !tui_btn_held(2, 0),
+            "우 코드 + 아무 버튼 없음 — 종전엔 `b == 2`만으로 영구 유지(모든 MOUSEMOVE 조기 반환)"
+        );
+        assert!(!tui_btn_held(0, MK_RBUTTON), "좌 코드 + 우만 눌림");
+        assert!(!tui_btn_held(2, MK_LBUTTON), "우 코드 + 좌만 눌림");
+        assert!(
+            !tui_btn_held(1, MK_LBUTTON | MK_RBUTTON),
+            "미지 코드(가운데)는 유지 안 함"
+        );
+    }
 
     /// X3-01·G3-02·G3-17 — 히트 존 표: 듀얼 정보 밴드 안은 dock_split 기준, 싱글 정보
     /// 밴드 안은 **공유 도크**(위젯 소유 좌·활성 유지), 밴드 밖/숨김은 파일 스플리터 기준.
