@@ -31,20 +31,34 @@ pub fn expand_env(input: &str) -> String {
     s.trim().to_string()
 }
 
+/// `hay[from..]`에서 ASCII 대소문자 무시로 `needle`을 찾아 **`hay` 기준 바이트 오프셋**을
+/// 반환. `to_lowercase()`는 길이를 보존하지 않아('İ' 2B→3B · 'K' 3B→1B) 그 오프셋을
+/// 원문에 쓰면 문자 경계 panic(G13-01) — 토큰(`%`·`$env:`·`${env:`)은 전부 ASCII이므로
+/// 바이트 단위 길이 보존 비교로 충분하다. `needle`은 ASCII·비어 있지 않아야 한다.
+/// 반환 오프셋은 `needle`이 ASCII라 항상 문자 경계.
+fn find_ascii_ci(hay: &str, from: usize, needle: &str) -> Option<usize> {
+    debug_assert!(needle.is_ascii() && !needle.is_empty());
+    let n = needle.as_bytes();
+    hay.as_bytes()
+        .get(from..)?
+        .windows(n.len())
+        .position(|w| w.eq_ignore_ascii_case(n))
+        .map(|rel| from + rel)
+}
+
 /// `open`…`close` 사이 이름을 `lookup`으로 치환(대소문자 무시 open 매칭·미정의=원문 유지).
+/// 인덱스는 전부 `s` 하나에서만 계산한다([`find_ascii_ci`]).
 fn replace_between(
     s: &str,
     open: &str,
     close: &str,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> String {
-    let lower = s.to_lowercase();
     let mut out = String::with_capacity(s.len());
     let mut i = 0usize;
     while i < s.len() {
-        match lower[i..].find(&open.to_lowercase()) {
-            Some(rel) => {
-                let start = i + rel;
+        match find_ascii_ci(s, i, open) {
+            Some(start) => {
                 out.push_str(&s[i..start]);
                 let name_start = start + open.len();
                 match s[name_start..].find(close) {
@@ -74,13 +88,11 @@ fn replace_between(
 
 /// PowerShell `$env:NAME`(중괄호 없음 — 이름은 `[A-Za-z0-9_]+`) 치환.
 fn replace_ps_bare(s: &str) -> String {
-    let lower = s.to_lowercase();
     let mut out = String::with_capacity(s.len());
     let mut i = 0usize;
     while i < s.len() {
-        match lower[i..].find("$env:") {
-            Some(rel) => {
-                let start = i + rel;
+        match find_ascii_ci(s, i, "$env:") {
+            Some(start) => {
                 out.push_str(&s[i..start]);
                 let name_start = start + "$env:".len();
                 let name_len = s[name_start..]
@@ -176,6 +188,41 @@ mod tests {
             "미정의 원문 유지"
         );
         assert_eq!(expand_env("  C:\\t  "), "C:\\t");
+    }
+
+    /// G13-01: `to_lowercase()`가 길이를 바꾸는 문자('İ' 2B→3B · 'K'(U+212A) 3B→1B ·
+    /// 'ǅ') 뒤의 토큰에서 바이트 오프셋이 어긋나 문자 경계 panic·엉뚱한 구간 치환이 났다.
+    #[test]
+    fn expand_env_non_ascii_case_change_no_panic() {
+        std::env::set_var("NEXA_T2", "V");
+        // 미정의 변수 — panic 없이 원문 유지
+        for s in [
+            "İ%한%",
+            "K%NEXA_NOPE%",
+            "KK%NEXA_NOPE%",
+            "ǅ%X%",
+            "İ$env:NEXA_NOPE",
+        ] {
+            assert_eq!(expand_env(s), s, "{s}");
+        }
+        // 정의된 변수 — 앞의 비ASCII 문자는 보존되고 토큰만 치환
+        assert_eq!(expand_env("C:\\İstanbul\\%NEXA_T2%"), "C:\\İstanbul\\V");
+        assert_eq!(expand_env("K%NEXA_T2%"), "KV");
+        assert_eq!(expand_env("KK%NEXA_T2%\\x"), "KKV\\x");
+        assert_eq!(expand_env("İ$env:NEXA_T2/x"), "İV/x");
+        assert_eq!(expand_env("İ${env:NEXA_T2}"), "İV");
+        // 토큰 대소문자 무시(ASCII)는 그대로
+        assert_eq!(expand_env("$ENV:NEXA_T2"), "V");
+        assert_eq!(expand_env("${ENV:NEXA_T2}"), "V");
+    }
+
+    #[test]
+    fn find_ascii_ci_offsets_are_in_haystack() {
+        assert_eq!(find_ascii_ci("abc$ENV:x", 0, "$env:"), Some(3));
+        assert_eq!(find_ascii_ci("İ%한%", 0, "%"), Some(2));
+        assert_eq!(find_ascii_ci("İ%한%", 3, "%"), Some(6));
+        assert_eq!(find_ascii_ci("abc", 0, "%"), None);
+        assert_eq!(find_ascii_ci("abc", 10, "a"), None, "범위 밖 from");
     }
 
     fn dirs(base: &str) -> Vec<String> {
