@@ -1054,6 +1054,13 @@ struct TermState {
     grid: (nexa_gui::Rect, i32, i32),
     /// 가로 보기 오프셋(열 — X-3 비줄바꿈 고정 열 모드의 가로 스크롤).
     view_x: usize,
+    /// 휠 분수 누적(10-02 QA — 트랙패드는 노치(120) 미만 delta를 잘게 보낸다. 종전
+    /// `3 * delta / 120` 정수 나눗셈은 0줄로 버려 천천히 움직이면 무반응이었다).
+    /// 스크롤백 = 줄(3/노치) · 가로 = 열(4/노치) · TUI 마우스 모드 휠 이벤트 = 1/노치
+    /// (종전엔 작은 delta마다 이벤트 1회 → 트랙패드에서 과속).
+    wheel: nexa_gui::WheelAccum,
+    hwheel: nexa_gui::WheelAccum,
+    tui_wheel: nexa_gui::WheelAccum,
 }
 
 impl TermState {
@@ -1066,6 +1073,9 @@ impl TermState {
             sel: None,
             grid: (nexa_gui::Rect::default(), 8, 16),
             view_x: 0,
+            wheel: nexa_gui::WheelAccum::default(),
+            hwheel: nexa_gui::WheelAccum::default(),
+            tui_wheel: nexa_gui::WheelAccum::default(),
         }
     }
 
@@ -7319,7 +7329,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // Shift+휠 = 터미널 가로 스크롤(X-3 비줄바꿈 고정 열 — 4열/노치)
                 if wparam.0 & MK_SHIFT != 0 && !st.term_wrap && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
-                        if t.scroll_view_x(-4 * delta / 120) {
+                        let cols = t.hwheel.add(-delta, 4);
+                        if cols != 0 && t.scroll_view_x(cols) {
                             invalidate_dock(hwnd, st, target);
                         }
                     }
@@ -7328,13 +7339,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if wparam.0 & MK_SHIFT == 0 && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
                         if t.screen.mouse_mode().is_some_and(|(_, sgr)| sgr) {
-                            let btn = if delta > 0 { 64 } else { 65 };
-                            for _ in 0..(delta.abs() / 120).max(1) {
+                            let n = t.tui_wheel.add(delta, 1);
+                            let btn = if n > 0 { 64 } else { 65 };
+                            for _ in 0..n.abs() {
                                 term_send_mouse(t, px, py, btn, true);
                             }
                             return LRESULT(0);
                         }
-                        if t.scroll_view(3 * delta / 120) {
+                        let lines = t.wheel.add(delta, 3);
+                        if lines != 0 && t.scroll_view(lines) {
                             invalidate_dock(hwnd, st, target);
                         }
                     }
@@ -7373,7 +7386,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // 터미널 위 가로 휠 = 가로 스크롤(X-3 비줄바꿈 고정 열)
                 if !st.term_wrap && term_hit(st, target, px, py) {
                     if let Some(t) = &mut st.terms[target] {
-                        if t.scroll_view_x(4 * delta / 120) {
+                        let cols = t.hwheel.add(delta, 4);
+                        if cols != 0 && t.scroll_view_x(cols) {
                             invalidate_dock(hwnd, st, target);
                         }
                     }
