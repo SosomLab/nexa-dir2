@@ -2065,6 +2065,43 @@ unsafe fn record_vpaste_undo(st: &mut State, created: &[PathBuf]) {
     }));
 }
 
+/// DnD 확보 스테이징 판정(점검 G8-04 — 10-02): `<tmp>\NexaDir\dnd-*\…` 아래면 참
+/// (dnd.rs `steal_volatile` 규약. `NexaDir\cloud` 등 다른 임시 폴더는 아님).
+fn is_dnd_staging(src: &Path, tmp: &Path) -> bool {
+    use std::path::Component;
+    let Ok(rest) = src.strip_prefix(tmp) else {
+        return false;
+    };
+    let mut it = rest.components();
+    matches!(it.next(), Some(Component::Normal(n)) if n == "NexaDir")
+        && matches!(it.next(), Some(Component::Normal(n)) if n.to_string_lossy().starts_with("dnd-"))
+}
+
+/// 전송 결과 (src, dest) 쌍을 (일반, 스테이징 출신)으로 분리 — 순수(단위 테스트).
+#[allow(clippy::type_complexity)]
+fn split_staged(
+    transferred: &[(PathBuf, PathBuf)],
+    tmp: &Path,
+) -> (Vec<(PathBuf, PathBuf)>, Vec<(PathBuf, PathBuf)>) {
+    transferred
+        .iter()
+        .cloned()
+        .partition(|(src, _)| !is_dnd_staging(src, tmp))
+}
+
+/// 전송이 비운 스테이징 슬롯 정리(G8 누락5) — `dnd-N\i` → `dnd-N` 순으로 `remove_dir`
+/// (비어 있을 때만 성공 — 잔존 항목이 있으면 그대로 둔다. 실패 무시).
+fn cleanup_staging_slots(staged: &[(PathBuf, PathBuf)]) {
+    for (src, _) in staged {
+        let Some(slot) = src.parent() else { continue };
+        if std::fs::remove_dir(slot).is_ok() {
+            if let Some(base) = slot.parent() {
+                let _ = std::fs::remove_dir(base);
+            }
+        }
+    }
+}
+
 /// 도크 내용 대상 키(10-02 QA) — 단일 선택 = 그 경로, 다중 = 개수, 없음 = 현재 폴더.
 fn dock_subject_key(p: &Panel) -> String {
     let tree = p.rows().source().tree();
@@ -4428,19 +4465,34 @@ unsafe fn on_transfer_message(hwnd: HWND, st: &mut State, gen: u64, done_phase: 
     let out = plock(&job.shared.outcome).take().unwrap_or_default();
     // undo 기록(M3-3, 원본 B-13u) — 수행된 (원본, 최종 대상) 쌍만. 취소돼도 수행분은 기록.
     if !out.transferred.is_empty() {
-        let n = out.transferred.len().to_string();
-        let op: Box<dyn nexa_ops::history::ReversibleOp> = match job.op {
-            nexa_ops::Op::Move => Box::new(nexa_ops::history::MoveBatchOp::new(
-                out.transferred.clone(),
-                trf("op.moveCount", &[&n]),
-            )),
-            nexa_ops::Op::Copy => Box::new(nexa_ops::history::CopyBatchOp::new(
-                out.transferred.clone(),
-                trf("op.copyCount", &[&n]),
-                Box::new(recycle_delete_one),
-            )),
-        };
-        st.history.push(op);
+        // DnD 확보 스테이징 출신(점검 G8-04 — 10-02): src가 `%TEMP%\NexaDir\dnd-*`면 원위치
+        // 복귀(MoveBatchOp undo)는 파일을 임시 폴더로 숨기는 결과 → 생성물 휴지통 삭제(VPasteOp)로
+        // 기록하고 빈 슬롯 폴더를 정리한다. 일반 쌍은 종전대로.
+        let (plain, staged) = split_staged(&out.transferred, &std::env::temp_dir());
+        if !staged.is_empty() {
+            let dests: Vec<PathBuf> = staged.iter().map(|(_, d)| d.clone()).collect();
+            let n = dests.len().to_string();
+            st.history.push(Box::new(VPasteOp {
+                paths: dests,
+                description: trf("op.moveCount", &[&n]),
+            }));
+            cleanup_staging_slots(&staged);
+        }
+        if !plain.is_empty() {
+            let n = plain.len().to_string();
+            let op: Box<dyn nexa_ops::history::ReversibleOp> = match job.op {
+                nexa_ops::Op::Move => Box::new(nexa_ops::history::MoveBatchOp::new(
+                    plain,
+                    trf("op.moveCount", &[&n]),
+                )),
+                nexa_ops::Op::Copy => Box::new(nexa_ops::history::CopyBatchOp::new(
+                    plain,
+                    trf("op.copyCount", &[&n]),
+                    Box::new(recycle_delete_one),
+                )),
+            };
+            st.history.push(op);
+        }
     }
     // 완료 후 양쪽 재로드(원본 TRANSFER-ENGINE 규약 — watcher는 M3-6)
     let ctx = st.nav_ctx();
@@ -9071,7 +9123,75 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 #[cfg(test)]
 mod tests {
-    use super::{route_key_with_term, should_trim, KeyRoute};
+    use super::{
+        cleanup_staging_slots, is_dnd_staging, route_key_with_term, should_trim, split_staged,
+        KeyRoute,
+    };
+    use std::path::PathBuf;
+
+    /// G8-04 — 스테이징 출신 쌍만 분리(NexaDir\cloud·임시 폴더 밖·다른 접두는 일반).
+    #[test]
+    fn split_staged_only_dnd_staging_sources() {
+        let tmp = PathBuf::from("C:\\T");
+        let staged = (
+            tmp.join("NexaDir")
+                .join("dnd-123-0")
+                .join("0")
+                .join("a.txt"),
+            PathBuf::from("D:\\dest\\a.txt"),
+        );
+        let cloud = (
+            tmp.join("NexaDir").join("cloud").join("c.txt"),
+            PathBuf::from("D:\\dest\\c.txt"),
+        );
+        let outside = (
+            PathBuf::from("E:\\src\\b.txt"),
+            PathBuf::from("D:\\dest\\b.txt"),
+        );
+        let other_tmp = (
+            tmp.join("7zAbc").join("x.txt"),
+            PathBuf::from("D:\\dest\\x.txt"),
+        );
+        assert!(is_dnd_staging(&staged.0, &tmp));
+        assert!(!is_dnd_staging(&cloud.0, &tmp));
+        assert!(!is_dnd_staging(&outside.0, &tmp));
+        assert!(!is_dnd_staging(&other_tmp.0, &tmp));
+        let (plain, st) = split_staged(
+            &[
+                staged.clone(),
+                cloud.clone(),
+                outside.clone(),
+                other_tmp.clone(),
+            ],
+            &tmp,
+        );
+        assert_eq!(st, vec![staged]);
+        assert_eq!(plain, vec![cloud, outside, other_tmp]);
+    }
+
+    /// G8 누락5 — 빈 슬롯·기반 폴더만 제거, 잔존 항목이 있는 슬롯은 보존.
+    #[test]
+    fn cleanup_staging_slots_removes_only_empty_dirs() {
+        let base = std::env::temp_dir().join("NexaDir").join(format!(
+            "dnd-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let slot0 = base.join("0");
+        let slot1 = base.join("1");
+        std::fs::create_dir_all(&slot0).unwrap();
+        std::fs::create_dir_all(&slot1).unwrap();
+        std::fs::write(slot1.join("left.txt"), b"x").unwrap(); // 전송 실패 잔존물 가정
+        let staged = vec![
+            (slot0.join("a.txt"), PathBuf::from("D:\\dest\\a.txt")),
+            (slot1.join("b.txt"), PathBuf::from("D:\\dest\\b.txt")),
+        ];
+        cleanup_staging_slots(&staged);
+        assert!(!slot0.exists(), "빈 슬롯 제거");
+        assert!(slot1.join("left.txt").exists(), "잔존 항목 보존");
+        assert!(base.exists(), "비어 있지 않은 기반 폴더는 유지");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// X2-03·G3-08·X3-09 — MC/DC: 피연산자(포커스·도크 표시·종류·PTY 기동) 각각의 독립 전환.
     #[test]
