@@ -651,6 +651,12 @@ pub unsafe fn track(
         )
         .0 as u32;
         timing::mark("TrackPopupMenuEx(user)");
+        // 메뉴가 닫혔으니 포워딩 즉시 해제(10-02 G8-20) — 아래 InvokeCommand가 띄우는 모달 UI
+        // (연결 프로그램·보내기 등)가 이 hwnd를 owner로 메뉴를 열면 WM_INITMENUPOPUP 등이 이
+        // wndproc에 오는데, 그 **남의 HMENU**가 주 메뉴 핸들러(submenu==0 폴백)로 흘러가면
+        // 안 된다. 닫힌 뒤에는 포워딩이 필요한 메시지가 없다(동적 서브메뉴·아이콘은 표시 중만).
+        // invoke용 `p.icm`·`p.new_icm`은 별도 소유라 영향 없음.
+        ACTIVE.set(Vec::new());
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         if sel >= ID_CUSTOM_FIRST {
             return Outcome::Custom(sel); // 고유 병합 항목 — 호출자 분기
@@ -698,7 +704,7 @@ pub unsafe fn track(
             Err(_) => Outcome::Cancelled, // 확장 실패 격리(ADR-0005 위험 1)
         }
     })();
-    ACTIVE.set(Vec::new());
+    ACTIVE.set(Vec::new()); // 멱등 — 위 해제의 보호선
     drop(p); // DestroyMenu + PIDL 해제
     out
 }
@@ -846,4 +852,46 @@ unsafe fn get_verb(icm: &IContextMenu, id_offset: u32) -> Option<String> {
     .ok()?; // 일부 확장은 미구현/실패 → 식별 불가 — 가로채기 없이 셸 실행
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     Some(String::from_utf16_lossy(&buf[..len]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ICM 없는 가짜 호스트 — 라우팅 선택만 검증(handle은 icm2/icm3 None이면 무동작).
+    fn fake_host(submenu: isize, first: u32, last: u32) -> MenuHost {
+        MenuHost {
+            icm2: None,
+            icm3: None,
+            submenu,
+            first,
+            last,
+        }
+    }
+
+    /// G8-20: ACTIVE가 비면(메뉴 닫힌 뒤) 메뉴 메시지는 포워딩되지 않고 None(DefWindowProc).
+    #[test]
+    fn forward_stops_once_active_cleared() {
+        ACTIVE.set(vec![fake_host(0, ID_SHELL_FIRST, ID_SHELL_LAST)]);
+        // 표시 중: 모르는 HMENU도 주 메뉴 핸들러로 폴백 소비(Some(0)).
+        assert_eq!(
+            forward_menu_msg(WM_INITMENUPOPUP, WPARAM(0x1234), LPARAM(0)),
+            Some(LRESULT(0))
+        );
+        // 메뉴 닫힘 = track이 TrackPopupMenuEx 직후 비움 → 이후 메시지는 미소비.
+        ACTIVE.set(Vec::new());
+        assert_eq!(
+            forward_menu_msg(WM_INITMENUPOPUP, WPARAM(0x1234), LPARAM(0)),
+            None
+        );
+        assert_eq!(forward_menu_msg(WM_MENUCHAR, WPARAM(0), LPARAM(0)), None);
+    }
+
+    /// 메뉴 메시지가 아닌 것은 ACTIVE와 무관하게 None.
+    #[test]
+    fn non_menu_messages_pass_through() {
+        ACTIVE.set(vec![fake_host(0, ID_SHELL_FIRST, ID_SHELL_LAST)]);
+        assert_eq!(forward_menu_msg(WM_NULL, WPARAM(0), LPARAM(0)), None);
+        ACTIVE.set(Vec::new());
+    }
 }
