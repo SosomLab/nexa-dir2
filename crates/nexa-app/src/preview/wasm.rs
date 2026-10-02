@@ -41,6 +41,15 @@ const READ_CAP: usize = 256 * 1024;
 const OUT_CAP: usize = 1 << 20;
 /// `read_at` 1회 클램프(임의 위치 읽기 — 목록 파싱에 충분하고 폭주는 막는다).
 const READ_AT_CAP: usize = 4 * 1024 * 1024;
+/// `read_at` 호출당 **누적 바이트 상한**(Ultracode G11 누락1 — A15). 종전은 호출마다 고정 100_000
+/// 연료를 과금해 `FUEL` 기준 약 2000회가 상한이었고, 멤버마다 1~2회 읽는 번들 archive.wasm은
+/// 멤버 수천 개의 ar(.lib)·cpio를 통째로 실패시켰다. 이제 횟수 폭주는 벽시계([`CALL_TIMEOUT_MS`])가,
+/// 데이터 폭주는 이 누적 상한이 막고 연료는 고정분 소액 + 바이트 비례만 과금한다.
+const READ_AT_TOTAL_CAP: u64 = 64 * 1024 * 1024;
+/// `read_at` 1회 고정 연료(진입·open 비용 — `FUEL` 기준 20만 회).
+const READ_AT_FUEL_FIXED: u64 = 1_000;
+/// `read_at` 바이트 비례 연료의 분모(64바이트당 1 — 4MB 읽기 = 65_536).
+const READ_AT_FUEL_PER_BYTES: u64 = 64;
 /// 압축 목록 항목 상한(그리드 보호 — nexa-vfs 상한과 동일 취지).
 const ARCHIVE_CAP: usize = 50_000;
 /// 호출당 **벽시계 상한**(점검 1차 #5 — ADR-0005가 약속한 시간 상한. 호스트 임포트 진입 시 검사 →
@@ -54,6 +63,8 @@ struct HostCtx {
     path: PathBuf,
     limits: StoreLimits,
     deadline: std::time::Instant,
+    /// 이번 호출에서 `read_at`이 실제로 읽은 누적 바이트([`READ_AT_TOTAL_CAP`] 게이트).
+    read_total: u64,
 }
 
 /// 호스트 임포트 공통 게이트(점검 1차 #5): ① 벽시계 상한 초과 → 트랩 ② 호스트 작업 비용을 **연료에 과금**
@@ -129,7 +140,12 @@ fn linker(engine: &Engine) -> Result<Linker<HostCtx>, wasmi::Error> {
     l.func_wrap(
         "env",
         "render_svg",
-        |mut caller: Caller<'_, HostCtx>, sptr: i32, slen: i32, optr: i32, ocap: i32| -> Result<i32, wasmi::Error> {
+        |mut caller: Caller<'_, HostCtx>,
+         sptr: i32,
+         slen: i32,
+         optr: i32,
+         ocap: i32|
+         -> Result<i32, wasmi::Error> {
             host_guard(&mut caller, 5_000_000)?; // GDI+ 래스터 + 임시 BMP — 가장 비싼 임포트
             let Some(mem) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
                 return Ok(0);
@@ -177,17 +193,38 @@ fn linker(engine: &Engine) -> Result<Linker<HostCtx>, wasmi::Error> {
     l.func_wrap(
         "env",
         "read_at",
-        |mut caller: Caller<'_, HostCtx>, off: i64, ptr: i32, cap: i32| -> Result<i32, wasmi::Error> {
+        |mut caller: Caller<'_, HostCtx>,
+         off: i64,
+         ptr: i32,
+         cap: i32|
+         -> Result<i32, wasmi::Error> {
             use std::io::{Read, Seek, SeekFrom};
-            host_guard(&mut caller, 100_000 + (cap.max(0) as u64) / 4)?; // 고정 + 바이트 비례
+            // 고정분은 소액(A15 — 종전 100_000은 호출 2000회에서 연료 소진). 횟수 폭주 = 벽시계.
+            host_guard(&mut caller, READ_AT_FUEL_FIXED)?;
             if off < 0 {
                 return Ok(0);
             }
             let path = caller.data().path.clone();
-            let cap = (cap.max(0) as usize).min(READ_AT_CAP);
+            let want = (cap.max(0) as usize).min(READ_AT_CAP);
             let Ok(mut f) = std::fs::File::open(&path) else {
                 return Ok(0);
             };
+            // 파일 끝 너머는 읽을 게 없다 — 유효 길이로 잘라 버퍼·과금 모두 실제 바이트 기준.
+            let len = f.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
+            let cap = len.saturating_sub(off as u64).min(want as u64) as usize;
+            if cap == 0 {
+                return Ok(0);
+            }
+            // 바이트 비례 과금 + 호출당 누적 바이트 상한(데이터 폭주 게이트)
+            host_guard(&mut caller, (cap as u64) / READ_AT_FUEL_PER_BYTES)?;
+            let total = caller.data().read_total + cap as u64;
+            if total > READ_AT_TOTAL_CAP {
+                return Err(wasmi::Error::new(format!(
+                    "read_at 누적 {}MB 상한 초과",
+                    READ_AT_TOTAL_CAP >> 20
+                )));
+            }
+            caller.data_mut().read_total = total;
             if f.seek(SeekFrom::Start(off as u64)).is_err() {
                 return Ok(0);
             }
@@ -250,10 +287,22 @@ fn linker(engine: &Engine) -> Result<Linker<HostCtx>, wasmi::Error> {
 
 /// 인스턴스 생성 + `fn_name() -> ptr` 호출 후 버퍼 회수(연료·메모리 상한 적용).
 fn call_buf(plugin: &WasmPlugin, path: &Path, fn_name: &str) -> Result<String, String> {
+    call_buf_timeout(plugin, path, fn_name, CALL_TIMEOUT_MS)
+}
+
+/// [`call_buf`]의 벽시계 상한 지정판 — 테스트가 연료 과금만 떼어 검증할 때 쓴다
+/// (디버그 빌드의 wasmi 인터프리터는 릴리스보다 수 배 느려 1.5 s 상한에 먼저 걸린다).
+fn call_buf_timeout(
+    plugin: &WasmPlugin,
+    path: &Path,
+    fn_name: &str,
+    timeout_ms: u64,
+) -> Result<String, String> {
     let ctx = HostCtx {
         path: path.to_path_buf(),
         limits: StoreLimitsBuilder::new().memory_size(MEM_CAP).build(),
-        deadline: std::time::Instant::now() + std::time::Duration::from_millis(CALL_TIMEOUT_MS),
+        deadline: std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms),
+        read_total: 0,
     };
     let mut store = Store::new(&plugin.engine, ctx);
     store.limiter(|c| &mut c.limits);
@@ -467,7 +516,8 @@ impl WasmProvider {
     }
 
     fn record(&self, ok: bool) {
-        self.failures.set(if ok { 0 } else { self.failures.get() + 1 });
+        self.failures
+            .set(if ok { 0 } else { self.failures.get() + 1 });
     }
 }
 
@@ -551,7 +601,11 @@ mod tests {
             "a/b.txt\t100\t40\t1700000000\tutc\tStore\n",
             "d\t0\t0\t0\tdir\t"
         );
-        let esc = |s: &str| s.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t");
+        let esc = |s: &str| {
+            s.replace('\\', "\\\\")
+                .replace('\n', "\\n")
+                .replace('\t', "\\t")
+        };
         format!(
             r#"
 (module
@@ -618,7 +672,10 @@ mod tests {
             .iter()
             .find(|e| e.path == "a/b.txt")
             .unwrap();
-        assert_eq!((f.size, f.packed, f.method.as_str()), (Some(100), Some(40), "Store"));
+        assert_eq!(
+            (f.size, f.packed, f.method.as_str()),
+            (Some(100), Some(40), "Store")
+        );
         assert_eq!((f.modified, f.time_is_local), (Some(1_700_000_000), false));
         let dir = doc.listing.entries.iter().find(|e| e.path == "d").unwrap();
         assert!(dir.is_dir && dir.size.is_none(), "폴더 행은 크기 없음");
@@ -661,25 +718,125 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// ar 멤버 1건(60B 헤더 + 데이터, 짝수 정렬) — sample_tests::ar_member와 같은 조립.
+    fn ar_member(name: &str, data: &[u8]) -> Vec<u8> {
+        let mut h = format!(
+            "{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}",
+            name,
+            1_700_000_000u64,
+            0,
+            0,
+            100644,
+            data.len()
+        );
+        h.push('`');
+        h.push('\n');
+        let mut v = h.into_bytes();
+        v.extend_from_slice(data);
+        if v.len() % 2 != 0 {
+            v.push(b'\n');
+        }
+        v
+    }
+
+    /// Ultracode G11 누락1(A15): 번들 archive.wasm은 ar 멤버마다 `read_at` 1회를 부르는데
+    /// 종전 호스트가 호출당 고정 100_000 연료를 과금해(FUEL 2억 ÷ 10만 ≈ 2000회) 멤버 수천 개의
+    /// Windows import .lib·cpio가 "연료 소진"으로 통째로 실패했다 → 2500멤버 합성 ar가 Ok여야 한다.
+    #[test]
+    fn read_at_fuel_allows_thousands_of_members() {
+        let dist = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/archive-viewer-wasm/dist/archive.wasm");
+        let d = std::env::temp_dir().join(format!("nexa_wasm_ar2500_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::copy(&dist, d.join("archive.wasm")).unwrap();
+        let (plugins, errors) = load_dir(&d);
+        assert!(errors.is_empty(), "{errors:?}");
+        let p = &plugins[0];
+        assert!(p.is_archive());
+
+        const N: usize = 2500;
+        let mut ar = b"!<arch>\n".to_vec();
+        for i in 0..N {
+            ar.extend(ar_member(&format!("m{i}.o/"), b"xx"));
+        }
+        let f = d.join("big.a");
+        std::fs::write(&f, &ar).unwrap();
+        // 벽시계는 넉넉히(디버그 wasmi — 릴리스는 0.2 s 안에 끝난다). 연료만 검증 대상.
+        let out = call_buf_timeout(p, &f, "nx_archive", 60_000)
+            .unwrap_or_else(|e| panic!("{N}멤버 ar 목록 실패: {e}"));
+        let mut it = out.lines();
+        assert_eq!(it.next(), Some("archive"), "{}", &out[..out.len().min(80)]);
+        assert_eq!(it.next().map(|h| h.starts_with("ar\t")), Some(true));
+        let rows: Vec<&str> = it.collect();
+        assert_eq!(rows.len(), N, "멤버 전부 나열");
+        assert!(
+            rows[N - 1].starts_with(&format!("m{}.o\t", N - 1)),
+            "{}",
+            rows[N - 1]
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `read_at`을 끝없이 부르는 모듈 — 누적 바이트 상한(A15) 검증용. 메모리 70페이지(4.4MB)라
+    /// 4MB 읽기가 게스트 버퍼에 들어간다.
+    const WAT_READ_LOOP: &str = r#"
+(module
+  (import "env" "read_at" (func $readat (param i64 i32 i32) (result i32)))
+  (memory (export "memory") 70)
+  (data (i32.const 1024) "rl\nReadLoop\nbin")
+  (func (export "nx_meta") (result i32)
+    (i32.store (i32.const 1020) (i32.const 15))
+    (i32.const 1020))
+  (func (export "nx_readloop") (result i32)
+    (loop (drop (call $readat (i64.const 0) (i32.const 4096) (i32.const 4194304))) (br 0))
+    (i32.const 0)))
+"#;
+
+    /// A15: 고정 과금을 낮춘 대신 **호출당 누적 바이트 상한**이 데이터 폭주를 막는다 —
+    /// 4MB 파일을 4MB씩 반복 읽으면 64MB 누적에서 트랩(연료 소진·벽시계보다 먼저).
+    #[test]
+    fn read_at_total_bytes_cap_traps_runaway_reads() {
+        let d = std::env::temp_dir().join(format!("nexa_wasm_rl_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("rl.wasm"), wat::parse_str(WAT_READ_LOOP).unwrap()).unwrap();
+        let (plugins, errors) = load_dir(&d);
+        assert_eq!(plugins.len(), 1, "{errors:?}");
+        let t = d.join("t.bin");
+        std::fs::write(&t, vec![7u8; READ_AT_CAP]).unwrap();
+        let err = call_buf(&plugins[0], &t, "nx_readloop").unwrap_err();
+        assert!(err.contains("read_at 누적"), "누적 상한 트랩: {err}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn breaker_disables_plugin_after_consecutive_failures() {
         let d = std::env::temp_dir().join(format!("nexa_wasm_brk_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("bad.wasm"), wat::parse_str(WAT_BROKEN_PREVIEW).unwrap()).unwrap();
+        std::fs::write(
+            d.join("bad.wasm"),
+            wat::parse_str(WAT_BROKEN_PREVIEW).unwrap(),
+        )
+        .unwrap();
         let (mut plugins, _) = load_dir(&d);
         let prov = WasmProvider::new(plugins.remove(0));
         let t = d.join("x.abc");
         std::fs::write(&t, "hi").unwrap();
         for i in 0..BREAKER_LIMIT {
             match prov.preview(&t) {
-                PreviewDoc::Lines(l) => assert!(l[0].contains("nx_preview"), "{i}: 실행 오류 1줄: {l:?}"),
+                PreviewDoc::Lines(l) => {
+                    assert!(l[0].contains("nx_preview"), "{i}: 실행 오류 1줄: {l:?}")
+                }
                 _ => panic!("lines"),
             }
         }
         assert!(prov.tripped(), "연속 {BREAKER_LIMIT}회 실패 → 격리");
         match prov.preview(&t) {
-            PreviewDoc::Lines(l) => assert!(!l[0].contains("nx_preview"), "격리 안내로 대체: {l:?}"),
+            PreviewDoc::Lines(l) => {
+                assert!(!l[0].contains("nx_preview"), "격리 안내로 대체: {l:?}")
+            }
             _ => panic!("lines"),
         }
         let _ = std::fs::remove_dir_all(&d);
