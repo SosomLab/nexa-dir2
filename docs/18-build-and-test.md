@@ -36,6 +36,25 @@ cargo build --release -p nexa-app
 cargo run --release -p nexa-app --example ctxmenu_probe -- "C:\path\to\file.pptx"
 ```
 
+### 2-2. UI 자동 조작·캡처 하네스 — `scripts/ui-qa.ps1` (10-02)
+
+실기 QA를 사람 손 없이 재현한다. **PostMessage**로 앱 창에 마우스/휠/키 메시지를 직접
+보내므로(SendInput 아님) 사용자 포커스를 훔치지 않고 창이 가려져 있어도 동작하며,
+`PrintWindow(PW_RENDERFULLCONTENT)`로 클라이언트 영역을 PNG로 캡처한다. 좌표 = 클라이언트
+좌표(= 캡처 PNG 픽셀). 종료는 반드시 `Close-Win`(WM_CLOSE = 세션 저장 — kill 금지).
+
+```powershell
+. scripts/ui-qa.ps1
+$p = Start-NexaDev; $h = Get-NexaHwnd $p.Id      # target\release\nexa-app.exe
+Capture-Win $h before.png
+Click $h 760 481; Drag $h 720 595 800 635; Wheel $h 1320 640 -120 -Shift
+Capture-Win $h after.png; Get-NexaStats $p.Id; Close-Win $h
+```
+
+첫 사용 10-02: 도크 Info 드래그 선택·빈 영역 앵커·가로 스크롤(좁힌 도크 + Shift+휠)·
+바 페이드를 캡처로 판정했고, DW 글리프가 GDI 클립을 무시해 왼쪽으로 번지는 결함을
+이 캡처에서 발견했다(코드 리뷰로는 못 잡는 종류).
+
 ## 3. 릴리스 프로파일 (예산 B2)
 
 - 워크스페이스 `[profile.release]`: `opt-level=3` · `lto="fat"` · `codegen-units=1` · `panic="abort"` · `strip="symbols"`.
