@@ -4,6 +4,7 @@
 
 use crate::draw::DrawCtx;
 use crate::event::{InputEvent, WheelAccum};
+use crate::fastscroll::FastScroller;
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::widget::{Invalidations, Widget};
@@ -61,6 +62,8 @@ pub struct InfoDock {
     /// 0줄로 버려 "천천히 움직이면 스크롤 안 됨"이 됐다). 세로 = 줄, 가로 = px.
     wheel: WheelAccum,
     hwheel: WheelAccum,
+    /// 고속 스크롤(10-02 — 휠 노치 연타 배수 + ×N 배지).
+    fast: FastScroller,
     /// 내용 식별 키(10-02 QA): 같은 키로 내용만 바뀌면(상세 도착·액세스 시각 갱신 등)
     /// 스크롤·선택을 **유지**한다 — 종전엔 모든 변경이 스크롤을 0으로 리셋해 스크롤 중
     /// "끊기거나 튀는" 증상이 났다.
@@ -116,6 +119,7 @@ impl InfoDock {
             bars: OverlayBars::default(),
             wheel: WheelAccum::default(),
             hwheel: WheelAccum::default(),
+            fast: FastScroller::default(),
             content_key: String::new(),
         }
     }
@@ -211,6 +215,7 @@ impl InfoDock {
     /// 주기 틱(호스트 TIMER_WIDGET_TICK) — 오버레이 바 유지/페이드.
     pub fn tick(&mut self, inv: &mut Invalidations) {
         self.bars.tick(self.content_rect(), inv);
+        self.fast.tick(self.content_rect(), inv); // 속도 배지(10-02)
     }
 
     /// 내용 라인 y→**절대** 인덱스(스크롤 반영. 이미지·터미널 종류는 None).
@@ -654,9 +659,14 @@ impl Widget for InfoDock {
                 // 동일). 호스트가 내용 영역 hover일 때만 라우팅한다.
                 if self.image.is_none() && !self.lines.is_empty() {
                     let step = self.wheel.add(delta, 3);
+                    let step = self.fast.wheel(delta, step); // 고속 스크롤(10-02)
                     if step != 0 {
                         let to = (self.scroll as i32 - step).max(0) as usize;
                         let _ = self.scroll_to(to, inv);
+                    }
+                    if self.fast.hud_visible() {
+                        inv.push(self.content_rect());
+                        inv.request_tick();
                     }
                 }
             }
@@ -664,8 +674,13 @@ impl Widget for InfoDock {
                 // 가로 스크롤(10-02 — Shift+휠·틸트 휠. 양수 = 오른쪽, 노치당 행 높이×3px)
                 if self.image.is_none() && !self.lines.is_empty() {
                     let step = self.hwheel.add(delta, self.row_h * 3);
+                    let step = self.fast.wheel(delta, step);
                     if step != 0 {
                         let _ = self.hscroll_to(self.scroll_x + step, inv);
+                    }
+                    if self.fast.hud_visible() {
+                        inv.push(self.content_rect());
+                        inv.request_tick();
                     }
                 }
             }
@@ -867,6 +882,8 @@ impl Widget for InfoDock {
         }
         self.draw_popout(ctx, theme, strip.bottom());
         self.bars.paint(ctx, theme, self.geoms()); // 오버레이 바(10-02) — 내용 위 마지막
+        self.fast
+            .paint(ctx, theme, self.content_rect(), self.row_h, self.pad_x); // ×N 배지
     }
 }
 

@@ -5,6 +5,7 @@
 use crate::columns::{order_badge, Align, Column};
 use crate::draw::DrawCtx;
 use crate::event::{InputEvent, Key, WheelAccum};
+use crate::fastscroll::FastScroller;
 use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::typeahead::{TypeAhead, TYPEAHEAD_TIMEOUT_MS};
@@ -222,6 +223,8 @@ pub struct VirtualRows<S> {
     indent_w: i32,
     wheel: WheelAccum,
     hwheel: WheelAccum,
+    /// 고속 스크롤(10-02 — nexa-sql ScrollAccel 이식): 휠 노치·↑↓ 자동 반복 연속 시 배수 + ×N 배지.
+    fast: FastScroller,
     /// 컬럼 정의(비면 헤더 없는 단일 트리 컬럼 — M1-3 호환).
     columns: Vec<Column>,
     /// 정렬 상태(우선순위 순). 빈 목록 = 소스 기본 정렬.
@@ -289,6 +292,7 @@ impl<S: RowSource> VirtualRows<S> {
             indent_w: indent_w.max(1),
             wheel: WheelAccum::default(),
             hwheel: WheelAccum::default(),
+            fast: FastScroller::default(),
             columns: Vec::new(),
             sort: Vec::new(),
             resize: None,
@@ -645,6 +649,7 @@ impl<S: RowSource> VirtualRows<S> {
         if self.typeahead.tick(now_ms) {
             inv.push(self.bounds);
         }
+        self.fast.tick(self.bounds, inv); // 속도 배지 유지/페이드(10-02)
         for axis in [Axis::V, Axis::H] {
             if self.axis_hot(axis) {
                 continue; // 호버/드래그 중인 축은 페이드 보류(이탈 시 flash_bar가 재개)
@@ -1698,16 +1703,27 @@ impl<S: RowSource> Widget for VirtualRows<S> {
         let page = (self.body_h() / self.row_h).max(1) as isize;
         match *ev {
             InputEvent::Wheel { delta } => {
-                let lines = self.wheel.add(delta, WHEEL_LINES) as isize;
+                let lines = self.wheel.add(delta, WHEEL_LINES);
+                // 고속 스크롤(10-02): 노치 연타면 배수(정밀 터치패드 분수 delta는 그대로)
+                let lines = self.fast.wheel(delta, lines) as isize;
                 if lines != 0 {
                     self.scroll_to(cur - lines, inv);
+                }
+                if self.fast.hud_visible() {
+                    inv.push(self.bounds);
+                    inv.request_tick();
                 }
             }
             InputEvent::HWheel { delta } => {
                 let lines = self.hwheel.add(delta, WHEEL_LINES);
+                let lines = self.fast.wheel(delta, lines);
                 if lines != 0 {
                     let x = self.scroll_x + lines * HSCROLL_PX;
                     self.hscroll_to(x, inv); // 가로 오버레이 바 표시(09-04)
+                }
+                if self.fast.hud_visible() {
+                    inv.push(self.bounds);
+                    inv.request_tick();
                 }
             }
             InputEvent::Key { key, shift, ctrl } => {
@@ -1716,13 +1732,23 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     return;
                 }
                 let caret = self.caret.unwrap_or(self.scroll_row).min(len - 1);
+                // 고속 스크롤(10-02): ↑/↓ 자동 반복이 짧은 간격으로 이어지면 한 번에 k행
+                let k = match key {
+                    Key::Up => self.fast.key(-1) as isize,
+                    Key::Down => self.fast.key(1) as isize,
+                    _ => 1,
+                };
+                if self.fast.hud_visible() {
+                    inv.push(self.bounds);
+                    inv.request_tick();
+                }
                 // 타일 그리드(07-16): ↑/↓ = ±열 수, ←/→ = ∓1/+1 (탐색기 아이콘 뷰 규약)
                 if self.mode == ViewMode::Tiles {
                     let cols = self.grid_cols() as isize;
                     let cur = caret as isize;
                     let target = match key {
-                        Key::Up => cur - cols,
-                        Key::Down => cur + cols,
+                        Key::Up => cur - cols * k,
+                        Key::Down => cur + cols * k,
                         Key::Left => cur - 1,
                         Key::Right => cur + 1,
                         Key::PageUp => cur - page * cols,
@@ -1747,8 +1773,8 @@ impl<S: RowSource> Widget for VirtualRows<S> {
                     Key::Up | Key::Down | Key::PageUp | Key::PageDown | Key::Home | Key::End => {
                         let cur = caret as isize;
                         let target = match key {
-                            Key::Up => cur - 1,
-                            Key::Down => cur + 1,
+                            Key::Up => cur - k,
+                            Key::Down => cur + k,
                             Key::PageUp => cur - page,
                             Key::PageDown => cur + page,
                             Key::Home => 0,
@@ -2260,6 +2286,8 @@ impl<S: RowSource> Widget for VirtualRows<S> {
             ctx.fill_rect(Rect::new(hud.right() - 1, hud.y, 1, hud.h), theme.accent);
         }
         self.paint_bar(ctx, theme); // 오버레이 스크롤바(09-04) — 본문 위 마지막
+        self.fast
+            .paint(ctx, theme, self.bounds, self.row_h, self.pad_x); // ×N 배지(10-02)
     }
 }
 
@@ -2548,6 +2576,22 @@ mod tests {
         v.on_event(&key(Key::Home), &mut inv);
         assert_eq!(v.scroll_row(), 0);
         assert_eq!(v.caret(), Some(0));
+    }
+
+    #[test]
+    fn fast_scroll_multiplies_rapid_wheel_notches_but_not_trackpad() {
+        // 10-02 고속 스크롤(nexa-sql 이식): 노치(120) 연타 = 6번째부터 ×2(step 5) · 분수 delta = 그대로
+        let (mut v, mut inv) = list(100, 200); // 완전 가시 10행
+        for _ in 0..8 {
+            v.on_event(&InputEvent::Wheel { delta: -120 }, &mut inv);
+        }
+        assert_eq!(v.scroll_row(), 5 * 3 + 3 * 6, "5회 ×1 + 3회 ×2");
+        assert!(inv.tick_requested(), "배지 = 틱 요청");
+        let (mut v2, mut inv2) = list(100, 200);
+        for _ in 0..15 {
+            v2.on_event(&InputEvent::Wheel { delta: -8 }, &mut inv2); // 트랙패드 = 누적만
+        }
+        assert_eq!(v2.scroll_row(), 3, "노치 미만 delta는 가속 없음(120 = 3행)");
     }
 
     #[test]

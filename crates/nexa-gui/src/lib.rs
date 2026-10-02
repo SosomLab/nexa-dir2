@@ -8,6 +8,7 @@ pub mod columns;
 pub mod draw;
 pub mod edit;
 pub mod event;
+pub mod fastscroll;
 pub mod geom;
 pub mod theme;
 pub mod typeahead;
