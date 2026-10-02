@@ -100,6 +100,90 @@ thread_local! {
     static ACTIVE: RefCell<Vec<MenuHost>> = const { RefCell::new(Vec::new()) };
 }
 
+/// 우클릭 지연 계측(10-02 — 탐색기 대비 분석). `NEXA_CTX_TIMING=1`일 때만 동작:
+/// 단계 시각 + 메뉴 메시지 포워딩 누적을 임시 폴더 `nexa-ctxmenu-timing.log`에 한 줄 추가.
+/// 꺼져 있으면 `mark`/`fwd` = 분기 하나(무비용).
+mod timing {
+    use std::cell::RefCell;
+    use std::time::Instant;
+    pub struct T {
+        pub t0: Instant,
+        pub marks: Vec<(&'static str, f64)>,
+        pub fwd_ms: f64,
+        pub fwd_n: u32,
+        pub first_fwd: Option<f64>,
+    }
+    thread_local! {
+        static CUR: RefCell<Option<T>> = const { RefCell::new(None) };
+    }
+    pub fn enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("NEXA_CTX_TIMING").is_some_and(|v| v == "1"))
+    }
+    pub fn start() {
+        if enabled() {
+            CUR.set(Some(T {
+                t0: Instant::now(),
+                marks: Vec::new(),
+                fwd_ms: 0.0,
+                fwd_n: 0,
+                first_fwd: None,
+            }));
+        }
+    }
+    pub fn mark(name: &'static str) {
+        if enabled() {
+            CUR.with_borrow_mut(|c| {
+                if let Some(t) = c {
+                    let ms = t.t0.elapsed().as_secs_f64() * 1000.0;
+                    t.marks.push((name, ms));
+                }
+            });
+        }
+    }
+    pub fn fwd(began: Option<Instant>) {
+        if let Some(b) = began {
+            CUR.with_borrow_mut(|c| {
+                if let Some(t) = c {
+                    t.fwd_ms += b.elapsed().as_secs_f64() * 1000.0;
+                    t.fwd_n += 1;
+                    if t.first_fwd.is_none() {
+                        t.first_fwd = Some(b.duration_since(t.t0).as_secs_f64() * 1000.0);
+                    }
+                }
+            });
+        }
+    }
+    pub fn finish(label: &str) {
+        if !enabled() {
+            return;
+        }
+        let Some(t) = CUR.take() else { return };
+        let mut line = format!("{label}:");
+        let mut prev = 0.0;
+        for (n, ms) in &t.marks {
+            line.push_str(&format!(" {n} +{:.1}", ms - prev));
+            prev = *ms;
+        }
+        line.push_str(&format!(
+            " | fwd {} msgs {:.1} ms (first at {:.1}) | total {:.1} ms\n",
+            t.fwd_n,
+            t.fwd_ms,
+            t.first_fwd.unwrap_or(-1.0),
+            t.t0.elapsed().as_secs_f64() * 1000.0
+        ));
+        let p = std::env::temp_dir().join("nexa-ctxmenu-timing.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+        {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+}
+
 impl MenuHost {
     /// 메뉴 메시지 1건 포워딩 — 확장 예외는 HRESULT로 격리(메뉴 그리기 실패 무시, 원본 동일).
     fn handle(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -126,7 +210,8 @@ pub fn forward_menu_msg(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRES
     ) {
         return None;
     }
-    ACTIVE.with_borrow(|active| {
+    let began = timing::enabled().then(std::time::Instant::now);
+    let r = ACTIVE.with_borrow(|active| {
         if active.is_empty() {
             return None;
         }
@@ -163,7 +248,9 @@ pub fn forward_menu_msg(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRES
         let target = target.or_else(|| active.iter().find(|m| m.submenu == 0))?;
         target.handle(msg, wparam, lparam);
         Some(LRESULT(0))
-    })
+    });
+    timing::fwd(began);
+    r
 }
 
 /// 셸 메뉴 표시. `paths`는 **같은 부모 폴더**의 파일/폴더들.
@@ -191,6 +278,7 @@ pub unsafe fn show(
     if paths.is_empty() {
         return Outcome::Cancelled;
     }
+    timing::start();
     let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     let out = show_inner(
         hwnd,
@@ -205,6 +293,7 @@ pub unsafe fn show(
     if hr.is_ok() {
         CoUninitialize();
     }
+    timing::finish("item");
     out
 }
 
@@ -252,10 +341,12 @@ unsafe fn show_inner(
             return Outcome::Cancelled;
         }
 
+        timing::mark("parse+bind");
         // 2) IContextMenu 취득 → 공용 메뉴 흐름.
         let Ok(icm) = folder.GetUIObjectOf::<IContextMenu>(hwnd, &children, None) else {
             return Outcome::Cancelled;
         };
+        timing::mark("GetUIObjectOf");
         run_menu(
             hwnd,
             &icm,
@@ -380,6 +471,7 @@ unsafe fn run_menu(
         {
             return Outcome::Cancelled;
         }
+        timing::mark("QueryContextMenu");
         // 2-0) 셸 항목 **제자리 대체**(원본 VerbReplacement — QA 07-14): 대상 verb의 메뉴
         // 항목 ID만 고유 ID로 바꿔치기 — 위치·라벨(=윈도우 기본 다국어) 그대로, 선택 시
         // Outcome::Custom으로 우리 경로 실행(단일 부모 한계 우회).
@@ -413,6 +505,7 @@ unsafe fn run_menu(
                 }
             }
         }
+        timing::mark("verbs");
         // 2-1) 고유 항목 병합(0x8000+) — 앵커(`after_id`) 지정은 그 항목 바로 아래 삽입,
         // 나머지는 구분자로 섹션 분리 후 하단(ADR-0005. 셸 제공 동사는 중복 금지).
         if !custom.is_empty() {
@@ -458,6 +551,7 @@ unsafe fn run_menu(
         // 2-2) "새로 만들기" 서브메뉴 병합(07-27 사용자) — 셸 New 확장(CLSID_NewMenu)을
         // 대상 폴더로 직접 초기화해 하단 섹션에 삽입. 실패는 조용히 생략(메뉴는 정상 표시).
         let new_icm = new_menu.and_then(|spec| attach_new_menu(hmenu, spec));
+        timing::mark("custom+NewMenu");
         if let Some((icm, sub)) = &new_icm {
             // 서브메뉴 lazy 채움(WM_INITMENUPOPUP)을 위해 포워딩 대상에 추가 —
             // 소유 서브메뉴 핸들·New 대역으로 선별 라우팅(QA 07-27 평탄 삽입 방지)
@@ -478,6 +572,7 @@ unsafe fn run_menu(
             let _ = GetCursorPos(&mut p);
             p
         });
+        timing::mark("pre-track");
         let _ = SetForegroundWindow(hwnd); // 메뉴 밖 클릭 시 정상 닫힘(표준 관례)
         let sel = TrackPopupMenuEx(
             hmenu,
@@ -488,6 +583,7 @@ unsafe fn run_menu(
             None,
         )
         .0 as u32;
+        timing::mark("TrackPopupMenuEx(user)");
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         if sel >= ID_CUSTOM_FIRST {
             return Outcome::Custom(sel); // 고유 병합 항목 — 호출자 분기
@@ -541,7 +637,12 @@ unsafe fn run_menu(
 }
 
 /// InvokeCommand 공용 래퍼 — lpVerb = MAKEINTRESOURCE(대역 내 오프셋).
-unsafe fn invoke(icm: &IContextMenu, hwnd: HWND, offset: u32, pt: POINT) -> windows::core::Result<()> {
+unsafe fn invoke(
+    icm: &IContextMenu,
+    hwnd: HWND,
+    offset: u32,
+    pt: POINT,
+) -> windows::core::Result<()> {
     let inv = CMINVOKECOMMANDINFOEX {
         cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
         fMask: CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE,
@@ -602,7 +703,11 @@ unsafe fn attach_new_menu(
         return None;
     }
     // 라벨 = 앱 언어(QA 07-14 — 셸 OS 라벨 대신 앱 언어 추종. 서브메뉴 핸들은 유지)
-    let mut label: Vec<u16> = spec.label.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut label: Vec<u16> = spec
+        .label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let mii = MENUITEMINFOW {
         cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
         fMask: MIIM_STRING,
