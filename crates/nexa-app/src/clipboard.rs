@@ -18,20 +18,23 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use windows::core::w;
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, POINT};
-use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-    RegisterClipboardFormatW, SetClipboardData,
-};
 use windows::core::Interface;
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, POINT};
 use windows::Win32::System::Com::StructuredStorage::CoGetInterfaceAndReleaseStream;
 use windows::Win32::System::Com::{
     CoInitializeEx, CoUninitialize, IDataObject, IStream, COINIT_MULTITHREADED, DVASPECT_CONTENT,
     FORMATETC, TYMED_HGLOBAL, TYMED_ISTREAM,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
+};
+use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
 use windows::Win32::System::Ole::{OleGetClipboard, ReleaseStgMedium, CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::UI::Shell::{DragQueryFileW, DROPFILES, FILEDESCRIPTORW, HDROP};
 
@@ -46,10 +49,35 @@ fn effect_format() -> u32 {
 /// 클립보드 열림 가드 — drop 시 CloseClipboard(전 경로 누수 방지).
 struct Open;
 
+/// OpenClipboard 경합 재시도(A23 — G8-10): WM_CLIPBOARDUPDATE는 모든 리스너에 동시에
+/// 뿌려져 클립보드 관리자(Win+V 기록·Ditto·PowerToys)가 먼저 잡고 있으면 첫 시도가
+/// 실패한다. 실패를 '파일 없음'으로 오판하면 잘라내기 흐림 표시가 엉뚱하게 지워지고
+/// Ctrl+V·Ctrl+C가 조용히 무시된다 — 탐색기와 같은 짧은 재시도(최대 5회·10ms 간격,
+/// 첫 성공 경로는 대기 0). 읽기·쓰기·비우기 전부 [`Open::new`] 공통.
+const OPEN_ATTEMPTS: u32 = 5;
+const OPEN_RETRY_DELAY: Duration = Duration::from_millis(10);
+
 impl Open {
     fn new(hwnd: Option<HWND>) -> Option<Self> {
-        unsafe { OpenClipboard(hwnd).ok().map(|_| Self) }
+        retry(OPEN_ATTEMPTS, OPEN_RETRY_DELAY, || unsafe {
+            OpenClipboard(hwnd).is_ok()
+        })
+        .then_some(Self)
     }
+}
+
+/// `try_once`를 최대 `attempts`회 — 실패 사이에만 `delay` 대기(성공 즉시 반환·마지막
+/// 실패 뒤 대기 없음). 순수 함수(실 클립보드 비접촉 테스트용).
+fn retry(attempts: u32, delay: Duration, mut try_once: impl FnMut() -> bool) -> bool {
+    for i in 0..attempts {
+        if try_once() {
+            return true;
+        }
+        if i + 1 < attempts {
+            std::thread::sleep(delay);
+        }
+    }
+    false
 }
 
 impl Drop for Open {
@@ -63,9 +91,7 @@ impl Drop for Open {
 /// 클립보드에 파일 목록이 있는가(열지 않고 판정) — 붙여넣기 메뉴 활성 판단용.
 /// 실경로(CF_HDROP)와 가상 파일(FileGroupDescriptorW — X-42) 모두 참.
 pub fn has_files() -> bool {
-    unsafe {
-        IsClipboardFormatAvailable(CF_HDROP.0 as u32).is_ok() || has_virtual_files()
-    }
+    unsafe { IsClipboardFormatAvailable(CF_HDROP.0 as u32).is_ok() || has_virtual_files() }
 }
 
 /// 클립보드에 **가상 파일**(FileGroupDescriptorW)이 있는가(X-42) — CF_HDROP 부재 시의
@@ -302,8 +328,8 @@ fn parse_group_descriptor(bytes: &[u8]) -> Vec<VirtualItem> {
         let Some(rel) = sanitize_rel(&String::from_utf16_lossy(&name_buf[..len])) else {
             continue;
         };
-        let is_dir = fd.dwFlags & FD_ATTRIBUTES != 0
-            && fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+        let is_dir =
+            fd.dwFlags & FD_ATTRIBUTES != 0 && fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
         let size = (fd.dwFlags & FD_FILESIZE != 0 && !is_dir)
             .then(|| (u64::from(fd.nFileSizeHigh) << 32) | u64::from(fd.nFileSizeLow));
         out.push(VirtualItem { rel, is_dir, size });
@@ -657,7 +683,11 @@ unsafe fn run_file_op(
             mark_seg(
                 shared,
                 seg,
-                if ok { SegStatus::Done } else { SegStatus::Failed },
+                if ok {
+                    SegStatus::Done
+                } else {
+                    SegStatus::Failed
+                },
                 n,
             );
             return ok;
@@ -697,7 +727,12 @@ unsafe fn run_file_op(
 }
 
 /// 세그먼트 상태 갱신(done = u64::MAX면 size 그대로 완료 표기).
-fn mark_seg(shared: &crate::win::TransferShared, idx: usize, status: crate::dialog::SegStatus, done: u64) {
+fn mark_seg(
+    shared: &crate::win::TransferShared,
+    idx: usize,
+    status: crate::dialog::SegStatus,
+    done: u64,
+) {
     let mut items = crate::win::plock(&shared.items);
     if let Some(it) = items.get_mut(idx) {
         it.status = status;
@@ -725,14 +760,15 @@ fn write_stream_job(
             return false;
         }
         let mut read = 0u32;
-        let hr =
-            unsafe { stream.Read(buf.as_mut_ptr().cast(), buf.len() as u32, Some(&mut read)) };
+        let hr = unsafe { stream.Read(buf.as_mut_ptr().cast(), buf.len() as u32, Some(&mut read)) };
         if read > 0 {
             if file.write_all(&buf[..read as usize]).is_err() {
                 return false;
             }
             total += u64::from(read);
-            shared.done_bytes.fetch_add(u64::from(read), Ordering::Relaxed);
+            shared
+                .done_bytes
+                .fetch_add(u64::from(read), Ordering::Relaxed);
             {
                 let mut items = crate::win::plock(&shared.items);
                 if let Some(it) = items.get_mut(seg) {
@@ -942,9 +978,7 @@ fn to_rtf_mono(text: &str) -> String {
         }
         body.push_str("\\par ");
     }
-    format!(
-        "{{\\rtf1\\ansi\\deff0{{\\fonttbl{{\\f0\\fmodern Consolas;}}}}\\f0\\fs18 {body}}}"
-    )
+    format!("{{\\rtf1\\ansi\\deff0{{\\fonttbl{{\\f0\\fmodern Consolas;}}}}\\f0\\fs18 {body}}}")
 }
 
 /// 클립보드에 텍스트가 있는가(컨텍스트 메뉴 "붙여넣기" 활성 판정 — 10-01).
@@ -1018,7 +1052,7 @@ mod tests {
             fd("한글 문서.txt", FD_FILESIZE, 0, 7),
             fd("폴더", FD_ATTRIBUTES, FILE_ATTRIBUTE_DIRECTORY, 0),
             fd("폴더\\안쪽.bin", 0, 0, 0),
-            fd("..\\탈출.txt", 0, 0, 0),       // 상위 탈출 — 기각
+            fd("..\\탈출.txt", 0, 0, 0),      // 상위 탈출 — 기각
             fd("C:\\abs\\경로.txt", 0, 0, 0), // 드라이브 절대 — 기각
         ];
         let items = parse_group_descriptor(&group_bytes(&fds));
@@ -1087,11 +1121,7 @@ mod tests {
             Err(windows::Win32::Foundation::DV_E_FORMATETC.into())
         }
 
-        fn GetDataHere(
-            &self,
-            _: *const FORMATETC,
-            _: *mut STGMEDIUM,
-        ) -> windows::core::Result<()> {
+        fn GetDataHere(&self, _: *const FORMATETC, _: *mut STGMEDIUM) -> windows::core::Result<()> {
             Err(windows::Win32::Foundation::E_NOTIMPL.into())
         }
 
@@ -1136,9 +1166,7 @@ mod tests {
             Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
         }
 
-        fn EnumDAdvise(
-            &self,
-        ) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
+        fn EnumDAdvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
             Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
         }
     }
@@ -1217,7 +1245,11 @@ mod tests {
         let shared = crate::win::TransferShared::new_arc();
         let h = run_virtual_paste(plan, shared.clone(), 0, 0);
         h.join().unwrap();
-        assert_eq!(std::fs::read(dir.join("워커.bin")).unwrap(), big, "다중 청크 왕복");
+        assert_eq!(
+            std::fs::read(dir.join("워커.bin")).unwrap(),
+            big,
+            "다중 청크 왕복"
+        );
         assert_eq!(
             std::fs::read(dir.join("폴더").join("작은.txt")).unwrap(),
             b"ab"
@@ -1235,6 +1267,93 @@ mod tests {
             "전 세그먼트 완료"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 재시도 루프 의미(A23 — 실 클립보드 비접촉): 첫 성공에서 멈추고(성공 경로 동일 —
+    /// 1회 호출), n번째 성공은 n회, 전부 실패는 `attempts`회에서 포기.
+    #[test]
+    fn retry_stops_at_first_success_and_caps_attempts() {
+        let mut calls = 0;
+        assert!(retry(5, Duration::ZERO, || {
+            calls += 1;
+            true
+        }));
+        assert_eq!(calls, 1, "첫 시도 성공 = 재시도 없음");
+
+        let mut calls = 0;
+        assert!(retry(5, Duration::ZERO, || {
+            calls += 1;
+            calls == 3
+        }));
+        assert_eq!(calls, 3, "3번째 성공에서 중단");
+
+        let mut calls = 0;
+        assert!(!retry(5, Duration::ZERO, || {
+            calls += 1;
+            false
+        }));
+        assert_eq!(calls, 5, "전부 실패 = 상한에서 포기");
+        assert_eq!(OPEN_ATTEMPTS, 5);
+        assert_eq!(OPEN_RETRY_DELAY, Duration::from_millis(10));
+    }
+
+    /// 다른 스레드가 OpenClipboard를 점유한 동안의 `Open::new`(G8-10 재현) — 실 클립보드를
+    /// 잠그므로 수동 실행(`cargo test -p nexa-app clipboard -- --ignored`):
+    /// 짧은 점유(25ms)는 재시도 안에 풀려 성공, 긴 점유(200ms)는 상한(5×10ms)에서 포기.
+    /// 점유 스레드는 **자기 메시지 전용 창**으로 연다 — hwnd=None은 같은 프로세스 안에서
+    /// 재열기가 허용돼 타 앱 경합이 재현되지 않는다(실측).
+    #[test]
+    #[ignore]
+    fn open_retries_while_another_thread_holds_clipboard() {
+        use std::sync::mpsc;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+        };
+        fn hold_for(ms: u64) -> (std::thread::JoinHandle<()>, mpsc::Receiver<()>) {
+            let (tx, rx) = mpsc::channel();
+            let h = std::thread::spawn(move || unsafe {
+                let hwnd = CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("STATIC"),
+                    w!(""),
+                    WINDOW_STYLE(0),
+                    0,
+                    0,
+                    0,
+                    0,
+                    Some(HWND_MESSAGE),
+                    None,
+                    None,
+                    None,
+                )
+                .expect("점유 스레드 메시지 전용 창");
+                assert!(OpenClipboard(Some(hwnd)).is_ok(), "점유 스레드 열기");
+                tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(ms));
+                let _ = CloseClipboard();
+                let _ = DestroyWindow(hwnd);
+            });
+            rx.recv().unwrap(); // 점유 확정 후 진행
+            (h, rx)
+        }
+        unsafe {
+            let (h, _rx) = hold_for(25);
+            let single = OpenClipboard(None).is_ok();
+            if single {
+                let _ = CloseClipboard();
+            }
+            assert!(!single, "점유 중 단발 OpenClipboard는 실패(재현 전제)");
+            assert!(Open::new(None).is_some(), "25ms 점유 → 재시도 안에 열림");
+            h.join().unwrap();
+
+            let (h, _rx) = hold_for(200);
+            assert!(
+                Open::new(None).is_none(),
+                "200ms 점유 → 5×10ms 상한에서 포기"
+            );
+            h.join().unwrap();
+            assert!(Open::new(None).is_some(), "해제 후 정상");
+        }
     }
 
     /// 실 OS 클립보드 왕복(쓰기→판정→읽기·잘라내기 판정) — 사용자 클립보드를 덮으므로 수동 실행:
