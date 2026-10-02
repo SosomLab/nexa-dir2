@@ -31,8 +31,9 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-    DrawTextW, EndPaint, InvalidateRect, SelectObject, SetBkMode, SetTextColor, DT_END_ELLIPSIS,
-    DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    DrawTextW, EndPaint, IntersectClipRect, InvalidateRect, RestoreDC, SaveDC, SelectObject,
+    SetBkMode, SetTextColor, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT,
+    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -51,6 +52,7 @@ thread_local! {
         nexa_gui::WheelAccum,
         nexa_gui::WheelAccum,
         nexa_gui::fastscroll::FastScroller,
+        nexa_gui::WheelAccum, // 세로 px(트랙패드 — 10-02 픽셀 스크롤)
     )> = std::cell::RefCell::new(Default::default());
 }
 use super::style::{fill, font_height, Style};
@@ -132,6 +134,8 @@ struct GridState {
     rows: Vec<GridRow>,
     /// 스크롤 상단 행.
     top: usize,
+    /// 상단 행의 **부분 px 오프셋**(0..row_h — 트랙패드 픽셀 스크롤 10-02). 행 단위 조작은 0으로 스냅.
+    top_frac: i32,
     /// 가로 스크롤 픽셀 오프셋(컬럼 합 > 폭일 때 — 07-18).
     h_off: i32,
     opts: GridOpts,
@@ -199,6 +203,7 @@ pub unsafe fn create(
             .collect(),
         rows: Vec::new(),
         top: 0,
+        top_frac: 0,
         h_off: 0,
         opts,
         drag: None,
@@ -232,9 +237,18 @@ pub unsafe fn set_rows(hwnd: HWND, rows: Vec<GridRow>) {
         let last = st.rows.len().checked_sub(1);
         st.focus = last.and_then(|l| st.focus.map(|f| f.min(l)));
         st.anchor = last.and_then(|l| st.anchor.map(|a| a.min(l)));
-        let vis = visible_rows(hwnd, st);
-        st.top = st.top.min(st.rows.len().saturating_sub(vis));
+        clamp_top(hwnd, st);
         let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+}
+
+/// 상단 행·부분 오프셋을 행 수·가시 행에 맞춰 클램프(끝에 닿으면 오프셋 0).
+unsafe fn clamp_top(hwnd: HWND, st: &mut GridState) {
+    let vis = visible_rows(hwnd, st);
+    let max_top = st.rows.len().saturating_sub(vis);
+    if st.top >= max_top {
+        st.top = max_top;
+        st.top_frac = 0;
     }
 }
 
@@ -313,9 +327,9 @@ fn sel_range(st: &mut GridState, i: usize) {
 /// 포커스 행이 보이도록 스크롤(키보드 내비).
 unsafe fn ensure_visible(hwnd: HWND, st: &mut GridState, i: usize) {
     let vis = visible_rows(hwnd, st).max(1);
-    if i < st.top {
+    if i < st.top || (i == st.top && st.top_frac > 0) {
         scroll_to(hwnd, st, i as isize);
-    } else if i >= st.top + vis {
+    } else if i >= st.top + vis || (st.top_frac > 0 && i + 1 == st.top + vis) {
         scroll_to(hwnd, st, i as isize - vis as isize + 1);
     }
 }
@@ -389,7 +403,7 @@ unsafe fn minus_rect(hwnd: HWND, st: &GridState, row_on_screen: i32) -> RECT {
     let rc = client(hwnd);
     let rh = row_h(hwnd, st);
     let side = font_height(hwnd, st.font).max(10);
-    let top = rc.top + header_h(hwnd, st) + row_on_screen * rh + (rh - side) / 2;
+    let top = rc.top + header_h(hwnd, st) - st.top_frac + row_on_screen * rh + (rh - side) / 2;
     RECT {
         left: rc.right - side - 10,
         top,
@@ -431,8 +445,10 @@ unsafe fn v_thumb(hwnd: HWND, st: &GridState) -> Option<RECT> {
     let hh = header_h(hwnd, st);
     let track_h = (rc.bottom - hh).max(1);
     let th = (track_h * vis as i32 / st.rows.len() as i32).max(THUMB_MIN);
-    let max_top = (st.rows.len() - vis) as i32;
-    let ty = hh + ((track_h - th) * st.top as i32) / max_top.max(1);
+    let rh = i64::from(row_h(hwnd, st).max(1));
+    let max_off = (st.rows.len() - vis) as i64 * rh;
+    let off = st.top as i64 * rh + i64::from(st.top_frac);
+    let ty = hh + (i64::from(track_h - th) * off / max_off.max(1)) as i32;
     let wbar = if matches!(st.bar_drag, Some(BarDrag::V(..))) {
         BAR_WIDE
     } else {
@@ -481,6 +497,18 @@ unsafe fn scroll_to(hwnd: HWND, st: &mut GridState, top: isize) {
     let vis = visible_rows(hwnd, st);
     let max_top = st.rows.len().saturating_sub(vis);
     st.top = top.clamp(0, max_top as isize) as usize;
+    st.top_frac = 0; // 행 단위 조작 = 스냅
+    flash_bars(hwnd, st);
+}
+
+/// 픽셀 단위 세로 이동(트랙패드 — 10-02). 끝 = 마지막 행 정렬(행 단위 규약과 동일 상한).
+unsafe fn scroll_by_px(hwnd: HWND, st: &mut GridState, dy: i32) {
+    let rh = i64::from(row_h(hwnd, st).max(1));
+    let vis = visible_rows(hwnd, st);
+    let max_off = st.rows.len().saturating_sub(vis) as i64 * rh;
+    let off = (st.top as i64 * rh + i64::from(st.top_frac) + i64::from(dy)).clamp(0, max_off);
+    st.top = (off / rh) as usize;
+    st.top_frac = (off % rh) as i32;
     flash_bars(hwnd, st);
 }
 
@@ -523,8 +551,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         m if m == NXGR_GETROW => LRESULT(state(hwnd).as_ref().map_or(-1, |s| s.last_toggle)),
         WM_SIZE => {
             if let Some(st) = state(hwnd).as_mut() {
-                let vis = visible_rows(hwnd, st);
-                st.top = st.top.min(st.rows.len().saturating_sub(vis));
+                clamp_top(hwnd, st);
                 st.h_off = st.h_off.clamp(0, max_h_off(hwnd, st));
             }
             let _ = InvalidateRect(Some(hwnd), None, false);
@@ -554,14 +581,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         let off = st.h_off - px;
                         hscroll_to(hwnd, st, off); // Shift+휠 = 가로
                     }
-                } else {
+                } else if delta.abs() >= nexa_gui::WHEEL_DELTA {
+                    // 마우스 노치 = 시스템 줄 수 × 가속(행 단위 스냅)
                     let rows = GRID_WHEEL.with_borrow_mut(|w| {
-                        let rows = w.0.add(delta, 3);
+                        let rows = w.0.add(delta, nexa_gui::wheel_lines());
                         w.2.wheel(delta, rows)
                     });
                     if rows != 0 {
                         let top = st.top as isize - rows as isize;
                         scroll_to(hwnd, st, top);
+                    }
+                } else {
+                    // 정밀 터치패드(노치 미만) = 픽셀 누적(10-02)
+                    let rh = row_h(hwnd, st).max(1);
+                    let px = GRID_WHEEL.with_borrow_mut(|w| w.3.add(delta, nexa_gui::wheel_lines() * rh));
+                    if px != 0 {
+                        scroll_by_px(hwnd, st, -px);
                     }
                 }
             }
@@ -650,7 +685,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     // ③ 본문: 마크 히트 → 토글/삭제 통지, 그 외 = 행 선택(07-18)
                     let _ = SetFocus(Some(hwnd));
                     let rh = row_h(hwnd, st);
-                    let on_screen = (y - hh) / rh.max(1);
+                    let on_screen = (y - hh + st.top_frac) / rh.max(1);
                     let idx = st.top + on_screen as usize;
                     if idx >= st.rows.len() {
                         // 빈 영역 클릭 = 선택 해제(탐색기 규약)
@@ -834,6 +869,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let rh = row_h(hwnd, st);
                 let fh = font_height(hwnd, st.font).max(10);
                 let ox = st.h_off; // 가로 오프셋(헤더·셀 공통)
+                let y0 = rc.top + hh - st.top_frac; // 상단 행 원점(부분 px 오프셋 — 10-02)
+                let body = RECT {
+                    top: rc.top + hh,
+                    ..rc
+                };
                 let band = RECT {
                     bottom: rc.top + hh,
                     ..rc
@@ -861,49 +901,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         }
                     }
                 }
-                // 행 배경(지브라 → 선택 → 포커스 테두리 순 — 07-18 선택 규약)
-                let vis0 = visible_rows(hwnd, st);
-                if st.opts.zebra {
-                    // sel_bg 절반 톤(bg와 50% 블렌드) — 빈 슬롯까지 줄무늬 유지
-                    let (b, s) = (st.style.bg.0, st.style.sel_bg.0);
-                    let half = |sh: u32| (((b >> sh & 0xFF) + (s >> sh & 0xFF)) / 2) << sh;
-                    let zc = windows::Win32::Foundation::COLORREF(half(0) | half(8) | half(16));
-                    let slots = ((rc.bottom - rc.top - hh) / rh.max(1)) + 1;
-                    for k in 0..slots {
-                        if (st.top as i32 + k) % 2 == 1 {
-                            let top = rc.top + hh + k * rh;
-                            let zr = RECT {
-                                top,
-                                bottom: (top + rh).min(rc.bottom),
-                                ..rc
-                            };
-                            fill(dc, &zr, zc);
-                        }
-                    }
-                }
-                for (row, _) in st.rows.iter().skip(st.top).take(vis0).enumerate() {
-                    let idx = st.top + row;
-                    let top = rc.top + hh + row as i32 * rh;
-                    let rr = RECT {
-                        top,
-                        bottom: top + rh,
-                        ..rc
-                    };
-                    if st.sel.get(idx).copied().unwrap_or(false) {
-                        fill(dc, &rr, st.style.sel_bg);
-                    }
-                    if st.has_focus && st.focus == Some(idx) {
-                        super::style::frame(dc, &rr, st.style.accent);
-                    }
-                }
-                // 체크 마크 + 스크롤 썸(AA — 도형 패스)
-                {
+                if st.opts.mark == Mark::Check {
+                    // 헤더 체크는 본문 클립 **밖**(GDI+ Graphics는 생성 시점 클립을 상속)
                     let mut g = GdipCtx::new(dc);
-                    let vis = visible_rows(hwnd, st);
-                    match st.opts.mark {
-                        Mark::Check => {
-                            let cw = st.cols.first().map_or(0, |c| c.width);
-                            let side = fh;
+                    let cw = st.cols.first().map_or(0, |c| c.width);
+                    let side = fh;
                             // 헤더 체크(07-18 시안): 전체 토글 — 0 해제(백지+외곽선)·
                             // 1 전체(accent+✓)·2 부분(accent+**흐릿한 ✓**)
                             if hh > 0 {
@@ -951,9 +953,56 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                                     }
                                 }
                             }
+                }
+                // 본문 클립(부분 행이 헤더 밴드를 덮지 않게 — 10-02 픽셀 스크롤)
+                let saved = SaveDC(dc);
+                let _ = IntersectClipRect(dc, body.left, body.top, body.right, body.bottom);
+                // 행 배경(지브라 → 선택 → 포커스 테두리 순 — 07-18 선택 규약)
+                let vis0 = visible_rows(hwnd, st) + 1;
+                if st.opts.zebra {
+                    // sel_bg 절반 톤(bg와 50% 블렌드) — 빈 슬롯까지 줄무늬 유지
+                    let (b, s) = (st.style.bg.0, st.style.sel_bg.0);
+                    let half = |sh: u32| (((b >> sh & 0xFF) + (s >> sh & 0xFF)) / 2) << sh;
+                    let zc = windows::Win32::Foundation::COLORREF(half(0) | half(8) | half(16));
+                    let slots = ((rc.bottom - rc.top - hh + st.top_frac) / rh.max(1)) + 1;
+                    for k in 0..slots {
+                        if (st.top as i32 + k) % 2 == 1 {
+                            let top = y0 + k * rh;
+                            let zr = RECT {
+                                top,
+                                bottom: (top + rh).min(rc.bottom),
+                                ..rc
+                            };
+                            fill(dc, &zr, zc);
+                        }
+                    }
+                }
+                for (row, _) in st.rows.iter().skip(st.top).take(vis0).enumerate() {
+                    let idx = st.top + row;
+                    let top = y0 + row as i32 * rh;
+                    let rr = RECT {
+                        top,
+                        bottom: top + rh,
+                        ..rc
+                    };
+                    if st.sel.get(idx).copied().unwrap_or(false) {
+                        fill(dc, &rr, st.style.sel_bg);
+                    }
+                    if st.has_focus && st.focus == Some(idx) {
+                        super::style::frame(dc, &rr, st.style.accent);
+                    }
+                }
+                // 체크 마크 + 스크롤 썸(AA — 도형 패스)
+                {
+                    let mut g = GdipCtx::new(dc);
+                    let vis = visible_rows(hwnd, st) + 1;
+                    match st.opts.mark {
+                        Mark::Check => {
+                            let cw = st.cols.first().map_or(0, |c| c.width);
+                            let side = fh;
                             for (row, r) in st.rows.iter().skip(st.top).take(vis).enumerate() {
                                 let Some(on) = r.check else { continue };
-                                let top = rc.top + hh + row as i32 * rh + (rh - side) / 2;
+                                let top = y0 + row as i32 * rh + (rh - side) / 2;
                                 let bx = rc.left - ox + (cw - side) / 2;
                                 if bx + side < rc.left {
                                     continue; // 가로 스크롤로 화면 밖
@@ -1037,7 +1086,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         }
                     }
                 } // GDI 텍스트 전에 Graphics 해제(HDC 혼용 규약)
-                  // 텍스트 패스(헤더 라벨 + 셀 — 1px 하향·말줄임)
+                  let _ = RestoreDC(dc, saved);
+                // 텍스트 패스(헤더 라벨 + 셀 — 1px 하향·말줄임)
                 let old = SelectObject(dc, st.font.into());
                 SetBkMode(dc, TRANSPARENT);
                 SetTextColor(dc, st.style.text);
@@ -1057,9 +1107,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     }
                     x0 += c.width;
                 }
-                let vis = visible_rows(hwnd, st);
+                let saved = SaveDC(dc);
+                let _ = IntersectClipRect(dc, body.left, body.top, body.right, body.bottom);
+                let vis = visible_rows(hwnd, st) + 1;
                 for (row, r) in st.rows.iter().skip(st.top).take(vis).enumerate() {
-                    let top = rc.top + hh + row as i32 * rh;
+                    let top = y0 + row as i32 * rh;
                     // 셀은 컬럼 1부터(체크 열이면) — cells[k] ↔ cols[k + skip]
                     let skip = usize::from(st.opts.mark == Mark::Check);
                     let mut x0 =
@@ -1086,6 +1138,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         x0 += c.width;
                     }
                 }
+                let _ = RestoreDC(dc, saved);
                 SelectObject(dc, old);
                 if st.opts.outline {
                     super::style::frame(dc, &rc, st.style.border); // 목록 모드 외곽선
