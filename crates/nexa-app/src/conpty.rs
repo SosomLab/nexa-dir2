@@ -160,7 +160,7 @@ impl ConPty {
             std::thread::spawn(move || {
                 let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
                 let handle = HANDLE(read_raw as *mut core::ffi::c_void);
-                let mut pending: Vec<u8> = Vec::new(); // 잘린 멀티바이트 보관
+                let mut chunker = Utf8Chunker::new(); // 잘린 멀티바이트 보관
                 let mut buf = [0u8; 4096];
                 loop {
                     let mut read = 0u32;
@@ -168,15 +168,8 @@ impl ConPty {
                     if ok.is_err() || read == 0 {
                         break; // EOF = 셸 종료(대기 스레드가 통지)
                     }
-                    pending.extend_from_slice(&buf[..read as usize]);
-                    // 유효 UTF-8 접두사만 디코드, 잘린 꼬리는 다음 읽기와 합침
-                    let valid = match std::str::from_utf8(&pending) {
-                        Ok(_) => pending.len(),
-                        Err(e) => e.valid_up_to(),
-                    };
-                    if valid > 0 {
-                        let text = String::from_utf8_lossy(&pending[..valid]).into_owned();
-                        pending.drain(..valid);
+                    // 디코드는 순수 타입(Utf8Chunker)이 맡는다 — 스레드는 호출만
+                    if let Some(text) = chunker.push(&buf[..read as usize]) {
                         crate::win::plock(&out).push_str(&text);
                         unsafe {
                             let _ =
@@ -302,15 +295,190 @@ fn default_shell() -> std::path::PathBuf {
         }
     }
     let sysroot = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    std::path::Path::new(&sysroot).join("System32").join("cmd.exe")
+    std::path::Path::new(&sysroot)
+        .join("System32")
+        .join("cmd.exe")
+}
+
+/// 읽기 스레드의 UTF-8 디코더 — **순수 타입**(점검 2차 G9-01·G9-11).
+///
+/// 바이트를 밀어 넣으면 지금 디코드할 수 있는 만큼을 `String`으로 돌려주고,
+/// 멀티바이트 문자가 읽기 경계에서 잘린 **꼬리(≤3바이트)는 보존**해 다음 호출과 합친다.
+/// 확정 **불량 바이트**(`Utf8Error::error_len() == Some`)는 U+FFFD로 치환하고 건너뛴다 —
+/// 종전 코드는 `valid_up_to()`만 보고 `valid == 0`이면 아무것도 하지 않아, 불량 바이트 1개가
+/// 선두에 오는 순간(위치 k>0이어도 앞 k바이트가 비워진 다음 라운드에 선두가 된다)
+/// 이후 셸 출력 전부가 `pending`에만 쌓이고 화면은 영구 침묵·메모리는 무한 증가했다.
+/// 유효 입력·경계 분할 입력의 출력 바이트열은 종전과 동일.
+pub(crate) struct Utf8Chunker {
+    pending: Vec<u8>,
+}
+
+impl Utf8Chunker {
+    pub(crate) fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
+    /// `bytes`를 덧붙이고 디코드 가능한 텍스트를 돌려준다. 돌려줄 것이 없으면(잘린 꼬리만) `None`.
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> Option<String> {
+        self.pending.extend_from_slice(bytes);
+        let mut out = String::new();
+        let mut consumed = 0usize;
+        loop {
+            match std::str::from_utf8(&self.pending[consumed..]) {
+                Ok(s) => {
+                    out.push_str(s);
+                    consumed = self.pending.len();
+                    break;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    // `valid_up_to()` 앞은 유효가 보장된 접두사 — 재검사 없이 그대로
+                    out.push_str(
+                        std::str::from_utf8(&self.pending[consumed..consumed + valid])
+                            .unwrap_or(""),
+                    );
+                    consumed += valid;
+                    match e.error_len() {
+                        None => break, // 잘린 꼬리 — 다음 읽기와 합친다
+                        Some(n) => {
+                            out.push('\u{FFFD}'); // 확정 불량 바이트 — 치환하고 건너뛴다
+                            consumed += n;
+                        }
+                    }
+                }
+            }
+        }
+        self.pending.drain(..consumed);
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    /// 아직 디코드하지 못한 꼬리 길이(항상 < 4).
+    #[cfg(test)]
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::Utf8Chunker;
+
     #[test]
     fn default_shell_is_absolute_and_exists() {
         let p = super::default_shell();
         assert!(p.is_absolute(), "{p:?}");
         assert!(p.is_file(), "{p:?}");
+    }
+
+    #[test]
+    fn chunker_valid_text_passes_through() {
+        let mut c = Utf8Chunker::new();
+        assert_eq!(
+            c.push("abc 한글 \x1b[31mé".as_bytes()).as_deref(),
+            Some("abc 한글 \x1b[31mé")
+        );
+        assert_eq!(c.pending_len(), 0);
+        assert_eq!(c.push(b""), None);
+    }
+
+    #[test]
+    fn chunker_invalid_leading_byte_is_replaced_not_stuck() {
+        // G9-01 ①: 종전에는 valid_up_to()==0 → 영구 정지
+        let mut c = Utf8Chunker::new();
+        assert_eq!(c.push(&[0xFF, b'a']).as_deref(), Some("\u{FFFD}a"));
+        assert_eq!(c.pending_len(), 0);
+        // 이후 출력도 계속 흐른다
+        assert_eq!(c.push(b"ok").as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn chunker_invalid_byte_in_middle_is_replaced() {
+        // 위치 k>0도 다음 라운드에 선두가 되어 같은 정지에 빠지던 경우
+        let mut c = Utf8Chunker::new();
+        assert_eq!(
+            c.push(&[b'a', b'b', 0xFF, b'c']).as_deref(),
+            Some("ab\u{FFFD}c")
+        );
+        assert_eq!(c.pending_len(), 0);
+        // 불량 바이트 2개 연속·잘린 시퀀스 뒤에 ASCII(= error_len Some(1))
+        assert_eq!(
+            c.push(&[0xC3, b'x', 0xE1, 0x80, b'y']).as_deref(),
+            Some("\u{FFFD}x\u{FFFD}y")
+        );
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn chunker_split_multibyte_one_byte_at_a_time() {
+        // G9-01 ②: "한" = ED 95 9C 를 1바이트씩
+        let bytes = "한".as_bytes();
+        let mut c = Utf8Chunker::new();
+        assert_eq!(c.push(&bytes[0..1]), None);
+        assert_eq!(c.pending_len(), 1);
+        assert_eq!(c.push(&bytes[1..2]), None);
+        assert_eq!(c.pending_len(), 2);
+        assert_eq!(c.push(&bytes[2..3]).as_deref(), Some("한"));
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn chunker_keeps_tail_and_joins_with_next_read() {
+        // G9-01 ③: [a, C3] → "a"·꼬리 [C3], 이어 [95] → "Õ"
+        let mut c = Utf8Chunker::new();
+        assert_eq!(c.push(&[b'a', 0xC3]).as_deref(), Some("a"));
+        assert_eq!(c.pending_len(), 1);
+        assert_eq!(c.push(&[0x95]).as_deref(), Some("Õ"));
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn chunker_split_valid_stream_equals_whole() {
+        // 동작 불변: 유효 입력을 아무 경계로 잘라 넣어도 이어 붙인 출력은 원문과 같다
+        let text = "줄1 한글 ✓ \x1b[1;32mé\x1b[0m 🙂 끝\r\n".repeat(37);
+        let bytes = text.as_bytes();
+        for step in [1usize, 2, 3, 5, 7, 11, 4096] {
+            let mut c = Utf8Chunker::new();
+            let mut joined = String::new();
+            for chunk in bytes.chunks(step) {
+                if let Some(s) = c.push(chunk) {
+                    joined.push_str(&s);
+                }
+            }
+            assert_eq!(joined, text, "step {step}");
+            assert_eq!(c.pending_len(), 0, "step {step}");
+        }
+    }
+
+    #[test]
+    fn chunker_random_bytes_never_accumulate() {
+        // G9-01 ④: 랜덤 100KB — 어떤 입력에도 꼬리는 4바이트 미만·출력은 멈추지 않는다
+        let mut x = 0x9E37_79B9_7F4A_7C15u64; // 결정적 xorshift
+        let mut c = Utf8Chunker::new();
+        let mut total_out = 0usize;
+        let mut fed = 0usize;
+        while fed < 100 * 1024 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let len = (x % 97) as usize + 1;
+            let chunk: Vec<u8> = (0..len)
+                .map(|i| (x.rotate_left((i % 8) as u32 * 8) & 0xFF) as u8)
+                .collect();
+            fed += chunk.len();
+            if let Some(s) = c.push(&chunk) {
+                total_out += s.len();
+            }
+            assert!(c.pending_len() < 4, "pending {}", c.pending_len());
+        }
+        assert!(total_out > 0);
+        // 마지막에 ASCII를 넣으면 남은 꼬리까지 전부 비워진다(치환 또는 포함)
+        let _ = c.push(b"z");
+        assert_eq!(c.pending_len(), 0);
     }
 }
