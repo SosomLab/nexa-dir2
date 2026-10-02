@@ -20,8 +20,10 @@ $whitelist = @(
   "winhttp.dll",                   # ADR-0006 X-37 클라우드 OAuth2 토큰 교환/API(TLS=schannel 위임)
   "crypt32.dll",                   # ADR-0006 토큰 DPAPI 보관(CryptProtectData)
   "ws2_32.dll",                    # ADR-0006 OAuth 루프백 리디렉션 1회 수신(127.0.0.1 한정)
-  "bcrypt.dll"                     # ADR-0006 PKCE code_challenge SHA-256(CNG BCryptHashData —
+  "bcrypt.dll",                    # ADR-0006 PKCE code_challenge SHA-256(CNG BCryptHashData —
                                    # 기존 bcryptprimitives.dll[std RNG]과 별개 인박스 DLL)
+  "propsys.dll"                    # X-60 도크 Info 상세(10-02 — 속성 시스템 PSGetPropertyKeyFromName·
+                                   # PSGetPropertyDescription: 탐색기 '자세히' 탭 속성·서식)
 )
 
 if (-not (Test-Path $Exe)) { throw "exe 없음: $Exe — cargo build --release 먼저" }
