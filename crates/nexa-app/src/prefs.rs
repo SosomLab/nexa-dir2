@@ -107,6 +107,15 @@ pub struct PrefValues {
     pub typeahead_special: bool,
     pub typeahead_space: bool,
     pub typeahead_backspace: bool,
+    /// 고속 스크롤(10-02 — X-63). 의미는 config::Settings와 동일.
+    pub fast_scroll: bool,
+    pub fast_scroll_step: i32,
+    pub fast_scroll_max: i32,
+    pub fast_scroll_window_ms: i32,
+    pub fast_scroll_hud: bool,
+    pub fast_scroll_hud_pos: i32,
+    pub fast_scroll_hud_hold_ms: i32,
+    pub fast_scroll_hud_fade_ms: i32,
     /// 전송 완료 창 닫기 대기(ms, 0~10000 — 0=진행 창 미표시, 07-21).
     pub transfer_close_ms: i32,
     /// DnD 호버 대기(ms, 200~10000 — 드래그 중 탭 전환/폴더 펼침까지 대기, X-32).
@@ -252,6 +261,15 @@ const F_TERM_THEME_DARK: u32 = 43;
 const F_TERM_THEME_LIGHT: u32 = 44;
 /// 터미널 복사 형식(09-04 — WT 대응).
 const F_TERM_COPY_FMT: u32 = 45;
+/// 고속 스크롤(10-02 — X-63): 사용·단계·상한·간격·배지·배지 자리·유지·페이드.
+const F_FS_ENABLED: u32 = 46;
+const F_FS_STEP: u32 = 47;
+const F_FS_MAX: u32 = 48;
+const F_FS_WINDOW: u32 = 49;
+const F_FS_HUD: u32 = 50;
+const F_FS_HUD_POS: u32 = 51;
+const F_FS_HUD_HOLD: u32 = 52;
+const F_FS_HUD_FADE: u32 = 53;
 
 /// 사이드바 **계층 트리**(전면 개편 07-15 — 사용자 요청: 단일 컴포넌트 트리 + 클릭 시
 /// 우측 세부): 정적 pre-order (key, 라벨 키, 깊이). 자식 여부 = 다음 노드 깊이로 판정.
@@ -265,6 +283,7 @@ const TREE: &[(&str, &str, i32)] = &[
     ("filelist", "pref.cat.list", 0),
     ("list", "pref.cat.listGeneral", 1),
     ("typeahead", "pref.cat.typeahead", 1),
+    ("scroll", "pref.cat.scroll", 1),
     ("ctxmenu", "pref.cat.ctxmenu", 1),
     ("transfer", "pref.cat.transfer", 1),
     ("tabs", "pref.cat.tabs", 0),
@@ -633,6 +652,63 @@ fn registry() -> Vec<Entry> {
             kind: Kind::PosGrid,
             field: F_TA_POS,
         },
+        // 고속 스크롤(10-02 — nexa-sql 설정 `scroll.*` 이식)
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsEnabled",
+            desc_key: "pref.fsEnabled.desc",
+            kind: Kind::CheckBox,
+            field: F_FS_ENABLED,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsStep",
+            desc_key: "pref.fsStep.desc",
+            kind: Kind::Number,
+            field: F_FS_STEP,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsMax",
+            desc_key: "pref.fsMax.desc",
+            kind: Kind::Number,
+            field: F_FS_MAX,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsWindow",
+            desc_key: "pref.fsWindow.desc",
+            kind: Kind::Number,
+            field: F_FS_WINDOW,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsHud",
+            desc_key: "pref.fsHud.desc",
+            kind: Kind::CheckBox,
+            field: F_FS_HUD,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsHudPos",
+            desc_key: "pref.fsHudPos.desc",
+            kind: Kind::PosGrid,
+            field: F_FS_HUD_POS,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsHudHold",
+            desc_key: "pref.fsHudHold.desc",
+            kind: Kind::Number,
+            field: F_FS_HUD_HOLD,
+        },
+        Entry {
+            cat: "scroll",
+            label_key: "pref.fsHudFade",
+            desc_key: "pref.fsHudFade.desc",
+            kind: Kind::Number,
+            field: F_FS_HUD_FADE,
+        },
         Entry {
             cat: "terminal",
             label_key: "pref.termWrap",
@@ -769,13 +845,30 @@ const ID_FIELD_BASE: u32 = 1200; // +field(체크/EDIT 명령)
 const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
 /// 그룹 페이지의 하위 메뉴 링크(드릴다운 개편 07-15) — +TREE 인덱스.
 const ID_NAV_BASE: u32 = 1600;
-/// 타입어헤드 위치 드롭다운 머리(오너드로 버튼 — 10-02). 팝업 셀은 메뉴 항목 id 1..=9.
-const ID_POS_HEAD: u32 = 1900;
+/// 위치 드롭다운(오너드로 버튼 — 10-02)의 머리 id = `ID_FIELD_BASE + field`(타입어헤드 배지·
+/// 고속 스크롤 배지 두 곳). 팝업 셀은 메뉴 항목 id 1..=9. 열린 팝업의 대상 필드는 전역 기록.
+static POS_MENU_FIELD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn is_pos_field(field: u32) -> bool {
+    matches!(field, F_TA_POS | F_FS_HUD_POS)
+}
+
+fn pos_value(st: &PrefState, field: u32) -> i32 {
+    match field {
+        F_FS_HUD_POS => st.values.fast_scroll_hud_pos.clamp(0, 8),
+        _ => st.values.typeahead_pos.clamp(0, 8),
+    }
+}
 /// 플러그인 사용 여부 체크(07-26 — 동적 목록) — +순번. ID_FIELD_BASE 이상이라
 /// 기존 "클릭 즉시 harvest+apply" 명령 경로를 그대로 탄다.
 const ID_PLUGIN_BASE: u32 = 2100;
 
 static REGISTER: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    /// 설정 창 본문 휠 가속기(10-02 — 창은 모달 1개).
+    static PANE_FAST: std::cell::RefCell<nexa_gui::fastscroll::FastScroller> =
+        std::cell::RefCell::new(nexa_gui::fastscroll::FastScroller::default());
+}
 const CLASS: PCWSTR = w!("NexaPrefs");
 const PANE_CLASS: PCWSTR = w!("NexaPrefsPane");
 /// 휠 한 노치(델타 120)당 스크롤 픽셀 — 델타 ÷ 2 = px라 잔량 계산이 정확(09-04).
@@ -1149,6 +1242,8 @@ impl PrefState {
         let total = self.wheel_rem + delta;
         let px = total * WHEEL_PX / 120;
         self.wheel_rem = total - px * 120 / WHEEL_PX;
+        // 고속 스크롤(10-02 — 설정 창도 같은 가속기. 배지는 네이티브 창이라 생략)
+        let px = PANE_FAST.with_borrow_mut(|f| f.wheel(delta, px));
         if px != 0 {
             self.scroll_to(self.scroll_y - px);
         }
@@ -1330,7 +1425,7 @@ impl PrefState {
                             y,
                             POS_HEAD_W,
                             POS_HEAD_H,
-                            ID_POS_HEAD,
+                            ID_FIELD_BASE + e.field,
                         );
                         self.rows.push(b);
                         y += POS_HEAD_H + 8;
@@ -1360,6 +1455,8 @@ impl PrefState {
                             F_TA_SPECIAL => self.values.typeahead_special,
                             F_TA_SPACE => self.values.typeahead_space,
                             F_TA_BS => self.values.typeahead_backspace,
+                            F_FS_ENABLED => self.values.fast_scroll,
+                            F_FS_HUD => self.values.fast_scroll_hud,
                             F_FOLDER_BOLD => self.values.list_folder_bold,
                             F_HDR_BOLD => self.values.header_bold,
                             F_HDR_ITALIC => self.values.header_italic,
@@ -1573,6 +1670,11 @@ impl PrefState {
                             F_TERM_COLS => self.values.term_cols.to_string(),
                             F_COL_AUTOFIT => self.values.col_autofit_max.to_string(),
                             F_TA_RESET => self.values.typeahead_reset_ms.to_string(),
+                            F_FS_STEP => self.values.fast_scroll_step.to_string(),
+                            F_FS_MAX => self.values.fast_scroll_max.to_string(),
+                            F_FS_WINDOW => self.values.fast_scroll_window_ms.to_string(),
+                            F_FS_HUD_HOLD => self.values.fast_scroll_hud_hold_ms.to_string(),
+                            F_FS_HUD_FADE => self.values.fast_scroll_hud_fade_ms.to_string(),
                             F_TRANSFER_CLOSE => self.values.transfer_close_ms.to_string(),
                             F_DND_HOVER => self.values.dnd_hover_ms.to_string(),
                             F_DLG_FONT => self.values.dlg_font.clone(),
@@ -1776,6 +1878,14 @@ impl PrefState {
             F_TAB_DBL => v.tab_dblclick != d.tab_dblclick,
             F_TA_SCOPE => v.typeahead_scope != d.typeahead_scope,
             F_TA_RESET => v.typeahead_reset_ms != d.typeahead_reset_ms,
+            F_FS_ENABLED => v.fast_scroll != d.fast_scroll,
+            F_FS_STEP => v.fast_scroll_step != d.fast_scroll_step,
+            F_FS_MAX => v.fast_scroll_max != d.fast_scroll_max,
+            F_FS_WINDOW => v.fast_scroll_window_ms != d.fast_scroll_window_ms,
+            F_FS_HUD => v.fast_scroll_hud != d.fast_scroll_hud,
+            F_FS_HUD_POS => v.fast_scroll_hud_pos != d.fast_scroll_hud_pos,
+            F_FS_HUD_HOLD => v.fast_scroll_hud_hold_ms != d.fast_scroll_hud_hold_ms,
+            F_FS_HUD_FADE => v.fast_scroll_hud_fade_ms != d.fast_scroll_hud_fade_ms,
             F_TRANSFER_CLOSE => v.transfer_close_ms != d.transfer_close_ms,
             F_DND_HOVER => v.dnd_hover_ms != d.dnd_hover_ms,
             F_TA_POS => v.typeahead_pos != d.typeahead_pos,
@@ -1868,6 +1978,19 @@ impl PrefState {
                 F_TA_RESET => {
                     self.values.typeahead_reset_ms = get_text(hw).trim().parse().unwrap_or(1000)
                 }
+                F_FS_STEP => {
+                    self.values.fast_scroll_step = get_text(hw).trim().parse().unwrap_or(5)
+                }
+                F_FS_MAX => self.values.fast_scroll_max = get_text(hw).trim().parse().unwrap_or(8),
+                F_FS_WINDOW => {
+                    self.values.fast_scroll_window_ms = get_text(hw).trim().parse().unwrap_or(160)
+                }
+                F_FS_HUD_HOLD => {
+                    self.values.fast_scroll_hud_hold_ms = get_text(hw).trim().parse().unwrap_or(250)
+                }
+                F_FS_HUD_FADE => {
+                    self.values.fast_scroll_hud_fade_ms = get_text(hw).trim().parse().unwrap_or(600)
+                }
                 F_TRANSFER_CLOSE => {
                     self.values.transfer_close_ms = get_text(hw).trim().parse().unwrap_or(2000)
                 }
@@ -1892,7 +2015,7 @@ impl PrefState {
                 }
                 F_HIDDEN | F_DOTFILES | F_DOCK | F_FOLDERS_FIRST | F_HIDE_EMPTY_GLYPH
                 | F_TERM_WRAP | F_CASE_SORT | F_TA_SPECIAL | F_TA_SPACE | F_TA_BS
-                | F_FOLDER_BOLD | F_HDR_BOLD | F_HDR_ITALIC => {
+                | F_FOLDER_BOLD | F_HDR_BOLD | F_HDR_ITALIC | F_FS_ENABLED | F_FS_HUD => {
                     let on = SendMessageW(hw, 0x00F0, None, None).0 == 1; // BM_GETCHECK
                     match field {
                         F_HIDDEN => self.values.show_hidden = on,
@@ -1905,6 +2028,8 @@ impl PrefState {
                         F_TA_SPECIAL => self.values.typeahead_special = on,
                         F_TA_SPACE => self.values.typeahead_space = on,
                         F_TA_BS => self.values.typeahead_backspace = on,
+                        F_FS_ENABLED => self.values.fast_scroll = on,
+                        F_FS_HUD => self.values.fast_scroll_hud = on,
                         F_FOLDER_BOLD => self.values.list_folder_bold = on,
                         F_HDR_BOLD => self.values.header_bold = on,
                         F_HDR_ITALIC => self.values.header_italic = on,
@@ -2085,7 +2210,8 @@ unsafe fn draw_pos_head(st: &PrefState, dis: &DRAWITEMSTRUCT) {
         right: r.left + 5 + tw,
         bottom: r.top + (h - th) / 2 + th,
     };
-    paint_pos_tile(dis.hDC, cell, st.values.typeahead_pos.clamp(0, 8), true);
+    let field = dis.CtlID.wrapping_sub(ID_FIELD_BASE);
+    paint_pos_tile(dis.hDC, cell, pos_value(st, field), true);
     // ▾ — 4줄 삼각형(폭 7→1)
     let cx = r.right - 10;
     let cy = r.top + h / 2 - 2;
@@ -2118,7 +2244,11 @@ unsafe fn draw_pos_menu_cell(st: &PrefState, dis: &DRAWITEMSTRUCT) {
         right: r.right - 4,
         bottom: r.bottom - 3,
     };
-    paint_pos_tile(dis.hDC, cell, idx, idx == st.values.typeahead_pos);
+    let cur = pos_value(
+        st,
+        POS_MENU_FIELD.load(std::sync::atomic::Ordering::Relaxed),
+    );
+    paint_pos_tile(dis.hDC, cell, idx, idx == cur);
 }
 
 /// 머리 클릭 = 3×3 이미지 팝업(오너드로 메뉴 3열 — MF_MENUBREAK로 열 분리, 열 우선 삽입).
@@ -2267,11 +2397,16 @@ unsafe extern "system" fn prefs_proc(
                     s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                ID_POS_HEAD if notify == 0 => {
+                i if notify == 0 && is_pos_field(i.wrapping_sub(ID_FIELD_BASE)) => {
                     // 위치 드롭다운(10-02) — 3×3 이미지 팝업 → 값 반영 + 즉시 적용 + 머리 재도장
+                    let field = i - ID_FIELD_BASE;
+                    POS_MENU_FIELD.store(field, std::sync::atomic::Ordering::Relaxed);
                     let head = HWND(lparam.0 as *mut core::ffi::c_void);
                     if let Some(idx) = pick_pos(hwnd, head) {
-                        (*st).values.typeahead_pos = idx;
+                        match field {
+                            F_FS_HUD_POS => (*st).values.fast_scroll_hud_pos = idx,
+                            _ => (*st).values.typeahead_pos = idx,
+                        }
                         (*st).harvest();
                         (*st).apply_now();
                     }
@@ -2384,7 +2519,7 @@ unsafe extern "system" fn prefs_proc(
                 draw_pos_menu_cell(&*st, dis);
                 return LRESULT(1);
             }
-            if dis.CtlID == ID_POS_HEAD {
+            if is_pos_field(dis.CtlID.wrapping_sub(ID_FIELD_BASE)) {
                 draw_pos_head(&*st, dis);
                 return LRESULT(1);
             }

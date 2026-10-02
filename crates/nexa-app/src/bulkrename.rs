@@ -590,6 +590,12 @@ unsafe fn host_thumb(h: HWND, hs: &HostState, wide: bool) -> Option<RECT> {
     })
 }
 
+thread_local! {
+    /// 카드 호스트 휠 누적기·가속기(10-02).
+    static HOST_WHEEL: std::cell::RefCell<(nexa_gui::WheelAccum, nexa_gui::fastscroll::FastScroller)> =
+        std::cell::RefCell::new(Default::default());
+}
+
 /// 스크롤 설정(클램프) + 카드 재배치 + 오버레이 표시·페이드 재무장.
 unsafe fn host_set_scroll(h: HWND, v: i32) {
     let Some(hs) = host_state(h).as_mut() else {
@@ -641,8 +647,15 @@ unsafe extern "system" fn host_proc(
         },
         WM_MOUSEWHEEL => {
             let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
-            let cur = host_state(hwnd).as_ref().map_or(0, |h| h.scroll);
-            host_set_scroll(hwnd, cur - delta.signum() * 48);
+            // 10-02: 분수 누적(트랙패드) + 고속 스크롤 배수(노치 연타) — 48px/노치
+            let px = HOST_WHEEL.with_borrow_mut(|w| {
+                let px = w.0.add(delta, 48);
+                w.1.wheel(delta, px)
+            });
+            if px != 0 {
+                let cur = host_state(hwnd).as_ref().map_or(0, |h| h.scroll);
+                host_set_scroll(hwnd, cur - px);
+            }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {

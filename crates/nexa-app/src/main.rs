@@ -84,6 +84,9 @@ mod pwprompt;
 mod recycle;
 #[cfg(windows)]
 mod shellmenu;
+// 전용 메뉴 스레드(10-02 X-61 — 우클릭 가속: 선행 구축 + 비블로킹 표시)
+#[cfg(windows)]
+mod menuthread;
 /// 셸 변경 통지 구독(X-44 5차 — OneDrive 플레이스홀더 등 FS 침묵 변경의 즉시 계기).
 #[cfg(windows)]
 mod shellnotify;

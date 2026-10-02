@@ -387,6 +387,22 @@ pref.taPos.mr = 右中
 pref.taPos.bl = 左下 (既定)
 pref.taPos.bc = 中央下
 pref.taPos.br = 右下
+pref.fsEnabled = 高速スクロールを使う
+pref.fsEnabled.desc = ホイールのノッチや↑/↓の自動リピートが短い間隔で続くと移動量を倍にします(精密タッチパッドは除外)。
+pref.fsStep = 倍率上昇の間隔(回)
+pref.fsStep.desc = 同じ方向にこの回数続くと倍率が1上がります(1~50)。
+pref.fsMax = 最大倍率
+pref.fsMax.desc = 倍率の上限です(1~32)。
+pref.fsWindow = 連続判定の間隔(ms)
+pref.fsWindow.desc = この時間内に続いた入力だけを連続とみなします(20~2000)。
+pref.fsHud = 速度バッジを表示
+pref.fsHud.desc = 加速中はその領域に×Nバッジを表示し、止まると徐々に消えます。
+pref.fsHudPos = 速度バッジの位置
+pref.fsHudPos.desc = バッジをスクロール領域のどこに表示するか(3×3)。
+pref.fsHudHold = バッジ保持時間(ms)
+pref.fsHudHold.desc = 最後の加速入力の後、バッジがそのまま見える時間です(0~10000)。
+pref.fsHudFade = バッジ消失時間(ms)
+pref.fsHudFade.desc = 保持時間の後、徐々に消える時間です(0~10000)。
 pref.taSpecial = 特殊文字を含める (ファイル名で安全)
 pref.taSpecial.desc = オフ = 英数字のみ入力されます。
 pref.taSpace = スペースを含める (プレフィックス入力中)
@@ -395,6 +411,7 @@ pref.taBackspace = Backspace で最後の文字を削除
 pref.taBackspace.desc = オフ = 先行入力中の Backspace を無視します。
 pref.cat.listGeneral = 表示と並べ替え
 pref.cat.typeahead = 先行入力
+pref.cat.scroll = 高速スクロール
 ops.close = 閉じる
 # X-17 virtual top-level
 nav.mypc = PC

@@ -155,6 +155,16 @@ pub struct Settings {
     pub typeahead_special: bool,
     pub typeahead_space: bool,
     pub typeahead_backspace: bool,
+    /// 고속 스크롤(10-02 — nexa-sql ScrollAccel 이식, X-63): 사용·연속 N회마다 배수 +1·상한·
+    /// 연속 판정 간격(ms)·배지 표시·배지 자리(0..8 = 3×3)·유지(ms)·페이드(ms).
+    pub fast_scroll: bool,
+    pub fast_scroll_step: i32,
+    pub fast_scroll_max: i32,
+    pub fast_scroll_window_ms: i32,
+    pub fast_scroll_hud: bool,
+    pub fast_scroll_hud_pos: i32,
+    pub fast_scroll_hud_hold_ms: i32,
+    pub fast_scroll_hud_fade_ms: i32,
     /// 보기 모드(사용자 요청 07-16): "tree"(계층 — 기본)|"flat"(일반 폴더)|"tiles"(타일).
     pub view_mode: String,
     /// 컬럼 너비 동기화(사용자 확정 07-18) — on = 좌/우 패널 폭 실시간 동기,
@@ -197,6 +207,20 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// 고속 스크롤 전역 설정값(10-02) — 기동·설정 적용 시 `nexa_gui::fastscroll::set_fast_scroll`에.
+    pub fn fast_scroll(&self) -> nexa_gui::fastscroll::FastScroll {
+        nexa_gui::fastscroll::FastScroll {
+            enabled: self.fast_scroll,
+            step: self.fast_scroll_step.clamp(1, 50) as u32,
+            max: self.fast_scroll_max.clamp(1, 32),
+            window_ms: self.fast_scroll_window_ms.clamp(20, 2000) as u64,
+            hud: self.fast_scroll_hud,
+            hud_pos: self.fast_scroll_hud_pos.clamp(0, 8) as u8,
+            hud_hold_ms: self.fast_scroll_hud_hold_ms.clamp(0, 10_000) as u64,
+            hud_fade_ms: self.fast_scroll_hud_fade_ms.clamp(0, 10_000) as u64,
+        }
+    }
+
     /// 종류별 client_id(미설정 = 빈 문자열).
     pub fn client_id(&self, kind: &str) -> &str {
         self.cloud_client_ids
@@ -265,6 +289,14 @@ impl Default for Settings {
             typeahead_special: true,
             typeahead_space: true,
             typeahead_backspace: true,
+            fast_scroll: true,
+            fast_scroll_step: 5,
+            fast_scroll_max: 8,
+            fast_scroll_window_ms: 160,
+            fast_scroll_hud: true,
+            fast_scroll_hud_pos: 2,
+            fast_scroll_hud_hold_ms: 250,
+            fast_scroll_hud_fade_ms: 600,
             view_mode: "tree".into(),
             col_width_sync: true,
             col_autofit_max: 400,
@@ -455,6 +487,17 @@ impl Settings {
             u8::from(self.typeahead_special),
             u8::from(self.typeahead_space),
             u8::from(self.typeahead_backspace)
+        ));
+        out.push_str(&format!(
+            "fast_scroll={}\nfast_scroll_step={}\nfast_scroll_max={}\nfast_scroll_window_ms={}\nfast_scroll_hud={}\nfast_scroll_hud_pos={}\nfast_scroll_hud_hold_ms={}\nfast_scroll_hud_fade_ms={}\n",
+            u8::from(self.fast_scroll),
+            self.fast_scroll_step,
+            self.fast_scroll_max,
+            self.fast_scroll_window_ms,
+            u8::from(self.fast_scroll_hud),
+            self.fast_scroll_hud_pos,
+            self.fast_scroll_hud_hold_ms,
+            self.fast_scroll_hud_fade_ms
         ));
         out.push_str(&format!(
             "base_font={}\nbase_font_size={}\nctx_font={}\nctx_font_size={}\nstatus_font={}\nstatus_font_size={}\nlist_font={}\nlist_font_size={}\nlist_folder_bold={}\nheader_bold={}\nheader_italic={}\n",
@@ -669,6 +712,38 @@ impl Settings {
                 "typeahead_special" => s.typeahead_special = v != "0",
                 "typeahead_space" => s.typeahead_space = v != "0",
                 "typeahead_backspace" => s.typeahead_backspace = v != "0",
+                "fast_scroll" => s.fast_scroll = v != "0",
+                "fast_scroll_step" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.fast_scroll_step = n.clamp(1, 50);
+                    }
+                }
+                "fast_scroll_max" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.fast_scroll_max = n.clamp(1, 32);
+                    }
+                }
+                "fast_scroll_window_ms" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.fast_scroll_window_ms = n.clamp(20, 2000);
+                    }
+                }
+                "fast_scroll_hud" => s.fast_scroll_hud = v != "0",
+                "fast_scroll_hud_pos" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.fast_scroll_hud_pos = n.clamp(0, 8);
+                    }
+                }
+                "fast_scroll_hud_hold_ms" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.fast_scroll_hud_hold_ms = n.clamp(0, 10_000);
+                    }
+                }
+                "fast_scroll_hud_fade_ms" => {
+                    if let Ok(n) = v.parse::<i32>() {
+                        s.fast_scroll_hud_fade_ms = n.clamp(0, 10_000);
+                    }
+                }
                 "launcher" => s.launcher = v != "0",
                 "launcher_seed" => s.launcher_seed = v.parse().unwrap_or(0),
                 // count 키 존재 = 항목 목록 확정(비움 포함) — launcherN은 아래에서 채움
@@ -1151,20 +1226,31 @@ mod tests {
         ];
         for text in &cases {
             let s = Settings::parse(text);
-            assert!((80..=1000).contains(&s.term_cols), "term_cols 클램프: {}", s.term_cols);
+            assert!(
+                (80..=1000).contains(&s.term_cols),
+                "term_cols 클램프: {}",
+                s.term_cols
+            );
             assert!(
                 (1..=200).contains(&s.term_font_size),
                 "font size 상식 범위: {}",
                 s.term_font_size
             );
-            assert!(s.split.is_finite() && (0.0..=1.0).contains(&s.split), "split 클램프: {}", s.split);
+            assert!(
+                s.split.is_finite() && (0.0..=1.0).contains(&s.split),
+                "split 클램프: {}",
+                s.split
+            );
             assert!(
                 s.dock_ratio.is_finite() && (0.0..=1.0).contains(&s.dock_ratio),
                 "dock_ratio 클램프"
             );
             assert!(s.transfer_close_ms >= 0 && s.dnd_hover_ms >= 0);
             assert!(s.term_font.len() <= 128, "term_font 길이 상한");
-            assert!(s.plugins_disabled.len() <= 512, "plugins_disabled 길이 상한");
+            assert!(
+                s.plugins_disabled.len() <= 512,
+                "plugins_disabled 길이 상한"
+            );
             // 왕복: 직렬화 → 파싱이 같은 값(손상된 파일을 한 번 저장하면 정상화)
             let again = Settings::parse(&s.serialize());
             assert_eq!(again.term_cols, s.term_cols);
@@ -1235,6 +1321,14 @@ mod tests {
             typeahead_special: false,
             typeahead_space: false,
             typeahead_backspace: false,
+            fast_scroll: false,
+            fast_scroll_step: 3,
+            fast_scroll_max: 4,
+            fast_scroll_window_ms: 200,
+            fast_scroll_hud: false,
+            fast_scroll_hud_pos: 8,
+            fast_scroll_hud_hold_ms: 100,
+            fast_scroll_hud_fade_ms: 300,
             view_mode: "tiles".into(),
             panel_mode: "single".into(),
             info_mode: "single".into(),
@@ -1329,9 +1423,18 @@ mod tests {
             3000,
             "DnD 호버 기본 3초(X-32)"
         );
-        assert_eq!(parsed.cloud_conns, s.cloud_conns, "클라우드 연결 왕복(X-36/37)");
-        assert!(parsed.cloud_conns[2].is_api(), "경로 없음+account = API 연결");
-        assert!(!parsed.cloud_conns[0].is_api(), "경로 있음 = 동기화 폴더 연결");
+        assert_eq!(
+            parsed.cloud_conns, s.cloud_conns,
+            "클라우드 연결 왕복(X-36/37)"
+        );
+        assert!(
+            parsed.cloud_conns[2].is_api(),
+            "경로 없음+account = API 연결"
+        );
+        assert!(
+            !parsed.cloud_conns[0].is_api(),
+            "경로 있음 = 동기화 폴더 연결"
+        );
         assert_eq!(
             parsed.client_id("onedrive"),
             "00000000-abcd-1234",
@@ -1460,7 +1563,7 @@ mod tests {
                     locked: vec![false, true], // 탭1 잠금 — 편의 UX ② 왕복
                     pinned: vec![true, false], // 탭0 고정 — 07-15 왕복
                     modes: vec!["tiles".into(), "tree".into()], // 탭별 보기 모드 — 07-16 왕복
-                    views: vec![5, 2], // 탭별 보기 옵션 — 08-02 왕복(숨김+폴더우선 / Dot만)
+                    views: vec![5, 2],         // 탭별 보기 옵션 — 08-02 왕복(숨김+폴더우선 / Dot만)
                     col_widths: vec![320, 64, 96], // 패널 컬럼 폭 — 07-18 왕복
                     col_layout: "cols:1[ext:1,name:1,size:0,modified:1,kind:1]".into(),
                 },
@@ -1496,7 +1599,11 @@ mod tests {
             vec!["tiles".to_string(), "tree".to_string()],
             "탭별 보기 모드 왕복(07-16)"
         );
-        assert_eq!(parsed.panels[0].views, vec![5, 2], "탭별 보기 옵션 왕복(08-02)");
+        assert_eq!(
+            parsed.panels[0].views,
+            vec![5, 2],
+            "탭별 보기 옵션 왕복(08-02)"
+        );
         // 빈/손상 → 기본
         let empty = Session::parse("");
         assert_eq!(empty.active_panel, 0);
@@ -1548,9 +1655,16 @@ mod tests {
                 .share_mode(0) // 공유 없음 → rename(REPLACE_EXISTING) 실패
                 .open(dir.join("t.txt"))
                 .unwrap();
-            assert!(save(&dir, "t.txt", "hello=3\n").is_err(), "잠긴 대상 = 저장 실패");
+            assert!(
+                save(&dir, "t.txt", "hello=3\n").is_err(),
+                "잠긴 대상 = 저장 실패"
+            );
         }
-        assert_eq!(load(&dir, "t.txt").unwrap(), "hello=2\n", "실패해도 옛 내용 보존");
+        assert_eq!(
+            load(&dir, "t.txt").unwrap(),
+            "hello=2\n",
+            "실패해도 옛 내용 보존"
+        );
         let leftovers = fs::read_dir(&dir)
             .unwrap()
             .flatten()

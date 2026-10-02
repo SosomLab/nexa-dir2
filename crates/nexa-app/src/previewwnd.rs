@@ -248,6 +248,16 @@ unsafe fn sync_scroll(hwnd: HWND, st: &mut PvState) {
     let _ = SetScrollInfo(hwnd, SB_HORZ, &hsi, true);
 }
 
+thread_local! {
+    /// 휠 누적기·가속기(10-02 — 세로 줄·가로 px·고속 스크롤). 창마다가 아니라 스레드 공용(동시
+    /// 조작은 한 창뿐).
+    static PV_WHEEL: std::cell::RefCell<(
+        nexa_gui::WheelAccum,
+        nexa_gui::WheelAccum,
+        nexa_gui::fastscroll::FastScroller,
+    )> = std::cell::RefCell::new(Default::default());
+}
+
 unsafe fn scroll_to(hwnd: HWND, st: &mut PvState, top: i32, left: i32) {
     let (bt, bl) = (st.top, st.left);
     st.top = top;
@@ -692,13 +702,22 @@ unsafe extern "system" fn pv_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if !state.is_null() {
                 let st = &mut *state;
                 let delta = ((wparam.0 >> 16) as i16) as i32;
+                // 10-02: 분수 누적(트랙패드) + 고속 스크롤 배수(노치 연타)
                 if wparam.0 & 0x0004 != 0 {
                     // MK_SHIFT = 가로(터미널 규약 동일)
-                    let left = st.left - delta;
+                    let px = PV_WHEEL.with_borrow_mut(|w| {
+                        let px = w.1.add(delta, 120);
+                        w.2.wheel(delta, px)
+                    });
+                    let left = st.left - px;
                     let top = st.top;
                     scroll_to(hwnd, st, top, left);
                 } else {
-                    let top = st.top - delta / 40; // 120 = 3행
+                    let rows = PV_WHEEL.with_borrow_mut(|w| {
+                        let rows = w.0.add(delta, 3); // 120 = 3행
+                        w.2.wheel(delta, rows)
+                    });
+                    let top = st.top - rows;
                     let left = st.left;
                     scroll_to(hwnd, st, top, left);
                 }

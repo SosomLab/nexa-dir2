@@ -45,6 +45,7 @@ pub const ID_CUSTOM_FIRST: u32 = 0x8000;
 /// 항목 메뉴에 병합할 "새로 만들기" 서브메뉴 요청(07-27 사용자) — 셸은 항목 메뉴에 New를
 /// 넣지 않으므로(배경 메뉴 전용) 셸 New 확장(CLSID_NewMenu)을 `dir` 대상으로 직접 호스팅.
 /// 배경 메뉴와 동일한 전체 ShellNew 템플릿(폴더·바로가기·txt·docx…)이 나온다.
+#[derive(Debug, Clone)]
 pub struct NewSpec {
     /// 생성 대상 폴더 — 파일 항목=부모·폴더 항목=자신(호출자 결정).
     pub dir: PathBuf,
@@ -53,6 +54,7 @@ pub struct NewSpec {
 }
 
 /// 병합할 고유 메뉴 항목(원본 CustomItem — 서브메뉴는 후속). `id`는 [`ID_CUSTOM_FIRST`] 이상.
+#[derive(Debug, Clone)]
 pub struct CustomItem {
     pub id: u32,
     pub label: String,
@@ -95,7 +97,8 @@ struct MenuHost {
     last: u32,
 }
 
-// 메뉴 표시 구간의 활성 핸들러 목록 — wndproc 포워딩용(UI 스레드 전용).
+// 메뉴 표시 구간의 활성 핸들러 목록 — wndproc 포워딩용(**메뉴를 표시하는 스레드** 전용 —
+// thread_local. 10-02 X-61: 전용 메뉴 스레드가 track하면 그 스레드의 숨은 창 wndproc이 포워딩).
 thread_local! {
     static ACTIVE: RefCell<Vec<MenuHost>> = const { RefCell::new(Vec::new()) };
 }
@@ -308,10 +311,32 @@ unsafe fn show_inner(
     new_menu: Option<&NewSpec>,
     at: Option<POINT>,
 ) -> Outcome {
+    match prepare_items(hwnd, paths, extended_verbs, hide, custom, new_menu) {
+        Some(p) => track(p, hwnd, intercept, None, at),
+        None => Outcome::Cancelled,
+    }
+}
+
+/// 항목 메뉴 **구축**(10-02 X-61 — 표시 없이 `QueryContextMenu`까지): 경로 → PIDL → 공통
+/// 부모 `IShellFolder` → `IContextMenu` → HMENU(셸 대역 + 제자리 대체 + 고유 병합 + New).
+/// 결과 [`Prepared`]는 **만든 스레드(STA)에서만** [`track`]할 수 있다(COM 객체·PIDL 보유).
+/// 전용 메뉴 스레드가 선택 직후 미리 부르고, 우클릭 때 `track`만 하면 확장 실행 시간
+/// (실측 0.6~1.4 s — docs/audit/20261002-ultracode/ctxmenu-latency.md)이 클릭 경로에서 빠진다.
+///
+/// # Safety
+/// COM 초기화된 STA 스레드. `hwnd`는 메뉴 소유 창(대화상자 부모).
+pub unsafe fn prepare_items(
+    hwnd: HWND,
+    paths: &[PathBuf],
+    extended_verbs: bool,
+    hide: &[(&str, u32, String)],
+    custom: &[CustomItem],
+    new_menu: Option<&NewSpec>,
+) -> Option<Prepared> {
     use std::os::windows::ffi::OsStrExt;
 
     // 1) 경로 → full PIDL → 공통 부모 IShellFolder + child PIDL 목록.
-    //    child는 full 내부를 가리킴 → full을 메뉴 종료까지 유지(원본 동일).
+    //    child는 full 내부를 가리킴 → full을 메뉴 종료까지 유지(원본 동일 — Prepared가 보유).
     let mut full_pidls: Vec<*mut ITEMIDLIST> = Vec::new();
     let mut children: Vec<*const ITEMIDLIST> = Vec::new();
     let mut folder: Option<IShellFolder> = None;
@@ -333,36 +358,37 @@ unsafe fn show_inner(
         folder.get_or_insert(f); // 같은 부모 — 첫 폴더만 유지(호출자 보장)
         children.push(child as *const ITEMIDLIST);
     }
-    let outcome = (|| {
-        let Some(folder) = &folder else {
-            return Outcome::Cancelled;
-        };
-        if children.is_empty() {
-            return Outcome::Cancelled;
+    let free = |pidls: &[*mut ITEMIDLIST]| {
+        for &pidl in pidls {
+            CoTaskMemFree(Some(pidl as *const core::ffi::c_void)); // ILFree 동등
         }
-
-        timing::mark("parse+bind");
-        // 2) IContextMenu 취득 → 공용 메뉴 흐름.
-        let Ok(icm) = folder.GetUIObjectOf::<IContextMenu>(hwnd, &children, None) else {
-            return Outcome::Cancelled;
-        };
-        timing::mark("GetUIObjectOf");
-        run_menu(
-            hwnd,
-            &icm,
-            extended_verbs,
-            intercept,
-            hide,
-            custom,
-            new_menu,
-            None,
-            at,
-        )
-    })();
-    for pidl in full_pidls {
-        CoTaskMemFree(Some(pidl as *const core::ffi::c_void)); // ILFree 동등
+    };
+    let Some(folder) = folder else {
+        free(&full_pidls);
+        return None;
+    };
+    if children.is_empty() {
+        free(&full_pidls);
+        return None;
     }
-    outcome
+    timing::mark("parse+bind");
+    // 2) IContextMenu 취득 → 공용 구축.
+    let Ok(icm) = folder.GetUIObjectOf::<IContextMenu>(hwnd, &children, None) else {
+        free(&full_pidls);
+        return None;
+    };
+    timing::mark("GetUIObjectOf");
+    match build(icm, extended_verbs, hide, custom, new_menu) {
+        Some(mut p) => {
+            p.pidls = full_pidls;
+            p.folder = Some(folder);
+            Some(p)
+        }
+        None => {
+            free(&full_pidls);
+            None
+        }
+    }
 }
 
 /// 폴더 **배경** 셸 메뉴 표시(원본 ADR-0005 S2) — `CreateViewObject(IID_IContextMenu)`.
@@ -434,143 +460,184 @@ unsafe fn show_background_inner(
     outcome
 }
 
-/// 공용 메뉴 흐름 — HMENU 구성(셸 대역+고유 병합)·표시·선택 분기(항목/배경 메뉴 공용).
-/// `new_menu`: 항목 메뉴에 New 서브메뉴 병합(07-27). `probe_dir`: `Some`=셸 대역 실행 후
-/// 이 폴더의 신규 항목 diff → [`Outcome::Created`](배경 메뉴 — 셸 자체 New 감지 휴리스틱).
-#[allow(clippy::too_many_arguments)]
-unsafe fn run_menu(
-    hwnd: HWND,
-    icm: &IContextMenu,
+/// 구축된 메뉴(10-02 X-61) — `build`/`prepare_items`가 만들고 [`track`]이 소비한다.
+/// COM 객체·HMENU·PIDL을 보유하므로 **만든 STA 스레드 전용**(Send 아님). 미표시로
+/// 버려지면 Drop이 HMENU·PIDL을 해제한다.
+pub struct Prepared {
+    hmenu: windows::Win32::UI::WindowsAndMessaging::HMENU,
+    icm: IContextMenu,
+    /// 메시지 포워딩 대상(주 메뉴 ICM + 호스팅 New 확장) — track이 ACTIVE에 설치.
+    hosts: Vec<MenuHost>,
+    new_icm: Option<(IContextMenu, windows::Win32::UI::WindowsAndMessaging::HMENU)>,
+    /// New 서브메뉴 대상 폴더(생성 diff 감지용).
+    new_dir: Option<PathBuf>,
+    /// 항목 메뉴: child PIDL이 참조하는 full PIDL(메뉴 종료까지 유지) + 부모 폴더.
+    pidls: Vec<*mut ITEMIDLIST>,
+    folder: Option<IShellFolder>,
+}
+
+impl Drop for Prepared {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DestroyMenu(self.hmenu);
+            for &pidl in &self.pidls {
+                CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+            }
+        }
+    }
+}
+
+/// HMENU 구축(항목/배경 공용 — 10-02 X-61 분리): 셸 대역 `QueryContextMenu` → 제자리 대체 →
+/// 고유 병합 → New 서브메뉴. 표시는 [`track`].
+unsafe fn build(
+    icm: IContextMenu,
     extended_verbs: bool,
-    intercept: &[&str],
     hide: &[(&str, u32, String)],
     custom: &[CustomItem],
     new_menu: Option<&NewSpec>,
-    probe_dir: Option<&Path>,
-    at: Option<POINT>,
-) -> Outcome {
-    let Ok(hmenu) = CreatePopupMenu() else {
-        return Outcome::Cancelled;
+) -> Option<Prepared> {
+    let hmenu = CreatePopupMenu().ok()?;
+    let mut p = Prepared {
+        hmenu,
+        hosts: vec![MenuHost {
+            icm2: icm.cast().ok(),
+            icm3: icm.cast().ok(),
+            submenu: 0,
+            first: ID_SHELL_FIRST,
+            last: ID_SHELL_LAST,
+        }],
+        icm,
+        new_icm: None,
+        new_dir: new_menu.map(|s| s.dir.clone()),
+        pidls: Vec::new(),
+        folder: None,
     };
-    ACTIVE.set(vec![MenuHost {
-        icm2: icm.cast().ok(),
-        icm3: icm.cast().ok(),
-        submenu: 0,
-        first: ID_SHELL_FIRST,
-        last: ID_SHELL_LAST,
-    }]);
     let flags = if extended_verbs {
         CMF_EXTENDEDVERBS
     } else {
         CMF_NORMAL
     };
-    let out = (|| {
-        if icm
-            .QueryContextMenu(hmenu, 0, ID_SHELL_FIRST, ID_SHELL_LAST, flags)
-            .is_err()
-        {
-            return Outcome::Cancelled;
-        }
-        timing::mark("QueryContextMenu");
-        // 2-0) 셸 항목 **제자리 대체**(원본 VerbReplacement — QA 07-14): 대상 verb의 메뉴
-        // 항목 ID만 고유 ID로 바꿔치기 — 위치·라벨(=윈도우 기본 다국어) 그대로, 선택 시
-        // Outcome::Custom으로 우리 경로 실행(단일 부모 한계 우회).
-        if !hide.is_empty() {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                GetMenuItemCount, GetMenuItemID, SetMenuItemInfoW, MENUITEMINFOW, MIIM_ID,
-                MIIM_STRING,
-            };
-            let n = GetMenuItemCount(Some(hmenu));
-            for pos in 0..n.max(0) {
-                let id = GetMenuItemID(hmenu, pos);
-                if !(ID_SHELL_FIRST..=ID_SHELL_LAST).contains(&id) {
-                    continue;
-                }
-                if let Some(verb) = get_verb(icm, id - ID_SHELL_FIRST) {
-                    if let Some((_, custom_id, label)) =
-                        hide.iter().find(|(v, _, _)| verb.eq_ignore_ascii_case(v))
-                    {
-                        // 라벨 = 앱 언어(i18n — QA 07-14: 셸 OS 라벨 대신 앱 언어 추종)
-                        let mut wide: Vec<u16> =
-                            label.encode_utf16().chain(std::iter::once(0)).collect();
-                        let mii = MENUITEMINFOW {
-                            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-                            fMask: MIIM_ID | MIIM_STRING,
-                            wID: *custom_id,
-                            dwTypeData: windows::core::PWSTR(wide.as_mut_ptr()),
-                            ..Default::default()
-                        };
-                        let _ = SetMenuItemInfoW(hmenu, pos as u32, true, &mii);
-                    }
+    if p.icm
+        .QueryContextMenu(hmenu, 0, ID_SHELL_FIRST, ID_SHELL_LAST, flags)
+        .is_err()
+    {
+        return None; // Drop이 HMENU 회수
+    }
+    timing::mark("QueryContextMenu");
+    // 2-0) 셸 항목 **제자리 대체**(원본 VerbReplacement — QA 07-14): 대상 verb의 메뉴
+    // 항목 ID만 고유 ID로 바꿔치기 — 위치·라벨(=윈도우 기본 다국어) 그대로, 선택 시
+    // Outcome::Custom으로 우리 경로 실행(단일 부모 한계 우회).
+    if !hide.is_empty() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetMenuItemCount, GetMenuItemID, SetMenuItemInfoW, MENUITEMINFOW, MIIM_ID, MIIM_STRING,
+        };
+        let n = GetMenuItemCount(Some(hmenu));
+        for pos in 0..n.max(0) {
+            let id = GetMenuItemID(hmenu, pos);
+            if !(ID_SHELL_FIRST..=ID_SHELL_LAST).contains(&id) {
+                continue;
+            }
+            if let Some(verb) = get_verb(&p.icm, id - ID_SHELL_FIRST) {
+                if let Some((_, custom_id, label)) =
+                    hide.iter().find(|(v, _, _)| verb.eq_ignore_ascii_case(v))
+                {
+                    // 라벨 = 앱 언어(i18n — QA 07-14: 셸 OS 라벨 대신 앱 언어 추종)
+                    let mut wide: Vec<u16> =
+                        label.encode_utf16().chain(std::iter::once(0)).collect();
+                    let mii = MENUITEMINFOW {
+                        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                        fMask: MIIM_ID | MIIM_STRING,
+                        wID: *custom_id,
+                        dwTypeData: windows::core::PWSTR(wide.as_mut_ptr()),
+                        ..Default::default()
+                    };
+                    let _ = SetMenuItemInfoW(hmenu, pos as u32, true, &mii);
                 }
             }
         }
-        timing::mark("verbs");
-        // 2-1) 고유 항목 병합(0x8000+) — 앵커(`after_id`) 지정은 그 항목 바로 아래 삽입,
-        // 나머지는 구분자로 섹션 분리 후 하단(ADR-0005. 셸 제공 동사는 중복 금지).
-        if !custom.is_empty() {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                GetMenuItemCount, GetMenuItemID, InsertMenuW, MF_BYPOSITION,
-            };
-            let mut bottom: Vec<&CustomItem> = Vec::new();
-            for c in custom {
+    }
+    timing::mark("verbs");
+    // 2-1) 고유 항목 병합(0x8000+) — 앵커(`after_id`) 지정은 그 항목 바로 아래 삽입,
+    // 나머지는 구분자로 섹션 분리 후 하단(ADR-0005. 셸 제공 동사는 중복 금지).
+    if !custom.is_empty() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetMenuItemCount, GetMenuItemID, InsertMenuW, MF_BYPOSITION,
+        };
+        let mut bottom: Vec<&CustomItem> = Vec::new();
+        for c in custom {
+            let mut flags = MF_STRING;
+            if !c.enabled {
+                flags |= MF_GRAYED;
+            }
+            let label = windows::core::HSTRING::from(&*c.label);
+            let anchor = c.after_id.and_then(|aid| {
+                let n = GetMenuItemCount(Some(hmenu));
+                (0..n.max(0)).find(|&pos| GetMenuItemID(hmenu, pos) == aid)
+            });
+            if let Some(pos) = anchor {
+                let _ = InsertMenuW(
+                    hmenu,
+                    (pos + 1) as u32,
+                    flags | MF_BYPOSITION,
+                    c.id as usize,
+                    PCWSTR(label.as_ptr()),
+                );
+            } else {
+                bottom.push(c);
+            }
+        }
+        if !bottom.is_empty() {
+            let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+            for c in bottom {
                 let mut flags = MF_STRING;
                 if !c.enabled {
                     flags |= MF_GRAYED;
                 }
                 let label = windows::core::HSTRING::from(&*c.label);
-                let anchor = c.after_id.and_then(|aid| {
-                    let n = GetMenuItemCount(Some(hmenu));
-                    (0..n.max(0)).find(|&pos| GetMenuItemID(hmenu, pos) == aid)
-                });
-                if let Some(pos) = anchor {
-                    let _ = InsertMenuW(
-                        hmenu,
-                        (pos + 1) as u32,
-                        flags | MF_BYPOSITION,
-                        c.id as usize,
-                        PCWSTR(label.as_ptr()),
-                    );
-                } else {
-                    bottom.push(c);
-                }
-            }
-            if !bottom.is_empty() {
-                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
-                for c in bottom {
-                    let mut flags = MF_STRING;
-                    if !c.enabled {
-                        flags |= MF_GRAYED;
-                    }
-                    let label = windows::core::HSTRING::from(&*c.label);
-                    let _ = AppendMenuW(hmenu, flags, c.id as usize, PCWSTR(label.as_ptr()));
-                }
+                let _ = AppendMenuW(hmenu, flags, c.id as usize, PCWSTR(label.as_ptr()));
             }
         }
+    }
 
-        // 2-2) "새로 만들기" 서브메뉴 병합(07-27 사용자) — 셸 New 확장(CLSID_NewMenu)을
-        // 대상 폴더로 직접 초기화해 하단 섹션에 삽입. 실패는 조용히 생략(메뉴는 정상 표시).
-        let new_icm = new_menu.and_then(|spec| attach_new_menu(hmenu, spec));
-        timing::mark("custom+NewMenu");
-        if let Some((icm, sub)) = &new_icm {
-            // 서브메뉴 lazy 채움(WM_INITMENUPOPUP)을 위해 포워딩 대상에 추가 —
-            // 소유 서브메뉴 핸들·New 대역으로 선별 라우팅(QA 07-27 평탄 삽입 방지)
-            ACTIVE.with_borrow_mut(|a| {
-                a.push(MenuHost {
-                    icm2: icm.cast().ok(),
-                    icm3: icm.cast().ok(),
-                    submenu: sub.0 as isize,
-                    first: ID_NEW_FIRST,
-                    last: ID_NEW_LAST,
-                })
-            });
-        }
+    // 2-2) "새로 만들기" 서브메뉴 병합(07-27 사용자) — 셸 New 확장(CLSID_NewMenu)을
+    // 대상 폴더로 직접 초기화해 하단 섹션에 삽입. 실패는 조용히 생략(메뉴는 정상 표시).
+    p.new_icm = new_menu.and_then(|spec| attach_new_menu(hmenu, spec));
+    timing::mark("custom+NewMenu");
+    if let Some((icm, sub)) = &p.new_icm {
+        // 서브메뉴 lazy 채움(WM_INITMENUPOPUP)을 위해 포워딩 대상에 추가 —
+        // 소유 서브메뉴 핸들·New 대역으로 선별 라우팅(QA 07-27 평탄 삽입 방지)
+        p.hosts.push(MenuHost {
+            icm2: icm.cast().ok(),
+            icm3: icm.cast().ok(),
+            submenu: sub.0 as isize,
+            first: ID_NEW_FIRST,
+            last: ID_NEW_LAST,
+        });
+    }
+    Some(p)
+}
 
+/// 구축된 메뉴 **표시·선택 분기**(10-02 X-61 분리). `hwnd` = 메뉴 소유 창(이 스레드 소유 —
+/// 메뉴 메시지가 그 wndproc → [`forward_menu_msg`]로 온다). `probe_dir`: `Some`=셸 대역
+/// 실행 후 이 폴더의 신규 항목 diff → [`Outcome::Created`](배경 메뉴 — 셸 자체 New 감지).
+///
+/// # Safety
+/// `p`를 만든 STA 스레드에서 호출. 모달 메뉴 펌프 동안 `hwnd`의 wndproc이 재진입한다.
+pub unsafe fn track(
+    mut p: Prepared,
+    hwnd: HWND,
+    intercept: &[&str],
+    probe_dir: Option<&Path>,
+    at: Option<POINT>,
+) -> Outcome {
+    ACTIVE.set(std::mem::take(&mut p.hosts));
+    let hmenu = p.hmenu;
+    let out = (|| {
         // 3) 표시 — 모달 메뉴 펌프(메뉴 메시지는 wndproc → forward_menu_msg).
         let pt = at.unwrap_or_else(|| {
-            let mut p = POINT::default();
-            let _ = GetCursorPos(&mut p);
-            p
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            pt
         });
         timing::mark("pre-track");
         let _ = SetForegroundWindow(hwnd); // 메뉴 밖 클릭 시 정상 닫힘(표준 관례)
@@ -590,13 +657,13 @@ unsafe fn run_menu(
         }
         if (ID_NEW_FIRST..=ID_NEW_LAST).contains(&sel) {
             // 호스팅한 New 서브메뉴 선택(07-27) — New 확장 ICM으로 invoke 후 생성 diff
-            let (Some(spec), Some((new_icm, _))) = (new_menu, &new_icm) else {
+            let (Some(dir), Some((new_icm, _))) = (&p.new_dir, &p.new_icm) else {
                 return Outcome::Cancelled;
             };
-            let before = dir_names(&spec.dir);
+            let before = dir_names(dir);
             return match invoke(new_icm, hwnd, sel - ID_NEW_FIRST, pt) {
                 // 생성은 결정적 트리거(New 선택) — 넉넉한 재시도(20ms×10)
-                Ok(()) => match detect_created(&spec.dir, &before, 10) {
+                Ok(()) => match detect_created(dir, &before, 10) {
                     Some(p) => Outcome::Created(p),
                     None => Outcome::Shell, // 바로가기 마법사 등 비동기 — 재로드만
                 },
@@ -609,7 +676,7 @@ unsafe fn run_menu(
 
         // 4) 앱 통합 동사 가로채기(원본 verbInterceptor) — undo 기록 등 자체 경로로.
         let offset = sel - ID_SHELL_FIRST;
-        if let Some(verb) = get_verb(icm, offset) {
+        if let Some(verb) = get_verb(&p.icm, offset) {
             if intercept.iter().any(|v| verb.eq_ignore_ascii_case(v)) {
                 return Outcome::Verb(verb);
             }
@@ -617,7 +684,7 @@ unsafe fn run_menu(
 
         // 5) 셸 실행 — lpVerb = MAKEINTRESOURCE(선택 오프셋).
         let before = probe_dir.map(dir_names);
-        match invoke(icm, hwnd, offset, pt) {
+        match invoke(&p.icm, hwnd, offset, pt) {
             Ok(()) => {
                 // 배경 메뉴 생성 감지(07-27 휴리스틱) — 항목 1개 신규면 리네임 진입 후보.
                 // 짧은 재시도(20ms×2)만 — 미생성 명령(속성 등)의 지연 최소화
@@ -632,8 +699,27 @@ unsafe fn run_menu(
         }
     })();
     ACTIVE.set(Vec::new());
-    let _ = DestroyMenu(hmenu);
+    drop(p); // DestroyMenu + PIDL 해제
     out
+}
+
+/// 공용 메뉴 흐름(배경 메뉴·동기 폴백) = [`build`] + [`track`].
+#[allow(clippy::too_many_arguments)]
+unsafe fn run_menu(
+    hwnd: HWND,
+    icm: &IContextMenu,
+    extended_verbs: bool,
+    intercept: &[&str],
+    hide: &[(&str, u32, String)],
+    custom: &[CustomItem],
+    new_menu: Option<&NewSpec>,
+    probe_dir: Option<&Path>,
+    at: Option<POINT>,
+) -> Outcome {
+    match build(icm.clone(), extended_verbs, hide, custom, new_menu) {
+        Some(p) => track(p, hwnd, intercept, probe_dir, at),
+        None => Outcome::Cancelled,
+    }
 }
 
 /// InvokeCommand 공용 래퍼 — lpVerb = MAKEINTRESOURCE(대역 내 오프셋).

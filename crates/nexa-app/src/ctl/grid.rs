@@ -44,6 +44,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::gdipctx::{color, GdipCtx};
+
+thread_local! {
+    /// 휠 누적기·가속기(10-02 — 세로 줄·가로 px·고속 스크롤).
+    static GRID_WHEEL: std::cell::RefCell<(
+        nexa_gui::WheelAccum,
+        nexa_gui::WheelAccum,
+        nexa_gui::fastscroll::FastScroller,
+    )> = std::cell::RefCell::new(Default::default());
+}
 use super::style::{fill, font_height, Style};
 
 /// 체크 토글 통지(WM_COMMAND HIWORD) — 행은 [`NXGR_GETROW`]로.
@@ -533,14 +542,27 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         }
         WM_MOUSEWHEEL => {
             if let Some(st) = state(hwnd).as_mut() {
-                let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as isize;
+                let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let shift = (wparam.0 & 0x0004/* MK_SHIFT */) != 0;
+                // 10-02: 분수 누적(트랙패드) + 고속 스크롤 배수(노치 연타)
                 if shift {
-                    let off = st.h_off - delta.signum() as i32 * 48;
-                    hscroll_to(hwnd, st, off); // Shift+휠 = 가로
+                    let px = GRID_WHEEL.with_borrow_mut(|w| {
+                        let px = w.1.add(delta, 48);
+                        w.2.wheel(delta, px)
+                    });
+                    if px != 0 {
+                        let off = st.h_off - px;
+                        hscroll_to(hwnd, st, off); // Shift+휠 = 가로
+                    }
                 } else {
-                    let top = st.top as isize - delta.signum() * 3;
-                    scroll_to(hwnd, st, top);
+                    let rows = GRID_WHEEL.with_borrow_mut(|w| {
+                        let rows = w.0.add(delta, 3);
+                        w.2.wheel(delta, rows)
+                    });
+                    if rows != 0 {
+                        let top = st.top as isize - rows as isize;
+                        scroll_to(hwnd, st, top);
+                    }
                 }
             }
             LRESULT(0)

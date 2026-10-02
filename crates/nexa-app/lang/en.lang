@@ -387,6 +387,22 @@ pref.taPos.mr = Middle right
 pref.taPos.bl = Bottom left (default)
 pref.taPos.bc = Bottom center
 pref.taPos.br = Bottom right
+pref.fsEnabled = Enable fast scroll
+pref.fsEnabled.desc = Rapid wheel notches or ↑/↓ auto-repeat multiply the step (precision touchpads excluded).
+pref.fsStep = Events per multiplier step
+pref.fsStep.desc = After this many consecutive events in one direction the multiplier grows by 1 (1–50).
+pref.fsMax = Maximum multiplier
+pref.fsMax.desc = Upper bound of the multiplier (1–32).
+pref.fsWindow = Streak window (ms)
+pref.fsWindow.desc = Only events within this interval count as consecutive (20–2000).
+pref.fsHud = Show speed badge
+pref.fsHud.desc = While accelerating, a ×N badge is shown in the scrolled area; it fades when you stop.
+pref.fsHudPos = Speed badge position
+pref.fsHudPos.desc = Where the badge appears in the scrolled area (3×3).
+pref.fsHudHold = Badge hold (ms)
+pref.fsHudHold.desc = How long the badge stays fully visible after the last accelerated event (0–10000).
+pref.fsHudFade = Badge fade (ms)
+pref.fsHudFade.desc = How long the badge takes to fade out after the hold (0–10000).
 pref.taSpecial = Include special characters (filename-safe)
 pref.taSpecial.desc = Off = letters and digits only.
 pref.taSpace = Include Space (while typing a prefix)
@@ -395,6 +411,7 @@ pref.taBackspace = Backspace erases last character
 pref.taBackspace.desc = Off = Backspace is ignored during type-ahead.
 pref.cat.listGeneral = View & Sort
 pref.cat.typeahead = Type-ahead
+pref.cat.scroll = Fast Scroll
 ops.close = Close
 # X-17 virtual top-level
 nav.mypc = This PC

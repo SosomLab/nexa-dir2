@@ -120,6 +120,9 @@ const TIMER_FSPOLL: usize = 14;
 /// 위젯 틱 요청([`Invalidations::request_tick`] — 파일 목록 오버레이 스크롤바 페이드, 09-04).
 /// flush가 무장하고, 틱에서 더 이상 요청이 없으면 해제.
 const TIMER_WIDGET_TICK: usize = 15;
+/// 컨텍스트 메뉴 선행 구축(10-02 X-61) — 선택이 이 시간 머물면 메뉴 스레드에 미리 구축시킨다.
+const TIMER_CTX_PREBUILD: usize = 16;
+const CTX_PREBUILD_MS: u32 = 300;
 const WIDGET_TICK_MS: u32 = 40;
 const FSPOLL_MS: u32 = 3_000;
 /// 비활성(보이는 창) 폴링 주기 — 활성 3s 대비 감속(성능 원칙과 비활성 갱신의 절충).
@@ -175,6 +178,9 @@ const WM_APP_SHCHANGE_BASE: u32 = 0x8014;
 /// 파일 상세(속성 시스템) 워커 완료(10-02 — [`crate::fileinfo::DetailWorker`]).
 /// wparam = 레인(패널) · lparam = Box<(gen, PathBuf, Vec<DetailLine>)>.
 const WM_APP_INFO_DETAILS: u32 = 0x8016;
+/// 전용 메뉴 스레드 결과(10-02 X-61 — [`crate::menuthread`]): wparam = 세대 · lparam =
+/// Box<(MenuReq, Outcome)>. 세대가 현재와 같을 때만 반영.
+const WM_APP_CTXMENU_RESULT: u32 = 0x8017;
 
 /// 클라우드 다운로드 워커 → UI 통지.
 pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
@@ -909,6 +915,14 @@ struct State {
     /// 패널별 미도착 요청(세대, 경로) — 늦게 온 낡은 결과 폐기용.
     info_req: [Option<(u64, PathBuf)>; 2],
     info_gen: u64,
+    /// 전용 메뉴 스레드(10-02 X-61) — None = 종전 동기 메뉴(폴백).
+    menu_thread: Option<crate::menuthread::MenuThread>,
+    /// 메뉴 세대 — 선행 구축·표시마다 +1. 결과는 같은 세대만 반영.
+    ctx_gen: u64,
+    /// 마지막 선행 구축 대상(targets) — 같으면 재요청 없음.
+    ctx_prepared_key: Option<Vec<PathBuf>>,
+    /// 메뉴 표시 중(결과 대기) — 중복 표시 방지.
+    ctx_showing: bool,
     /// 가시성 필터 **미러**(08-02 재정의 — 값의 SSOT는 탭[panel.rs Tab]. 여기는
     /// 활성 탭 값의 사본으로 update_status가 동기 — 메뉴/툴바/상태 바/영속 읽기용).
     show_hidden: bool,
@@ -939,6 +953,8 @@ struct State {
     ta_scope: String,
     ta_reset_ms: i32,
     ta_pos: i32,
+    /// 고속 스크롤 설정(10-02 — 전역 nexa_gui::fastscroll과 동기, 설정 저장용).
+    fast: nexa_gui::fastscroll::FastScroll,
     ta_special: bool,
     ta_space: bool,
     ta_backspace: bool,
@@ -1061,6 +1077,8 @@ struct TermState {
     wheel: nexa_gui::WheelAccum,
     hwheel: nexa_gui::WheelAccum,
     tui_wheel: nexa_gui::WheelAccum,
+    /// 고속 스크롤(10-02 — 스크롤백 휠 노치 연타 배수. 배지는 term_paint가 그린다).
+    fast: nexa_gui::fastscroll::FastScroller,
 }
 
 impl TermState {
@@ -1076,6 +1094,7 @@ impl TermState {
             wheel: nexa_gui::WheelAccum::default(),
             hwheel: nexa_gui::WheelAccum::default(),
             tui_wheel: nexa_gui::WheelAccum::default(),
+            fast: nexa_gui::fastscroll::FastScroller::default(),
         }
     }
 
@@ -1290,6 +1309,8 @@ pub fn run() -> Result<()> {
         .map(|t| Session::parse(&t))
         .unwrap_or_default();
     let theme_mode = ThemeMode::from_str(&settings.theme);
+    // 고속 스크롤 전역 설정(10-02) — 위젯·창들이 사건마다 읽는다
+    nexa_gui::fastscroll::set_fast_scroll(settings.fast_scroll());
     // i18n 활성화(M2-6) — 패널·메뉴 생성 전에(컬럼 제목·라벨이 tr() 경유)
     let langs = i18n::discover(&data);
     let code = i18n::resolve_code(&settings.lang, &unsafe { system_ui_lang() }, &langs);
@@ -1506,6 +1527,10 @@ pub fn run() -> Result<()> {
         info_details: [None, None],
         info_req: [None, None],
         info_gen: 0,
+        menu_thread: None,
+        ctx_gen: 0,
+        ctx_prepared_key: None,
+        ctx_showing: false,
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
         sort_folders_first: settings.sort_folders_first,
@@ -1521,6 +1546,7 @@ pub fn run() -> Result<()> {
         ta_scope: settings.typeahead_scope.clone(),
         ta_reset_ms: settings.typeahead_reset_ms,
         ta_pos: settings.typeahead_pos,
+        fast: settings.fast_scroll(),
         ta_special: settings.typeahead_special,
         ta_space: settings.typeahead_space,
         ta_backspace: settings.typeahead_backspace,
@@ -2575,6 +2601,8 @@ unsafe fn term_paint(
             }
         }
     }
+    // 고속 스크롤 ×N 배지(10-02) — 그리드 위 마지막
+    t.fast.paint(ctx, theme, rc, cell_h, 6);
     true
 }
 
@@ -2756,21 +2784,19 @@ unsafe fn show_background_context_menu(hwnd: HWND) {
 
 /// 캐럿/선택 기준 셸 컨텍스트 메뉴 표시(M3-4 — 우클릭·Apps/Shift+F10 공용).
 /// `at_caret`=true면 캐럿 행 앵커 위치(키보드), false면 커서 위치(마우스).
-unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
+/// 행 컨텍스트 메뉴 **요청 구축**(10-02 X-61 — 메뉴 스레드 공용 데이터): 대상(같은 부모로
+/// 축소)·전체 선택·Shift 확장·가로채기 동사·제자리 대체·고유 항목·New 대상 + 표시 좌표.
+/// State를 **읽기만** 하고 즉시 반환한다(모달 펌프 없음).
+unsafe fn build_row_menu_req(
+    hwnd: HWND,
+    st: &mut State,
+    at_caret: bool,
+) -> Option<(
+    crate::menuthread::MenuReq,
+    Option<windows::Win32::Foundation::POINT>,
+)> {
     use crate::shellmenu::{self, CustomItem};
-    // 1단계: State에서 요청 데이터 추출 — 모달 메뉴 펌프 전 참조 종료(ADR-0003 재진입 안전)
-    struct Req {
-        targets: Vec<PathBuf>,
-        /// 축소 전 전체 선택(교차 폴더 포함) — copy/cut/경로 복사 가로채기용(QA 07-14).
-        full: Vec<PathBuf>,
-        shift: bool,
-        custom: Vec<CustomItem>,
-        paste_dir: Option<PathBuf>,
-        /// "새로 만들기" 서브메뉴 대상(07-27) — 단일 선택: 파일=부모·폴더=자신.
-        new_spec: Option<shellmenu::NewSpec>,
-        at: Option<windows::Win32::Foundation::POINT>,
-    }
-    let req = state_of(hwnd).and_then(|st| {
+    (|| {
         let full = display_order_targets(st); // 표시 순서(QA 07-14 — 경로 복사 순서 정합)
         let targets = context_targets(st);
         if targets.is_empty() {
@@ -2857,35 +2883,80 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
                 _ => {}
             }
         }
-        Some(Req {
-            targets,
-            full,
-            shift: GetKeyState(VK_SHIFT.0 as i32) < 0,
-            custom,
-            paste_dir,
-            new_spec,
+        Some((
+            crate::menuthread::MenuReq {
+                targets,
+                full,
+                extended: GetKeyState(VK_SHIFT.0 as i32) < 0,
+                intercept: ["delete", "rename", "copy", "cut"]
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect(),
+                hide: vec![("copyaspath".to_string(), CTX_COPY_PATH, tr("ctx.copyPath"))],
+                custom,
+                new_spec,
+                paste_dir,
+            },
             at,
-        })
-    });
-    let Some(req) = req else { return };
-    let outcome = shellmenu::show(
+        ))
+    })()
+}
+
+/// 행 컨텍스트 메뉴 표시(10-02 X-61): 전용 메뉴 스레드에 **표시 요청만** 보내고 돌아온다 —
+/// 준비된 메뉴가 같은 대상이면 즉시 뜨고(수 ms), 아니면 그 스레드가 구축 후 띄운다. UI는
+/// 그동안 멈추지 않는다. 결과는 `WM_APP_CTXMENU_RESULT`. 메뉴 스레드가 없으면 종전 동기 경로.
+unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
+    let Some(st) = state_of(hwnd) else { return };
+    if st.ctx_showing {
+        return; // 이미 떠 있음(결과 대기)
+    }
+    let Some((req, at)) = build_row_menu_req(hwnd, st, at_caret) else {
+        return;
+    };
+    if let Some(mt) = &st.menu_thread {
+        st.ctx_gen += 1;
+        if mt.show(st.ctx_gen, req.clone(), at) {
+            st.ctx_showing = true;
+            st.ctx_prepared_key = None; // 준비분은 표시로 소비됨 — 다음 선택에서 재구축
+            return;
+        }
+    }
+    // 동기 폴백(메뉴 스레드 없음) — 모달 펌프 전 State 참조 종료(ADR-0003 재진입 안전)
+    let hide: Vec<(&str, u32, String)> = req
+        .hide
+        .iter()
+        .map(|(v, id, l)| (v.as_str(), *id, l.clone()))
+        .collect();
+    let intercept: Vec<&str> = req.intercept.iter().map(String::as_str).collect();
+    let outcome = crate::shellmenu::show(
         hwnd,
         &req.targets,
-        req.shift,
-        &["delete", "rename", "copy", "cut"],
-        &[("copyaspath", CTX_COPY_PATH, tr("ctx.copyPath"))],
+        req.extended,
+        &intercept,
+        &hide,
         &req.custom,
         req.new_spec.as_ref(),
-        req.at,
+        at,
     );
     let Some(st) = state_of(hwnd) else { return };
+    apply_row_menu_outcome(hwnd, st, &req, outcome);
+}
+
+/// 메뉴 결과 반영(동기·비동기 공용) — 셸 실행 재로드·앱 통합 동사·고유 항목.
+unsafe fn apply_row_menu_outcome(
+    hwnd: HWND,
+    st: &mut State,
+    req: &crate::menuthread::MenuReq,
+    outcome: crate::shellmenu::Outcome,
+) {
+    use crate::shellmenu;
     match outcome {
         shellmenu::Outcome::Shell => reload_both(hwnd, st, ""), // 셸이 FS 변경했을 수 있음
         // 새로 만들기 생성 감지(07-27) — 캐럿 이동 + 인라인 리네임 진입(탐색기 관례)
         shellmenu::Outcome::Created(path) => focus_created_and_rename(hwnd, st, &path),
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("delete") => {
             // 앱 경로 합류 — undo 기록(M3-3). Shift 열림 = 완전 삭제(확인창 방어)
-            do_delete(hwnd, st, req.shift);
+            do_delete(hwnd, st, req.extended);
         }
         shellmenu::Outcome::Verb(v) if v.eq_ignore_ascii_case("rename") => {
             begin_rename_caret(hwnd, st); // 인라인 리네임 합류(M3-2)
@@ -2924,7 +2995,7 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
         }
         shellmenu::Outcome::Custom(CTX_DELETE_PERMANENT) => do_delete(hwnd, st, true),
         shellmenu::Outcome::Custom(CTX_PASTE_INTO) => {
-            if let Some(dir) = req.paste_dir {
+            if let Some(dir) = req.paste_dir.clone() {
                 if let Some((paths, op)) = crate::clipboard::read_file_list() {
                     if op == nexa_ops::Op::Move {
                         crate::clipboard::clear(hwnd); // 잘라내기는 1회성(탐색기 관례)
@@ -2936,6 +3007,44 @@ unsafe fn show_row_context_menu(hwnd: HWND, at_caret: bool) {
             }
         }
         _ => {}
+    }
+}
+
+/// 선행 구축 예약(10-02 X-61): 선택이 바뀌면 [`CTX_PREBUILD_MS`] 뒤 메뉴 스레드에 미리 구축시킨다.
+/// 모든 상호작용이 지나는 `update_status` 길목에서 부른다(값이 같으면 무비용).
+unsafe fn arm_ctx_prebuild(hwnd: HWND, st: &mut State) {
+    if st.menu_thread.is_none() || st.ctx_showing {
+        return;
+    }
+    let targets = context_targets(st);
+    if targets.is_empty() {
+        if st.ctx_prepared_key.take().is_some() {
+            if let Some(mt) = &st.menu_thread {
+                mt.invalidate();
+            }
+        }
+        return;
+    }
+    if st.ctx_prepared_key.as_ref() != Some(&targets) {
+        SetTimer(Some(hwnd), TIMER_CTX_PREBUILD, CTX_PREBUILD_MS, None);
+    }
+}
+
+/// 선행 구축 실행(타이머·우클릭 누름) — 대상이 바뀌었을 때만 메뉴 스레드에 보낸다.
+unsafe fn prebuild_ctx_menu(hwnd: HWND, st: &mut State) {
+    if st.ctx_showing {
+        return;
+    }
+    let Some((req, _)) = build_row_menu_req(hwnd, st, false) else {
+        return;
+    };
+    if st.ctx_prepared_key.as_ref() == Some(&req.targets) {
+        return;
+    }
+    if let Some(mt) = &st.menu_thread {
+        st.ctx_prepared_key = Some(req.targets.clone());
+        st.ctx_gen += 1;
+        mt.prepare(st.ctx_gen, req);
     }
 }
 
@@ -4809,6 +4918,7 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
             None,
         );
     }
+    arm_ctx_prebuild(hwnd, st); // 컨텍스트 메뉴 선행 구축(10-02 X-61)
     flush_invalidations(hwnd, &mut inv);
 }
 
@@ -6043,6 +6153,14 @@ unsafe fn open_prefs(hwnd: HWND) {
                 typeahead_special: st.ta_special,
                 typeahead_space: st.ta_space,
                 typeahead_backspace: st.ta_backspace,
+                fast_scroll: st.fast.enabled,
+                fast_scroll_step: st.fast.step as i32,
+                fast_scroll_max: st.fast.max,
+                fast_scroll_window_ms: st.fast.window_ms as i32,
+                fast_scroll_hud: st.fast.hud,
+                fast_scroll_hud_pos: st.fast.hud_pos as i32,
+                fast_scroll_hud_hold_ms: st.fast.hud_hold_ms as i32,
+                fast_scroll_hud_fade_ms: st.fast.hud_fade_ms as i32,
                 transfer_close_ms: st.transfer_close_ms,
                 dnd_hover_ms: st.dnd_hover_ms,
             },
@@ -6336,6 +6454,23 @@ unsafe fn apply_prefs(hwnd: HWND, v: &crate::prefs::PrefValues) {
     if v.dnd_hover_ms != st.dnd_hover_ms {
         st.dnd_hover_ms = v.dnd_hover_ms.clamp(200, 10_000);
     }
+    // 고속 스크롤(10-02 — X-63): 전역 교체 = 모든 스크롤 영역 즉시 반영(핫스왑)
+    {
+        let cfg = nexa_gui::fastscroll::FastScroll {
+            enabled: v.fast_scroll,
+            step: v.fast_scroll_step.clamp(1, 50) as u32,
+            max: v.fast_scroll_max.clamp(1, 32),
+            window_ms: v.fast_scroll_window_ms.clamp(20, 2000) as u64,
+            hud: v.fast_scroll_hud,
+            hud_pos: v.fast_scroll_hud_pos.clamp(0, 8) as u8,
+            hud_hold_ms: v.fast_scroll_hud_hold_ms.clamp(0, 10_000) as u64,
+            hud_fade_ms: v.fast_scroll_hud_fade_ms.clamp(0, 10_000) as u64,
+        };
+        if cfg != st.fast {
+            st.fast = cfg;
+            nexa_gui::fastscroll::set_fast_scroll(cfg);
+        }
+    }
     // 타입어헤드 옵션(07-15) — 전 탭 즉시 적용
     if v.typeahead_scope != st.ta_scope
         || v.typeahead_reset_ms != st.ta_reset_ms
@@ -6600,6 +6735,14 @@ fn current_settings(st: &State) -> Settings {
         typeahead_special: st.ta_special,
         typeahead_space: st.ta_space,
         typeahead_backspace: st.ta_backspace,
+        fast_scroll: st.fast.enabled,
+        fast_scroll_step: st.fast.step as i32,
+        fast_scroll_max: st.fast.max,
+        fast_scroll_window_ms: st.fast.window_ms as i32,
+        fast_scroll_hud: st.fast.hud,
+        fast_scroll_hud_pos: st.fast.hud_pos as i32,
+        fast_scroll_hud_hold_ms: st.fast.hud_hold_ms as i32,
+        fast_scroll_hud_fade_ms: st.fast.hud_fade_ms as i32,
         dock_ratio: st.panels[0].dock_ratio(),
         dock_split: st.dock_split,
         term_font: st.term_font.clone(),
@@ -7267,6 +7410,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(st) = ptr.as_mut() {
                 // 도크 Info 상세 워커(10-02) — 결과는 WM_APP_INFO_DETAILS로 UI에
                 let hwnd_raw = hwnd.0 as isize;
+                // 전용 메뉴 스레드(10-02 X-61) — 실패 시 None = 종전 동기 메뉴
+                st.menu_thread = crate::menuthread::MenuThread::spawn(
+                    hwnd.0 as isize,
+                    windows::Win32::System::Threading::GetCurrentThreadId(),
+                    WM_APP_CTXMENU_RESULT,
+                );
                 st.info_worker = Some(crate::fileinfo::DetailWorker::spawn(
                     move |lane, gen, path, lines| {
                         let payload = Box::into_raw(Box::new((gen, path, lines))) as isize;
@@ -7461,8 +7610,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             return LRESULT(0);
                         }
                         let lines = t.wheel.add(delta, 3);
-                        if lines != 0 && t.scroll_view(lines) {
+                        let lines = t.fast.wheel(delta, lines); // 고속 스크롤(10-02)
+                        let scrolled = lines != 0 && t.scroll_view(lines);
+                        let hud = t.fast.hud_visible();
+                        if scrolled || hud {
                             invalidate_dock(hwnd, st, target);
+                        }
+                        if hud {
+                            // ×N 배지 유지/페이드 = 위젯 틱 타이머(flush 경유 없이 직접 무장)
+                            SetTimer(Some(hwnd), TIMER_WIDGET_TICK, WIDGET_TICK_MS, None);
                         }
                     }
                     return LRESULT(0);
@@ -7757,7 +7913,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let ctx = st.nav_ctx();
                     st.panels[idx].drain_actions(ctx, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
-                    // 탭 우클릭 메뉴(편의 UX ②) — 모달 팝업은 State 참조를 끊고(재진입 규약)
+                    prebuild_ctx_menu(hwnd, st); // 우클릭 누름 = 즉시 선행 구축(10-02 X-61)
+                                                 // 탭 우클릭 메뉴(편의 UX ②) — 모달 팝업은 State 참조를 끊고(재진입 규약)
                     tab_menu = st.panels[idx].take_tab_menu().map(|t| (idx, t));
                 }
             }
@@ -8610,6 +8767,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 셸 변경 통지(X-44 5차) — 페이로드 해석 없이 디바운스 합류(등록 pidl이
         // 이미 범위를 필터·앱은 전체 재열거로 수렴 = watcher 동일 규약). 폭주는
         // 300ms 디바운스 + 1s 상한이 흡수.
+        m if m == WM_APP_CTXMENU_RESULT => {
+            // 메뉴 스레드 결과(10-02 X-61) — 같은 세대만 반영
+            if lparam.0 != 0 {
+                let (req, outcome) = *Box::from_raw(
+                    lparam.0 as *mut (crate::menuthread::MenuReq, crate::shellmenu::Outcome),
+                );
+                if let Some(st) = state_of(hwnd) {
+                    st.ctx_showing = false;
+                    if wparam.0 as u64 == st.ctx_gen {
+                        apply_row_menu_outcome(hwnd, st, &req, outcome);
+                        update_status(hwnd, st);
+                    }
+                    // 닫힌 직후 같은 선택에 다시 우클릭할 때를 위해 즉시 재구축(실측: 대기
+                    // 없이 연속 우클릭하면 구축 400~700ms를 기다리던 것 → 수십 ms)
+                    prebuild_ctx_menu(hwnd, st);
+                }
+            }
+            LRESULT(0)
+        }
         m if m == WM_APP_INFO_DETAILS => {
             // 도크 Info 상세 도착(10-02) — 그 레인의 최신 요청과 세대·경로가 맞을 때만 반영
             if lparam.0 != 0 {
@@ -8926,6 +9102,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 return LRESULT(0);
             }
+            if wparam.0 == TIMER_CTX_PREBUILD {
+                let _ = KillTimer(Some(hwnd), TIMER_CTX_PREBUILD);
+                if let Some(st) = state_of(hwnd) {
+                    prebuild_ctx_menu(hwnd, st); // 선행 구축(10-02 X-61)
+                }
+                return LRESULT(0);
+            }
             if wparam.0 == TIMER_WIDGET_TICK {
                 // 위젯 틱(오버레이 바 페이드) — 재요청 없으면 해제(flush가 재무장)
                 if let Some(st) = state_of(hwnd) {
@@ -8935,6 +9118,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[1].rows_mut().tick(now, &mut inv);
                     st.panels[0].dock.tick(&mut inv); // 도크 오버레이 바 페이드(10-02)
                     st.panels[1].dock.tick(&mut inv);
+                    for i in 0..2 {
+                        // 터미널 ×N 배지 페이드(10-02)
+                        if let Some(t) = &mut st.terms[i] {
+                            let mut tinv = Invalidations::default();
+                            t.fast.tick(t.grid.0, &mut tinv);
+                            if tinv.tick_requested() {
+                                inv.request_tick();
+                            }
+                            for r in tinv.drain() {
+                                inv.push(r);
+                            }
+                        }
+                    }
                     if !inv.tick_requested() {
                         let _ = KillTimer(Some(hwnd), TIMER_WIDGET_TICK);
                     }
