@@ -1202,22 +1202,25 @@ impl State {
     fn active_panel(&mut self) -> &mut Panel {
         &mut self.panels[self.active]
     }
-    /// 좌표가 속한 패널(도크 밴드 인지 — X-6: 밴드 안은 dock_split 기준). 스플리터 존=None.
+    /// 좌표가 속한 **위젯 소유** 패널(도크 밴드 인지 — X-6: 밴드 안은 dock_split 기준.
+    /// 싱글 정보의 공유 도크는 좌 위젯 = `Some(0)`). 스플리터 존=None.
+    /// 활성 전환 여부까지 가르려면 [`State::hit_zone`].
     fn panel_at_pt(&self, x: i32, y: i32) -> Option<usize> {
-        if self.panels[0].dock_visible() {
-            let band = self.panels[0].dock.bounds();
-            if band.h > 0 && y >= band.y {
-                let right = self.panels[1].dock.bounds();
-                return if x < band.right() {
-                    Some(0)
-                } else if x >= right.x {
-                    Some(1)
-                } else {
-                    None // 도크 스플리터 존
-                };
-            }
-        }
-        self.panel_at(x)
+        self.hit_zone(x, y).owner()
+    }
+
+    /// 포인터 히트 존(10-02 A19) — 순수 판정 [`hit_zone_impl`]에 현 레이아웃을 넘긴다.
+    fn hit_zone(&self, x: i32, y: i32) -> HitZone {
+        let g = HitGeom {
+            single_info: single_info(self),
+            band: self.panels[0]
+                .dock_shown()
+                .then(|| self.panels[0].dock.bounds()),
+            right_dock_x: self.panels[1].dock.bounds().x,
+            p0_right: self.panels[0].bounds().right(),
+            p1_x: self.panels[1].bounds().x,
+        };
+        hit_zone_impl(&g, x, y)
     }
 
     /// 좌표가 속한 패널 인덱스(스플리터 존이면 `None`).
@@ -1229,6 +1232,69 @@ impl State {
         } else {
             None // 스플리터 존
         }
+    }
+}
+
+/// 포인터 히트 존(10-02 A19 — X3-01·G3-02·G3-17). `panel_at_pt`가 '위젯 소유 패널'과
+/// '포커스를 줄 패널'을 하나의 값으로 돌려줘, 싱글 정보의 전폭 공유 도크(좌 위젯)를
+/// 누르면 활성 패널이 1→0으로 뒤집히고 `update_dock_info`(원천=활성)가 방금 보던 우
+/// 패널 파일의 미리보기를 좌 패널 선택으로 교체하던 결함을 가른다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HitZone {
+    /// 패널 영역(탭·경로 바·목록 또는 그 패널 **소유** 도크) — 클릭 = 활성 전환.
+    Panel(usize),
+    /// 싱글 정보의 전폭 공유 도크(위젯 소유 = 좌, 내용 원천 = 활성 패널) —
+    /// 클릭해도 활성 패널 **유지**(터미널 세션은 좌 고정 규약 그대로).
+    SharedDock,
+    /// 파일 또는 도크 스플리터 존.
+    Split,
+}
+
+impl HitZone {
+    /// 이벤트를 받을 위젯 소유 패널(공유 도크 = 좌 위젯). 스플리터 존이면 `None`.
+    fn owner(self) -> Option<usize> {
+        match self {
+            HitZone::Panel(i) => Some(i),
+            HitZone::SharedDock => Some(0),
+            HitZone::Split => None,
+        }
+    }
+}
+
+/// [`hit_zone_impl`] 입력 — `State`에서 뽑은 현 레이아웃 지오메트리.
+struct HitGeom {
+    single_info: bool,
+    /// **표시 중(h>0)** 인 좌 도크 밴드 rect(싱글 정보면 전폭) — 숨김이면 `None`.
+    band: Option<GRect>,
+    /// 우 도크 x(듀얼 정보 — 도크 스플리터 존의 우측 경계).
+    right_dock_x: i32,
+    /// 좌 패널 right · 우 패널 x(파일 스플리터 존 경계).
+    p0_right: i32,
+    p1_x: i32,
+}
+
+/// 순수 히트 판정 — 도크 밴드 안은 dock_split 기준(X-6), 밖은 파일 스플리터 기준.
+fn hit_zone_impl(g: &HitGeom, x: i32, y: i32) -> HitZone {
+    if let Some(band) = g.band {
+        if y >= band.y {
+            if g.single_info {
+                return HitZone::SharedDock;
+            }
+            return if x < band.right() {
+                HitZone::Panel(0)
+            } else if x >= g.right_dock_x {
+                HitZone::Panel(1)
+            } else {
+                HitZone::Split
+            };
+        }
+    }
+    if x < g.p0_right {
+        HitZone::Panel(0)
+    } else if x >= g.p1_x {
+        HitZone::Panel(1)
+    } else {
+        HitZone::Split
     }
 }
 
@@ -7764,7 +7830,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 } else if let Some(idx) = st.panel_at_pt(x, y) {
                     st.term_focus = None; // 기본 해제 — 아래에서 터미널 클릭이면 재설정(M4-3)
-                    set_active(hwnd, st, idx);
+                                          // 싱글 정보의 공유 도크(좌 위젯) 클릭은 활성 패널 **유지**(X3-01·G3-02
+                                          // 10-02) — 내용 원천이 활성 패널이라 좌로 뒤집으면 미리보기가 바뀐다.
+                                          // 위젯 라우팅(idx=0)·터미널 좌 세션 규약은 그대로.
+                    let shared_dock = st.hit_zone(x, y) == HitZone::SharedDock;
+                    if !shared_dock {
+                        set_active(hwnd, st, idx);
+                    }
                     // 프레스 시점(선택 반영 전) 행·기선택 판정 — **기선택 행만 OLE DnD 후보**.
                     // 미선택 행 드래그=러버밴드(원본 B-4)·리네임 **필드 안**=텍스트 드래그
                     // (QA 07-13 3차). 가드는 필드 안 클릭만(QA 07-26 진범: 리네임 중 다른
@@ -7793,9 +7865,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.panels[idx].drain_actions(ctx, &mut inv);
                     // 탭 드래그 원위치 스냅샷(08-02 QA — ESC 취소 복귀·해제/ESC에서 소거)
                     st.tab_drag_undo = st.panels[idx].tabbar.pressed_tab().map(|i| (idx, i));
-                    // 터미널 [→] = 현재 폴더로 이동(QA 07-14 — 원본 '터미널에서 열기')
+                    // 터미널 [→] = 현재 폴더로 이동(QA 07-14 — 원본 '터미널에서 열기').
+                    // 공유 도크면 '현재 폴더' = 활성 패널(내용 원천과 동일)
                     if st.panels[idx].dock.take_goto() {
-                        let dir = st.panels[idx].root_path();
+                        let src = if shared_dock { st.active } else { idx };
+                        let dir = st.panels[src].root_path();
                         if let Some(t) = &mut st.terms[idx] {
                             if t.exited {
                                 st.terms[idx] = None; // 재시작(cwd=현재 폴더 lazy start)
@@ -7907,7 +7981,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
                 if let Some(idx) = st.panel_at_pt(x, y) {
-                    set_active(hwnd, st, idx);
+                    // 공유 도크 우클릭(복사 메뉴)도 활성 유지(X3-01 — LBUTTONDOWN과 동일)
+                    if st.hit_zone(x, y) != HitZone::SharedDock {
+                        set_active(hwnd, st, idx);
+                    }
                     let mut inv = Invalidations::default();
                     let was_editing = st.panels[idx].pathbar.is_editing();
                     st.panels[idx].on_event(&InputEvent::RightDown { x, y }, &mut inv);
@@ -8276,7 +8353,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let mut exec: Option<PathBuf> = None;
             if let Some(st) = state_of(hwnd) {
                 let (x, y) = mouse_xy(lparam);
-                if let Some(idx) = st.panel_at(x) {
+                // 다른 마우스 핸들러와 같은 히트 존(G3-17 10-02 — 종전 `panel_at(x)`는
+                // 도크 밴드 더블클릭을 파일 스플리터 기준으로 반대 패널에 넘겼다).
+                // 공유 도크 더블클릭 = 동작 없음(활성 유지).
+                let zone = st.hit_zone(x, y);
+                if zone == HitZone::SharedDock {
+                    return LRESULT(0);
+                }
+                if let Some(idx) = zone.owner() {
                     set_active(hwnd, st, idx);
                     // 탭 본체 더블클릭 = 설정 동작(사용자 요청 07-15 — 기본 닫기)
                     if let Some(ti) = st.panels[idx].tabbar.tab_index_at(x, y) {
@@ -9323,10 +9407,77 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_staging_slots, is_dnd_staging, route_key_with_term, should_trim, split_staged,
-        KeyRoute,
+        cleanup_staging_slots, hit_zone_impl, is_dnd_staging, route_key_with_term, should_trim,
+        split_staged, GRect, HitGeom, HitZone, KeyRoute,
     };
     use std::path::PathBuf;
+
+    /// X3-01·G3-02·G3-17 — 히트 존 표: 듀얼 정보 밴드 안은 dock_split 기준, 싱글 정보
+    /// 밴드 안은 **공유 도크**(위젯 소유 좌·활성 유지), 밴드 밖/숨김은 파일 스플리터 기준.
+    #[test]
+    fn hit_zone_table() {
+        // 듀얼 정보: 파일 스플리터 190~200, 도크 스플리터 200~210
+        let dual = HitGeom {
+            single_info: false,
+            band: Some(GRect::new(0, 300, 200, 100)),
+            right_dock_x: 210,
+            p0_right: 190,
+            p1_x: 200,
+        };
+        assert_eq!(hit_zone_impl(&dual, 100, 350), HitZone::Panel(0));
+        assert_eq!(hit_zone_impl(&dual, 250, 350), HitZone::Panel(1));
+        assert_eq!(
+            hit_zone_impl(&dual, 205, 350),
+            HitZone::Split,
+            "도크 스플리터 존"
+        );
+        assert_eq!(hit_zone_impl(&dual, 100, 100), HitZone::Panel(0));
+        assert_eq!(
+            hit_zone_impl(&dual, 195, 100),
+            HitZone::Split,
+            "파일 스플리터 존"
+        );
+        assert_eq!(hit_zone_impl(&dual, 250, 100), HitZone::Panel(1));
+        // 밴드 좌측 끝(dock_split ≠ split)은 파일 분할과 무관하게 좌 — G3-17
+        assert_eq!(hit_zone_impl(&dual, 195, 350), HitZone::Panel(0));
+
+        // 싱글 정보: 좌 도크 전폭(0..400)·우 도크 0-rect(x=0)
+        let single = HitGeom {
+            single_info: true,
+            band: Some(GRect::new(0, 300, 400, 100)),
+            right_dock_x: 0,
+            p0_right: 190,
+            p1_x: 200,
+        };
+        assert_eq!(hit_zone_impl(&single, 100, 350), HitZone::SharedDock);
+        assert_eq!(
+            hit_zone_impl(&single, 350, 350),
+            HitZone::SharedDock,
+            "우 패널 아래 밴드도 공유 도크 — 종전 Some(0)으로 활성이 좌로 뒤집혔다"
+        );
+        assert_eq!(
+            hit_zone_impl(&single, 350, 100),
+            HitZone::Panel(1),
+            "밴드 밖은 종전대로"
+        );
+        assert_eq!(
+            HitZone::SharedDock.owner(),
+            Some(0),
+            "위젯 소유는 좌(panel_at_pt 호환)"
+        );
+        assert_eq!(HitZone::Split.owner(), None);
+
+        // 도크 숨김(또는 0-rect — dock_shown=false): 밴드 없음 = 파일 스플리터 기준
+        let hidden = HitGeom {
+            single_info: true,
+            band: None,
+            right_dock_x: 0,
+            p0_right: 190,
+            p1_x: 200,
+        };
+        assert_eq!(hit_zone_impl(&hidden, 350, 350), HitZone::Panel(1));
+        assert_eq!(hit_zone_impl(&hidden, 100, 350), HitZone::Panel(0));
+    }
 
     /// G8-04 — 스테이징 출신 쌍만 분리(NexaDir\cloud·임시 폴더 밖·다른 접두는 일반).
     #[test]
