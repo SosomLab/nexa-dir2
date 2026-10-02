@@ -125,7 +125,8 @@ enum Kind {
     /// 드롭다운 목록(CBS_DROPDOWNLIST — 09-04): 항목이 많아 라디오로는 세로가 길어지는 값
     /// (터미널 스킴 15종). 선택 = 즉시 적용. 항목 원천은 [`Select`].
     Select(Select),
-    /// 3×3 위치 피커(오너드로 이미지 버튼 — 원본 §7-A, QA 07-15).
+    /// 3×3 위치 — **이미지 드롭다운**(10-02 사용자 — nexa-sql `PositionDropdown` 방식 이식:
+    /// 머리 = 선택 위치 미니 화면 타일 + ▾, 클릭 = 3×3 이미지 셀 팝업). 종전 9버튼 그리드 대체.
     PosGrid,
     /// 자유 텍스트(EDIT) — X-12에서 글꼴이 Font 행으로 이관돼 현재 미사용(향후 텍스트 설정용).
     #[allow(dead_code)]
@@ -156,7 +157,11 @@ enum Select {
 impl Select {
     fn options(self) -> Vec<(String, String)> {
         let tag = |s: &nexa_term::TermScheme| {
-            let kind = tr(if s.dark { "pref.theme.dark" } else { "pref.theme.light" });
+            let kind = tr(if s.dark {
+                "pref.theme.dark"
+            } else {
+                "pref.theme.light"
+            });
             (s.id.to_string(), format!("{} ({kind})", s.name))
         };
         match self {
@@ -169,10 +174,16 @@ impl Select {
                 o.extend(nexa_term::SCHEMES.iter().map(tag));
                 o
             }
-            Select::SchemeDark => nexa_term::SCHEMES.iter().filter(|s| s.dark).map(tag).collect(),
-            Select::SchemeLight => {
-                nexa_term::SCHEMES.iter().filter(|s| !s.dark).map(tag).collect()
-            }
+            Select::SchemeDark => nexa_term::SCHEMES
+                .iter()
+                .filter(|s| s.dark)
+                .map(tag)
+                .collect(),
+            Select::SchemeLight => nexa_term::SCHEMES
+                .iter()
+                .filter(|s| !s.dark)
+                .map(tag)
+                .collect(),
             Select::CopyFormat => TERM_COPY_OPTS
                 .iter()
                 .map(|(v, lk)| (v.to_string(), tr(lk)))
@@ -758,8 +769,8 @@ const ID_FIELD_BASE: u32 = 1200; // +field(체크/EDIT 명령)
 const ID_OPT_BASE: u32 = 1400; // +라디오 옵션 순번
 /// 그룹 페이지의 하위 메뉴 링크(드릴다운 개편 07-15) — +TREE 인덱스.
 const ID_NAV_BASE: u32 = 1600;
-/// 타입어헤드 위치 3×3 피커 셀(오너드로 — QA 07-15) — +0..9.
-const ID_POS_BASE: u32 = 1900;
+/// 타입어헤드 위치 드롭다운 머리(오너드로 버튼 — 10-02). 팝업 셀은 메뉴 항목 id 1..=9.
+const ID_POS_HEAD: u32 = 1900;
 /// 플러그인 사용 여부 체크(07-26 — 동적 목록) — +순번. ID_FIELD_BASE 이상이라
 /// 기존 "클릭 즉시 harvest+apply" 명령 경로를 그대로 탄다.
 const ID_PLUGIN_BASE: u32 = 2100;
@@ -1293,7 +1304,8 @@ impl PrefState {
                         y += 28;
                     }
                     Kind::PosGrid => {
-                        // 3×3 이미지 피커(원본 §7-A — QA 07-15 라디오 9종 대체)
+                        // 위치 이미지 드롭다운(10-02 — nexa-sql PositionDropdown 방식):
+                        // 캡션 + [미니 화면 타일 ▾] 한 개(클릭 = 3×3 이미지 팝업)
                         let cap = mk(
                             self.pane,
                             self.font,
@@ -1308,23 +1320,20 @@ impl PrefState {
                         );
                         self.rows.push(cap);
                         y += 24;
-                        for gi in 0..9u32 {
-                            let (col, row_i) = ((gi % 3) as i32, (gi / 3) as i32);
-                            let b = mk(
-                                self.pane,
-                                self.font,
-                                w!("BUTTON"),
-                                "",
-                                WS_TABSTOP.0 | BS_OWNERDRAW as u32,
-                                x0 + col * 30,
-                                y + row_i * 30,
-                                26,
-                                26,
-                                ID_POS_BASE + gi,
-                            );
-                            self.rows.push(b);
-                        }
-                        y += 3 * 30 + 6;
+                        let b = mk(
+                            self.pane,
+                            self.font,
+                            w!("BUTTON"),
+                            "",
+                            WS_TABSTOP.0 | BS_OWNERDRAW as u32,
+                            x0,
+                            y,
+                            POS_HEAD_W,
+                            POS_HEAD_H,
+                            ID_POS_HEAD,
+                        );
+                        self.rows.push(b);
+                        y += POS_HEAD_H + 8;
                     }
                     Kind::CheckBox => {
                         // 라벨 일체형 체크박스(원본 스크린샷) — 클릭 즉시 적용
@@ -1477,7 +1486,12 @@ impl PrefState {
                                 Some(LPARAM(w16.as_ptr() as isize)),
                             );
                             if val == cur {
-                                SendMessageW(cb, 0x014E /* CB_SETCURSEL */, Some(WPARAM(i)), None);
+                                SendMessageW(
+                                    cb,
+                                    0x014E, /* CB_SETCURSEL */
+                                    Some(WPARAM(i)),
+                                    None,
+                                );
                             }
                             vals.push(val);
                         }
@@ -1985,39 +1999,159 @@ unsafe fn draw_tree_item(st: &PrefState, dis: &DRAWITEMSTRUCT) {
     SelectObject(dis.hDC, old);
 }
 
-/// 3×3 위치 피커 셀 오너드로(QA 07-15) — 선택 = accent 테두리+점, 비선택 = 회색.
-unsafe fn draw_pos_cell(st: &PrefState, dis: &DRAWITEMSTRUCT) {
-    let idx = (dis.CtlID - ID_POS_BASE) as i32;
-    let selected = st.values.typeahead_pos == idx;
-    FillRect(dis.hDC, &dis.rcItem, GetSysColorBrush(COLOR_WINDOW));
-    let border = CreateSolidBrush(COLORREF(if selected { 0x00D4_7800 } else { 0x00C8_C8C8 }));
-    let r = dis.rcItem;
-    let t = if selected { 2 } else { 1 };
-    // 테두리(두께 t)
-    for (x, y, w, h) in [
-        (r.left, r.top, r.right - r.left, t),
-        (r.left, r.bottom - t, r.right - r.left, t),
-        (r.left, r.top, t, r.bottom - r.top),
-        (r.right - t, r.top, t, r.bottom - r.top),
-    ] {
-        let rc = RECT {
-            left: x,
-            top: y,
-            right: x + w,
-            bottom: y + h,
-        };
-        FillRect(dis.hDC, &rc, border);
-    }
-    // 중앙 점(선택 = accent·비선택 = 회색)
-    let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
-    let dot = RECT {
-        left: cx - 3,
-        top: cy - 3,
-        right: cx + 3,
-        bottom: cy + 3,
+/// 위치 드롭다운 머리 크기(px — 콤보 높이와 맞춤).
+const POS_HEAD_W: i32 = 56;
+const POS_HEAD_H: i32 = 26;
+/// 팝업 셀 크기(px — 4:3 화면 타일 + 여백).
+const POS_CELL_W: i32 = 40;
+const POS_CELL_H: i32 = 32;
+const POS_ACCENT: u32 = 0x00D4_7800; // BGR — 설정 창 accent(라이트 고정)
+const POS_GRAY: u32 = 0x00A0_A0A0;
+const POS_BORDER: u32 = 0x00C8_C8C8;
+
+unsafe fn fill(hdc: HDC, l: i32, t: i32, r: i32, b: i32, color: u32) {
+    let br = CreateSolidBrush(COLORREF(color));
+    FillRect(
+        hdc,
+        &RECT {
+            left: l,
+            top: t,
+            right: r,
+            bottom: b,
+        },
+        br,
+    );
+    let _ = DeleteObject(br.into());
+}
+
+unsafe fn frame(hdc: HDC, r: RECT, th: i32, color: u32) {
+    fill(hdc, r.left, r.top, r.right, r.top + th, color);
+    fill(hdc, r.left, r.bottom - th, r.right, r.bottom, color);
+    fill(hdc, r.left, r.top, r.left + th, r.bottom, color);
+    fill(hdc, r.right - th, r.top, r.right, r.bottom, color);
+}
+
+/// 미니 화면 타일(10-02 — nexa-sql `posgrid::paint_cell` 규약): 4:3 화면 테두리 안
+/// `idx`(행우선 0..9) 자리에 작은 박스. `on` = accent(선택) · 아니면 회색.
+unsafe fn paint_pos_tile(hdc: HDC, cell: RECT, idx: i32, on: bool) {
+    let (cw, ch) = (cell.right - cell.left, cell.bottom - cell.top);
+    // 4:3 화면을 셀 가운데에
+    let (sw, sh) = if cw * 3 > ch * 4 {
+        (ch * 4 / 3, ch)
+    } else {
+        (cw, cw * 3 / 4)
     };
-    FillRect(dis.hDC, &dot, border);
-    let _ = DeleteObject(border.into());
+    let sx = cell.left + (cw - sw) / 2;
+    let sy = cell.top + (ch - sh) / 2;
+    let scr = RECT {
+        left: sx,
+        top: sy,
+        right: sx + sw,
+        bottom: sy + sh,
+    };
+    let edge = if on { POS_ACCENT } else { POS_GRAY };
+    frame(hdc, scr, 1, edge);
+    // 위치 박스 = 화면의 ~30% × ~28%, 안쪽 여백 2px
+    let (bw, bh) = ((sw * 3 / 10).max(3), (sh * 28 / 100).max(3));
+    let pad = 2;
+    let (col, row) = (idx % 3, idx / 3);
+    let bx = match col {
+        0 => sx + pad,
+        1 => sx + (sw - bw) / 2,
+        _ => sx + sw - pad - bw,
+    };
+    let by = match row {
+        0 => sy + pad,
+        1 => sy + (sh - bh) / 2,
+        _ => sy + sh - pad - bh,
+    };
+    fill(hdc, bx, by, bx + bw, by + bh, edge);
+}
+
+/// 드롭다운 머리 오너드로(10-02): 콤보 상자 룩(흰 바탕 + 테두리 · 포커스/눌림 = accent)
+/// + 선택 위치 타일 + ▾.
+unsafe fn draw_pos_head(st: &PrefState, dis: &DRAWITEMSTRUCT) {
+    use windows::Win32::UI::Controls::{ODS_FOCUS, ODS_SELECTED};
+    let r = dis.rcItem;
+    FillRect(dis.hDC, &r, GetSysColorBrush(COLOR_WINDOW));
+    let hot = dis.itemState.0 & (ODS_FOCUS.0 | ODS_SELECTED.0) != 0;
+    frame(dis.hDC, r, 1, if hot { POS_ACCENT } else { POS_BORDER });
+    let h = r.bottom - r.top;
+    let th = ((h - 8) * 4 / 5).max(6);
+    let tw = th * 4 / 3;
+    let cell = RECT {
+        left: r.left + 5,
+        top: r.top + (h - th) / 2,
+        right: r.left + 5 + tw,
+        bottom: r.top + (h - th) / 2 + th,
+    };
+    paint_pos_tile(dis.hDC, cell, st.values.typeahead_pos.clamp(0, 8), true);
+    // ▾ — 4줄 삼각형(폭 7→1)
+    let cx = r.right - 10;
+    let cy = r.top + h / 2 - 2;
+    for i in 0..4 {
+        fill(
+            dis.hDC,
+            cx - 3 + i,
+            cy + i,
+            cx + 4 - i,
+            cy + i + 1,
+            0x0030_3030,
+        );
+    }
+}
+
+/// 팝업 메뉴 셀 오너드로(10-02): 호버 = 옅은 accent 배경 · 현재 값 = accent 타일.
+unsafe fn draw_pos_menu_cell(st: &PrefState, dis: &DRAWITEMSTRUCT) {
+    use windows::Win32::UI::Controls::ODS_SELECTED;
+    let idx = dis.itemID as i32 - 1;
+    let r = dis.rcItem;
+    let hover = dis.itemState.0 & ODS_SELECTED.0 != 0;
+    if hover {
+        fill(dis.hDC, r.left, r.top, r.right, r.bottom, 0x00F7_E6CC);
+    } else {
+        FillRect(dis.hDC, &r, GetSysColorBrush(COLOR_WINDOW));
+    }
+    let cell = RECT {
+        left: r.left + 4,
+        top: r.top + 3,
+        right: r.right - 4,
+        bottom: r.bottom - 3,
+    };
+    paint_pos_tile(dis.hDC, cell, idx, idx == st.values.typeahead_pos);
+}
+
+/// 머리 클릭 = 3×3 이미지 팝업(오너드로 메뉴 3열 — MF_MENUBREAK로 열 분리, 열 우선 삽입).
+/// 반환 = 고른 위치(0..9) · 취소 = None.
+unsafe fn pick_pos(owner: HWND, head: HWND) -> Option<i32> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, TrackPopupMenuEx, MF_MENUBREAK, MF_OWNERDRAW,
+        TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
+    };
+    let menu = CreatePopupMenu().ok()?;
+    for col in 0..3u32 {
+        for row in 0..3u32 {
+            let id = (row * 3 + col + 1) as usize;
+            let mut flags = MF_OWNERDRAW;
+            if row == 0 && col > 0 {
+                flags |= MF_MENUBREAK;
+            }
+            let _ = AppendMenuW(menu, flags, id, PCWSTR::null());
+        }
+    }
+    let mut rc = RECT::default();
+    let _ = GetWindowRect(head, &mut rc);
+    let sel = TrackPopupMenuEx(
+        menu,
+        (TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN).0,
+        rc.left,
+        rc.bottom + 2,
+        owner,
+        None,
+    )
+    .0;
+    let _ = DestroyMenu(menu);
+    (1..=9).contains(&sel).then_some(sel - 1)
 }
 
 unsafe extern "system" fn prefs_proc(
@@ -2133,11 +2267,15 @@ unsafe extern "system" fn prefs_proc(
                     s.rebuild();
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
-                i if (ID_POS_BASE..ID_POS_BASE + 9).contains(&i) && notify == 0 => {
-                    // 3×3 피커 클릭(QA 07-15) — 값 반영 + 즉시 적용 + 셀 재도장
-                    (*st).values.typeahead_pos = (i - ID_POS_BASE) as i32;
-                    (*st).harvest();
-                    (*st).apply_now();
+                ID_POS_HEAD if notify == 0 => {
+                    // 위치 드롭다운(10-02) — 3×3 이미지 팝업 → 값 반영 + 즉시 적용 + 머리 재도장
+                    let head = HWND(lparam.0 as *mut core::ffi::c_void);
+                    if let Some(idx) = pick_pos(hwnd, head) {
+                        (*st).values.typeahead_pos = idx;
+                        (*st).harvest();
+                        (*st).apply_now();
+                    }
+                    let _ = InvalidateRect(Some(head), None, false);
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 i if i >= ID_OPT_BASE => {
@@ -2162,17 +2300,21 @@ unsafe extern "system" fn prefs_proc(
                 // 드롭다운 목록(09-04 — Kind::Select): CBN_SELCHANGE 인덱스 → 값 즉시 적용
                 i if i >= ID_FIELD_BASE
                     && notify == 1
-                    && (*st).selects.iter().any(|(h, _, _)| h.0 == lparam.0 as *mut _) =>
+                    && (*st)
+                        .selects
+                        .iter()
+                        .any(|(h, _, _)| h.0 == lparam.0 as *mut _) =>
                 {
                     let combo = HWND(lparam.0 as *mut core::ffi::c_void);
                     let sel = SendMessageW(combo, 0x0147 /* CB_GETCURSEL */, None, None).0;
-                    let picked = (*st)
-                        .selects
-                        .iter()
-                        .find(|(h, _, _)| *h == combo)
-                        .and_then(|(_, f, vals)| {
-                            usize::try_from(sel).ok().and_then(|i| vals.get(i)).map(|v| (*f, v.clone()))
-                        });
+                    let picked = (*st).selects.iter().find(|(h, _, _)| *h == combo).and_then(
+                        |(_, f, vals)| {
+                            usize::try_from(sel)
+                                .ok()
+                                .and_then(|i| vals.get(i))
+                                .map(|v| (*f, v.clone()))
+                        },
+                    );
                     if let Some((field, val)) = picked {
                         match field {
                             F_TERM_THEME => (*st).values.term_theme = val,
@@ -2218,14 +2360,32 @@ unsafe extern "system" fn prefs_proc(
             }
             LRESULT(0)
         }
+        WM_MEASUREITEM => {
+            // 위치 팝업 셀 크기(10-02 — 오너드로 메뉴). 그 외는 기본.
+            let mis = &mut *(lparam.0 as *mut windows::Win32::UI::Controls::MEASUREITEMSTRUCT);
+            if mis.CtlType == windows::Win32::UI::Controls::ODT_MENU
+                && (1..=9).contains(&mis.itemID)
+            {
+                mis.itemWidth = POS_CELL_W as u32;
+                mis.itemHeight = POS_CELL_H as u32;
+                return LRESULT(1);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_DRAWITEM => {
             let dis = &*(lparam.0 as *const DRAWITEMSTRUCT);
             if dis.CtlID == ID_TREE {
                 draw_tree_item(&*st, dis);
                 return LRESULT(1);
             }
-            if (ID_POS_BASE..ID_POS_BASE + 9).contains(&dis.CtlID) {
-                draw_pos_cell(&*st, dis);
+            if dis.CtlType == windows::Win32::UI::Controls::ODT_MENU
+                && (1..=9).contains(&dis.itemID)
+            {
+                draw_pos_menu_cell(&*st, dis);
+                return LRESULT(1);
+            }
+            if dis.CtlID == ID_POS_HEAD {
+                draw_pos_head(&*st, dis);
                 return LRESULT(1);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
