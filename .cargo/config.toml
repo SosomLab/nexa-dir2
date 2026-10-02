@@ -1,11 +1,15 @@
 # CRT 정적 링크 — 재배포 런타임 0 (예산 B3, docs/18 §3)
-# 완화 기술(점검 1차 #4 — docs/29 §4 B2~B4): CFG · CET(x64) · DLL 검색 = System32 한정
+# 완화 기술(점검 1차 #4 — docs/29 §4 B2~B4): CFG · DLL 검색 = System32 한정
 # (/DEPENDENTLOADFLAG:0x800 = LOAD_LIBRARY_SEARCH_SYSTEM32 — 인박스 DLL 사이드로딩 차단).
+# **CET(/CETCOMPAT)는 의도적으로 제외**(10-02 — 0.20.0 `3e829f7`에서 켰다가 회수): 셸 컨텍스트
+# 메뉴가 서드파티 확장 DLL을 프로세스 안에 로드하므로(IContextMenu 호스팅 — shellmenu.rs)
+# 그림자 스택을 모르는 확장(.NET 2.0 CLR 기반 확장 실측)이 fast-fail 0xC0000409
+# (FAST_FAIL_SET_CONTEXT_DENIED)로 앱을 즉사시킨다. explorer.exe도 같은 이유로 CET OFF.
+# 재현·회귀 = `cargo run --release -p nexa-app --example ctxmenu_probe -- <경로>`.
 [target.x86_64-pc-windows-msvc]
 rustflags = [
   "-C", "target-feature=+crt-static",
   "-C", "control-flow-guard=yes",
-  "-C", "link-arg=/CETCOMPAT",
   "-C", "link-arg=/DEPENDENTLOADFLAG:0x800",
 ]
 

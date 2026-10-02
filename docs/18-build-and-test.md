@@ -29,6 +29,11 @@ cargo run -p nexa-app
 # 릴리스 단일 exe (Windows)
 cargo build --release -p nexa-app
 # 산출: target/release/nexa-app.exe (CRT 정적 링크 — .cargo/config.toml)
+
+# 셸 컨텍스트 메뉴 격리 재현기(10-02 — 우클릭 즉사 회귀): 인수 경로의 IContextMenu를
+# 앱과 같은 순서로 취득해 QueryContextMenu까지만 수행. 종료 0 = 정상 · 0xC0000409 =
+# fast-fail(CET 등 — docs/29 B2/B3). 서드파티 확장이 프로세스 안에서 실행되는 구간을 밟는다.
+cargo run --release -p nexa-app --example ctxmenu_probe -- "C:\path\to\file.pptx"
 ```
 
 ## 3. 릴리스 프로파일 (예산 B2)

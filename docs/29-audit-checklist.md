@@ -47,7 +47,7 @@ ID 접두: **T** 테스트 · **B** 예산(DR-2) · **P** 성능 · **S** 보안
 | P-4 | VT 파서 처리량·견고성 | `nexa-term --example audit_vt` | ≥ 10MB/s · 비정상 시퀀스 1만 건 무패닉 | ○ |
 | P-5 | 유휴 CPU | 활성 창 10s TotalProcessorTime 증가 | ≤ 2%(활성) · 비활성/최소화 ~0% | △ |
 | P-6 | 핫패스 정적 질문(§7) | 코드 리뷰 | HIGH 0 | 수동 |
-| S-1 | PE 완화 기술 | PE 헤더 DllCharacteristics | DYNAMIC_BASE·HIGH_ENTROPY_VA·NX_COMPAT 필수 · GUARD_CF·CETCOMPAT 권장(WARN) | ○ |
+| S-1 | PE 완화 기술 | PE 헤더 DllCharacteristics | DYNAMIC_BASE·HIGH_ENTROPY_VA·NX_COMPAT 필수 · GUARD_CF 권장(WARN) · **CETCOMPAT 금지**(10-02 — 셸 확장 호스트. 아래 B2/B3) | ○ |
 | S-2 | 매니페스트 | 이미지 내 `requestedExecutionLevel` | `asInvoker` + `longPathAware` + DPI 선언 | ○(존재만) |
 | S-3~ | §4 보안 표 A~G | 코드 리뷰 + 수동 실기 | 표의 기준 | 수동 |
 | F-1~ | §5 파일 조작 질문 | 코드 리뷰 + 실기(다수 파일) | HIGH 0 · 데이터 손실 경로 0 | 수동 |
@@ -114,7 +114,7 @@ ID 접두: **T** 테스트 · **B** 예산(DR-2) · **P** 성능 · **S** 보안
 | A4/A5 | DPI·longPathAware 매니페스트 선언 | 매니페스트 | 존재 |
 | A6 | 프로세스 완화 정책 | `SetProcessMitigationPolicy` | ImageLoad(원격/저라벨 차단)·ExtensionPointDisable |
 | B1 | ASLR·HighEntropy·DEP | PE DllCharacteristics | 0x0020\|0x0040\|0x0100 |
-| B2/B3 | CFG · CET | DllCharacteristics 0x4000 · 디버그 디렉터리 type 20 | 존재(`-C control-flow-guard=yes`·`/CETCOMPAT`) |
+| B2/B3 | CFG · CET | DllCharacteristics 0x4000 · 디버그 디렉터리 type 20 | CFG 존재(`-C control-flow-guard=yes`) · **CET는 의도적 부재**(10-02 회수 — `/CETCOMPAT` 시 셸 컨텍스트 메뉴가 프로세스 안에 로드하는 서드파티 확장[.NET 2.0 CLR 기반 실측]이 `FAST_FAIL_SET_CONTEXT_DENIED` 0xC0000409로 즉사. explorer.exe도 CET OFF. 회귀 = `cargo run --release -p nexa-app --example ctxmenu_probe -- <경로>` 종료 0) |
 | B4/B5 | DLL 검색 경로 하드닝 · 하이재킹 가능 임포트 | LoadConfig DependentLoadFlags · imports ∖ KnownDLLs | 0x0800 · 공집합 |
 | B6/B7 | 런타임 LoadLibrary 없음 · 인박스 화이트리스트 | grep · budget-b3 | 0건 · 통과 |
 | B8 | release `overflow-checks` | Cargo.toml | true(권장) |
