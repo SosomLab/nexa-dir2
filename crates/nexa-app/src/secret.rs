@@ -35,15 +35,23 @@ pub fn save_token(idx: usize, refresh: &str) -> bool {
 #[allow(dead_code)] // 사용처 = ADR-0006 §3 2차(탐색) — 저장된 refresh 로드
 pub fn load_token(idx: usize) -> Option<String> {
     let hex = std::fs::read_to_string(tok_path(idx)).ok()?;
-    let hex = hex.trim();
-    if hex.len() % 2 != 0 || hex.is_empty() {
+    let blob = decode_hex(&hex)?;
+    let plain = unprotect(&blob)?;
+    String::from_utf8(plain).ok()
+}
+
+/// 소문자 hex 1줄 → 바이트. 앞뒤 공백 허용. **ASCII가 아니거나**(BOM·멀티바이트 — 편집기
+/// 저장 흔적) 홀수 길이·빈 문자열·비hex 문자는 `None` — 바이트 슬라이싱이 문자 경계를
+/// 가르며 panic 하던 손상 파일 경로를 막는다(G10-04).
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.is_empty() || !s.is_ascii() || !s.len().is_multiple_of(2) {
         return None;
     }
-    let blob: Option<Vec<u8>> = (0..hex.len() / 2)
-        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
-        .collect();
-    let plain = unprotect(&blob?)?;
-    String::from_utf8(plain).ok()
+    s.as_bytes()
+        .chunks(2)
+        .map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
+        .collect()
 }
 
 /// 연결 해제 시 토큰 파일 제거(흔적 정리).
@@ -73,9 +81,9 @@ fn protect(data: &[u8]) -> Option<Vec<u8>> {
         let mut out = CRYPT_INTEGER_BLOB::default();
         CryptProtectData(&input, None, None, None, None, 0, &mut out).ok()?;
         let v = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
-        let _ = windows::Win32::Foundation::LocalFree(Some(
-            windows::Win32::Foundation::HLOCAL(out.pbData as *mut core::ffi::c_void),
-        ));
+        let _ = windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+            out.pbData as *mut core::ffi::c_void,
+        )));
         Some(v)
     }
 }
@@ -91,9 +99,9 @@ fn unprotect(blob: &[u8]) -> Option<Vec<u8>> {
         let mut out = CRYPT_INTEGER_BLOB::default();
         CryptUnprotectData(&input, None, None, None, None, 0, &mut out).ok()?;
         let v = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
-        let _ = windows::Win32::Foundation::LocalFree(Some(
-            windows::Win32::Foundation::HLOCAL(out.pbData as *mut core::ffi::c_void),
-        ));
+        let _ = windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+            out.pbData as *mut core::ffi::c_void,
+        )));
         Some(v)
     }
 }
@@ -127,5 +135,38 @@ mod tests {
     #[test]
     fn corrupt_or_missing_is_none() {
         assert_eq!(load_token(30), None); // 미저장 슬롯
+    }
+
+    /// G10-04 — 비ASCII(멀티바이트·BOM)는 문자 경계 panic 없이 None, 정상 hex는 바이트.
+    #[test]
+    fn decode_hex_rejects_non_ascii_and_odd() {
+        assert_eq!(
+            decode_hex("a\u{e9}a"),
+            None,
+            "멀티바이트 — 바이트 길이 4(짝수)지만 거부"
+        );
+        assert_eq!(decode_hex("\u{feff}00ff"), None, "BOM 선두");
+        assert_eq!(decode_hex("00ff"), Some(vec![0x00, 0xff]));
+        assert_eq!(
+            decode_hex("  00FF\r\n"),
+            Some(vec![0x00, 0xff]),
+            "앞뒤 공백·대문자 허용"
+        );
+        assert_eq!(decode_hex(""), None);
+        assert_eq!(decode_hex("0"), None, "홀수 길이");
+        assert_eq!(decode_hex("0g"), None, "비hex 문자");
+    }
+
+    /// 손상 토큰 파일(멀티바이트 섞임)을 실제로 써 두고 load_token이 None인지 — 기동 복원 경로.
+    #[test]
+    fn corrupt_token_file_is_none() {
+        let idx = 29; // 실사용·다른 테스트와 겹치지 않는 꼬리 슬롯
+        let p = tok_path(idx);
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&p, "a\u{e9}a").expect("손상 파일 작성");
+        assert_eq!(load_token(idx), None);
+        let _ = std::fs::remove_file(&p);
     }
 }
