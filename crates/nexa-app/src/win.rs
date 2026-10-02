@@ -5049,6 +5049,29 @@ unsafe fn update_status(hwnd: HWND, st: &mut State) {
     flush_invalidations(hwnd, &mut inv);
 }
 
+/// 입력 핸들러 공용 꼬리(10-02 X2-01·X1-02·X2-13) — flush → 제목 → `update_status`
+/// 동기 길목. 선택·경로를 바꿀 수 있는 모든 입력 경로(클릭·키·더블클릭·X버튼·
+/// Alt+방향키·경로바 제출·타입어헤드·탭 바 새 탭)가 이 한 함수를 지난다. 종전에는
+/// 경로별로 손으로 쓴 꼬리 일부가 `update_status`를 빠뜨려 더블클릭 폴더 진입 직후
+/// 상태바·도크 Info가 이전 폴더를 보이고 watcher·프로브 기준선이 다음 폴링 틱(0~3s)까지
+/// 낡아 외부 변경이 삼켜졌다. 기준 = Enter 폴더 진입 경로의 결과.
+unsafe fn finish_input(hwnd: HWND, st: &mut State, inv: &mut Invalidations) {
+    flush_invalidations(hwnd, inv);
+    update_title(hwnd, st, "");
+    update_status(hwnd, st);
+}
+
+/// 선택 시그니처(패널별 선택 수·캐럿) — MouseUp이 선택을 바꿨는지(프레스 보류 단일화·
+/// 러버밴드 확정) 판정해 바뀐 경우에만 동기 길목을 지난다(X2-01 ① — 매 뗌마다
+/// `update_status`를 돌리면 클릭당 도크 재생성이 2회가 되므로).
+fn selection_sig(st: &State) -> [(usize, Option<usize>); 2] {
+    let sig = |i: usize| {
+        let rows = st.panels[i].rows();
+        (rows.source().tree().selection_count(), rows.caret())
+    };
+    [sig(0), sig(1)]
+}
+
 /// 명령 실행(메뉴·도구 모음 공용).
 unsafe fn run_command(hwnd: HWND, st: &mut State, id: u32) {
     let ctx = st.nav_ctx();
@@ -7924,9 +7947,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // 제안 클릭 = 그 폴더로 즉시 이동(PATH-SUG — 탐색기 동일)
                         let nav = st.nav_ctx();
                         st.active_panel().drain_actions(nav, &mut inv);
-                        flush_invalidations(hwnd, &mut inv);
-                        update_title(hwnd, st, "");
-                        update_status(hwnd, st);
+                        finish_input(hwnd, st, &mut inv);
                         return LRESULT(0);
                     }
                     if st
@@ -8018,8 +8039,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.term_caret_on = true;
                         SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                         st.term_focus = Some(idx);
-                        update_dock_info(st, &mut inv);
-                        invalidate_dock(hwnd, st, idx);
+                        invalidate_dock(hwnd, st, idx); // 내용 동기는 꼬리 update_status(X2-13)
                     }
                     // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3).
                     // 실제 표시 중(h>0)일 때만 — 싱글 정보의 0-rect 우 도크가 터미널
@@ -8033,9 +8053,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.term_caret_on = true;
                         // 캐럿 깜빡임(QA 07-14) — 포커스 동안만, 시스템 깜빡임 주기
                         SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
-                        update_dock_info(st, &mut inv); // 종류 전환 직후 내용 동기
-                                                        // 그리드 안 프레스: TUI 마우스 모드(X-5)면 시퀀스 전달(Shift=
-                                                        // 로컬 우회 — 터미널 관례), 아니면 로컬 선택 시작(QA 07-14)
+                        // 종류 전환 직후 내용 동기는 꼬리 update_status가 1회 수행(X2-13 —
+                        // 종전엔 여기서 한 번 더 호출해 같은 클릭에 도크 재생성 2회).
+                        // 그리드 안 프레스: TUI 마우스 모드(X-5)면 시퀀스 전달(Shift=
+                        // 로컬 우회 — 터미널 관례), 아니면 로컬 선택 시작(QA 07-14)
                         if let Some(t) = &mut st.terms[idx] {
                             if t.grid.0.contains(nexa_gui::Point { x, y }) {
                                 if !shift && term_send_mouse(t, x, y, 0, true) {
@@ -8048,8 +8069,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 }
                             }
                         }
-                    } else if st.panels[idx].dock_shown() && y >= st.panels[idx].dock.bounds().y {
-                        update_dock_info(st, &mut inv);
                     }
                     // 기선택 항목 재클릭(1s 이상 간격) = 이름 바꾸기 **예약**(진입은 MouseUp —
                     // 드래그가 시작되면 취소 = DnD 우선. 짧은 간격은 더블클릭 시도로 무시)
@@ -8076,9 +8095,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 // 클릭으로 확정된 포커스 영역(리스트/터미널) 강조 동기(QA 07-15)
                 sync_focus_visuals(st, &mut inv);
-                flush_invalidations(hwnd, &mut inv);
-                update_title(hwnd, st, "");
-                update_status(hwnd, st);
+                finish_input(hwnd, st, &mut inv);
             }
             LRESULT(0)
         }
@@ -8469,10 +8486,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         break;
                     }
                 }
+                let sig0 = selection_sig(st);
                 st.panels[0].on_event(&ev, &mut inv);
                 st.panels[1].on_event(&ev, &mut inv);
                 sync_col_widths(st, &mut inv); // 컬럼 폭 동기(07-18)
-                flush_invalidations(hwnd, &mut inv);
+                if selection_sig(st) != sig0 {
+                    // 뗌에서 선택 확정(기선택 다중 행 무드래그 클릭 → 1개 붕괴·러버밴드) —
+                    // 상태바 "N selected"·도크가 낡지 않게 동기 길목(X2-01 ①). 모달
+                    // 팝아웃 분기보다 **앞**(State 참조 규약).
+                    finish_input(hwnd, st, &mut inv);
+                } else {
+                    flush_invalidations(hwnd, &mut inv);
+                }
                 // 미리보기 ↗ "크게" 버튼 발화(07-26 — 버튼 안 릴리스) = 독립 창(모달)
                 for i in 0..2 {
                     if st.panels[i].dock.take_popout() {
@@ -8506,8 +8531,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     2 => st.active_panel().nav_forward(ctx, &mut inv),
                     _ => {}
                 }
-                flush_invalidations(hwnd, &mut inv);
-                update_title(hwnd, st, "");
+                finish_input(hwnd, st, &mut inv); // 폴더 진입 = 동기 길목(X1-02)
             }
             LRESULT(0)
         }
@@ -8534,9 +8558,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             "lock" => st.panels[idx].toggle_tab_lock(ti, &mut inv),
                             _ => st.panels[idx].close_tab(ti, &mut inv),
                         }
-                        flush_invalidations(hwnd, &mut inv);
-                        update_title(hwnd, st, "");
-                        update_status(hwnd, st);
+                        finish_input(hwnd, st, &mut inv);
                         return LRESULT(0);
                     }
                     // 탭 바 빈 공간 더블클릭 = 새 탭(원본 F20 — QA 07-14)
@@ -8544,8 +8566,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let mut inv = Invalidations::default();
                         let ctx = st.nav_ctx();
                         st.panels[idx].new_tab(ctx, &mut inv);
-                        flush_invalidations(hwnd, &mut inv);
-                        update_title(hwnd, st, "");
+                        finish_input(hwnd, st, &mut inv); // 새 탭 = 경로 변경(X2-13)
                         return LRESULT(0);
                     }
                     // 컬럼 경계 더블클릭 = 콘텐츠 auto-fit(07-19 사용자 —
@@ -8564,8 +8585,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let mut inv = Invalidations::default();
                         let ctx = st.nav_ctx();
                         exec = st.panels[idx].activate_row(row, ctx, &mut inv);
-                        flush_invalidations(hwnd, &mut inv);
-                        update_title(hwnd, st, "");
+                        // 폴더 진입 = Enter 경로와 같은 동기 길목(X1-02 — 종전 update_title만:
+                        // 상태바 항목 수·도크 Info가 이전 폴더, watcher 3s 지연·기준선 미수립)
+                        finish_input(hwnd, st, &mut inv);
                     }
                 }
             }
@@ -8607,8 +8629,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             update_path_suggest(st, &mut inv); // 텍스트 변경 시에만
                         }
                     }
-                    flush_invalidations(hwnd, &mut inv);
-                    update_title(hwnd, st, "");
+                    if vk == VK_RETURN.0 {
+                        finish_input(hwnd, st, &mut inv); // 제출 = 경로 변경(X1-02)
+                    } else {
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
+                    }
                     return LRESULT(0);
                 }
                 // 도크 터미널 포커스(M4-3) — 비문자 키를 VT 시퀀스로 전달, 그 외는 WM_CHAR로
@@ -8772,9 +8798,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     st.active_panel()
                         .on_event(&InputEvent::Key { key, shift, ctrl }, &mut inv);
                 }
-                flush_invalidations(hwnd, &mut inv);
-                update_title(hwnd, st, "");
-                update_status(hwnd, st);
+                finish_input(hwnd, st, &mut inv);
             }
             LRESULT(0)
         }
@@ -8807,8 +8831,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     false
                 };
                 if handled {
-                    flush_invalidations(hwnd, &mut inv);
-                    update_title(hwnd, st, "");
+                    finish_input(hwnd, st, &mut inv); // Alt+방향키 진입 = 동기 길목(X1-02)
                     return LRESULT(0);
                 }
             }
@@ -9282,8 +9305,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             SetTimer(Some(hwnd), TIMER_TYPEAHEAD, TIMER_TICK_MS, None);
                         }
                     }
-                    flush_invalidations(hwnd, &mut inv);
-                    update_title(hwnd, st, "");
+                    if !st.active_panel().pathbar.is_editing()
+                        && !st.active_panel().rows().is_renaming()
+                    {
+                        // 타입어헤드 = 선택 이동(X2-01 ②) — 상태바·도크 동기 길목
+                        finish_input(hwnd, st, &mut inv);
+                    } else {
+                        flush_invalidations(hwnd, &mut inv);
+                        update_title(hwnd, st, "");
+                    }
                 }
             }
             LRESULT(0)
