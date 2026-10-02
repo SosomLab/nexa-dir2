@@ -43,8 +43,9 @@ try {
 
   # ── T-3 비Windows 경로 검사(docs/18 §4) ─────────────────────────────────────
   $l = cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu 2>&1 | Out-String
+  $lwarn = ([regex]::Matches($l, '^warning: (?!`)', 'Multiline')).Count
   $lerr = ([regex]::Matches($l, '^error', 'Multiline')).Count
-  Rec 'T-3' 'linux target check' ($(if ($lerr -eq 0) { 'PASS' } else { 'FAIL' })) "errors=$lerr (경고는 기존 svg.rs 데드코드)"
+  Rec 'T-3' 'linux target check' ($(if ($lwarn -eq 0 -and $lerr -eq 0) { 'PASS' } else { 'FAIL' })) "warnings=$lwarn errors=$lerr"
 
   # ── T-4 커버리지(선택) ─────────────────────────────────────────────────────
   if ($Coverage -and -not $Quick) {

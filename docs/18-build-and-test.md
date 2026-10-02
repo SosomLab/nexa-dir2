@@ -100,7 +100,11 @@ pwsh scripts/build-plugins.ps1 -SkipDist -OutDir plugins   # dist는 그대로(�
   > 비Windows 경로에서는 **타입 추론이 끊기거나**(`Vec::new()`의 원소 타입 —
   > E0282) **임포트가 미사용**이 되어 컴파일이 깨질 수 있다. Windows 전용 모듈을
   > 추가·게이팅했다면 push 전에 위 §2의 `--target x86_64-unknown-linux-gnu`
-  > 검사를 돌린다(링크 불필요 — `cargo check`로 충분).
+  > 검사를 돌린다(링크 불필요 — `cargo check`로 충분). **기준 = 오류 0 + 경고 0**
+  > (10-02 — `scripts/audit.ps1` T-3가 경고도 판정한다). 소비자가 전부
+  > `#[cfg(windows)]` 뒤에 있는 순수 모듈은 `mod` 선언에
+  > `#[cfg_attr(not(windows), allow(dead_code))]`를 붙여 dead_code 경고를 없앤다
+  > (`cloud`·`fsprobe`·`svg`·`fileinfo` 등 — main.rs 선례).
   >
   > **그리고 `cargo check`만으로는 부족하다**(09-02 — 같은 잡이 08-24부터 9일·8커밋
   > 동안 붉었다). 이번 건은 컴파일이 아니라 **런타임 동작 차이**였다: 해제된 메모리를
