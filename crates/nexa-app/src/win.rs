@@ -8129,9 +8129,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 };
                 if let Some(paths) = drag_paths {
                     let _ = ReleaseCapture(); // LBUTTONDOWN의 캡처 해제 — OLE가 소유
-                    crate::dnd::begin_drag(&paths);
+                    let dropped = crate::dnd::begin_drag(&paths);
                     if let Some(st) = state_of(hwnd) {
-                        reload_both(hwnd, st, ""); // 이동/복사 결과 반영(수행은 드롭 대상 몫)
+                        // DoDragDrop이 버튼 해제를 소비해 위젯에 MouseUp이 오지 않는다 —
+                        // 양 패널 목록의 클릭 확정 보류(press_pending)·밴드를 여기서 소거
+                        // (X3-03·G6-01 10-02: 낡은 보류가 다음 클릭의 MouseUp에서 재로드 후
+                        // 다른 파일이 된 인덱스를 단일 선택하던 결함). 선택 집합은 불변.
+                        for p in 0..2 {
+                            st.panels[p].rows_mut().abort_press();
+                        }
+                        if dropped {
+                            // 드롭 성공 = 이동/복사 결과 반영(수행은 드롭 대상 몫)
+                            reload_both(hwnd, st, "");
+                        }
+                        // 취소(ESC)·임계만 넘긴 뒤 놓음 = 양 패널 재열거 생략(X2-12) —
+                        // 실제 변경이 있었다면 watcher 통지·FSPOLL 보험이 반영한다
                     }
                     return LRESULT(0);
                 }
