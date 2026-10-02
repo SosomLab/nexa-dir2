@@ -302,8 +302,14 @@ pub fn decode_name(bytes: &[u8], utf8: bool) -> String {
 pub fn normalize_path(raw: &str) -> (String, bool) {
     let mut suspicious = raw.starts_with('/') || raw.starts_with('\\');
     let mut s = raw.replace('\\', "/");
-    if s.len() >= 3 && s.as_bytes()[0].is_ascii_alphabetic() && s[1..3] == *":/" {
-        s = s[3..].to_string(); // "C:/..." 드라이브 절대 경로
+    // 드라이브 절대 경로("C:/...") 판정은 바이트로만 본다 — `s[1..3]` str 슬라이스는 둘째 글자가
+    // 멀티바이트('a한.txt')면 문자 경계 밖이라 패닉(10-02 점검 G7-01). 세 바이트가 전부 ASCII일 때만
+    // 참이므로 `s[3..]`는 항상 문자 경계.
+    if s.as_bytes()
+        .get(..3)
+        .is_some_and(|b| b[0].is_ascii_alphabetic() && &b[1..3] == b":/")
+    {
+        s = s[3..].to_string();
         suspicious = true;
     }
     let mut parts: Vec<&str> = Vec::new();
@@ -634,4 +640,80 @@ mod tests {
         assert!(out.chars().all(|c| c == '가'));
     }
 
+    #[test]
+    fn drive_check_survives_multibyte_second_char() {
+        // 10-02 점검 G7-01: 첫 글자 ASCII + 둘째 글자 멀티바이트 → 바이트 1..3이 글자 중간.
+        // 드라이브 판정이 str 슬라이스였을 때 "end byte index 3 is not a char boundary" 패닉.
+        assert_eq!(normalize_path("a한.txt"), ("a한.txt".into(), false));
+        assert_eq!(normalize_path("x日本/y"), ("x日本/y".into(), false));
+        // 3바이트 미만 ASCII("C:" 뒤가 곧장 멀티바이트) — 드라이브 아님·플래그 없음
+        assert_eq!(normalize_path("C:한"), ("C:한".into(), false));
+        // 드라이브 절대 경로 뒤 멀티바이트 — 판정·플래그는 그대로
+        assert_eq!(normalize_path("C:/한"), ("한".into(), true));
+        assert_eq!(normalize_path("D:\\한/글.txt"), ("한/글.txt".into(), true));
+        // 세 번째 바이트가 글자 중간(한의 2번째 바이트)이라도 바이트 비교라 패닉 없음
+        assert_eq!(normalize_path("a한"), ("a한".into(), false));
+    }
+
+    /// 최소 ZIP 조립기(단일 항목·저장 방식·UTF-8 이름 플래그) — zip.rs 픽스처의 축약판.
+    fn tiny_zip(name: &str, data: &[u8]) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        let flags: u16 = 0x800;
+        out.extend_from_slice(b"PK\x03\x04");
+        out.extend_from_slice(&20u16.to_le_bytes());
+        out.extend_from_slice(&flags.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // method = stored
+        out.extend_from_slice(&0u16.to_le_bytes()); // time
+        out.extend_from_slice(&0x0021u16.to_le_bytes()); // date 1980-01-01
+        out.extend_from_slice(&0u32.to_le_bytes()); // crc
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+
+        let cd_off = out.len() as u32;
+        let mut cd: Vec<u8> = Vec::new();
+        cd.extend_from_slice(b"PK\x01\x02");
+        cd.extend_from_slice(&20u16.to_le_bytes());
+        cd.extend_from_slice(&20u16.to_le_bytes());
+        cd.extend_from_slice(&flags.to_le_bytes());
+        cd.extend_from_slice(&0u16.to_le_bytes()); // method
+        cd.extend_from_slice(&0u16.to_le_bytes()); // time
+        cd.extend_from_slice(&0x0021u16.to_le_bytes()); // date
+        cd.extend_from_slice(&0u32.to_le_bytes()); // crc
+        cd.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        cd.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        cd.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        cd.extend_from_slice(&0u16.to_le_bytes()); // extra
+        cd.extend_from_slice(&0u16.to_le_bytes()); // comment
+        cd.extend_from_slice(&0u16.to_le_bytes()); // disk
+        cd.extend_from_slice(&0u16.to_le_bytes()); // internal attr
+        cd.extend_from_slice(&0u32.to_le_bytes()); // external attr
+        cd.extend_from_slice(&0u32.to_le_bytes()); // local header offset
+        cd.extend_from_slice(name.as_bytes());
+        let cd_size = cd.len() as u32;
+        out.extend_from_slice(&cd);
+        out.extend_from_slice(b"PK\x05\x06");
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&cd_off.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn zip_entry_with_multibyte_second_char_lists_without_panic() {
+        // 10-02 점검 G7-01 회귀: 'C드라이브백업.zip' 같은 항목 하나로 미리보기(UI 스레드)가 abort했다
+        let z = tiny_zip("a가나.txt", b"hello");
+        let l = list_from(&SliceSource(&z), "zip", &ListOpts::default()).unwrap();
+        assert_eq!(l.entries.len(), 1);
+        assert_eq!(l.entries[0].path, "a가나.txt");
+        assert!(!l.entries[0].suspicious);
+        assert_eq!(l.entries[0].size, Some(5));
+    }
 }
