@@ -52,6 +52,8 @@ mod dnd;
 /// 경로용 폴백 서명). `std::fs`만 쓰므로 전 플랫폼 컴파일·테스트 대상이다.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod fsprobe;
+// 파일 상세 정보(10-02 — 도크 Info 기본 8줄 + 속성 시스템 자세히)
+mod fileinfo;
 #[cfg(windows)]
 mod icon;
 #[cfg_attr(not(windows), allow(dead_code))]

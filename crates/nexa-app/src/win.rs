@@ -172,6 +172,9 @@ const WM_APP_VPASTE: u32 = 0x8013;
 /// 셸 변경 통지(X-44 5차 — [`crate::shellnotify`]): 패널 0/1 = BASE+0/+1.
 /// OneDrive 플레이스홀더 생성처럼 **파일시스템 계층이 침묵**하는 변경의 즉시 계기.
 const WM_APP_SHCHANGE_BASE: u32 = 0x8014;
+/// 파일 상세(속성 시스템) 워커 완료(10-02 — [`crate::fileinfo::DetailWorker`]).
+/// wparam = 레인(패널) · lparam = Box<(gen, PathBuf, Vec<DetailLine>)>.
+const WM_APP_INFO_DETAILS: u32 = 0x8016;
 
 /// 클라우드 다운로드 워커 → UI 통지.
 pub(crate) fn post_cloud_download(hwnd_raw: isize, payload: isize) {
@@ -899,6 +902,13 @@ struct State {
     icons: std::cell::RefCell<ShellIcons>,
     stats: PaintStats,
     tz: i32,
+    /// 도크 Info 상세 워커(10-02) — WM_CREATE에서 기동.
+    info_worker: Option<crate::fileinfo::DetailWorker>,
+    /// 패널별 상세 캐시(경로, 줄) — 도착분. 선택이 같으면 재조회 없음.
+    info_details: [Option<(PathBuf, Vec<crate::fileinfo::DetailLine>)>; 2],
+    /// 패널별 미도착 요청(세대, 경로) — 늦게 온 낡은 결과 폐기용.
+    info_req: [Option<(u64, PathBuf)>; 2],
+    info_gen: u64,
     /// 가시성 필터 **미러**(08-02 재정의 — 값의 SSOT는 탭[panel.rs Tab]. 여기는
     /// 활성 탭 값의 사본으로 update_status가 동기 — 메뉴/툴바/상태 바/영속 읽기용).
     show_hidden: bool,
@@ -1482,6 +1492,10 @@ pub fn run() -> Result<()> {
         icons: std::cell::RefCell::new(ShellIcons::new()),
         stats: PaintStats::default(),
         tz,
+        info_worker: None,
+        info_details: [None, None],
+        info_req: [None, None],
+        info_gen: 0,
         show_hidden: settings.show_hidden,
         show_dotfiles: settings.show_dotfiles,
         sort_folders_first: settings.sort_folders_first,
@@ -2041,14 +2055,23 @@ unsafe fn record_vpaste_undo(st: &mut State, created: &[PathBuf]) {
     }));
 }
 
-/// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식) — 다중 선택=개수·단일=속성·없음=현재 폴더.
-fn dock_info(p: &Panel) -> Vec<String> {
+/// 도크 정보 뷰 내용(M4-1, 원본 DockInfo 이식 → 10-02 사용자 요청 확장) —
+/// 다중 선택=개수·없음=현재 폴더·단일=**기본 8줄**(이름·종류·경로·크기·디스크 할당 크기·
+/// 만든/수정한/액세스한 날짜 — 사용자 지정 순서) + 탐색기 "자세히" 탭 상세(속성 시스템 —
+/// [`crate::fileinfo`]). 상세는 워커가 채우므로 `details`가 이 경로의 것이 아니면 "불러오는
+/// 중" 한 줄. 반환 = (줄, 상세를 요청해야 할 경로).
+fn dock_info(
+    p: &Panel,
+    tz: i32,
+    details: Option<&(PathBuf, Vec<crate::fileinfo::DetailLine>)>,
+) -> (Vec<String>, Option<PathBuf>) {
+    use crate::fileinfo::{self, DetailLine};
     use nexa_gui::widgets::RowSource;
     let rows = p.rows();
     let tree = rows.source().tree();
     let sel = tree.selection_count();
     if sel >= 2 {
-        return vec![trf("info.selected", &[&sel.to_string()])];
+        return (vec![trf("info.selected", &[&sel.to_string()])], None);
     }
     if sel == 1 {
         if let Some(i) = tree
@@ -2057,31 +2080,84 @@ fn dock_info(p: &Panel) -> Vec<String> {
             .and_then(|&id| tree.index_of(id))
         {
             if let Some(r) = tree.row(i) {
+                let path = tree.node_path(r.id).map(|p| p.to_path_buf());
+                let local = path
+                    .as_deref()
+                    .filter(|p| nexa_vfs::cloud_parts(p).is_none());
+                let basic = local.and_then(fileinfo::basic);
                 let mut lines = vec![
-                    r.name.clone(),
+                    trf("info.name", &[&r.name]),
                     trf("info.kind", &[&rows.source().cell(i, COL_KIND)]),
                 ];
-                if r.kind != nexa_core::FileKind::Dir {
-                    lines.push(trf("info.size", &[&r.size.to_string()])); // 원시 바이트(원본)
-                }
-                let modified = rows.source().cell(i, COL_MODIFIED);
-                if !modified.is_empty() {
-                    lines.push(trf("info.modified", &[&modified]));
-                }
-                if let Some(path) = tree.node_path(r.id) {
+                if let Some(path) = &path {
                     // 클라우드는 센티널 대신 라벨 경로(X-37)
                     let disp = nexa_vfs::cloud_display(path)
                         .unwrap_or_else(|| path.to_string_lossy().into_owned());
                     lines.push(trf("info.path", &[&disp]));
                 }
-                return lines;
+                let fmt_t = |ms: Option<i64>| ms.map(|ms| crate::source::fmt_datetime(ms, tz));
+                match &basic {
+                    Some(b) => {
+                        if let Some(sz) = b.size {
+                            lines.push(trf("info.size", &[&fileinfo::fmt_size_long(sz)]));
+                        }
+                        if let Some(d) = b.size_on_disk {
+                            lines.push(trf("info.sizeOnDisk", &[&fileinfo::fmt_size_long(d)]));
+                        }
+                        if let Some(t) = fmt_t(b.created) {
+                            lines.push(trf("info.created", &[&t]));
+                        }
+                        if let Some(t) = fmt_t(b.modified) {
+                            lines.push(trf("info.modified", &[&t]));
+                        }
+                        if let Some(t) = fmt_t(b.accessed) {
+                            lines.push(trf("info.accessed", &[&t]));
+                        }
+                    }
+                    None => {
+                        // 메타데이터 불가(클라우드 가상·접근 불가) — 트리 값으로 폴백
+                        if r.kind != nexa_core::FileKind::Dir {
+                            lines.push(trf("info.size", &[&fileinfo::fmt_size_long(r.size)]));
+                        }
+                        let modified = rows.source().cell(i, COL_MODIFIED);
+                        if !modified.is_empty() {
+                            lines.push(trf("info.modified", &[&modified]));
+                        }
+                    }
+                }
+                // 형식별 상세(탐색기 자세히 탭) — 워커 결과가 이 경로의 것일 때만
+                let want = basic
+                    .as_ref()
+                    .filter(|b| fileinfo::wants_details(b))
+                    .and(local.map(|p| p.to_path_buf()));
+                if let Some(w) = &want {
+                    match details.filter(|(dp, _)| dp == w) {
+                        Some((_, dl)) => {
+                            for l in dl {
+                                match l {
+                                    DetailLine::Group(g) => {
+                                        lines.push(String::new());
+                                        lines.push(format!("[{g}]"));
+                                    }
+                                    DetailLine::Prop(k, v) => lines.push(format!("{k}: {v}")),
+                                }
+                            }
+                            return (lines, None);
+                        }
+                        None => {
+                            lines.push(String::new());
+                            lines.push(tr("info.loadingDetails"));
+                        }
+                    }
+                }
+                return (lines, want);
             }
         }
     }
     let root = p.root_path();
     let disp =
         nexa_vfs::cloud_display(&root).unwrap_or_else(|| root.to_string_lossy().into_owned());
-    vec![trf("info.currentFolder", &[&disp])]
+    (vec![trf("info.currentFolder", &[&disp])], None)
 }
 
 /// 단일 선택 파일의 미리보기(M4-2 → ADR-0004 S1: 공급자 시임 경유).
@@ -2217,7 +2293,22 @@ fn update_dock_info(st: &mut State, inv: &mut Invalidations) {
                     st.tz,
                 ),
                 2 => (Vec::new(), None), // 터미널은 paint에서 직접 그림(M4-3)
-                _ => (dock_info(&st.panels[src]), None),
+                _ => {
+                    let (lines, want) =
+                        dock_info(&st.panels[src], st.tz, st.info_details[src].as_ref());
+                    // 상세 요청(10-02) — 같은 경로 미도착 요청이 있으면 재요청 없음
+                    if let Some(w) = want {
+                        let pending = st.info_req[src].as_ref().is_some_and(|(_, p)| *p == w);
+                        if !pending {
+                            if let Some(worker) = &st.info_worker {
+                                st.info_gen += 1;
+                                st.info_req[src] = Some((st.info_gen, w.clone()));
+                                worker.request(src, st.info_gen, w);
+                            }
+                        }
+                    }
+                    (lines, None)
+                }
             };
             st.panels[i].dock.set_lines(lines, inv);
             st.panels[i].dock.set_image(image, inv);
@@ -7029,6 +7120,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 아래에서 1회 재열거해 워커를 깨운다(사용자 QA 08-01: 기동 시 미표시).
             install_cloud_lister(hwnd);
             if let Some(st) = ptr.as_mut() {
+                // 도크 Info 상세 워커(10-02) — 결과는 WM_APP_INFO_DETAILS로 UI에
+                let hwnd_raw = hwnd.0 as isize;
+                st.info_worker = Some(crate::fileinfo::DetailWorker::spawn(
+                    move |lane, gen, path, lines| {
+                        let payload = Box::into_raw(Box::new((gen, path, lines))) as isize;
+                        post_final_notify(hwnd_raw, WM_APP_INFO_DETAILS, lane, payload);
+                    },
+                ));
                 st.dpi = GetDpiForWindow(hwnd);
                 let mut inv = Invalidations::default();
                 let ctx = st.nav_ctx();
@@ -8353,6 +8452,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 셸 변경 통지(X-44 5차) — 페이로드 해석 없이 디바운스 합류(등록 pidl이
         // 이미 범위를 필터·앱은 전체 재열거로 수렴 = watcher 동일 규약). 폭주는
         // 300ms 디바운스 + 1s 상한이 흡수.
+        m if m == WM_APP_INFO_DETAILS => {
+            // 도크 Info 상세 도착(10-02) — 그 레인의 최신 요청과 세대·경로가 맞을 때만 반영
+            if lparam.0 != 0 {
+                let (gen, path, lines) = *Box::from_raw(
+                    lparam.0 as *mut (u64, PathBuf, Vec<crate::fileinfo::DetailLine>),
+                );
+                let lane = wparam.0.min(1);
+                if let Some(st) = state_of(hwnd) {
+                    let fresh = st.info_req[lane]
+                        .as_ref()
+                        .is_some_and(|(g, p)| *g == gen && *p == path);
+                    if fresh {
+                        st.info_req[lane] = None;
+                        st.info_details[lane] = Some((path, lines));
+                        let mut inv = Invalidations::default();
+                        update_dock_info(st, &mut inv);
+                        flush_invalidations(hwnd, &mut inv);
+                    }
+                }
+            }
+            LRESULT(0)
+        }
         m if m == WM_APP_SHCHANGE_BASE || m == WM_APP_SHCHANGE_BASE + 1 => {
             crate::shellnotify::release_payload(wparam.0, lparam.0);
             if let Some(st) = state_of(hwnd) {
