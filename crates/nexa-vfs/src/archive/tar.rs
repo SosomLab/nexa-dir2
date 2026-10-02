@@ -49,7 +49,13 @@ fn checksum_ok(h: &[u8]) -> bool {
     let sum: u64 = h
         .iter()
         .enumerate()
-        .map(|(i, &b)| if (148..156).contains(&i) { 32 } else { b as u64 })
+        .map(|(i, &b)| {
+            if (148..156).contains(&i) {
+                32
+            } else {
+                b as u64
+            }
+        })
         .sum();
     let signed: i64 = h
         .iter()
@@ -66,18 +72,24 @@ fn checksum_ok(h: &[u8]) -> bool {
 }
 
 /// PAX 확장 레코드(`길이 키=값\n` 반복) 파싱.
+///
+/// 길이 필드는 아카이브가 준 **바이트 수**이므로 `&[u8]`로 자른다 — `&str`로 자르면
+/// 손상 레코드의 길이가 멀티바이트 글자 중간에 떨어질 때 경계 panic이 난다(G7-02).
+/// `len <= sp + 1`(빈 레코드·자기 길이보다 짧은 길이)이면 손상으로 보고 중단한다.
 fn parse_pax(body: &[u8]) -> Vec<(String, String)> {
-    let text = String::from_utf8_lossy(body);
     let mut out = Vec::new();
-    let mut rest = text.as_ref();
-    while let Some(sp) = rest.find(' ') {
-        let Ok(len) = rest[..sp].parse::<usize>() else {
+    let mut rest = body;
+    while let Some(sp) = rest.iter().position(|&b| b == b' ') {
+        let Some(len) = std::str::from_utf8(&rest[..sp])
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
             break;
         };
-        if len == 0 || len > rest.len() {
+        if len <= sp + 1 || len > rest.len() {
             break;
         }
-        let rec = &rest[sp + 1..len];
+        let rec = String::from_utf8_lossy(&rest[sp + 1..len]);
         if let Some((k, v)) = rec.split_once('=') {
             out.push((k.to_string(), v.trim_end_matches('\n').to_string()));
         }
@@ -154,7 +166,9 @@ impl ArchiveFormat for Tar {
                         match k.as_str() {
                             "path" => pending_name = Some(v),
                             "size" => pending_size = v.parse().ok(),
-                            "mtime" => pending_mtime = v.split('.').next().and_then(|s| s.parse().ok()),
+                            "mtime" => {
+                                pending_mtime = v.split('.').next().and_then(|s| s.parse().ok())
+                            }
                             _ => {}
                         }
                     }
@@ -185,7 +199,11 @@ impl ArchiveFormat for Tar {
                     modified: pending_mtime.take().or(mtime).filter(|&t| t > 0),
                     time_is_local: false, // tar = Unix epoch(UTC)
                     encrypted: false,
-                    method: if is_dir { String::new() } else { "Store".into() },
+                    method: if is_dir {
+                        String::new()
+                    } else {
+                        "Store".into()
+                    },
                     crc32: None,
                     suspicious,
                 });
@@ -218,7 +236,13 @@ mod tests {
         let sum: u64 = h
             .iter()
             .enumerate()
-            .map(|(i, &b)| if (148..156).contains(&i) { 32 } else { b as u64 })
+            .map(|(i, &b)| {
+                if (148..156).contains(&i) {
+                    32
+                } else {
+                    b as u64
+                }
+            })
             .sum();
         h[148..154].copy_from_slice(format!("{sum:06o}").as_bytes());
         h[155] = b' ';
@@ -229,8 +253,10 @@ mod tests {
     fn pax_record(kv: &str) -> String {
         let mut n = kv.len() + 3;
         loop {
-            let s = format!("{n} {kv}
-");
+            let s = format!(
+                "{n} {kv}
+"
+            );
             if s.len() == n {
                 return s;
             }
@@ -291,6 +317,61 @@ mod tests {
     }
 
     #[test]
+    fn pax_short_length_field_does_not_panic() {
+        // 길이 1 = 자기 길이보다 짧음(len <= sp+1) → 빈 결과, 패닉 없음
+        assert!(parse_pax(b"1 x=y\n").is_empty());
+        // 길이 0 → 중단
+        assert!(parse_pax(b"0 x=y\n").is_empty());
+        // 길이 필드가 숫자가 아님 → 중단
+        assert!(parse_pax(b"ab x=y\n").is_empty());
+        // 길이가 본문보다 큼 → 중단
+        assert!(parse_pax(b"99 x=y\n").is_empty());
+    }
+
+    #[test]
+    fn pax_length_inside_multibyte_char_does_not_panic() {
+        // "6 p=한\n"은 8바이트인데 길이 6은 '한'(4..7) 중간 — &str 슬라이스였다면 경계 panic
+        let body = "6 p=한\n".as_bytes();
+        let got = parse_pax(body);
+        // 레코드 하나를 손실 변환으로 읽고 다음 토큰('\xe2'로 시작)엔 공백이 없어 종료
+        assert!(got.len() <= 1);
+        if let Some((k, _)) = got.first() {
+            assert_eq!(k, "p");
+        }
+    }
+
+    #[test]
+    fn pax_well_formed_records_roundtrip() {
+        let rec = pax_record("path=가/나.txt")
+            + &pax_record("size=12")
+            + &pax_record("mtime=1700000000.5");
+        let got = parse_pax(rec.as_bytes());
+        assert_eq!(
+            got,
+            vec![
+                ("path".to_string(), "가/나.txt".to_string()),
+                ("size".to_string(), "12".to_string()),
+                ("mtime".to_string(), "1700000000.5".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn pax_header_with_corrupt_length_lists_without_panic() {
+        // 길이 필드를 1 작게 만든 손상 PAX 레코드 — Ok 또는 Corrupt이되 패닉 없음
+        let rec = pax_record("path=가/나.txt");
+        let n: usize = rec.split(' ').next().unwrap().parse().unwrap();
+        let bad = format!("{} {}", n - 1, &rec[rec.find(' ').unwrap() + 1..]);
+        let mut v = Vec::new();
+        v.extend(header("PaxHeader", bad.len() as u64, b'x', 0, ""));
+        v.extend(body(bad.as_bytes()));
+        v.extend(header("after.txt", 0, b'0', 0, ""));
+        let t = build(&[(String::new(), v)]);
+        let r = Tar.list(&SliceSource(&t), &ListOpts::default());
+        assert!(matches!(r, Ok(_) | Err(ArchiveError::Corrupt(_))));
+    }
+
+    #[test]
     fn base256_size_field_is_read() {
         let mut h = header("big.bin", 0, b'0', 0, "");
         h[124] = 0x80; // base-256 표식
@@ -299,7 +380,13 @@ mod tests {
         let sum: u64 = h
             .iter()
             .enumerate()
-            .map(|(i, &b)| if (148..156).contains(&i) { 32 } else { b as u64 })
+            .map(|(i, &b)| {
+                if (148..156).contains(&i) {
+                    32
+                } else {
+                    b as u64
+                }
+            })
             .sum();
         h[148..154].copy_from_slice(format!("{sum:06o}").as_bytes());
         h[155] = b' ';
