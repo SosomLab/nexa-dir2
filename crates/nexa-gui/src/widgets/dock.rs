@@ -562,13 +562,16 @@ impl Widget for InfoDock {
                             inv.push(self.bounds);
                         }
                     }
+                } else if self.popout_on && self.popout_range.get().contains(Point { x, y }) {
+                    // 우상단 ↗ "크게" 이미지 버튼(07-26) — 프레스 시각만, 발화는 MouseUp.
+                    // 오버레이 바보다 **먼저** 판정(10-02 G6-10): 버튼 오른쪽 8px가 세로 바
+                    // 존(right−14)과 겹쳐 scroll 0이면 썸 드래그가, 아니면 페이지 이동이
+                    // 클릭을 삼켜 '색은 바뀌는데 안 눌림'이 됐다. 명시적 버튼이 바보다 우선.
+                    self.popout_pressed = true;
+                    inv.push(self.popout_range.get());
                 } else if let Some((axis, hit)) = self.bars.mouse_down(x, y, self.geoms(), inv) {
                     // 오버레이 바(10-02): 썸 드래그 시작·트랙 페이지 이동 — 선택 불변
                     self.apply_bar(axis, hit, inv);
-                } else if self.popout_on && self.popout_range.get().contains(Point { x, y }) {
-                    // 우상단 ↗ "크게" 이미지 버튼(07-26) — 프레스 시각만, 발화는 MouseUp
-                    self.popout_pressed = true;
-                    inv.push(self.popout_range.get());
                 } else if let Some(pos) = self.anchor_at(x, y) {
                     // 내용 드래그 선택 시작(QA 07-15 → 07-20 **문자 단위** 앵커 →
                     // 10-02 빈 영역 = 마지막 라인 끝)
@@ -1205,6 +1208,63 @@ mod tests {
             d.tick(&mut inv);
         }
         assert!(!d.bars.visible(Axis::V), "페이드 완료");
+    }
+
+    #[test]
+    fn popout_click_wins_over_flashed_bar() {
+        // 10-02 G6-10: 12줄 미리보기 = set_lines flash로 세로 바 가시. 팝아웃 셀
+        // x∈[370,394)와 세로 바 존 x≥386(썸 x=388−2)이 8px 겹침 — scroll 0이면 썸이
+        // 버튼 위(y 121..)라 종전엔 썸 드래그가 클릭을 삼켰다. 버튼 판정 선행 = 발화.
+        let mut inv = Invalidations::default();
+        let mut d = InfoDock::new("정보", 20, 6);
+        d.set_bounds(Rect::new(0, 100, 400, 120), &mut inv);
+        d.set_lines((0..12).map(|i| format!("l{i}")).collect(), &mut inv);
+        d.set_popout(true, &mut inv);
+        d.paint(&mut Probe, &Theme::dark());
+        assert!(d.bars.visible(Axis::V), "flash 상태");
+        let cell = d.popout_range.get();
+        assert_eq!((cell.x, cell.right()), (370, 394));
+        let g = d.geoms();
+        let t = d.bars.thumb(Axis::V, &g[0], true).expect("세로 썸");
+        let (x, y) = (cell.right() - 8, cell.y + 7);
+        assert!(
+            x >= t.x - 2 && y >= t.y && y < t.bottom(),
+            "클릭점이 썸 히트 존 안(겹침 재현 전제)"
+        );
+        d.on_event(
+            &InputEvent::MouseDown {
+                x,
+                y,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert!(
+            d.popout_pressed && !d.bars.dragging(),
+            "버튼 프레스가 바 드래그보다 우선"
+        );
+        d.on_event(&InputEvent::MouseUp { x, y }, &mut inv);
+        assert!(d.take_popout(), "안 릴리스 = 발화");
+        assert_eq!(d.scroll, 0, "스크롤 불변");
+        // 바 드래그 동작 불변: 버튼 아래 썸 구간 프레스는 종전대로 드래그
+        let (bx, by) = (t.x + 1, cell.bottom() + 1);
+        assert!(by < t.bottom(), "썸 안·버튼 밖");
+        d.on_event(
+            &InputEvent::MouseDown {
+                x: bx,
+                y: by,
+                shift: false,
+                ctrl: false,
+            },
+            &mut inv,
+        );
+        assert!(
+            d.bars.dragging() && !d.popout_pressed,
+            "버튼 밖 = 바 드래그"
+        );
+        d.on_event(&InputEvent::MouseUp { x: bx, y: by }, &mut inv);
+        assert!(!d.take_popout());
     }
 
     #[test]
