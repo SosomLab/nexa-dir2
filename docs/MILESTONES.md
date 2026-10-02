@@ -76,7 +76,7 @@
 - ✅ M5-2 릴리스 파이프라인(`feat/m5-release-pipeline`, 07-15) — `.github/workflows/release.yml` 신설: 버전 태그 push(`0.5.0` 형식·`v` 접두사 허용) → windows-latest `cargo test`+release 빌드 → **예산 게이트(B2 exe ≤10MB·B3 임포트 화이트리스트 — CI와 동일 스크립트 `scripts/budget-b3.ps1`)** 통과 필수 → `NexaDir-<버전>-win-x64.exe`(포터블 단일 exe — DR-3) 개명 → **GitHub Release 자동 생성·첨부**(자동 노트). `workflow_dispatch` 수동 실행=게이트+아티팩트까지(Release는 태그에서만). 릴리스 절차 SSOT = [18](18-build-and-test.md) §5(`git tag X.Y.Z && git push origin X.Y.Z`).
 - ✅ M5-3 접근성·IME 마감·서명 결정(`feat/m5-a11y`, 07-15) — **UIA SelectionItem 실동작**(Select/Add/Remove → WM_APP_UIA_SELECT UI 스레드 전달·select_program 범위 방어)·**구조 변경 이벤트**(uia_notify (패널·경로·행 수) 서명 → ChildrenInvalidated — M2-7 1차 한계 2건 해소)·**리네임 인라인 IME 조합 창 배치**(rename_edit_info — M3-2 α 해소)·**서명 = 무서명 유지 확정**(DR-3 갱신 — 원본 PKG-4 공동 보류[Store $19 vs OV 연 $100~400 비용 결정 대기]·SmartScreen 감수·인증서 확보 시 release.yml 서명 단계 추가).
 
-## 포스트 M5 — UX 고도화·배포 채널 정착 (`0.7.0`~`0.21.0`)
+## 포스트 M5 — UX 고도화·배포 채널 정착 (`0.7.0`~`0.22.0`)
 
 > M5 마감 이후는 **사용자 QA가 다음 작업을 정하는** 구간이다(마일스톤 단위가 아니라 릴리스 단위).
 > 시간순 서사 = [DEVLOG](DEVLOG.md)·[journal/](journal/), 사용자용 = 위키 [개발 여정](wiki/개발-여정.md).
@@ -101,7 +101,7 @@
   (플러그인이 한 번도 배포된 적 없었다는 실측 → 자산 6종) · `0.18.1` = 설치형 VERSIONINFO 보강으로
   **Defender ML 오탐 해소**.
 - 🚧 **실기 QA 대기** — X-40 클라우드 실검증 · X-42~X-46 배포분([TODO](TODO.md) §7).
-- 🚧 **미배포(10-02)** — **X-59 우클릭 즉사(CET) 수정 + 도크 Info/Preview 세로·가로 스크롤 + UI 자동 QA 하네스**: `0.20.0`의 `/CETCOMPAT`가 프로세스 안 비CET 셸 확장(.NET 2.0 CLR)과 충돌해 `FAST_FAIL_SET_CONTEXT_DENIED` 즉사 → 플래그 회수(격리 재현기 `ctxmenu_probe`) · 공용 오버레이 바 `overlaybar.rs`·가로 스크롤·빈 영역 드래그 앵커·Info 휠 라우팅 · `scripts/ui-qa.ps1`(PostMessage+PrintWindow). `d064819`·`e230f36`·`c421091`. 다음 릴리스 계기.
+- ✅ **`0.22.0`**(10-02) — **트랙패드 픽셀 스크롤 전 영역**[파일 목록·Info/Preview·터미널·F3·압축 그리드 — 행+부분 px 오프셋·가로 px] · **고속 스크롤**[nexa-sql ScrollAccel/SpeedHud 이식 8영역 + 설정 페이지·step 3/max 16·파일 목록 한 단계 더·사용 여부 연동·시스템 휠 줄 수] · **우클릭 가속**[전용 STA 메뉴 스레드 선행 구축 16~42ms(종전 0.7~2.1s)] · **Info 기본 8줄+형식별 상세**[Windows 속성 시스템] · **우클릭 즉사 수정**[`/CETCOMPAT` 회수 — 비CET 셸 확장 충돌] · 도크 Info/Preview 세로+가로 스크롤·드래그 선택 · 설정 위치 드롭다운 · **Ultracode 배치 0~4 결함 수정 34커밋**[panic·즉사·무한 루프·데이터 손실·포인터/포커스·탐색 길목/편집 상태]. 하루 46커밋(X-59 `d064819`·`e230f36`·`c421091` / X-60 `0ea8617` / X-61 `f986415` / X-62 `2d4ec46` / X-63 `a7739ae`·`7d8b1e9`·`7d6e149` / X-64 배치 0~4). 승격 `1f04dff`. 채널 = winget `0.21.0` 병합 → 제출 · choco `0.21.0` 검수 중 → 제외(규칙). 실기 QA 대기.
 - ✅ **`0.21.0`**(10-01) — **X-58 텍스트 편집 컨텍스트 메뉴 + Edit 메뉴 클립보드 4종**: 경로바
   편집·이름변경 필드 우클릭 네이티브 팝업(실행 취소/잘라내기/복사/붙여넣기/삭제/전체 선택) · 도크 Info/Preview·F3 창
   복사/전체 선택 · 터미널 복사/붙여넣기/전체 선택 · Edit 메뉴 Cut/Copy/Paste/Select All(한 디스패치 `do_clip`) · 첫 우클릭 =

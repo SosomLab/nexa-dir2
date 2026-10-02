@@ -10,6 +10,7 @@
 
 | 브랜치 | 생성 | 병합(커밋) | 삭제 | 커밋수 | 작업 요약 | 상세 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `release/0.22.0` | 2026-10-02 | 2026-10-02 (ff) | 2026-10-02 | 2 | **릴리스 `0.22.0` 승격 + 문서 1차** — Cargo·lock·lang 3종 `@app` · README·CLAUDE·STATUS·MILESTONES·TODO·DEVLOG·journal·BRANCHES. 채널 = winget 제출(0.21.0 병합)·choco 제외(0.21.0 검수 중). 태그·2차 = journal | [journal](journal/2026-10-02.md) |
 | `release/0.21.0` | 2026-10-01 | 2026-10-01 (ff) | 2026-10-01 | 2 | **릴리스 `0.21.0` 승격 + 문서 1차** — Cargo·lock·lang 3종 `@app` · README·CLAUDE·STATUS·MILESTONES·TODO·DEVLOG·journal·위키 기능 3쪽. 태그 `0.21.0`=`45aa0d7` → Release 자산 6종 · winget 2건 제출 · choco 자동 push | [journal](journal/2026-10-01.md) |
 | `feat/x58-edit-context-menu` | 2026-10-01 | 2026-10-01 (ff) | 2026-10-01 | 2 | **X-58 텍스트 편집 컨텍스트 메뉴 + Edit 메뉴 클립보드 4종**(사용자 요청 2건) — 경로바 편집·이름변경 필드 우클릭 네이티브 팝업 6항목 · 도크 Info/Preview·F3 창 복사/전체 선택 · 터미널 복사/붙여넣기/전체 선택 · Edit 메뉴 Cut/Copy/Paste/Select All = 한 디스패치 `do_clip` · edit.rs 단일 단계 undo · lang 3종 5키 | [journal](journal/2026-10-01.md) |
 | `docs/channel-status-0929` | 2026-09-29 | 2026-09-29 (ff) | 2026-09-29 | 1 | **저장소 최신화·배포 검토·진행사항 최신화**(사용자 요청 — 코드 무변경) — `0.20.0` 이후 코드 변경 0 → 새 버전 불필요 판정 · **choco `0.20.0` 두 패키지 `Approved`**(virtualex 09-10 — 약 38시간) 반영 = 3채널 전부 `0.20.0` 동기 · 21 §7·§8·STATUS·CLAUDE·MILESTONES·DEVLOG·위키 2쪽 | [journal](journal/2026-09-29.md) |
@@ -156,6 +157,10 @@
 | `feat/m0-scaffold` | 2026-07-11 | 2026-07-11 (`e1a2e7f`) | 2026-07-24(정정) | 11 | M0-1~6 — 워크스페이스·코어 3크레이트 이식(테스트 green)·Win32 창 스켈레톤(windows 타깃 check green)·CI(예산 게이트) + 권한 복구 | [2026-07-11](journal/2026-07-11.md) |
 | `docs/foundation` | 2026-07-11 | 2026-07-11 (`d2727b5`) | 2026-07-11 | 6 | 설계 문서 세트(비전·아키텍처·ADR-0001·DR·로드맵·TODO·운영 문서) + 권한 정리 | [2026-07-11](journal/2026-07-11.md) |
 ---
+## release/0.22.0
+- **생성**: 2026-10-02 (분기: main `a0c434a`). **커밋**: `1f04dff`(승격) → 문서 1차. 병합(ff)·삭제: 2026-10-02. 태그 `0.22.0` = 문서 1차 커밋(2차 journal 참조).
+- **검증**: main `a0c434a` CI run 37021902729 3잡 green · 로컬 421 테스트·clippy 0·linux check·audit -Quick PASS · release exe 4,043,776B.
+
 ## release/0.21.0
 - **생성**: 2026-10-01 (분기: main `683ddfc`). **커밋**: `5a8e2a4`(승격) → `45aa0d7`(문서 1차 + 위키 기능 3쪽). 병합(ff)·삭제: 2026-10-01. 태그 `0.21.0` = `45aa0d7`.
 - **검증**: CI run 36826679664 3잡 green · Release run 36827340655 성공(자산 6종·해시 3중 일치·choco push success) · `winget validate` 통과.
