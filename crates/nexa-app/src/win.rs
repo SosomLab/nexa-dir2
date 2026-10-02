@@ -7231,6 +7231,18 @@ fn clip_act_of(vk: u16) -> Option<ClipAct> {
 /// 포커스 문맥별 편집 동작 디스패치(10-01): ① 경로바 편집 → ② 인라인 이름변경 →
 /// ③ 도크 터미널(키 포커스) → ④ 도크 Info/Preview 텍스트 선택(복사만) → ⑤ 파일 목록
 /// (기존 Ctrl+A/C/X/V·Undo 경로). 처리했으면 `true`(Paste = 전송 시작 시).
+/// 진행 중인 텍스트 편집(경로바 편집·인라인 리네임) 정리(G3-06 10-02) — 터미널이 키
+/// 포커스·편집 메뉴 대상으로 확정되는 순간 호출. `do_clip`은 ①경로바 → ②리네임 →
+/// ③터미널 순서로 대상을 고르므로, 편집이 살아 있으면 **터미널을 우클릭해 고른** Paste/
+/// Select All이 경로바·이름변경 필드에 작용했다(우클릭은 좌클릭과 달리 편집을 취소하지
+/// 않는다 — panel.rs RightDown은 도크만 라우팅). 터미널 좌클릭도 리네임은 남겼다.
+fn cancel_text_edits(st: &mut State, inv: &mut Invalidations) {
+    st.active_panel().pathbar.cancel_edit(inv);
+    for p in 0..2 {
+        st.panels[p].rows_mut().cancel_rename(inv);
+    }
+}
+
 unsafe fn do_clip(hwnd: HWND, st: &mut State, act: ClipAct) -> bool {
     use nexa_gui::EditKey;
     let mut inv = Invalidations::default();
@@ -7590,8 +7602,18 @@ unsafe fn show_edit_popup(hwnd: HWND, target: EditMenuTarget) {
             }
             flush_invalidations(hwnd, &mut inv);
         }
-        _ => {
-            // 경로바/이름변경/터미널 = do_clip 문맥 순서가 대상과 일치(터미널은 호출 전 포커스 이동)
+        EditMenuTarget::Term(p) => {
+            // 좌표로 확정된 터미널 대상 — do_clip ①②(경로바·리네임)가 가로채지 않도록
+            // 편집을 정리하고 키 포커스를 재확정한 뒤 위임(G3-06). 키보드 Ctrl+C/V는
+            // 종전 ①→②→③ 순서 그대로.
+            let mut inv = Invalidations::default();
+            cancel_text_edits(st, &mut inv);
+            st.term_focus = Some(p);
+            flush_invalidations(hwnd, &mut inv);
+            do_clip(hwnd, st, act);
+        }
+        EditMenuTarget::PathBar | EditMenuTarget::Rename => {
+            // do_clip 문맥 순서(①경로바 → ②리네임)가 좌표 대상과 일치
             do_clip(hwnd, st, act);
         }
     }
@@ -8072,6 +8094,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         st.term_caret_on = true;
                         SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                         st.term_focus = Some(idx);
+                        cancel_text_edits(st, &mut inv); // 터미널 포커스 확정(G3-06)
                         invalidate_dock(hwnd, st, idx); // 내용 동기는 꼬리 update_status(X2-13)
                     }
                     // 도크(종류 전환 반영 후) 터미널 영역 클릭 = 키 포커스(M4-3).
@@ -8084,6 +8107,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     {
                         st.term_focus = Some(idx);
                         st.term_caret_on = true;
+                        // 터미널이 키 포커스 = 진행 중 리네임 정리(G3-06 — 도크 클릭은 rows를
+                        // 지나지 않아 필드가 남고 Ctrl+V가 ②리네임에 붙던 결함)
+                        cancel_text_edits(st, &mut inv);
                         // 캐럿 깜빡임(QA 07-14) — 포커스 동안만, 시스템 깜빡임 주기
                         SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                         // 종류 전환 직후 내용 동기는 꼬리 update_status가 1회 수행(X2-13 —
@@ -8229,11 +8255,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             });
             if let Some(target) = target {
                 if let (EditMenuTarget::Term(p), Some(st)) = (target, state_of(hwnd)) {
-                    // 터미널 우클릭 = 좌클릭과 같이 키 포커스 이동(붙여넣기 대상 확정)
+                    // 터미널 우클릭 = 좌클릭과 같이 키 포커스 이동(붙여넣기 대상 확정) +
+                    // 경로바 편집·리네임 정리(G3-06 — 메뉴가 뜬 동안 필드가 남아 있지 않게)
                     st.term_focus = Some(p);
                     st.term_caret_on = true;
                     SetTimer(Some(hwnd), TIMER_TERM_CARET, caret_blink_ms(), None);
                     let mut inv = Invalidations::default();
+                    cancel_text_edits(st, &mut inv);
                     sync_focus_visuals(st, &mut inv);
                     flush_invalidations(hwnd, &mut inv);
                 }
