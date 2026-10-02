@@ -133,6 +133,13 @@ mod win {
             t_new = ms(t);
         }
         let _ = DestroyMenu(hmenu);
+        // 재사용 측정(10-02 — 우클릭 가속 검토): 같은 IContextMenu로 새 HMENU에 재질의
+        let t = Instant::now();
+        let hm2 = CreatePopupMenu().expect("CreatePopupMenu");
+        let r2 = icm.QueryContextMenu(hm2, 0, 1, 0x6FFF, flags);
+        let n2 = GetMenuItemCount(Some(hm2));
+        let _ = DestroyMenu(hm2);
+        println!("  reuse same IContextMenu: {:.1} ms ({r2:?}, {n2} items)", ms(t));
         drop(icm);
         drop(folder);
         CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
